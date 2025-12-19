@@ -10,10 +10,10 @@ class BusInteractionEncoder:
 
     @staticmethod
     def get_encoder() -> Any:
-        match args().bus_interaction_handler:
+        match ARGS().bus_interaction_handler:
             case BusInteractionHandlers.OPENVM: return OpenVMBusInteractionEncoder()
             case _:
-                logging.error(f"Unsupported bus interaction handler: {args().bus_interactions}")
+                logging.error(f"Unsupported bus interaction handler: {ARGS().bus_interactions}")
                 return None
 
     @log_conversion()

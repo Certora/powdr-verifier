@@ -2,8 +2,7 @@
 import collections
 import logging
 import pprint
-from re import L
-from typing import Any, Optional
+from typing import Any
 from pysmt import logics
 from pysmt.shortcuts import *
 from pysmt.typing import *
@@ -11,7 +10,7 @@ from pysmt.fnode import FNode
 from pysmt.smtlib import *
 
 from .bus_interactions import *
-from .utils import map_recursive, args, log_conversion
+from .utils import map_recursive, ARGS, log_conversion
 from .pretty_printer import pretty_print_smtlib
 
 LOGIC = logics.UFNIA
@@ -65,7 +64,7 @@ class SmtConverter:
 def load_smt_formula(data: Any) -> FNode:
     smt_converter = SmtConverter()
     formula = smt_converter.to_formula_with_axioms(data)
-    if args().log_smt:
+    if ARGS().log_smt:
         logging.info(f'after smt conversion:\n{pprint.pformat(formula, width=80)}')
     return formula
 
