@@ -25,11 +25,11 @@ class OpenVMBusInteraction(Enum):
         return self.value
 
 
-ARGS: Optional[argparse.Namespace] = None
+__ARGS: Optional[argparse.Namespace] = None
 
-def args() -> argparse.Namespace:
-    assert ARGS is not None
-    return ARGS
+def ARGS() -> argparse.Namespace:
+    assert __ARGS is not None
+    return __ARGS
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -38,18 +38,19 @@ def parse_args():
     parser.add_argument('--bus-interaction-handler', type=BusInteractionHandlers, default=BusInteractionHandlers.DEFAULT, choices=list(BusInteractionHandlers))
     parser.add_argument('--log-json', action='store_true')
     parser.add_argument('--log-conversion', action='store_true')
+    parser.add_argument('--log-rewrites', action='store_true')
     parser.add_argument('--log-smt', action='store_true')
     parser.add_argument('--dump-smt', action='store_true')
     parser.add_argument('-v', '--verbose', action='count', default=0)
-    global ARGS
-    ARGS = parser.parse_args()
-    if args().verbose > 0:
+    global __ARGS
+    __ARGS = parser.parse_args()
+    if ARGS().verbose > 0:
         logger = logging.getLogger()
-        logger.setLevel(logger.level - 10 * args().verbose)
+        logger.setLevel(logger.level - 10 * ARGS().verbose)
 
 def load_json(file: TextIO, label: str) -> Any:
     data = json.load(file)
-    if args().log_json:
+    if ARGS().log_json:
         logging.info(f'{label}:\n{json.dumps(data, indent=2)}')
     return data
 
@@ -58,7 +59,7 @@ def log_conversion(level=logging.INFO):
         @functools.wraps(func)
         def inner(self, before: Any) -> Any:
             after = func(self, before)
-            if args().log_conversion: # and after is None:
+            if ARGS().log_conversion: # and after is None:
                 logging.log(level, f'Converted {before}\nto {after}')
             return after
         return inner

@@ -8,8 +8,8 @@ from src.smt import *
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     parse_args()
-    before = load_json(args().input_before, 'Before')
-    after = load_json(args().input_after, 'After')
+    before = load_json(ARGS().input_before, 'Before')
+    after = load_json(ARGS().input_after, 'After')
 
     before_i2n, before_n2i = collect_variables(before)
     after_i2n, after_n2i = collect_variables(after)
