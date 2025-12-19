@@ -12,20 +12,33 @@ from pysmt.smtlib import *
 from .bus_interactions import *
 from .utils import map_recursive, ARGS, log_conversion
 from .pretty_printer import pretty_print_smtlib
+from .rewriter import rewrite
 
 LOGIC = logics.UFNIA
 
 
-FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['formula', 'axioms'])
+FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['formula', 'axioms', 'derived'])
 
 class SmtConverter:
     def __init__(self):
         self.bus_interaction_encoder = BusInteractionEncoder.get_encoder()
+    
+    def convert_derived(self, data: list[Any]) -> Any:
+        res = []
+        for derived in data:
+            match derived:
+                case [{'name': str(name), 'id': int}, value]:
+                    res.append(Equals(Symbol(name, INT), value))
+                case _:
+                    logging.error(f"Unsupported derived column: {derived}")
+        return res
 
     @log_conversion(level=logging.DEBUG)
-    def convert(self, data: Any) -> Optional[Symbol]:
+    def convert(self, data: Any) -> Any:
         match data:
             case {'Number': int(value)}:
+                return Int(value)
+            case {'Constant': int(value)}:
                 return Int(value)
             case {'Reference': { 'name': str(name), 'id': int() }}:
                 return Symbol(name, INT)
@@ -41,12 +54,13 @@ class SmtConverter:
                     case _: return None
             case {'expr': expr, **rest} if rest == {}:
                 return expr
-            case {'constraints': list(cs), 'bus_interactions': list(bis), **rest}:
+            case {'constraints': list(cs), 'bus_interactions': list(bis), 'derived_columns': list(dc), **rest}:
                 return {
                     **rest,
                     'constraints': And(*[ Equals(c, Int(0)) for c in cs ]),
                     'bus_interactions': And(*[ self.bus_interaction_encoder.encode(bi) for bi in bis ]),
                     'axioms': self.bus_interaction_encoder.get_axioms(),
+                    'derived_columns': self.convert_derived(dc),
                 }
             case _:
                 return None
@@ -59,6 +73,7 @@ class SmtConverter:
         return FormulaWithAxioms(
             formula=And(data['machine']['constraints'], data['machine']['bus_interactions']),
             axioms=data['machine']['axioms'],
+            derived=data['machine']['derived_columns'],
         )
 
 def load_smt_formula(data: Any) -> FNode:
@@ -71,7 +86,7 @@ def load_smt_formula(data: Any) -> FNode:
 def is_equivalent(f1: FormulaWithAxioms, f2: FormulaWithAxioms) -> bool:
     f = And(
         Not(Iff(f1.formula, f2.formula)),
-        And(*set(f1.axioms + f2.axioms)),
+        And(*set(f1.axioms + f2.axioms + f1.derived + f2.derived)),
     )
     if args().dump_smt:
         with open('dump.smt2', 'w') as dump:
