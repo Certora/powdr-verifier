@@ -1,0 +1,75 @@
+import logging
+from pysmt.shortcuts import *
+from pysmt.typing import *
+from pysmt.fnode import FNode
+from pysmt.smtlib import *
+from pysmt.walkers import *
+from pysmt import operators
+from pysmt import substituter
+
+from .utils import ARGS
+
+def rewrite_mul2or(input: FNode) -> FNode:
+    '''(= (* x (- x 1)) 0) --> (or (= x 0) (= x 1))'''
+    if not input.is_equals(): return None
+    left, right = input.args()
+    if not left.is_times(): return None
+    if not right.is_zero(): return None
+    x, sub = left.args()
+    if not x.is_symbol(): return None
+    if not sub.is_minus(): return None
+    x2, one = sub.args()
+    if not x2 == x: return None
+    if not one.is_one(): return None
+    
+    return Or(Equals(x, Int(0)), Equals(x, Int(1)))
+
+def rewrite_reflexiveeq(input: FNode) -> FNode:
+    '''(= x x) --> True'''
+    if not input.is_equals(): return None
+    left, right = input.args()
+    if not left == right: return None
+    return TRUE()
+
+def rewrite_reflexiveminus(input: FNode) -> FNode:
+    '''(- x x) --> 0'''
+    if not input.is_minus(): return None
+    left, right = input.args()
+    if not left == right: return None
+    return Int(0)
+
+def rewrite_minuszero(input: FNode) -> FNode:
+    '''(- x 0) --> x'''
+    if not input.is_minus(): return None
+    left, right = input.args()
+    if not right.is_zero(): return None
+    return left
+
+REWRITES = {
+    operators.EQUALS: [rewrite_mul2or, rewrite_reflexiveeq],
+    operators.MINUS: [rewrite_reflexiveminus, rewrite_minuszero],
+}
+
+class Rewriter(substituter.Substituter):
+    def __init__(self, env=None):
+        substituter.Substituter.__init__(self, env=env)
+    
+    @substituter.handles(set(operators.ALL_TYPES) - operators.QUANTIFIERS - {operators.FUNCTION})
+    def walk_identity_or_replace(self, formula, args, **kwargs):
+        for rewrite in REWRITES.get(formula.node_type(), []):
+            result = rewrite(formula)
+            if result is not None:
+                self.did_rewrite = True
+                if ARGS().log_rewrites:
+                    logging.info(f'rewrote {formula} --> {result}')
+                return result
+        return substituter.Substituter.super(self, formula, args=args, **kwargs)
+
+def rewrite(input: FNode) -> FNode:
+    rewriter = Rewriter()
+    while True:
+        rewriter.did_rewrite = False
+        input = rewriter.substitute(input)
+        if not rewriter.did_rewrite:
+            break
+    return input

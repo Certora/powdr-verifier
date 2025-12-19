@@ -88,7 +88,8 @@ def is_equivalent(f1: FormulaWithAxioms, f2: FormulaWithAxioms) -> bool:
         Not(Iff(f1.formula, f2.formula)),
         And(*set(f1.axioms + f2.axioms + f1.derived + f2.derived)),
     )
-    if args().dump_smt:
+    f = rewrite(f)
+    if ARGS().dump_smt:
         with open('dump.smt2', 'w') as dump:
             pretty_print_smtlib(f, dump, LOGIC)
     match is_sat(f, logic=LOGIC):
