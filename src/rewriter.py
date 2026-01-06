@@ -7,22 +7,34 @@ from pysmt.walkers import *
 from pysmt import operators
 from pysmt import substituter
 
+from .smt_utils import wrap_mod, UF_MOD
 from .utils import ARGS
 
 def rewrite_mul2or(input: FNode) -> FNode:
-    '''(= (* x (- x 1)) 0) --> (or (= x 0) (= x 1))'''
+    '''(= (uf_mod (* x (- x 1)) C) 0) --> (or (= (uf_mod x C) 0) (= (uf_mod x C) 1))'''
     if not input.is_equals(): return None
-    left, right = input.args()
-    if not left.is_times(): return None
-    if not right.is_zero(): return None
-    x, sub = left.args()
+    mod, zero = input.args()
+
+    if not mod.is_function_application(): return None
+    fname = mod.function_name()
+    if not fname.is_symbol(): return None
+    if not fname.symbol_name() == UF_MOD.symbol_name(): return None
+
+    if not zero.is_zero(): return None
+    times, const = mod.args()
+    if not times.is_times(): return None
+    if not const.is_int_constant(): return None
+    x, sub = times.args()
     if not x.is_symbol(): return None
     if not sub.is_minus(): return None
     x2, one = sub.args()
     if not x2 == x: return None
     if not one.is_one(): return None
     
-    return Or(Equals(x, Int(0)), Equals(x, Int(1)))
+    return Or(
+        Equals(Function(fname, [x, const]), Int(0)),
+        Equals(Function(fname, [x, const]), Int(1))
+    )
 
 def rewrite_reflexiveeq(input: FNode) -> FNode:
     '''(= x x) --> True'''
