@@ -1,5 +1,5 @@
 import argparse
-from bz2 import decompress
+from collections import namedtuple
 from enum import Enum
 import functools
 import json
@@ -24,6 +24,13 @@ class OpenVMBusInteraction(Enum):
     def __str__(self) -> str:
         return self.value
 
+class FieldTypes(Enum):
+    BABYBEAR = 0x78000001
+    KOALABEAR = 0x7f000001
+    GOLDILOCKS = 0xFFFFFFFF00000001
+
+    def __str__(self) -> str:
+        return self.name.lower()
 
 __ARGS: Optional[argparse.Namespace] = None
 
@@ -36,6 +43,7 @@ def parse_args():
     parser.add_argument('input_before', type=argparse.FileType('r'))
     parser.add_argument('input_after', type=argparse.FileType('r'))
     parser.add_argument('--bus-interaction-handler', type=BusInteractionHandlers, default=BusInteractionHandlers.DEFAULT, choices=list(BusInteractionHandlers))
+    parser.add_argument('--field-type', type=FieldTypes, default=FieldTypes.BABYBEAR, choices=list(FieldTypes))
     parser.add_argument('--log-json', action='store_true')
     parser.add_argument('--log-conversion', action='store_true')
     parser.add_argument('--log-rewrites', action='store_true')
@@ -59,7 +67,7 @@ def log_conversion(level=logging.INFO):
         @functools.wraps(func)
         def inner(self, before: Any) -> Any:
             after = func(self, before)
-            if ARGS().log_conversion: # and after is None:
+            if ARGS().log_conversion: # and after is not None:
                 logging.log(level, f'Converted {before}\nto {after}')
             return after
         return inner
