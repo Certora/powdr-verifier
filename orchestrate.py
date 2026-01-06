@@ -28,7 +28,7 @@ def deserialize(cbor_file):
         ], cwd=POWDR_DIR)
 
 def deserialize_all():
-    for cbor_file in DATA_DIR.glob("apc_candidate_0.cbor"):
+    for cbor_file in DATA_DIR.glob("*.cbor"):
         print(f"Deserializing {cbor_file}")
         deserialize(cbor_file)
 

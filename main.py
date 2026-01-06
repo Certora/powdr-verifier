@@ -14,9 +14,6 @@ if __name__ == '__main__':
     before_i2n, before_n2i = collect_variables(before)
     after_i2n, after_n2i = collect_variables(after)
 
-    #print(sorted(before_i2n.items()))
-    #print(sorted(after_i2n.items()))
-
     before_smt = load_smt_formula(before)
     after_smt = load_smt_formula(after)
 

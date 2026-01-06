@@ -1,9 +1,9 @@
 import argparse
-from collections import namedtuple
 from enum import Enum
 import functools
 import json
 import logging
+from pathlib import Path
 from typing import Any, TextIO, Optional
 
 class BusInteractionHandlers(Enum):
@@ -40,8 +40,8 @@ def ARGS() -> argparse.Namespace:
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('input_before', type=argparse.FileType('r'))
-    parser.add_argument('input_after', type=argparse.FileType('r'))
+    parser.add_argument('input_before', type=Path)
+    parser.add_argument('input_after', type=Path)
     parser.add_argument('--bus-interaction-handler', type=BusInteractionHandlers, default=BusInteractionHandlers.DEFAULT, choices=list(BusInteractionHandlers))
     parser.add_argument('--field-type', type=FieldTypes, default=FieldTypes.BABYBEAR, choices=list(FieldTypes))
     parser.add_argument('--log-json', action='store_true')
@@ -56,8 +56,12 @@ def parse_args():
         logger = logging.getLogger()
         logger.setLevel(logger.level - 10 * ARGS().verbose)
 
-def load_json(file: TextIO, label: str) -> Any:
-    data = json.load(file)
+def get_smt_dump_filename() -> Path:
+    return ARGS().input_before.parent / f"verify-{ARGS().input_before.stem}-{ARGS().input_after.stem}.smt2"
+
+def load_json(file: Path, label: str) -> Any:
+    with open(file, 'r') as f:
+        data = json.load(f)
     if ARGS().log_json:
         logging.info(f'{label}:\n{json.dumps(data, indent=2)}')
     return data

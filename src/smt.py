@@ -107,7 +107,7 @@ def is_equivalent(f1: FormulaWithAxioms, f2: FormulaWithAxioms) -> bool:
     )
     f = rewrite(f)
     if ARGS().dump_smt:
-        with open('dump.smt2', 'w') as dump:
+        with open(get_smt_dump_filename(), 'w') as dump:
             pretty_print_smtlib(f, dump, LOGIC)
     logging.info(f'solving...')
     match is_sat(f, logic=LOGIC):
