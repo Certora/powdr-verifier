@@ -4,15 +4,16 @@ import logging
 import pprint
 from typing import Any
 from pysmt import logics
-from pysmt.shortcuts import *
-from pysmt.typing import *
 from pysmt.fnode import FNode
+from pysmt.shortcuts import *
 from pysmt.smtlib import *
+from pysmt.typing import *
 
 from .bus_interactions import *
 from .utils import map_recursive, ARGS, log_conversion
 from .pretty_printer import pretty_print_smtlib
 from .rewriter import rewrite
+from .smt_utils import wrap_mod
 
 LOGIC = logics.UFNIA
 
@@ -22,6 +23,12 @@ FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['formula', 'axi
 class SmtConverter:
     def __init__(self):
         self.bus_interaction_encoder = BusInteractionEncoder.get_encoder()
+        self.field_symbols = set()
+    
+    def convert_constraints(self, data: list[Any]) -> Any:
+        return And(*[
+            Equals(wrap_mod(c), Int(0)) for c in data
+        ])
     
     def convert_derived(self, data: list[Any]) -> Any:
         res = []
@@ -41,7 +48,9 @@ class SmtConverter:
             case {'Constant': int(value)}:
                 return Int(value)
             case {'Reference': { 'name': str(name), 'id': int() }}:
-                return Symbol(name, INT)
+                sym = Symbol(name, INT)
+                self.field_symbols.add(sym)
+                return sym
             case {'UnaryOperation': { 'expr': expr, 'op': str(op) }}:
                 match op:
                     case 'Minus': return Minus(Int(0), expr)
@@ -57,7 +66,7 @@ class SmtConverter:
             case {'constraints': list(cs), 'bus_interactions': list(bis), 'derived_columns': list(dc), **rest}:
                 return {
                     **rest,
-                    'constraints': And(*[ Equals(c, Int(0)) for c in cs ]),
+                    'constraints': self.convert_constraints(cs),
                     'bus_interactions': And(*[ self.bus_interaction_encoder.encode(bi) for bi in bis ]),
                     'axioms': self.bus_interaction_encoder.get_axioms(),
                     'derived_columns': self.convert_derived(dc),
@@ -67,12 +76,20 @@ class SmtConverter:
     
     def convert_recursive(self, data: Any) -> Any:
         return map_recursive(data, self.convert)
+    
+    def __basic_range_axioms(self) -> list[FNode]:
+        return [
+            And(
+                LE(Int(0), sym),
+                LT(sym, Int(ARGS().field_type.value))
+            ) for sym in self.field_symbols
+        ]
 
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
         data = self.convert_recursive(data)
         return FormulaWithAxioms(
             formula=And(data['machine']['constraints'], data['machine']['bus_interactions']),
-            axioms=data['machine']['axioms'],
+            axioms=self.__basic_range_axioms() + data['machine']['axioms'],
             derived=data['machine']['derived_columns'],
         )
 
@@ -92,6 +109,7 @@ def is_equivalent(f1: FormulaWithAxioms, f2: FormulaWithAxioms) -> bool:
     if ARGS().dump_smt:
         with open('dump.smt2', 'w') as dump:
             pretty_print_smtlib(f, dump, LOGIC)
+    logging.info(f'solving...')
     match is_sat(f, logic=LOGIC):
         case True:
             print("SAT")

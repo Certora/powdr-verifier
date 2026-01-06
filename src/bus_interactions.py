@@ -4,6 +4,7 @@ from pysmt.shortcuts import *
 from pysmt.typing import *
 from pysmt.fnode import FNode
 
+from .smt_utils import wrap_mod
 from .utils import *
 
 class BusInteractionEncoder:
@@ -34,6 +35,7 @@ class OpenVMBusInteractionEncoder(BusInteractionEncoder):
             ForAll([x], Equals(Function(self.UF_XOR, [x, x]), Int(0))),
         ]
 
+    @log_conversion()
     def encode(self, data: Any) -> FNode:
         match data:
             case {'mult': mult} if mult.is_int_constant() and mult.constant_value() == 0:
@@ -46,7 +48,7 @@ class OpenVMBusInteractionEncoder(BusInteractionEncoder):
                     'args': [address_space, pointer, *data, timestamp],
                 }:
                 return Implies(
-                    Equals(mult, Int(-1)),
+                    Equals(wrap_mod(mult), wrap_mod(Int(-1))),
                     And(
                         *[ And(LE(Int(0), d), LE(d, Int(255))) for d in data ]
                     )
