@@ -93,19 +93,14 @@ class SmtConverter:
             derived=data['machine']['derived_columns'],
         )
 
-def load_smt_formula(data: Any) -> FNode:
+def convert_to_smt(data: Any) -> FNode:
     smt_converter = SmtConverter()
     formula = smt_converter.to_formula_with_axioms(data)
     if ARGS().log_smt:
         logging.info(f'after smt conversion:\n{pprint.pformat(formula, width=80)}')
     return formula
 
-def is_equivalent(f1: FormulaWithAxioms, f2: FormulaWithAxioms) -> bool:
-    f = And(
-        Not(Iff(f1.formula, f2.formula)),
-        And(*set(f1.axioms + f2.axioms + f1.derived + f2.derived)),
-    )
-    f = rewrite(f)
+def check_formula(f: FNode) -> bool:
     if ARGS().dump_smt:
         with open(get_smt_dump_filename(), 'w') as dump:
             pretty_print_smtlib(f, dump, LOGIC)
