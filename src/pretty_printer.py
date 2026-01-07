@@ -106,6 +106,7 @@ def pretty_print_smtlib(f: FNode, file: TextIO, logic: logics.Logic):
     # smtlib.commands.insert(1, script.SmtLibCommand(name='echo', args=[';
     # (define-fun uf_mod ((a Int) (b Int)) Int (mod a b))
     # ']))
+    smtlib.commands.insert(1, script.SmtLibCommand(name='set-option', args=[':produce-models', 'true']))
     smtlib.add_command(script.SmtLibCommand(name='get-model', args=[]))
     printer = SMTPrettyPrinter(file, depth=1)
     for cmd in smtlib.commands:
