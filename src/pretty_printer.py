@@ -51,11 +51,18 @@ class SMTPrettyPrinter(script.SmtPrinter):
         yield
         self.depth -= 1
     
+    def indent(self):
+        self.write(self.INDENT * self.depth)
+
+    def write_indented(self, *args, **kwargs):
+        self.indent()
+        self.write(*args, **kwargs)
+    
     @printers.write_annotations
     def walk_nary(self, formula, operator):
         if self.should_collapse(formula):
             if not self.is_collapsed:
-                self.write(self.INDENT * self.depth)
+                self.indent()
             with self.collapsed():
                 self.write(f'({operator}')
                 for s in formula.args():
@@ -63,35 +70,35 @@ class SMTPrettyPrinter(script.SmtPrinter):
                     yield s
                 self.write(')')
         else:
-            self.write(self.INDENT * self.depth)
-            self.write(f'({operator}\n')
+            self.write_indented(f'({operator}\n')
             with self.indented():
                 for s in formula.args():
                     yield s
                     self.write('\n')
-            self.write(self.INDENT * self.depth)
-            self.write(')')
+            self.write_indented(')')
     
     @printers.write_annotations
     def _walk_quantifier(self, operator, formula):
         assert len(formula.quantifier_vars()) > 0
-        self.write(self.INDENT * self.depth)
-        self.write(f'({operator} (')
+        self.write_indented(f'({operator}\n')
+        with self.indented():
+            self.write_indented('(\n')
 
-        with self.collapsed():
-            for s in formula.quantifier_vars():
-                self.write('(')
-                yield s
-                self.write(f' {s.symbol_type().as_smtlib(False)})')
+            with self.indented():
+                for s in formula.quantifier_vars():
+                    self.write_indented('(')
+                    with self.collapsed():
+                        yield s
+                        self.write(f' {s.symbol_type().as_smtlib(False)})\n')
 
-        self.write(') ')
+            self.write_indented(') ')
         if not self.is_collapsed:
             self.write('\n')
         with self.indented():
             yield formula.arg(0)
         if not self.is_collapsed:
             self.write('\n')
-            self.write(self.INDENT * self.depth)
+            self.indent()
         self.write(')')
 
 def pretty_print_smtlib(f: FNode, file: TextIO, logic: logics.Logic):
