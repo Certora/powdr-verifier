@@ -10,8 +10,8 @@ if __name__ == '__main__':
     before = load_json(ARGS().input_before, 'Before')
     after = load_json(ARGS().input_after, 'After')
 
-    before_smt = convert_to_smt(before)
-    after_smt = convert_to_smt(after)
+    before_smt = convert_to_smt_formula(before)
+    after_smt = convert_to_smt_formula(after)
 
     vc = build_vc(before_smt, after_smt)
 

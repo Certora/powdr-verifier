@@ -6,14 +6,14 @@ from typing import Any
 from pysmt import logics
 from pysmt.fnode import FNode
 from pysmt.shortcuts import *
-from pysmt.smtlib import *
+from pysmt.smtlib import script
 from pysmt.typing import *
 
 from .bus_interactions import *
 from .utils import map_recursive, ARGS, log_conversion
 from .pretty_printer import pretty_print_smtlib
 from .rewriter import rewrite
-from .smt_utils import wrap_mod
+from .smt_utils import wrap_mod, REAL_MOD,UF_MOD
 
 LOGIC = logics.UFNIA
 
@@ -93,17 +93,39 @@ class SmtConverter:
             derived=data['machine']['derived_columns'],
         )
 
-def convert_to_smt(data: Any) -> FNode:
+def convert_to_smt_formula(data: Any) -> FNode:
     smt_converter = SmtConverter()
     formula = smt_converter.to_formula_with_axioms(data)
     if ARGS().log_smt:
         logging.info(f'after smt conversion:\n{pprint.pformat(formula, width=80)}')
     return formula
 
+def convert_to_smt_script(f: FNode, logic: logics.Logic) -> script.SmtLibScript:
+    smtlib = script.smtlibscript_from_formula(f, logic)
+
+    # replace "declare-fun uf_mod" by "define-fun uf_mod"
+    for id,cmd in enumerate(smtlib.commands):
+        match cmd:
+            case script.SmtLibCommand(name='declare-fun') if cmd.args == [UF_MOD]:
+                args = [Symbol('x', INT), Symbol('y', INT)]
+                define_fun = script.SmtLibCommand(
+                    name='define-fun',
+                    args=[UF_MOD, args, INT, Function(REAL_MOD, args)]
+                )
+                smtlib.commands[id] = define_fun
+            case _:
+                pass
+
+    # add model production and model retrieval
+    smtlib.commands.insert(1, script.SmtLibCommand(name='set-option', args=[':produce-models', 'true']))
+    smtlib.add_command(script.SmtLibCommand(name='get-model', args=[]))
+    return smtlib
+
 def check_formula(f: FNode) -> bool:
     if ARGS().dump_smt:
         with open(get_smt_dump_filename(), 'w') as dump:
-            pretty_print_smtlib(f, dump, LOGIC)
+            smtlib = convert_to_smt_script(f, LOGIC)
+            pretty_print_smtlib(smtlib, dump)
     logging.info(f'solving...')
     match is_sat(f, logic=LOGIC):
         case True:

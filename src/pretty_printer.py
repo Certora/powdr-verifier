@@ -1,6 +1,6 @@
 
 import contextlib
-from pysmt import logics, operators
+from pysmt import operators
 from pysmt.fnode import FNode
 from pysmt.shortcuts import *
 from pysmt.smtlib import *
@@ -91,23 +91,13 @@ class SMTPrettyPrinter(script.SmtPrinter):
                         yield s
                         self.write(f' {s.symbol_type().as_smtlib(False)})\n')
 
-            self.write_indented(') ')
-        if not self.is_collapsed:
-            self.write('\n')
+            self.write_indented(')\n')
         with self.indented():
             yield formula.arg(0)
-        if not self.is_collapsed:
-            self.write('\n')
-            self.indent()
-        self.write(')')
+        self.write('\n')
+        self.write_indented(')')
 
-def pretty_print_smtlib(f: FNode, file: TextIO, logic: logics.Logic):
-    smtlib = script.smtlibscript_from_formula(f, logic)
-    # smtlib.commands.insert(1, script.SmtLibCommand(name='echo', args=[';
-    # (define-fun uf_mod ((a Int) (b Int)) Int (mod a b))
-    # ']))
-    smtlib.commands.insert(1, script.SmtLibCommand(name='set-option', args=[':produce-models', 'true']))
-    smtlib.add_command(script.SmtLibCommand(name='get-model', args=[]))
+def pretty_print_smtlib(smtlib: script.SmtLibScript, file: TextIO):
     printer = SMTPrettyPrinter(file, depth=1)
     for cmd in smtlib.commands:
         match cmd:
