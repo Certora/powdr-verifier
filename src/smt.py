@@ -9,21 +9,29 @@ from pysmt.shortcuts import *
 from pysmt.smtlib import script
 from pysmt.typing import *
 
-from .bus_interactions import *
-from .utils import map_recursive, ARGS, log_conversion
+from . import bus_interactions
+from .basic_block import BasicBlock
+from .utils import get_smt_dump_filename, map_recursive, ARGS, log_conversion, BusInteractionHandlers
 from .pretty_printer import pretty_print_smtlib
 from .rewriter import rewrite
 from .smt_utils import wrap_mod, REAL_MOD,UF_MOD
 
 LOGIC = logics.UFNIA
 
-
 FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['formula', 'axioms', 'derived'])
 
 class SmtConverter:
-    def __init__(self):
-        self.bus_interaction_encoder = BusInteractionEncoder.get_encoder()
+    def __init__(self, basic_block: BasicBlock):
+        self.basic_block = basic_block
         self.field_symbols = set()
+
+        match ARGS().bus_interaction_handler:
+            case BusInteractionHandlers.OPENVM:
+                self.bus_interaction_encoder = bus_interactions.OpenVMBusInteractionEncoder(basic_block)
+            case _:
+                logging.error(f"Unsupported bus interaction handler: {ARGS().bus_interaction_handler}")
+                self.bus_interaction_encoder = None
+
     
     def convert_constraints(self, data: list[Any]) -> Any:
         return And(*[
@@ -38,7 +46,7 @@ class SmtConverter:
                     res.append(Equals(Symbol(name, INT), value))
                 case _:
                     logging.error(f"Unsupported derived column: {derived}")
-        return res
+        return And(*res)
 
     @log_conversion(level=logging.DEBUG)
     def convert(self, data: Any) -> Any:
@@ -64,11 +72,13 @@ class SmtConverter:
             case {'expr': expr, **rest} if rest == {}:
                 return expr
             case {'constraints': list(cs), 'bus_interactions': list(bis), 'derived_columns': list(dc), **rest}:
+                bi = self.bus_interaction_encoder.encode_all(bis)
+                biaxioms = self.bus_interaction_encoder.get_axioms()
                 return {
                     **rest,
                     'constraints': self.convert_constraints(cs),
-                    'bus_interactions': And(*[ self.bus_interaction_encoder.encode(bi) for bi in bis ]),
-                    'axioms': self.bus_interaction_encoder.get_axioms(),
+                    'bus_interactions': bi,
+                    'axioms': biaxioms,
                     'derived_columns': self.convert_derived(dc),
                 }
             case _:
@@ -78,23 +88,23 @@ class SmtConverter:
         return map_recursive(data, self.convert)
     
     def __basic_range_axioms(self) -> list[FNode]:
-        return [
+        return And(
             And(
                 LE(Int(0), sym),
                 LT(sym, Int(ARGS().field_type.value))
             ) for sym in self.field_symbols
-        ]
+        )
 
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
         data = self.convert_recursive(data)
         return FormulaWithAxioms(
             formula=And(data['machine']['constraints'], data['machine']['bus_interactions']),
-            axioms=self.__basic_range_axioms() + data['machine']['axioms'],
+            axioms=And(self.__basic_range_axioms(), data['machine']['axioms']),
             derived=data['machine']['derived_columns'],
         )
 
-def convert_to_smt_formula(data: Any) -> FNode:
-    smt_converter = SmtConverter()
+def convert_to_smt_formula(data: Any, basic_block: BasicBlock) -> FNode:
+    smt_converter = SmtConverter(basic_block)
     formula = smt_converter.to_formula_with_axioms(data)
     if ARGS().log_smt:
         logging.info(f'after smt conversion:\n{pprint.pformat(formula, width=80)}')
@@ -136,5 +146,5 @@ def check_formula(f: FNode) -> bool:
             print("UNSAT")
             return True
         case _:
-            print(f"UNKNOWN: {res}")
+            print(f"UNKNOWN")
             return False

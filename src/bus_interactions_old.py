@@ -4,15 +4,16 @@ from pysmt.shortcuts import *
 from pysmt.typing import *
 from pysmt.fnode import FNode
 
+from .basic_block import BasicBlock
 from .smt_utils import wrap_mod
 from .utils import *
 
 class BusInteractionEncoder:
 
     @staticmethod
-    def get_encoder() -> Any:
+    def get_encoder(basic_block: BasicBlock) -> Any:
         match ARGS().bus_interaction_handler:
-            case BusInteractionHandlers.OPENVM: return OpenVMBusInteractionEncoder()
+            case BusInteractionHandlers.OPENVM: return OpenVMBusInteractionEncoder(basic_block)
             case _:
                 logging.error(f"Unsupported bus interaction handler: {ARGS().bus_interactions}")
                 return None
@@ -20,23 +21,31 @@ class BusInteractionEncoder:
     @log_conversion()
     def encode(self, data: Any) -> FNode:
         raise NotImplementedError
+        
+    def encode_all(self, bis: list[Any]) -> FNode:
+        return And(*[ self.encode_one(bi) for bi in bis ])
 
     def get_axioms(self) -> list[FNode]:
         raise NotImplementedError
 
 class OpenVMBusInteractionEncoder(BusInteractionEncoder):
     UF_XOR = Symbol('uf_xor', FunctionType(INT, [INT, INT]))
+    UF_PC_LOOKUP = Symbol('uf_pc_lookup', FunctionType(INT, [INT, INT]))    
 
-    def __init__(self):
+    def __init__(self, basic_block: BasicBlock):
+        self.basic_block = basic_block
+        self.axioms = self.__axioms_for_bitwise()
+
+    def __axioms_for_bitwise(self) -> list[FNode]:
         x = Symbol('x', INT)
-        self.axioms = [
+        return [
             ForAll([x], Equals(Function(self.UF_XOR, [x, Int(0)]), x)),
             ForAll([x], Equals(Function(self.UF_XOR, [Int(0), x]), x)),
             ForAll([x], Equals(Function(self.UF_XOR, [x, x]), Int(0))),
         ]
 
     @log_conversion()
-    def encode(self, data: Any) -> FNode:
+    def encode_one(self, data: Any) -> FNode:
         match data:
             case {'mult': mult} if mult.is_int_constant() and mult.constant_value() == 0:
                 return TRUE()
@@ -96,3 +105,8 @@ class OpenVMBusInteractionEncoder(BusInteractionEncoder):
     
     def get_axioms(self) -> list[FNode]:
         return self.axioms
+
+def encode(bis: list[Any], basic_block: BasicBlock) -> (FNode, list[FNode]):
+    encoder = BusInteractionEncoder.get_encoder(basic_block)
+    bi = encoder.encode_all(bis)
+    return bi, encoder.get_axioms()

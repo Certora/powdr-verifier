@@ -13,17 +13,6 @@ class BusInteractionHandlers(Enum):
     def __str__(self) -> str:
         return self.value
 
-class OpenVMBusInteraction(Enum):
-    EXECUTION_BRIDGE = 0
-    MEMORY = 1
-    PC_LOOKUP = 2
-    VARIABLE_RANGE_CHECKER = 3
-    BITWISE_LOOKUP = 6
-    TUPLE_RANGE_CHECKER = 7
-
-    def __str__(self) -> str:
-        return self.value
-
 class FieldTypes(Enum):
     BABYBEAR = 0x78000001
     KOALABEAR = 0x7f000001
