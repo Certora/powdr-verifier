@@ -23,7 +23,7 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
                 LE(Int(0), x), LE(x, Int(255)),
                 LE(Int(0), y), LE(y, Int(255)),
                 Equals(Function(self.UF_XOR, [x, y]), z),
-                Equals(op, Int(0)),
+                Equals(op, Int(1)),
             )
         else:
             logging.error(f"Unsupported bitwise operation: {op}")
