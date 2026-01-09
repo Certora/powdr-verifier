@@ -29,16 +29,25 @@ def ARGS() -> argparse.Namespace:
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('input_before', type=Path)
-    parser.add_argument('input_after', type=Path)
+    parser.add_argument('-v', '--verbose', action='count', default=0)
     parser.add_argument('--bus-interaction-handler', type=BusInteractionHandlers, default=BusInteractionHandlers.DEFAULT, choices=list(BusInteractionHandlers))
     parser.add_argument('--field-type', type=FieldTypes, default=FieldTypes.BABYBEAR, choices=list(FieldTypes))
     parser.add_argument('--log-json', action='store_true')
     parser.add_argument('--log-conversion', action='store_true')
-    parser.add_argument('--log-rewrites', action='store_true')
     parser.add_argument('--log-smt', action='store_true')
-    parser.add_argument('--dump-smt', action='store_true')
-    parser.add_argument('-v', '--verbose', action='count', default=0)
+
+    sub = parser.add_subparsers(dest="command")
+
+    sub_eval = sub.add_parser('eval')
+    sub_eval.add_argument('input', type=Path)
+    sub_eval.add_argument('model', type=Path)
+
+    sub_verify = sub.add_parser('verify')
+    sub_verify.add_argument('input_before', type=Path)
+    sub_verify.add_argument('input_after', type=Path)
+    sub_verify.add_argument('--log-rewrites', action='store_true')
+    sub_verify.add_argument('--dump-smt', action='store_true')
+
     global __ARGS
     __ARGS = parser.parse_args()
     if ARGS().verbose > 0:
