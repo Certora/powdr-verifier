@@ -17,12 +17,11 @@ def encode_sequencing(id: str, interactions: list[tuple[FNode, FNode]]) -> FNode
     timestamps = [ Symbol(f'seqt_{id}_{i}', INT) for i in range(n) ]
 
     return And(
-        *[Or(
-            Equals(datas[i], interactions[j][0]) for j in range(n)
-        ) for i in range(n)],
-        *[Or(
-            Equals(timestamps[i], interactions[j][1]) for j in range(n)
-        ) for i in range(n)],
+        # each data is equal to one of the interactions
+        *[ Or(Equals(datas[i], interactions[j][0]) for j in range(n)) for i in range(n)],
+        # each timestamp is equal to one of the interactions
+        *[ Or(Equals(timestamps[i], interactions[j][1]) for j in range(n)) for i in range(n)],
+        # sequencing on datas and timestamps
         *[
                 And(Equals(datas[i], datas[i+1]), GT(timestamps[i+1], timestamps[i]))
             if i % 2 == 0 else
