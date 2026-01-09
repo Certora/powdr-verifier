@@ -45,11 +45,10 @@ class OpenVMBusInteractionEncoder(InteractionEncoder):
         self.bitwise_lookup = openvm_bitwise_lookup.OpenVMBitwiseLookupEncoder()
         self.execution_bridge = openvm_execution_bridge.OpenVMExecutionBridgeEncoder()
         self.memory = openvm_memory.OpenVMMemoryEncoder()
-        self.pc_lookup = openvm_pc_lookup.OpenVMPCLookupEncoder()
+        self.pc_lookup = openvm_pc_lookup.OpenVMPCLookupEncoder(basic_block)
         self.variable_range_checker = openvm_variable_range_checker.OpenVMVariableRangeCheckerEncoder()
         self.tuple_range_checker = openvm_tuple_range_checker.OpenVMTupleRangeCheckerEncoder()
 
-        self.basic_block = basic_block
         super().__init__([self.bitwise_lookup, self.execution_bridge, self.memory, self.pc_lookup, self.variable_range_checker, self.tuple_range_checker])
     
     def encode(self, data: Any) -> FNode:
@@ -62,8 +61,12 @@ class OpenVMBusInteractionEncoder(InteractionEncoder):
                     'args': [address_space, pointer, *data, timestamp],
                 }:
                 return self.memory.encode(mult, address_space, pointer, data, timestamp)
-            case {'id': OpenVMBusInteraction.PC_LOOKUP.value}:
-                return self.pc_lookup.encode()
+            case {
+                    'id': OpenVMBusInteraction.PC_LOOKUP.value,
+                    'mult': mult,
+                    'args': operands
+                }:
+                return self.pc_lookup.encode(mult, operands)
             case {
                     'id': OpenVMBusInteraction.VARIABLE_RANGE_CHECKER.value,
                     'mult': mult,
