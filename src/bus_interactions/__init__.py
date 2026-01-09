@@ -23,11 +23,11 @@ class InteractionEncoder:
     def encode(self, data: Any) -> FNode:
         raise NotImplementedError
 
-    def encode_all(self, data: list[Any]) -> FNode:
-        return And(*[ self.encode(d) for d in data ])
+    def encode_all(self, data: list[Any]) -> list[FNode]:
+        return [ self.encode(d) for d in data ]
 
     def get_axioms(self) -> list[FNode]:
-        return And(*[ encoder.get_axioms() for encoder in self.encoders ])
+        return [ encoder.get_axioms() for encoder in self.encoders ]
 
 class OpenVMBusInteraction(Enum):
     EXECUTION_BRIDGE = 0

@@ -18,7 +18,7 @@ from .smt_utils import wrap_mod, REAL_MOD,UF_MOD
 
 LOGIC = logics.UFNIA
 
-FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['formula', 'axioms', 'derived'])
+FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['constraints', 'bus_interactions', 'axioms', 'derived'])
 
 class SmtConverter:
     def __init__(self, name: str, basic_block: BasicBlock):
@@ -34,9 +34,9 @@ class SmtConverter:
 
     
     def convert_constraints(self, data: list[Any]) -> Any:
-        return And(*[
+        return [
             Equals(wrap_mod(c), Int(0)) for c in data
-        ])
+        ]
     
     def convert_derived(self, data: list[Any]) -> Any:
         res = []
@@ -46,7 +46,7 @@ class SmtConverter:
                     res.append(Equals(Symbol(name, INT), value))
                 case _:
                     logging.error(f"Unsupported derived column: {derived}")
-        return And(*res)
+        return res
 
     @log_conversion(level=logging.DEBUG)
     def convert(self, data: Any) -> Any:
@@ -88,22 +88,23 @@ class SmtConverter:
         return map_recursive(data, self.convert)
     
     def __basic_range_axioms(self) -> list[FNode]:
-        return And(
+        return [
             And(
                 LE(Int(0), sym),
                 LT(sym, Int(ARGS().field_type.value))
             ) for sym in self.field_symbols
-        )
+        ]
 
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
         data = self.convert_recursive(data)
         return FormulaWithAxioms(
-            formula=And(data['machine']['constraints'], data['machine']['bus_interactions']),
-            axioms=And(self.__basic_range_axioms(), data['machine']['axioms']),
+            constraints=data['machine']['constraints'],
+            bus_interactions=data['machine']['bus_interactions'],
+            axioms=self.__basic_range_axioms() + data['machine']['axioms'],
             derived=data['machine']['derived_columns'],
         )
 
-def convert_to_smt_formula(name: str, data: Any, basic_block: BasicBlock) -> FNode:
+def convert_to_smt_formula(name: str, data: Any, basic_block: BasicBlock) -> FormulaWithAxioms:
     smt_converter = SmtConverter(name, basic_block)
     formula = smt_converter.to_formula_with_axioms(data)
     if ARGS().log_smt:

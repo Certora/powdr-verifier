@@ -1,10 +1,11 @@
 from .smt import *
 
 def collect_variables(data: FormulaWithAxioms) -> frozenset[FNode]:
-    return (
-        data.formula.get_free_variables() |
-        data.axioms.get_free_variables() |
-        data.derived.get_free_variables()
+    return frozenset.union(
+        *[f.get_free_variables() for f in data.constraints],
+        *[f.get_free_variables() for f in data.bus_interactions],
+        *[f.get_free_variables() for f in data.axioms],
+        *[f.get_free_variables() for f in data.derived],
     )
 
 def build_vc(f1: FormulaWithAxioms, f2: FormulaWithAxioms) -> FNode:
@@ -16,11 +17,14 @@ def build_vc(f1: FormulaWithAxioms, f2: FormulaWithAxioms) -> FNode:
 
     f = ForAll(onlyfirst,
         And(
-            Not(Iff(f1.formula, f2.formula)),
-            f1.axioms,
-            f2.axioms,
-            f1.derived,
-            f2.derived,
+            Not(Iff(
+                And(*f1.constraints, *f1.bus_interactions),
+                And(*f2.constraints, *f2.bus_interactions)
+            )),
+            And(*f1.axioms),
+            And(*f2.axioms),
+            And(*f1.derived),
+            And(*f2.derived),
         )
     )
     return rewrite(f)
