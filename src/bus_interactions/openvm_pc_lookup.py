@@ -18,8 +18,8 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
     UF_F = Symbol('pc_f', FunctionType(INT, [INT]))
     UF_G = Symbol('pc_g', FunctionType(INT, [INT]))
 
-    def __init__(self, basic_block: BasicBlock) -> None:
-        super().__init__()
+    def __init__(self, name: str, basic_block: BasicBlock) -> None:
+        super().__init__(name)
         self.basic_block = basic_block
         self.stmt_count = len(self.basic_block.statements)
 

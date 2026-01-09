@@ -14,8 +14,8 @@ if __name__ == '__main__':
     before_block = BasicBlock(before["block"])
     assert before_block == BasicBlock(after["block"]), "The basic block has changed"
 
-    before_smt = convert_to_smt_formula(before, before_block)
-    after_smt = convert_to_smt_formula(after, before_block)
+    before_smt = convert_to_smt_formula("before", before, before_block)
+    after_smt = convert_to_smt_formula("after", after, before_block)
 
     vc = build_vc(before_smt, after_smt)
 

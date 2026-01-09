@@ -21,13 +21,13 @@ LOGIC = logics.UFNIA
 FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['formula', 'axioms', 'derived'])
 
 class SmtConverter:
-    def __init__(self, basic_block: BasicBlock):
+    def __init__(self, name: str, basic_block: BasicBlock):
         self.basic_block = basic_block
         self.field_symbols = set()
 
         match ARGS().bus_interaction_handler:
             case BusInteractionHandlers.OPENVM:
-                self.bus_interaction_encoder = bus_interactions.OpenVMBusInteractionEncoder(basic_block)
+                self.bus_interaction_encoder = bus_interactions.OpenVMBusInteractionEncoder(name, basic_block)
             case _:
                 logging.error(f"Unsupported bus interaction handler: {ARGS().bus_interaction_handler}")
                 self.bus_interaction_encoder = None
@@ -103,8 +103,8 @@ class SmtConverter:
             derived=data['machine']['derived_columns'],
         )
 
-def convert_to_smt_formula(data: Any, basic_block: BasicBlock) -> FNode:
-    smt_converter = SmtConverter(basic_block)
+def convert_to_smt_formula(name: str, data: Any, basic_block: BasicBlock) -> FNode:
+    smt_converter = SmtConverter(name, basic_block)
     formula = smt_converter.to_formula_with_axioms(data)
     if ARGS().log_smt:
         logging.info(f'after smt conversion:\n{pprint.pformat(formula, width=80)}')

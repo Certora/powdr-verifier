@@ -41,13 +41,13 @@ class OpenVMBusInteraction(Enum):
         return self.value
 
 class OpenVMBusInteractionEncoder(InteractionEncoder):
-    def __init__(self, basic_block: BasicBlock):
-        self.bitwise_lookup = openvm_bitwise_lookup.OpenVMBitwiseLookupEncoder()
-        self.execution_bridge = openvm_execution_bridge.OpenVMExecutionBridgeEncoder()
-        self.memory = openvm_memory.OpenVMMemoryEncoder()
-        self.pc_lookup = openvm_pc_lookup.OpenVMPCLookupEncoder(basic_block)
-        self.variable_range_checker = openvm_variable_range_checker.OpenVMVariableRangeCheckerEncoder()
-        self.tuple_range_checker = openvm_tuple_range_checker.OpenVMTupleRangeCheckerEncoder()
+    def __init__(self, name: str, basic_block: BasicBlock):
+        self.bitwise_lookup = openvm_bitwise_lookup.OpenVMBitwiseLookupEncoder(name)
+        self.execution_bridge = openvm_execution_bridge.OpenVMExecutionBridgeEncoder(name)
+        self.memory = openvm_memory.OpenVMMemoryEncoder(name)
+        self.pc_lookup = openvm_pc_lookup.OpenVMPCLookupEncoder(name, basic_block)
+        self.variable_range_checker = openvm_variable_range_checker.OpenVMVariableRangeCheckerEncoder(name)
+        self.tuple_range_checker = openvm_tuple_range_checker.OpenVMTupleRangeCheckerEncoder(name)
 
         super().__init__([
             self.bitwise_lookup, self.execution_bridge, self.memory, self.pc_lookup,
