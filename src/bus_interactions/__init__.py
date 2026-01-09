@@ -56,8 +56,12 @@ class OpenVMBusInteractionEncoder(InteractionEncoder):
     
     def encode(self, data: Any) -> FNode:
         match data:
-            case {'id': OpenVMBusInteraction.EXECUTION_BRIDGE.value}:
-                return self.execution_bridge.encode()
+            case {
+                    'id': OpenVMBusInteraction.EXECUTION_BRIDGE.value,
+                    'mult': mult,
+                    'args': [pc, timestamp],
+                }:
+                return self.execution_bridge.encode(mult, pc, timestamp)
             case {
                     'id': OpenVMBusInteraction.MEMORY.value,
                     'mult': mult,
