@@ -49,7 +49,10 @@ class OpenVMBusInteractionEncoder(InteractionEncoder):
         self.variable_range_checker = openvm_variable_range_checker.OpenVMVariableRangeCheckerEncoder()
         self.tuple_range_checker = openvm_tuple_range_checker.OpenVMTupleRangeCheckerEncoder()
 
-        super().__init__([self.bitwise_lookup, self.execution_bridge, self.memory, self.pc_lookup, self.variable_range_checker, self.tuple_range_checker])
+        super().__init__([
+            self.bitwise_lookup, self.execution_bridge, self.memory, self.pc_lookup,
+            self.variable_range_checker, self.tuple_range_checker
+        ])
     
     def encode(self, data: Any) -> FNode:
         match data:
