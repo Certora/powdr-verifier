@@ -1,8 +1,9 @@
 import logging
 
+from src.basic_block import *
+from src.encoding import *
 from src.utils import *
 from src.smt import *
-from src.encoding import *
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
@@ -10,8 +11,11 @@ if __name__ == '__main__':
     before = load_json(ARGS().input_before, 'Before')
     after = load_json(ARGS().input_after, 'After')
 
-    before_smt = convert_to_smt_formula(before)
-    after_smt = convert_to_smt_formula(after)
+    before_block = BasicBlock(before["block"])
+    assert before_block == BasicBlock(after["block"]), "The basic block has changed"
+
+    before_smt = convert_to_smt_formula(before, before_block)
+    after_smt = convert_to_smt_formula(after, before_block)
 
     vc = build_vc(before_smt, after_smt)
 
