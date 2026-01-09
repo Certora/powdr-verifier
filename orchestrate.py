@@ -11,7 +11,7 @@ assert VERIFIER_DIR.exists()
 
 def run_powdr():
     POWDR_CONFIGS = [
-        f"APC_CBOR_PATH={DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True)} cargo test single_add_1"
+        f"APC_CBOR_PATH={DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True)} cargo test single_add_1 -- --no-capture"
     ]
     for config in POWDR_CONFIGS:
         print(f"Running {config}")
