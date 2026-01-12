@@ -14,6 +14,7 @@ if __name__ == '__main__':
 
     match ARGS().command:
         case 'trace':
+            logging.info(f"running tracer on {ARGS().input}")
             input = load_json(ARGS().input, 'input')
 
             smt = convert_to_smt_formula("input", input, BasicBlock(input["block"]))
@@ -21,6 +22,7 @@ if __name__ == '__main__':
             trace(smt)
 
         case 'eval':
+            logging.info(f"evaluating trace from {ARGS().model} on {ARGS().input}")
             input = load_json(ARGS().input, 'input')
             model = load_json(ARGS().model, 'model')
 
@@ -29,6 +31,7 @@ if __name__ == '__main__':
             evaluate(input["machine"], smt, model)
 
         case 'verify':
+            logging.info(f"verify equivalence of {ARGS().input_before} and {ARGS().input_after}")
             before = load_json(ARGS().input_before, 'Before')
             after = load_json(ARGS().input_after, 'After')
 
