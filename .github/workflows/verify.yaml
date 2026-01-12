@@ -1,0 +1,40 @@
+name: Generate rust cache for PR builds
+on:
+  push
+
+env:
+    CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu
+
+    steps:
+    - name: checkout verifier
+      uses: actions/checkout@v6
+      with:
+        path: verifier
+        submodules: recursive
+
+    - name: checkout powdr
+      uses: actions/checkout@v6
+      with:
+        repository: git@github.com:Certora/powdr.git
+        ref: develop
+        path: powdr
+        submodules: recursive
+
+    - name: setup cargo cache
+      uses: actions/cache@v3
+      with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            powdr/target/
+          key: cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-
+    
+    - name: run test case
+      run: APC_CBOR_PATH=../data cargo test single_add_1 -- --no-capture
+      working-directory: powdr
