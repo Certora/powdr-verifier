@@ -35,8 +35,13 @@ def parse_args():
     parser.add_argument('--log-json', action='store_true')
     parser.add_argument('--log-conversion', action='store_true')
     parser.add_argument('--log-smt', action='store_true')
+    parser.add_argument('--dump-smt', action='store_true')
 
     sub = parser.add_subparsers(dest="command")
+    
+    sub_trace = sub.add_parser('trace')
+    sub_trace.add_argument('input', type=Path)
+    sub_trace.add_argument('--use-derived', action='store_true')
 
     sub_eval = sub.add_parser('eval')
     sub_eval.add_argument('input', type=Path)
@@ -46,7 +51,6 @@ def parse_args():
     sub_verify.add_argument('input_before', type=Path)
     sub_verify.add_argument('input_after', type=Path)
     sub_verify.add_argument('--log-rewrites', action='store_true')
-    sub_verify.add_argument('--dump-smt', action='store_true')
 
     global __ARGS
     __ARGS = parser.parse_args()
@@ -55,7 +59,14 @@ def parse_args():
         logger.setLevel(logger.level - 10 * ARGS().verbose)
 
 def get_smt_dump_filename() -> Path:
-    return ARGS().input_before.parent / f"verify-{ARGS().input_before.stem}-{ARGS().input_after.stem}.smt2"
+    match ARGS().command:
+        case 'trace':
+            return ARGS().input.parent / f"trace-{ARGS().input.stem}.smt2"
+        case 'verify':
+            return ARGS().input_before.parent / f"verify-{ARGS().input_before.stem}-{ARGS().input_after.stem}.smt2"
+        case _:
+            raise ValueError(f"Unknown command: {ARGS().command}")
+    
 
 def load_json(file: Path, label: str) -> Any:
     with open(file, 'r') as f:

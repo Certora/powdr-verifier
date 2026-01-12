@@ -138,11 +138,10 @@ def check_formula(f: FNode) -> bool:
     match is_sat(f, logic=LOGIC):
         case True:
             print("SAT")
-            print(get_model(f, logic=LOGIC))
-            return False
+            return get_model(f, logic=LOGIC)
         case False:
             print("UNSAT")
-            return True
+            return False
         case _:
             print(f"UNKNOWN")
-            return False
+            return None

@@ -34,7 +34,7 @@ def deserialize_all():
 
 def run_verifier():
     subprocess.run([
-        "python3", VERIFIER_DIR / "main.py", "verify", DATA_DIR / "apc_candidate_unopt_0.json", DATA_DIR / "apc_candidate_0.json", "--dump-smt"
+        "python3", VERIFIER_DIR / "main.py", "--dump-smt", "verify", DATA_DIR / "apc_candidate_unopt_0.json", DATA_DIR / "apc_candidate_0.json"
     ])
 
 run_powdr()
