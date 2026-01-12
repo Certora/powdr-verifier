@@ -54,13 +54,12 @@ jobs:
     
     - name: deserialize test case
       run: |
-        for file in `ls data/*.cbor`; do
-          cargo run --bin deserialize babybear ../${file} human ../${file%.cbor}.txt
-          cargo run --bin deserialize babybear ../${file} json ../${file%.cbor}.json
+        for file in `ls ../data/*.cbor`; do
+          cargo run --bin deserialize babybear ${file} human ${file%.cbor}.txt
+          cargo run --bin deserialize babybear ${file} json ${file%.cbor}.json
         done
       working-directory: powdr
     
     - name: run tracer
-      run:
-        python verifier/main.py trace data/*.json
+      run: python3 verifier/main.py trace data/*.json
     
