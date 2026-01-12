@@ -1,10 +1,6 @@
 import json
-from pysmt.fnode import FNode
-from pysmt.shortcuts import *
-from pysmt.substituter import FunctionInterpretation
-from pysmt.typing import *
 
-from .smt_utils import UF_MOD
+from .smt_utils import *
 
 from .smt import FormulaWithAxioms
 

@@ -1,12 +1,10 @@
 import logging
 from typing import Any
-from pysmt.shortcuts import *
-from pysmt.typing import *
-from pysmt.fnode import FNode
 
 from .single_interaction_encoder import SingleInteractionEncoder
 
 from ..basic_block import BasicBlock
+from ..smt_utils import *
 
 class OpenVMPCLookupEncoder(SingleInteractionEncoder):
     UF_OPCODE = Symbol('pc_opcode', FunctionType(INT, [INT]))

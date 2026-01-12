@@ -1,10 +1,9 @@
 import logging
 from typing import Any
-from pysmt.shortcuts import *
-from pysmt.typing import *
-from pysmt.fnode import FNode
 
 from .single_interaction_encoder import SingleInteractionEncoder
+
+from ..smt_utils import *
 
 class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
     UF_XOR = Symbol('uf_xor', FunctionType(INT, [INT, INT]))

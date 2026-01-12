@@ -1,10 +1,6 @@
-import argparse
 from enum import Enum
 import logging
 from typing import Any
-
-from pysmt.fnode import FNode
-from pysmt.shortcuts import *
 
 from . import single_interaction_encoder
 from . import openvm_bitwise_lookup
@@ -15,6 +11,7 @@ from . import openvm_variable_range_checker
 from . import openvm_tuple_range_checker
 
 from ..basic_block import BasicBlock
+from ..smt_utils import *
 
 class InteractionEncoder:
     def __init__(self, encoders: list[single_interaction_encoder.SingleInteractionEncoder]):

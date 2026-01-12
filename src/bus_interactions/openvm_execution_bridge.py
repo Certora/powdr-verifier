@@ -1,11 +1,7 @@
-import logging
-from typing import Any
-from pysmt.shortcuts import *
-from pysmt.typing import *
-from pysmt.fnode import FNode
-
 from .single_interaction_encoder import SingleInteractionEncoder
 from .sequencing import encode_sequencing
+
+from ..smt_utils import *
 
 class OpenVMExecutionBridgeEncoder(SingleInteractionEncoder):
     def __init__(self, name: str) -> None:

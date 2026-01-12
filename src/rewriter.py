@@ -1,13 +1,6 @@
 import logging
-from pysmt.shortcuts import *
-from pysmt.typing import *
-from pysmt.fnode import FNode
-from pysmt.smtlib import *
-from pysmt.walkers import *
-from pysmt import operators
-from pysmt import substituter
 
-from .smt_utils import wrap_mod, UF_MOD
+from .smt_utils import *
 from .utils import ARGS
 
 def rewrite_mul2or(input: FNode) -> FNode:

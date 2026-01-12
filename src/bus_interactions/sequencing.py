@@ -1,6 +1,4 @@
-from pysmt.fnode import FNode
-from pysmt.shortcuts import *
-from pysmt.typing import *
+from ..smt_utils import *
 
 # encodes a formula that establishes a sequencing of the given interactions
 # each interaction is a tuple of (data, timestamp) and a sequencing imposes a

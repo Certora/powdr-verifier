@@ -1,9 +1,8 @@
 from typing import Any
-from pysmt.shortcuts import *
-from pysmt.typing import *
-from pysmt.fnode import FNode
 
 from .single_interaction_encoder import SingleInteractionEncoder
+
+from ..smt_utils import *
 
 class OpenVMVariableRangeCheckerEncoder(SingleInteractionEncoder):
     def encode(self, mult: Any, x: Any, bits: Any) -> FNode:
