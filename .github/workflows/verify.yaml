@@ -49,7 +49,7 @@ jobs:
         pip install -r verifier/requirements.txt
 
     - name: run test case
-      run: APC_CBOR_PATH=../data cargo test single_add_1 -- --no-capture
+      run: APC_CBOR_PATH=../../data cargo test single_add_1 -- --no-capture
       working-directory: powdr
     
     - name: deserialize test case
