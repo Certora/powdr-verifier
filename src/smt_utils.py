@@ -10,6 +10,8 @@ from .utils import ARGS
 UF_MOD = Symbol('uf_mod', FunctionType(INT, [INT, INT]))
 REAL_MOD = Symbol('mod', FunctionType(INT, [INT, INT]))
 
+logics.PYSMT_LOGICS = logics.PYSMT_LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA])
+
 def wrap_mod(input: FNode, modulus: Optional[FNode] = None) -> FNode:
     if modulus is None:
         modulus = Int(ARGS().field_type.value)
