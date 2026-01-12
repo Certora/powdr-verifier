@@ -22,10 +22,13 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
         super().__init__(name)
         self.basic_block = basic_block
         self.stmt_count = len(self.basic_block.statements)
+        self.needs_axioms = False
+        self.globals = frozenset([self.UF_OPCODE, self.UF_A, self.UF_B, self.UF_C, self.UF_D, self.UF_E, self.UF_F, self.UF_G])
 
     def encode(self, mult: Any, operands: list[Any]) -> FNode:
         match operands:
             case [pc, op, a, b, c, d, e, f, g]:
+                self.needs_axioms = True
                 return And(
                     LT(pc, Int(self.stmt_count)),
                     Equals(Function(self.UF_OPCODE, [pc]), op),
@@ -42,6 +45,8 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
                 return None
 
     def get_axioms(self) -> list[FNode]:
+        if not self.needs_axioms:
+            return TRUE()
         return And(
             And(
                 Equals(Function(self.UF_OPCODE, [Int(pc)]), Int(stmt["opcode"])),

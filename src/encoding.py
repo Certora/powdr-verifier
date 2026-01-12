@@ -13,7 +13,9 @@ def build_vc(f1: FormulaWithAxioms, f2: FormulaWithAxioms) -> FNode:
     var1 = collect_variables(f1)
     var2 = collect_variables(f2)
 
-    onlyfirst = var1 - var2
+    globals = f1.globals | f2.globals
+
+    onlyfirst = (var1 - var2) - globals
 
     f = ForAll(onlyfirst,
         And(

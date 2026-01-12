@@ -18,7 +18,7 @@ from .smt_utils import wrap_mod, REAL_MOD,UF_MOD
 
 LOGIC = logics.UFNIA
 
-FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['constraints', 'bus_interactions', 'axioms', 'derived'])
+FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['constraints', 'bus_interactions', 'axioms', 'derived', 'globals'])
 
 class SmtConverter:
     def __init__(self, name: str, basic_block: BasicBlock):
@@ -80,6 +80,7 @@ class SmtConverter:
                     'bus_interactions': bi,
                     'axioms': biaxioms,
                     'derived_columns': self.convert_derived(dc),
+                    'globals': self.bus_interaction_encoder.get_globals(),
                 }
             case _:
                 return None
@@ -102,6 +103,7 @@ class SmtConverter:
             bus_interactions=data['machine']['bus_interactions'],
             axioms=self.__basic_range_axioms() + data['machine']['axioms'],
             derived=data['machine']['derived_columns'],
+            globals=data['machine']['globals'],
         )
 
 def convert_to_smt_formula(name: str, data: Any, basic_block: BasicBlock) -> FormulaWithAxioms:
