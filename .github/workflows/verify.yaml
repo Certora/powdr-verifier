@@ -61,6 +61,5 @@ jobs:
       working-directory: powdr
     
     - name: run tracer
-      run:
-        python verifier/main.py trace data/*.json
+      run: python3 verifier/main.py trace data/*.json
     
