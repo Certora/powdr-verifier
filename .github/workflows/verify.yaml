@@ -14,6 +14,10 @@ jobs:
       with:
         python-version: '3.13'
 
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: 1.82.0
+
     - name: checkout verifier
       uses: actions/checkout@v6
       with:
@@ -46,7 +50,7 @@ jobs:
     
     - name: deserialize test case
       run: |
-        for file in ../data/*.cbor; do
+        for file in `ls ../data/*.cbor`; do
           cargo run --bin deserialize babybear ${file} human ../data/${file%.cbor}.txt
           cargo run --bin deserialize babybear ${file} json ../data/${file%.cbor}.json
         done
