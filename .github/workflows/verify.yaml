@@ -49,14 +49,14 @@ jobs:
         pip install -r verifier/requirements.txt
 
     - name: run test case
-      run: APC_CBOR_PATH=../data cargo test single_add_1 -- --no-capture
+      run: APC_CBOR_PATH=../../data cargo test single_add_1 -- --no-capture
       working-directory: powdr
     
     - name: deserialize test case
       run: |
         for file in `ls data/*.cbor`; do
-          cargo run --bin deserialize babybear ${file} human ../data/${file%.cbor}.txt
-          cargo run --bin deserialize babybear ${file} json ../data/${file%.cbor}.json
+          cargo run --bin deserialize babybear ../${file} human ../${file%.cbor}.txt
+          cargo run --bin deserialize babybear ../${file} json ../${file%.cbor}.json
         done
       working-directory: powdr
     
