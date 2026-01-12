@@ -70,7 +70,12 @@ jobs:
     - name: run evaluator
       run: |
         for file in `ls data/apc_*-model.json`; do
-          python3 verifier/main.py eval ${file%-model.json}.json ${file}
+          python3 verifier/main.py eval ${file/-model/}.json ${file}
         done
 
+    - name: run verifier
+      run: |
+        for file in `ls data/apc_*_unopt_*.json`; do
+          python3 verifier/main.py verify ${file} ${file/_unopt/}
+        done
     
