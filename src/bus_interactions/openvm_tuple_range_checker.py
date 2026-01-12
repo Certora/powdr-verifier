@@ -4,4 +4,4 @@ from ..smt_utils import *
 
 class OpenVMTupleRangeCheckerEncoder(SingleInteractionEncoder):
     def encode(self) -> FNode:
-        return True()
+        return TRUE()
