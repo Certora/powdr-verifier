@@ -55,7 +55,7 @@ jobs:
     
     - name: deserialize test case
       run: |
-        for file in `ls ../data/*.cbor`; do
+        for file in `ls ../data/apc_*.cbor`; do
           cargo run --bin deserialize babybear ${file} human ${file%.cbor}.txt
           cargo run --bin deserialize babybear ${file} json ${file%.cbor}.json
         done
@@ -64,6 +64,13 @@ jobs:
     - name: run tracer
       run: |
         for file in `ls data/apc_*.json`; do
-          python3 verifier/main.py trace ${file}
+          python3 verifier/main.py trace ${file} --dump-model ${file%.json}-model.json
         done
+    
+    - name: run evaluator
+      run: |
+        for file in `ls data/apc_*-model.json`; do
+          python3 verifier/main.py eval ${file%-model.json}.json ${file}
+        done
+
     
