@@ -7,3 +7,6 @@ class SingleInteractionEncoder:
 
     def get_axioms(self) -> list[FNode]:
         return TRUE()
+    
+    def get_globals(self) -> frozenset[FNode]:
+        return getattr(self, 'globals', frozenset())

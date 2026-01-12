@@ -28,6 +28,10 @@ class InteractionEncoder:
 
     def get_axioms(self) -> list[FNode]:
         return [ encoder.get_axioms() for encoder in self.encoders ]
+    
+    def get_globals(self) -> frozenset[FNode]:
+        """Returns all global symbols that should not be part of any quantifier"""
+        return frozenset.union(*[encoder.get_globals() for encoder in self.encoders])
 
 class OpenVMBusInteraction(Enum):
     EXECUTION_BRIDGE = 0
@@ -92,3 +96,4 @@ class OpenVMBusInteractionEncoder(InteractionEncoder):
             case _:
                 logging.error(f"Unsupported bus interaction: {data}")
                 return None
+
