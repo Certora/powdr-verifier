@@ -40,5 +40,5 @@ if __name__ == '__main__':
 
             verify(before, after, before_block)
         case _:
-            logging.error(f"Unknown command: {ARGS().command}")
+            logging.error(f"unknown command: {ARGS().command}")
             exit(1)
