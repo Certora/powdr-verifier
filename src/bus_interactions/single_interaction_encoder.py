@@ -1,5 +1,4 @@
-from pysmt.fnode import FNode
-from pysmt.shortcuts import *
+from ..smt_utils import *
 
 class SingleInteractionEncoder:
     def __init__(self, name: str):

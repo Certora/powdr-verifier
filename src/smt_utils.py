@@ -1,5 +1,8 @@
 from pysmt.fnode import FNode
+from pysmt import logics, operators, substituter
 from pysmt.shortcuts import *
+from pysmt.smtlib import script
+from pysmt.substituter import FunctionInterpretation
 from typing import Optional
 
 from .utils import ARGS

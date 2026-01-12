@@ -3,18 +3,13 @@ import collections
 import logging
 import pprint
 from typing import Any
-from pysmt import logics
-from pysmt.fnode import FNode
-from pysmt.shortcuts import *
-from pysmt.smtlib import script
-from pysmt.typing import *
 
 from . import bus_interactions
 from .basic_block import BasicBlock
 from .utils import get_smt_dump_filename, map_recursive, ARGS, log_conversion, BusInteractionHandlers
 from .pretty_printer import pretty_print_smtlib
 from .rewriter import rewrite
-from .smt_utils import wrap_mod, REAL_MOD,UF_MOD
+from .smt_utils import *
 
 LOGIC = logics.UFNIA
 
