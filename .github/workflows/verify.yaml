@@ -19,7 +19,7 @@ jobs:
     - name: checkout powdr
       uses: actions/checkout@v6
       with:
-        repository: git@github.com:Certora/powdr.git
+        repository: Certora/powdr
         ref: develop
         path: powdr
         submodules: recursive
