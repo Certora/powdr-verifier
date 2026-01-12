@@ -23,6 +23,7 @@ jobs:
         ref: develop
         path: powdr
         submodules: recursive
+        ssh-key: ${{ secrets.DEPLOY_KEY_POWDR }}
 
     - name: setup cargo cache
       uses: actions/cache@v3
