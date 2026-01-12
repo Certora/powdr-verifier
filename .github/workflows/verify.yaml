@@ -55,8 +55,8 @@ jobs:
     - name: deserialize test case
       run: |
         for file in `ls data/*.cbor`; do
-          cargo run --bin deserialize babybear ${file} human ../data/${file%.cbor}.txt
-          cargo run --bin deserialize babybear ${file} json ../data/${file%.cbor}.json
+          cargo run --bin deserialize babybear ../${file} human ../${file%.cbor}.txt
+          cargo run --bin deserialize babybear ../${file} json ../${file%.cbor}.json
         done
       working-directory: powdr
     
