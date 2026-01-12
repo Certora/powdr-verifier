@@ -61,5 +61,8 @@ jobs:
       working-directory: powdr
     
     - name: run tracer
-      run: python3 verifier/main.py trace data/*.json
+      run: |
+        for file in `ls data/apc_*.json`; do
+          python3 verifier/main.py trace ${file}
+        done
     
