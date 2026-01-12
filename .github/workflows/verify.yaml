@@ -64,13 +64,13 @@ jobs:
     - name: run tracer
       run: |
         for file in `ls data/apc_*.json`; do
-          python3 verifier/main.py trace ${file} --dump-model model-${file%.json}.json
+          python3 verifier/main.py trace ${file} --dump-model ${file%.json}.model
         done
     
     - name: run evaluator
       run: |
-        for file in `ls data/model-*.json`; do
-          python3 verifier/main.py eval ${file#model-} ${file}
+        for file in `ls data/*.model`; do
+          python3 verifier/main.py eval ${file%.model}.json ${file}
         done
 
     - name: run verifier
