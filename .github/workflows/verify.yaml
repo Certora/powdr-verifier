@@ -56,26 +56,34 @@ jobs:
     - name: deserialize test case
       run: |
         for file in `ls ../data/apc_*.cbor`; do
+          echo "::group::deserialize ${file}"
           cargo run --bin deserialize babybear ${file} human ${file%.cbor}.txt
           cargo run --bin deserialize babybear ${file} json ${file%.cbor}.json
+          echo "::endgroup::"
         done
       working-directory: powdr
     
     - name: run tracer
       run: |
         for file in `ls data/apc_*.json`; do
+          echo "::group::run tracer on ${file}"
           python3 verifier/main.py trace ${file} --dump-model ${file%.json}.model
+          echo "::endgroup::"
         done
     
     - name: run evaluator
       run: |
         for file in `ls data/*.model`; do
+          echo "::group::run evaluator on ${file%.model}.json"
           python3 verifier/main.py eval ${file%.model}.json ${file}
+          echo "::endgroup::"
         done
 
     - name: run verifier
       run: |
         for file in `ls data/apc_*_unopt_*.json`; do
+          echo "::group::run verifier on ${file} ${file/_unopt/}"
           python3 verifier/main.py verify ${file} ${file/_unopt/}
+          echo "::endgroup::"
         done
     
