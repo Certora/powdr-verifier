@@ -14,7 +14,10 @@ def trace(smt: FormulaWithAxioms):
     if ARGS().use_derived and len(smt.derived) > 0:
         f = And(f, *smt.derived)
 
-    model = check_formula(f)
-        
-    print(json.dumps(to_nice_model(model), indent=4))
+    model = to_nice_model(check_formula(f))
+
+    if ARGS().dump_model:
+        with open(ARGS().dump_model, 'w') as f:
+            json.dump(model, f, indent=4)
+    print(json.dumps(model, indent=4))
 
