@@ -134,7 +134,6 @@ def check_formula(f: FNode) -> bool:
         with open(get_smt_dump_filename(), 'w') as dump:
             smtlib = convert_to_smt_script(f, LOGIC)
             pretty_print_smtlib(smtlib, dump)
-    logging.info(f'solving...')
     match is_sat(f, logic=LOGIC):
         case True:
             print("SAT")
