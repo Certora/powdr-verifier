@@ -57,8 +57,6 @@ def run_verifier():
 if __name__ == '__main__':
     args = parse_args()
 
-    run_powdr(args.tests)
-
     match args.command:
         case 'trace':
             run_powdr(args.tests)
