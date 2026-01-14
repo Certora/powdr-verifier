@@ -1,3 +1,4 @@
+from .permutation_check import encode_permutation_check
 from .single_interaction_encoder import SingleInteractionEncoder
 from .sequencing import encode_sequencing
 
@@ -9,8 +10,9 @@ class OpenVMExecutionBridgeEncoder(SingleInteractionEncoder):
         self.interactions = []
 
     def encode(self, mult: FNode, pc: FNode, timestamp: FNode) -> FNode:
-        self.interactions.append((pc, timestamp))
+        self.interactions.append((mult, [pc, timestamp]))
         return TRUE()
 
     def get_axioms(self) -> list[FNode]:
-        return encode_sequencing(f'{self.name}_eb', self.interactions)
+        encode_timestamps = lambda i1, i2: LT(i1[1], i2[1])
+        return encode_permutation_check(f'{self.name}_eb', self.interactions, encode_timestamps)
