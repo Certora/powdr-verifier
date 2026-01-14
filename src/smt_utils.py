@@ -4,6 +4,7 @@ from pysmt.shortcuts import *
 from pysmt.smtlib import script
 from pysmt.substituter import FunctionInterpretation
 from typing import Any, Optional
+from pathlib import Path
 
 from .utils import ARGS
 
@@ -11,9 +12,13 @@ UF_MOD = Symbol('uf_mod', FunctionType(INT, [INT, INT]))
 REAL_MOD = Symbol('mod', FunctionType(INT, [INT, INT]))
 
 logics.PYSMT_LOGICS = logics.PYSMT_LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA])
-get_env().factory.add_generic_solver('cvc5ff', [
-    'cvc5/build/bin/cvc5', '--mod-range-solver', '--nia-intro-mm-mod'
-], [logics.QF_UFNIA, logics.UFNIA])
+
+cvc5_path = Path('cvc5/build/bin/cvc5')
+if cvc5_path.exists():
+    get_env().factory.add_generic_solver('cvc5ff',
+        [ 'cvc5/build/bin/cvc5', '--mod-range-solver', '--nia-intro-mm-mod' ],
+        [ logics.QF_UFNIA, logics.UFNIA ]
+    )
 
 def wrap_mod(input: FNode, modulus: Optional[FNode] = None) -> FNode:
     if modulus is None:
