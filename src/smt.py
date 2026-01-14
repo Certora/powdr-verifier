@@ -134,10 +134,10 @@ def check_formula(f: FNode) -> bool:
         with open(get_smt_dump_filename(), 'w') as dump:
             smtlib = convert_to_smt_script(f, LOGIC)
             pretty_print_smtlib(smtlib, dump)
-    match is_sat(f, logic=LOGIC):
+    match is_sat(f, logic=LOGIC, solver_name='cvc5ff'):
         case True:
             print("SAT")
-            return get_model(f, logic=LOGIC)
+            return get_model(f, logic=LOGIC, solver_name='cvc5ff')
         case False:
             print("UNSAT")
             return False

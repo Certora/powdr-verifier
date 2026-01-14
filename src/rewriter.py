@@ -59,7 +59,7 @@ class Rewriter(substituter.Substituter):
     def __init__(self, env=None):
         substituter.Substituter.__init__(self, env=env)
     
-    @substituter.handles(set(operators.ALL_TYPES) - operators.QUANTIFIERS - {operators.FUNCTION})
+    @substituter.handles(set(operators.ALL_TYPES) - operators.QUANTIFIERS)
     def walk_identity_or_replace(self, formula, args, **kwargs):
         for rewrite in REWRITES.get(formula.node_type(), []):
             result = rewrite(formula)
