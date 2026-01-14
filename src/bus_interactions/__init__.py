@@ -14,6 +14,7 @@ from ..basic_block import BasicBlock
 from ..smt_utils import *
 
 class InteractionEncoder:
+    """Base class for an encoder of arbitrary bus interactions."""
     def __init__(self, encoders: list[single_interaction_encoder.SingleInteractionEncoder]):
         self.encoders = encoders
 
@@ -42,6 +43,7 @@ class OpenVMBusInteraction(Enum):
         return self.value
 
 class OpenVMBusInteractionEncoder(InteractionEncoder):
+    """Encoder for the OpenVM bus interactions."""
     def __init__(self, name: str, basic_block: BasicBlock):
         self.bitwise_lookup = openvm_bitwise_lookup.OpenVMBitwiseLookupEncoder(name)
         self.execution_bridge = openvm_execution_bridge.OpenVMExecutionBridgeEncoder(name)
@@ -72,9 +74,9 @@ class OpenVMBusInteractionEncoder(InteractionEncoder):
             case {
                     'id': OpenVMBusInteraction.PC_LOOKUP.value,
                     'mult': mult,
-                    'args': operands
+                    'args': [pc, op, a, b, c, d, e, f, g]
                 }:
-                return self.pc_lookup.encode(mult, operands)
+                return self.pc_lookup.encode(mult, pc, op, a, b, c, d, e, f, g)
             case {
                     'id': OpenVMBusInteraction.VARIABLE_RANGE_CHECKER.value,
                     'mult': mult,

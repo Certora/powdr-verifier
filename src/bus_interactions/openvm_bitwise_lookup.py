@@ -6,6 +6,15 @@ from .single_interaction_encoder import SingleInteractionEncoder
 from ..smt_utils import *
 
 class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
+    """
+    Encodes bitwise lookup bus interactions. It implements two cases:
+
+    * `(x, y, 0, 0)` constrains `x` and `y` to be bytes
+    * `(x, y, z, 1)` constrains `x`, `y`, and `z` to be bytes and `z = x xor y`
+
+    The xor is encoded as an overapproximating `uf_xor` that is restricted
+    on a best-effort basis by some axioms.
+    """
     UF_XOR = Symbol('uf_xor', FunctionType(INT, [INT, INT]))
 
     def __init__(self, name: str) -> None:
@@ -14,7 +23,7 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
         self.globals = frozenset([self.UF_XOR])
 
     def encode(self, mult: Any, x: Any, y: Any, z: Any, op: Any) -> FNode:
-        if op == Int(0):
+        if op == Int(0) and z == Int(0):
             return And(
                 LE(Int(0), x), LE(x, Int(255)),
                 LE(Int(0), y), LE(y, Int(255)),
