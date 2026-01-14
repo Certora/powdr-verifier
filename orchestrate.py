@@ -13,8 +13,20 @@ assert VERIFIER_DIR.exists()
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('command', type=str, choices=['trace', 'eval', 'verify'])
-    parser.add_argument('tests', type=str, nargs='*', default=['single_add_1'])
+
+    sub = parser.add_subparsers(dest="command")
+    
+    sub_trace = sub.add_parser('trace')
+    sub_trace.add_argument('test', type=str, default='single_add_1')
+
+    sub_eval = sub.add_parser('eval')
+    sub_eval.add_argument('test', type=str, default='single_add_1')
+
+    sub_verify = sub.add_parser('verify')
+    sub_verify.add_argument('test', type=str, default='single_add_1')
+
+    sub_ppsmt = sub.add_parser('preprocess')
+    sub_ppsmt.add_argument('file', type=Path)
 
     return parser.parse_args()
 
@@ -96,6 +108,14 @@ if __name__ == '__main__':
                 "verify",
                 DATA_DIR / "apc_candidate_unopt_0.json",
                 DATA_DIR / "apc_candidate_0.json",
+            ])
+        
+        case 'preprocess':
+            subprocess.run([
+                "cvc5/build/bin/cvc5",
+                "--preprocess-only",
+                "-o", "post-asserts",
+                args.file,
             ])
 
         case _:
