@@ -26,9 +26,9 @@ def encode_permutation_check(
 
     assert all(len(i[1]) == nargs for i in interactions)
 
-    mults = [ Symbol(f'seq_{id}_{i}m', INT) for i in range(n) ]
+    mults = [ Symbol(f'perm_{id}_{i}m', INT) for i in range(n) ]
     datas = [
-        [ Symbol(f'seq_{id}_{i}d_{k}', INT) for k in range(nargs) ]
+        [ Symbol(f'perm_{id}_{i}d_{k}', INT) for k in range(nargs) ]
         for i in range(n)
     ]
 

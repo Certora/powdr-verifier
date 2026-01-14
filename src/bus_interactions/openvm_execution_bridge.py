@@ -1,6 +1,5 @@
 from .permutation_check import encode_permutation_check
 from .single_interaction_encoder import SingleInteractionEncoder
-from .sequencing import encode_sequencing
 
 from ..smt_utils import *
 
