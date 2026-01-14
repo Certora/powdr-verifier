@@ -32,8 +32,9 @@ def parse_args():
     parser.add_argument('-v', '--verbose', action='count', default=0)
     parser.add_argument('--bus-interaction-handler', type=BusInteractionHandlers, default=BusInteractionHandlers.DEFAULT, choices=list(BusInteractionHandlers))
     parser.add_argument('--field-type', type=FieldTypes, default=FieldTypes.BABYBEAR, choices=list(FieldTypes))
-    parser.add_argument('--log-json', action='store_true')
     parser.add_argument('--log-conversion', action='store_true')
+    parser.add_argument('--log-json', action='store_true')
+    parser.add_argument('--log-rewrites', action='store_true')
     parser.add_argument('--log-smt', action='store_true')
     parser.add_argument('--dump-smt', action='store_true')
 
@@ -51,7 +52,6 @@ def parse_args():
     sub_verify = sub.add_parser('verify')
     sub_verify.add_argument('input_before', type=Path)
     sub_verify.add_argument('input_after', type=Path)
-    sub_verify.add_argument('--log-rewrites', action='store_true')
 
     global __ARGS
     __ARGS = parser.parse_args()

@@ -1,6 +1,7 @@
 import json
 import logging
 
+from .rewriter import rewrite
 from .smt import FormulaWithAxioms, check_formula
 from .smt_utils import *
 from .utils import ARGS
@@ -14,6 +15,8 @@ def trace(smt: FormulaWithAxioms):
     )
     if ARGS().use_derived and len(smt.derived) > 0:
         f = And(f, *smt.derived)
+    
+    f = rewrite(f)
 
     model = to_nice_model(check_formula(f))
     print(json.dumps(model, indent=4))
