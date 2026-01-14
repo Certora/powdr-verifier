@@ -14,7 +14,7 @@ assert VERIFIER_DIR.exists()
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('command', type=str, choices=['trace', 'eval', 'verify'])
-    parser.add_argument('tests', type=str, nargs='+', default=['single_add_1'])
+    parser.add_argument('tests', type=str, nargs='*', default=['single_add_1'])
 
     return parser.parse_args()
 
@@ -61,31 +61,45 @@ if __name__ == '__main__':
 
     match args.command:
         case 'trace':
-            logging.info(f"running tracer on {args.input}")
-            input = load_json(args.input, 'input')
-
-            smt = convert_to_smt_formula("input", input, BasicBlock(input["block"]))
-
-            trace(smt)
+            run_powdr(args.tests)
+            deserialize_all()
+            subprocess.run([
+                "python3", VERIFIER_DIR / "main.py",
+                "--dump-smt",
+                "trace",
+                DATA_DIR / "apc_candidate_0.json",
+                "--dump-model", DATA_DIR / "apc_candidate_0.model"
+            ])
 
         case 'eval':
-            logging.info(f"evaluating trace from {args.model} on {args.input}")
-            input = load_json(args.input, 'input')
-            model = load_json(args.model, 'model')
-
-            smt = convert_to_smt_formula("input", input, BasicBlock(input["block"]))
-
-            evaluate(input["machine"], smt, model)
+            run_powdr(args.tests)
+            deserialize_all()
+            subprocess.run([
+                "python3", VERIFIER_DIR / "main.py",
+                "--dump-smt",
+                "trace",
+                DATA_DIR / "apc_candidate_0.json",
+                "--dump-model", DATA_DIR / "apc_candidate_0.model"
+            ])
+            subprocess.run([
+                "python3", VERIFIER_DIR / "main.py",
+                "--dump-smt",
+                "eval",
+                DATA_DIR / "apc_candidate_0.json",
+                DATA_DIR / "apc_candidate_0.model",
+            ])
 
         case 'verify':
-            logging.info(f"verify equivalence of {args.input_before} and {args.input_after}")
-            before = load_json(args.input_before, 'Before')
-            after = load_json(args.input_after, 'After')
+            run_powdr(args.tests)
+            deserialize_all()
+            subprocess.run([
+                "python3", VERIFIER_DIR / "main.py",
+                "--dump-smt",
+                "verify",
+                DATA_DIR / "apc_candidate_unopt_0.json",
+                DATA_DIR / "apc_candidate_0.json",
+            ])
 
-            before_block = BasicBlock(before["block"])
-            assert before_block == BasicBlock(after["block"]), "The basic block has changed"
-
-            verify(before, after, before_block)
         case _:
             logging.error(f"unknown command: {args.command}")
             exit(1)
