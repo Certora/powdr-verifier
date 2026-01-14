@@ -12,7 +12,6 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
         self.interactions = {}
     
     def __add_interaction(self, mult: FNode, address_space: FNode, pointer: FNode, data: list[FNode], timestamp: FNode) -> None:
-        assert address_space.is_int_constant() and pointer.is_int_constant()
         if (address_space, pointer) not in self.interactions:
             self.interactions[(address_space, pointer)] = []
         self.interactions[(address_space, pointer)].append((mult, data + [timestamp]))
