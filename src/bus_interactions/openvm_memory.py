@@ -7,6 +7,10 @@ from .single_interaction_encoder import SingleInteractionEncoder
 from ..smt_utils import *
 
 class OpenVMMemoryEncoder(SingleInteractionEncoder):
+    """
+    Encodes memory bus interactions. It implements a permutation check on all
+    interactions and requires their timestamps increase.
+    """
     def __init__(self, name: str) -> None:
         super().__init__(name)
         self.interactions = {}
