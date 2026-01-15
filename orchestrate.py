@@ -71,7 +71,7 @@ if __name__ == '__main__':
 
     match args.command:
         case 'trace':
-            run_powdr(args.tests)
+            run_powdr(args.test)
             deserialize_all()
             subprocess.run([
                 "python3", VERIFIER_DIR / "main.py",
@@ -82,7 +82,7 @@ if __name__ == '__main__':
             ])
 
         case 'eval':
-            run_powdr(args.tests)
+            run_powdr(args.test)
             deserialize_all()
             subprocess.run([
                 "python3", VERIFIER_DIR / "main.py",
@@ -100,7 +100,7 @@ if __name__ == '__main__':
             ])
 
         case 'verify':
-            run_powdr(args.tests)
+            run_powdr(args.test)
             deserialize_all()
             subprocess.run([
                 "python3", VERIFIER_DIR / "main.py",
