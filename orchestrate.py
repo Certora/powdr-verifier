@@ -31,13 +31,12 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_powdr(tests):
-    for test in tests:
-        cmd = [
-            f"APC_CBOR_PATH={DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True)} cargo test {test} -- --no-capture"
-        ]
-        logging.info(f"running {cmd}")
-        subprocess.run(cmd, shell=True, cwd=POWDR_DIR)
+def run_powdr(test):
+    cmd = [
+        f"APC_CBOR_PATH={DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True)} cargo test {test} -- --no-capture"
+    ]
+    logging.info(f"running {cmd}")
+    subprocess.run(cmd, shell=True, cwd=POWDR_DIR)
 
 def deserialize(cbor_file):
     DESERIALIZE_CONFIGS = [
