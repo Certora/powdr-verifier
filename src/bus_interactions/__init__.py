@@ -90,8 +90,12 @@ class OpenVMBusInteractionEncoder(InteractionEncoder):
                 }:
                 return self.bitwise_lookup.encode(mult, x, y, z, op)
 
-            case {'id': OpenVMBusInteraction.TUPLE_RANGE_CHECKER.value}:
-                return self.tuple_range_checker.encode()
+            case {
+                    'id': OpenVMBusInteraction.TUPLE_RANGE_CHECKER.value,
+                    'mult': mult,
+                    'args': [x, y]
+                }:
+                return self.tuple_range_checker.encode(mult, x, y)
             case _:
                 logging.error(f"Unsupported bus interaction: {data}")
                 return None
