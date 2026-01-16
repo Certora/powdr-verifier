@@ -60,6 +60,8 @@ class SMTPrettyPrinter(script.SmtPrinter):
     
     @printers.write_annotations
     def walk_nary(self, formula, operator):
+        if hasattr(formula, 'comment'):
+            self.write_indented(f'; {formula.comment}\n')
         if self.should_collapse(formula):
             if not self.is_collapsed:
                 self.indent()

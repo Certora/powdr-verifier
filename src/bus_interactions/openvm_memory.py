@@ -23,16 +23,23 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
 
     def encode(self, mult: FNode, address_space: FNode, pointer: FNode, data: list[FNode], timestamp: FNode) -> FNode:
         self.__add_interaction(mult, address_space, pointer, data, timestamp)
-        return Implies(
-            Equals(wrap_mod(mult), wrap_mod(Int(-1))),
-            And(
-                *[ And(LE(Int(0), d), LE(d, Int(255))) for d in data ]
-            )
+        return with_comment(
+            Implies(
+                #Equals(wrap_mod(mult), wrap_mod(Int(-1))),
+                TRUE(),
+                And(
+                    *[ And(LE(Int(0), d), LE(d, Int(255))) for d in data ]
+                )
+            ),
+            f"MEMORY interaction for {address_space} {pointer}"
         )
     
     def get_axioms(self) -> list[FNode]:
         encode_timestamps = lambda i1, i2: LT(i1[4], i2[4])
         return And(
-            encode_permutation_check(f'{self.name}_mem_{self.name_or_id(address_space)}_{self.name_or_id(pointer)}', interactions, encode_timestamps)
+            with_comment(
+                encode_permutation_check(interactions, encode_timestamps),
+                f"MEMORY axioms for {address_space} {pointer}"
+            )
             for (address_space, pointer), interactions in self.interactions.items()
         )

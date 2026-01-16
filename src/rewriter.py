@@ -67,7 +67,7 @@ class Rewriter(substituter.Substituter):
                 self.did_rewrite = True
                 if ARGS().log_rewrites:
                     logging.info(f'rewrote {formula} --> {result}')
-                return result
+                return keep_comment(result, formula)
         return substituter.Substituter.super(self, formula, args=args, **kwargs)
 
 def rewrite(input: FNode) -> FNode:

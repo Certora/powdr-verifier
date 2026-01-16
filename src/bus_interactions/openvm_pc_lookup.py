@@ -46,14 +46,17 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
         if not self.needs_axioms:
             return TRUE()
         return And(
-            And(
-                Equals(Function(self.UF_OPCODE, [Int(pc)]), Int(stmt["opcode"])),
-                Equals(Function(self.UF_A, [Int(pc)]), Int(stmt["a"])),
-                Equals(Function(self.UF_B, [Int(pc)]), Int(stmt["b"])),
-                Equals(Function(self.UF_C, [Int(pc)]), Int(stmt["c"])),
-                Equals(Function(self.UF_D, [Int(pc)]), Int(stmt["d"])),
-                Equals(Function(self.UF_E, [Int(pc)]), Int(stmt["e"])),
-                Equals(Function(self.UF_F, [Int(pc)]), Int(stmt["f"])),
-                Equals(Function(self.UF_G, [Int(pc)]), Int(stmt["g"])),
+            with_comment(
+                And(
+                    Equals(Function(self.UF_OPCODE, [Int(4*pc)]), Int(stmt["opcode"])),
+                    Equals(Function(self.UF_A, [Int(4*pc)]), Int(stmt["a"])),
+                    Equals(Function(self.UF_B, [Int(4*pc)]), Int(stmt["b"])),
+                    Equals(Function(self.UF_C, [Int(4*pc)]), Int(stmt["c"])),
+                    Equals(Function(self.UF_D, [Int(4*pc)]), Int(stmt["d"])),
+                    Equals(Function(self.UF_E, [Int(4*pc)]), Int(stmt["e"])),
+                    Equals(Function(self.UF_F, [Int(4*pc)]), Int(stmt["f"])),
+                    Equals(Function(self.UF_G, [Int(4*pc)]), Int(stmt["g"])),
+                ),
+                f"PC LOOKUP for {pc}"
             ) for pc,stmt in enumerate(self.basic_block.statements)
         )
