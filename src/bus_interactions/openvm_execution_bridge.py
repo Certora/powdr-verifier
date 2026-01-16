@@ -8,8 +8,8 @@ class OpenVMExecutionBridgeEncoder(SingleInteractionEncoder):
     Encodes execution bridge bus interactions. It implements a permutation
     check on all interactions and requires their timestamps increase.
     """
-    def __init__(self, name: str) -> None:
-        super().__init__(name)
+    def __init__(self) -> None:
+        super().__init__()
         self.interactions = []
 
     def encode(self, mult: FNode, pc: FNode, timestamp: FNode) -> FNode:

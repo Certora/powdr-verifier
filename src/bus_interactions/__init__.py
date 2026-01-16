@@ -16,8 +16,14 @@ from ..smt_utils import *
 
 class InteractionEncoder:
     """Base class for an encoder of arbitrary bus interactions."""
-    def __init__(self, encoders: list[single_interaction_encoder.SingleInteractionEncoder]):
+    def __init__(self, encoders: list[single_interaction_encoder.SingleInteractionEncoder], cur_state: Any):
+        """
+        Initialize with the list of encoders. The order in this list fixes the
+        order in which the encoders are applied.
+        """
         self.encoders = encoders
+        for e in encoders:
+            setattr(e, '_cur_state', cur_state)
 
     def add(self, data: Any):
         raise NotImplementedError
@@ -53,18 +59,19 @@ class OpenVMBusInteraction(Enum):
 
 class OpenVMBusInteractionEncoder(InteractionEncoder):
     """Encoder for the OpenVM bus interactions."""
-    def __init__(self, name: str, basic_block: BasicBlock):
-        self.bitwise_lookup = openvm_bitwise_lookup.OpenVMBitwiseLookupEncoder(name)
-        self.execution_bridge = openvm_execution_bridge.OpenVMExecutionBridgeEncoder(name)
-        self.memory = openvm_memory.OpenVMMemoryEncoder(name)
-        self.pc_lookup = openvm_pc_lookup.OpenVMPCLookupEncoder(name, basic_block)
-        self.variable_range_checker = openvm_variable_range_checker.OpenVMVariableRangeCheckerEncoder(name)
-        self.tuple_range_checker = openvm_tuple_range_checker.OpenVMTupleRangeCheckerEncoder(name)
+    def __init__(self, basic_block: BasicBlock, cur_state: Any):
+        self.bitwise_lookup = openvm_bitwise_lookup.OpenVMBitwiseLookupEncoder()
+        self.execution_bridge = openvm_execution_bridge.OpenVMExecutionBridgeEncoder()
+        self.memory = openvm_memory.OpenVMMemoryEncoder()
+        self.pc_lookup = openvm_pc_lookup.OpenVMPCLookupEncoder(basic_block)
+        self.variable_range_checker = openvm_variable_range_checker.OpenVMVariableRangeCheckerEncoder()
+        self.tuple_range_checker = openvm_tuple_range_checker.OpenVMTupleRangeCheckerEncoder()
 
         super().__init__([
-            self.bitwise_lookup, self.execution_bridge, self.memory, self.pc_lookup,
-            self.variable_range_checker, self.tuple_range_checker
-        ])
+            self.bitwise_lookup, self.execution_bridge, self.pc_lookup,
+            self.variable_range_checker, self.tuple_range_checker,
+            self.memory
+        ], cur_state)
     
     def add(self, data: Any):
         match data:

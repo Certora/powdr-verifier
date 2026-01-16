@@ -24,7 +24,7 @@ class SmtConverter:
 
         match ARGS().bus_interaction_handler:
             case BusInteractionHandlers.OPENVM:
-                self.bus_interaction_encoder = bus_interactions.OpenVMBusInteractionEncoder(name, basic_block)
+                self.bus_interaction_encoder = bus_interactions.OpenVMBusInteractionEncoder(basic_block, self)
             case _:
                 logging.error(f"Unsupported bus interaction handler: {ARGS().bus_interaction_handler}")
                 self.bus_interaction_encoder = None
@@ -75,13 +75,11 @@ class SmtConverter:
                     case _: return None
             case {'expr': expr, **rest} if rest == {}:
                 return expr
-            case {'constraints': list(cs), 'bus_interactions': list(bis), 'derived_columns': list(dc), **rest}:
+            case {'constraints': list(cs), 'bus_interactions': list(bis), 'derived_columns': list(dc)}:
                 self.convert_constraints(cs)
                 self.convert_derived(dc)
                 self.bus_interaction_encoder.add_all(bis)
-                return {
-                    **rest,
-                }
+                return data
             case _:
                 return None
     
@@ -99,11 +97,12 @@ class SmtConverter:
             )
 
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
-        data = self.convert_recursive(data)
+        self.convert_recursive(data)
         self.__add_basic_range_axioms()
+        bus_interactions = self.bus_interaction_encoder.encode_all()
         return FormulaWithAxioms(
             constraints=self.constraints,
-            bus_interactions=self.bus_interaction_encoder.encode_all(),
+            bus_interactions=bus_interactions,
             axioms=self.bus_interaction_encoder.get_axioms(),
             derived=self.derived_columns,
             globals=self.bus_interaction_encoder.get_globals(),

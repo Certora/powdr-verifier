@@ -17,8 +17,8 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
     """
     UF_XOR = Symbol('uf_xor', FunctionType(INT, [INT, INT]))
 
-    def __init__(self, name: str) -> None:
-        super().__init__(name)
+    def __init__(self) -> None:
+        super().__init__()
         self.needs_xor_axioms = False
         self.globals = frozenset([self.UF_XOR])
 
