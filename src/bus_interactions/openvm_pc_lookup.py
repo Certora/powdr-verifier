@@ -31,7 +31,8 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
     def encode(self, mult: Any, pc: FNode, op: FNode, a: FNode, b: FNode, c: FNode, d: FNode, e: FNode, f: FNode, g: FNode) -> FNode:
         self.needs_axioms = True
         return And(
-            LT(pc, Int(self.stmt_count)),
+            LT(pc, Int(4*self.stmt_count - 3)),
+            Equals(wrap_mod(pc, Int(4)), Int(0)),
             Equals(Function(self.UF_OPCODE, [pc]), op),
             Equals(Function(self.UF_A, [pc]), a),
             Equals(Function(self.UF_B, [pc]), b),
