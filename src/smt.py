@@ -30,7 +30,10 @@ class SmtConverter:
     
     def convert_constraints(self, data: list[Any]) -> Any:
         return [
-            Equals(wrap_mod(c), Int(0)) for c in data
+            with_comment(
+                Equals(wrap_mod(c), Int(0)),
+                f"CONSTRAINT #{id}"
+            ) for id,c in enumerate(data)
         ]
     
     def convert_derived(self, data: list[Any]) -> Any:
@@ -85,10 +88,13 @@ class SmtConverter:
     
     def __basic_range_axioms(self) -> list[FNode]:
         return [
-            And(
-                LE(Int(0), sym),
-                LT(sym, Int(ARGS().field_type.value))
-            ) for sym in self.field_symbols
+            with_comment(
+                And(
+                    LE(Int(0), sym),
+                    LT(sym, Int(ARGS().field_type.value))
+                ),
+                f"BASIC RANGE axiom for {sym}"
+            ) for sym in sorted(self.field_symbols, key=lambda x: str(x))
         ]
 
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:

@@ -14,7 +14,10 @@ class OpenVMTupleRangeCheckerEncoder(SingleInteractionEncoder):
         of `x` and `y` to be in the range [0, MAX_0] and [0, MAX_1], respectively.
         `MAX_0` and `MAX_1` are constants from the VM config.
         """
-        return And(
-            LE(Int(0), x), LT(x, Int(self.MAX_0)),
-            LE(Int(0), y), LT(y, Int(self.MAX_1)),
+        return with_comment(
+            And(
+                LE(Int(0), x), LT(x, Int(self.MAX_0)),
+                LE(Int(0), y), LT(y, Int(self.MAX_1)),
+            ),
+            f"TUPLE RANGE CHECKER {x} {y}"
         )

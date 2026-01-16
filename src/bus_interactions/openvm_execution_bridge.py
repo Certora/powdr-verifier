@@ -14,8 +14,9 @@ class OpenVMExecutionBridgeEncoder(SingleInteractionEncoder):
 
     def encode(self, mult: FNode, pc: FNode, timestamp: FNode) -> FNode:
         self.interactions.append((mult, [pc, timestamp]))
-        return TRUE()
+        return with_comment(TRUE(), f"EXECUTION BRIDGE")
 
     def get_axioms(self) -> list[FNode]:
         encode_timestamps = lambda i1, i2: LT(i1[1], i2[1])
-        return encode_permutation_check(f'{self.name}_eb', self.interactions, encode_timestamps)
+        r = encode_permutation_check(self.interactions, encode_timestamps)
+        return with_comment(r, f"EXECUTION BRIDGE axioms")

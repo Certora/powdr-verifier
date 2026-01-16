@@ -3,7 +3,7 @@ from pysmt import logics, operators, substituter
 from pysmt.shortcuts import *
 from pysmt.smtlib import script
 from pysmt.substituter import FunctionInterpretation
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 from pathlib import Path
 
 from .utils import ARGS
@@ -20,12 +20,23 @@ if cvc5_path.exists():
         [ 'cvc5/build/bin/cvc5', '--mod-range-solver', '--nia-intro-mm-mod' ],
         [ logics.QF_UFNIA, logics.UFNIA ]
     )
-    DEFAULT_SOLVER = 'cvc5ff'
+    #DEFAULT_SOLVER = 'cvc5ff'
 
 def wrap_mod(input: FNode, modulus: Optional[FNode] = None) -> FNode:
     if modulus is None:
         modulus = Int(ARGS().field_type.value)
     return Function(UF_MOD, [input, modulus])
+
+def with_comment(f: FNode, comment: str) -> FNode:
+    setattr(f, 'comment', comment)
+    return f
+def keep_comment(new: FNode, old: FNode) -> FNode:
+    if hasattr(old, 'comment'):
+        setattr(new, 'comment', old.comment)
+    return new
+
+def without_trues(fs: Iterable[FNode]) -> Iterable[FNode]:
+    return filter(lambda x: not x.is_true(), fs)
 
 def as_constant(f: FNode) -> Any:
     if f.is_constant():
