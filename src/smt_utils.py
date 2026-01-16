@@ -1,26 +1,11 @@
-from pysmt.fnode import FNode
-from pysmt import logics, operators, substituter
-from pysmt.shortcuts import *
-from pysmt.smtlib import script
-from pysmt.substituter import FunctionInterpretation
 from typing import Any, Iterable, Optional
-from pathlib import Path
 
 from .utils import ARGS
 
+from .smt_backends.pysmt import *
+
 UF_MOD = Symbol('uf_mod', FunctionType(INT, [INT, INT]))
 REAL_MOD = Symbol('mod', FunctionType(INT, [INT, INT]))
-
-logics.PYSMT_LOGICS = logics.PYSMT_LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA])
-
-DEFAULT_SOLVER = 'z3'
-cvc5_path = Path('cvc5/build/bin/cvc5')
-if cvc5_path.exists():
-    get_env().factory.add_generic_solver('cvc5ff',
-        [ 'cvc5/build/bin/cvc5', '--mod-range-solver', '--nia-intro-mm-mod' ],
-        [ logics.QF_UFNIA, logics.UFNIA ]
-    )
-    #DEFAULT_SOLVER = 'cvc5ff'
 
 def wrap_mod(input: FNode, modulus: Optional[FNode] = None) -> FNode:
     if modulus is None:
@@ -56,3 +41,25 @@ class NameOrIdGenerator:
         if x.is_constant() or x.is_symbol():
             return str(x)
         return self.mapping.setdefault(x, len(self.mapping))
+
+def convert_to_smt_script(f: FNode, logic: logics.Logic) -> script.SmtLibScript:
+    smtlib = script.smtlibscript_from_formula(f, logic)
+
+    # replace "declare-fun uf_mod" by "define-fun uf_mod"
+    for id,cmd in enumerate(smtlib.commands):
+        match cmd:
+            case script.SmtLibCommand(name='declare-fun') if cmd.args == [UF_MOD]:
+                args = [Symbol('x', INT), Symbol('y', INT)]
+                define_fun = script.SmtLibCommand(
+                    name='define-fun',
+                    args=[UF_MOD, args, INT, Function(REAL_MOD, args)]
+                )
+                smtlib.commands[id] = define_fun
+            case _:
+                pass
+
+    # add model production and model retrieval
+    smtlib.commands.insert(1, script.SmtLibCommand(name='set-option', args=[':produce-models', 'true']))
+    smtlib.commands.insert(2, script.SmtLibCommand(name='set-option', args=[':incremental', 'true']))
+    smtlib.add_command(script.SmtLibCommand(name='get-model', args=[]))
+    return smtlib
