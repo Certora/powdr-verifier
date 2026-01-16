@@ -22,10 +22,10 @@ class InteractionEncoder:
         raise NotImplementedError
 
     def encode_all(self, data: list[Any]) -> list[FNode]:
-        return [ self.encode(d) for d in data ]
+        return list(without_trues(self.encode(d) for d in data))
 
     def get_axioms(self) -> list[FNode]:
-        return [ encoder.get_axioms() for encoder in self.encoders ]
+        return list(without_trues(encoder.get_axioms() for encoder in self.encoders))
     
     def get_globals(self) -> frozenset[FNode]:
         """Returns all global symbols that should not be part of any quantifier"""
@@ -89,7 +89,6 @@ class OpenVMBusInteractionEncoder(InteractionEncoder):
                     'args': [x, y, z, op]
                 }:
                 return self.bitwise_lookup.encode(mult, x, y, z, op)
-
             case {
                     'id': OpenVMBusInteraction.TUPLE_RANGE_CHECKER.value,
                     'mult': mult,

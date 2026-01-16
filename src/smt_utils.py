@@ -3,7 +3,7 @@ from pysmt import logics, operators, substituter
 from pysmt.shortcuts import *
 from pysmt.smtlib import script
 from pysmt.substituter import FunctionInterpretation
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 from pathlib import Path
 
 from .utils import ARGS
@@ -34,6 +34,9 @@ def keep_comment(new: FNode, old: FNode) -> FNode:
     if hasattr(old, 'comment'):
         setattr(new, 'comment', old.comment)
     return new
+
+def without_trues(fs: Iterable[FNode]) -> Iterable[FNode]:
+    return filter(lambda x: not x.is_true(), fs)
 
 def as_constant(f: FNode) -> Any:
     if f.is_constant():
