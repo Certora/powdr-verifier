@@ -7,7 +7,6 @@ from typing import Any
 from . import bus_interactions
 from .basic_block import BasicBlock
 from .utils import get_smt_dump_filename, map_recursive, ARGS, log_conversion, BusInteractionHandlers
-from .pretty_printer import pretty_print_smtlib
 from .rewriter import rewrite
 from .smt_utils import *
 
@@ -114,27 +113,6 @@ def convert_to_smt_formula(name: str, data: Any, basic_block: BasicBlock) -> For
     if ARGS().log_smt:
         logging.info(f'after smt conversion:\n{pprint.pformat(formula, width=80)}')
     return formula
-
-def convert_to_smt_script(f: FNode, logic: logics.Logic) -> script.SmtLibScript:
-    smtlib = script.smtlibscript_from_formula(f, logic)
-
-    # replace "declare-fun uf_mod" by "define-fun uf_mod"
-    for id,cmd in enumerate(smtlib.commands):
-        match cmd:
-            case script.SmtLibCommand(name='declare-fun') if cmd.args == [UF_MOD]:
-                args = [Symbol('x', INT), Symbol('y', INT)]
-                define_fun = script.SmtLibCommand(
-                    name='define-fun',
-                    args=[UF_MOD, args, INT, Function(REAL_MOD, args)]
-                )
-                smtlib.commands[id] = define_fun
-            case _:
-                pass
-
-    # add model production and model retrieval
-    smtlib.commands.insert(1, script.SmtLibCommand(name='set-option', args=[':produce-models', 'true']))
-    smtlib.add_command(script.SmtLibCommand(name='get-model', args=[]))
-    return smtlib
 
 def check_formula(f: FNode) -> bool:
     if ARGS().dump_smt:

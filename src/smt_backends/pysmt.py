@@ -1,10 +1,25 @@
-
 import contextlib
-from pysmt import operators
-from pysmt.fnode import FNode
-from pysmt.shortcuts import *
-from pysmt.smtlib import *
+from pathlib import Path
 from typing import TextIO
+
+from pysmt.fnode import FNode
+from pysmt import logics, operators, substituter
+from pysmt.shortcuts import *
+from pysmt.smtlib import script, printers
+from pysmt.substituter import FunctionInterpretation
+
+
+logics.PYSMT_LOGICS = logics.PYSMT_LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA])
+
+DEFAULT_SOLVER = 'z3'
+cvc5_path = Path('cvc5/build/bin/cvc5')
+if cvc5_path.exists():
+    get_env().factory.add_generic_solver('cvc5ff',
+        [ 'cvc5/build/bin/cvc5', '--mod-range-solver', '--nia-intro-mm-mod' ],
+        [ logics.QF_UFNIA, logics.UFNIA ]
+    )
+    #DEFAULT_SOLVER = 'cvc5ff'
+
 
 class SMTPrettyPrinter(script.SmtPrinter):
 
