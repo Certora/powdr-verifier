@@ -1,3 +1,4 @@
+from .rewriter import rewrite
 from .smt import *
 
 def collect_variables(data: FormulaWithAxioms) -> frozenset[FNode]:
