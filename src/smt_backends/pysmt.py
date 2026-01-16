@@ -1,15 +1,73 @@
 import contextlib
 from pathlib import Path
-from typing import TextIO
+from typing import TextIO, Optional
+
+
+# make pysmt support Mod
+# be careful with the order of the imports
+
+# first patch pysmt.operators
+from pysmt import operators
+from pysmt.solvers.z3 import Z3Converter, Z3Solver, z3
+
+operators.MOD = operators.ALL_TYPES[-1] + 1
+operators.ALL_TYPES.append(operators.MOD)
+operators.IRA_OPERATORS = operators.IRA_OPERATORS | frozenset([operators.MOD])
+operators.__OP_STR__[operators.MOD] = 'MOD'
+
+# patch logics
+from pysmt import logics
+
+logics.PYSMT_LOGICS = logics.PYSMT_LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA])
+Z3Solver.LOGICS = Z3Solver.LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA])
+
+# then patch all the formula manager and all the walkers
+from pysmt.formula import FormulaManager
+from pysmt.walkers import IdentityDagWalker
+from pysmt.printers import HRPrinter
+from pysmt.oracles import AtomsOracle, FreeVarsOracle, QuantifierOracle, TheoryOracle, TypesOracle
+from pysmt.type_checker import SimpleTypeChecker
+
+FormulaManager.Mod = lambda self, left, right: self.create_node(node_type=operators.MOD, args=(left, right))
+
+# oracles.py
+QuantifierOracle.walk_mod = QuantifierOracle.walk_all
+TheoryOracle.walk_mod = TheoryOracle.walk_div
+FreeVarsOracle.walk_mod = FreeVarsOracle.walk_simple_args
+AtomsOracle.walk_mod = AtomsOracle.walk_theory_op
+TypesOracle.walk_mod = TypesOracle.walk_combine
+# printers.py
+HRPrinter.walk_mod = lambda self, formula: self.walk_nary(formula, '%')
+# type_checker.py
+SimpleTypeChecker.walk_mod = SimpleTypeChecker.walk_realint_to_realint
+# solvers/z3.py
+Z3Converter.walk_mod = Z3Converter.make_walk_binary(z3.Z3_mk_mod)
+# walkers/identitydag.py
+IdentityDagWalker.walk_mod = lambda self, formula, args, **kwargs: self.mgr.Mod(args[0], args[1])
+
+import pysmt.smtlib.printers
+# smtlib/printers.py
+pysmt.smtlib.printers.SmtPrinter.walk_mod = lambda self, formula: self.walk_nary(formula, 'mod')
+
+# now go on with the rest
 
 from pysmt.fnode import FNode
-from pysmt import logics, operators, substituter
+from pysmt import substituter
+from pysmt.logics import Logic
 from pysmt.shortcuts import *
 from pysmt.smtlib import script, printers
 from pysmt.substituter import FunctionInterpretation
 
+from ..utils import ARGS
 
-logics.PYSMT_LOGICS = logics.PYSMT_LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA])
+# make pysmt support QF_UFNIA and UFNIA
+UFNIA = logics.UFNIA
+QF_UFNIA = logics.QF_UFNIA
+
+def Mod(left, right):
+    r""".. math:: l % r """
+    return get_env().formula_manager.Mod(left, right)
+
 
 DEFAULT_SOLVER = 'z3'
 cvc5_path = Path('cvc5/build/bin/cvc5')
@@ -20,6 +78,13 @@ if cvc5_path.exists():
     )
     #DEFAULT_SOLVER = 'cvc5ff'
 
+UF_MOD = Symbol('uf_mod', FunctionType(INT, [INT, INT]))
+REAL_MOD = Symbol('mod', FunctionType(INT, [INT, INT]))
+
+def wrap_mod(input: FNode, modulus: Optional[FNode] = None) -> FNode:
+    if modulus is None:
+        modulus = Int(ARGS().field_type.value)
+    return Mod(input, modulus)
 
 class SMTPrettyPrinter(script.SmtPrinter):
 
@@ -125,3 +190,29 @@ def pretty_print_smtlib(smtlib: script.SmtLibScript, file: TextIO):
             case _:
                 cmd.serialize(file, daggify=False)
                 file.write('\n')
+
+def convert_to_smt_script(f: FNode, logic: Logic) -> script.SmtLibScript:
+    smtlib = script.smtlibscript_from_formula(f, logic)
+
+    # replace "declare-fun uf_mod" by "define-fun uf_mod"
+    for id,cmd in enumerate(smtlib.commands):
+        match cmd:
+            case script.SmtLibCommand(name='declare-fun') if cmd.args == [UF_MOD]:
+                args = [Symbol('x', INT), Symbol('y', INT)]
+                define_fun = script.SmtLibCommand(
+                    name='define-fun',
+                    args=[UF_MOD, args, INT, Function(REAL_MOD, args)]
+                )
+                smtlib.commands[id] = define_fun
+            case _:
+                pass
+
+    # add model production and model retrieval
+    smtlib.commands.insert(1, script.SmtLibCommand(name='set-option', args=[':produce-models', 'true']))
+    smtlib.commands.insert(2, script.SmtLibCommand(name='set-option', args=[':incremental', 'true']))
+    smtlib.add_command(script.SmtLibCommand(name='get-model', args=[]))
+    return smtlib
+
+def print_formula_to_file(f, LOGIC, dump):
+    smtlib = convert_to_smt_script(f, LOGIC)
+    pretty_print_smtlib(smtlib, dump)

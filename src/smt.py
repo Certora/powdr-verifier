@@ -7,10 +7,9 @@ from typing import Any
 from . import bus_interactions
 from .basic_block import BasicBlock
 from .utils import get_smt_dump_filename, map_recursive, ARGS, log_conversion, BusInteractionHandlers
-from .rewriter import rewrite
 from .smt_utils import *
 
-LOGIC = logics.UFNIA
+LOGIC = UFNIA
 
 FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['constraints', 'bus_interactions', 'axioms', 'derived', 'globals'])
 
@@ -117,8 +116,7 @@ def convert_to_smt_formula(name: str, data: Any, basic_block: BasicBlock) -> For
 def check_formula(f: FNode) -> bool:
     if ARGS().dump_smt:
         with open(get_smt_dump_filename(), 'w') as dump:
-            smtlib = convert_to_smt_script(f, LOGIC)
-            pretty_print_smtlib(smtlib, dump)
+            print_formula_to_file(f, LOGIC, dump)
     match is_sat(f, logic=LOGIC, solver_name=DEFAULT_SOLVER):
         case True:
             print("SAT")
