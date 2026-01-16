@@ -19,6 +19,8 @@ class SmtConverter:
     def __init__(self, name: str, basic_block: BasicBlock):
         self.basic_block = basic_block
         self.field_symbols = set()
+        self.constraints = []
+        self.derived_columns = []
 
         match ARGS().bus_interaction_handler:
             case BusInteractionHandlers.OPENVM:
@@ -27,24 +29,28 @@ class SmtConverter:
                 logging.error(f"Unsupported bus interaction handler: {ARGS().bus_interaction_handler}")
                 self.bus_interaction_encoder = None
 
+    def __add_constraint(self, c: FNode, comment: str) -> None:
+        self.constraints.append(with_comment(c, comment))
     
     def convert_constraints(self, data: list[Any]) -> Any:
-        return [
-            with_comment(
+        for id,c in enumerate(data):
+            self.__add_constraint(
                 Equals(wrap_mod(c), Int(0)),
                 f"CONSTRAINT #{id}"
-            ) for id,c in enumerate(data)
-        ]
+            )
     
     def convert_derived(self, data: list[Any]) -> Any:
-        res = []
         for derived in data:
             match derived:
                 case [{'name': str(name), 'id': int}, value]:
-                    res.append(Equals(Symbol(name, INT), value))
+                    self.derived_columns.append(
+                        with_comment(
+                            Equals(Symbol(name, INT), value),
+                            f"DERIVED COLUMN {name} = {value}"
+                        )
+                    )
                 case _:
                     logging.error(f"Unsupported derived column: {derived}")
-        return res
 
     @log_conversion(level=logging.DEBUG)
     def convert(self, data: Any) -> Any:
@@ -70,15 +76,11 @@ class SmtConverter:
             case {'expr': expr, **rest} if rest == {}:
                 return expr
             case {'constraints': list(cs), 'bus_interactions': list(bis), 'derived_columns': list(dc), **rest}:
-                bi = self.bus_interaction_encoder.encode_all(bis)
-                biaxioms = self.bus_interaction_encoder.get_axioms()
+                self.convert_constraints(cs)
+                self.convert_derived(dc)
+                self.bus_interaction_encoder.add_all(bis)
                 return {
                     **rest,
-                    'constraints': self.convert_constraints(cs),
-                    'bus_interactions': bi,
-                    'axioms': biaxioms,
-                    'derived_columns': self.convert_derived(dc),
-                    'globals': self.bus_interaction_encoder.get_globals(),
                 }
             case _:
                 return None
@@ -86,25 +88,25 @@ class SmtConverter:
     def convert_recursive(self, data: Any) -> Any:
         return map_recursive(data, self.convert)
     
-    def __basic_range_axioms(self) -> list[FNode]:
-        return [
-            with_comment(
+    def __add_basic_range_axioms(self) -> list[FNode]:
+        for sym in sorted(self.field_symbols, key=lambda x: str(x)):
+            self.__add_constraint(
                 And(
                     LE(Int(0), sym),
                     LT(sym, Int(ARGS().field_type.value))
                 ),
                 f"BASIC RANGE axiom for {sym}"
-            ) for sym in sorted(self.field_symbols, key=lambda x: str(x))
-        ]
+            )
 
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
         data = self.convert_recursive(data)
+        self.__add_basic_range_axioms()
         return FormulaWithAxioms(
-            constraints=data['machine']['constraints'],
-            bus_interactions=data['machine']['bus_interactions'],
-            axioms=self.__basic_range_axioms() + data['machine']['axioms'],
-            derived=data['machine']['derived_columns'],
-            globals=data['machine']['globals'],
+            constraints=self.constraints,
+            bus_interactions=self.bus_interaction_encoder.encode_all(),
+            axioms=self.bus_interaction_encoder.get_axioms(),
+            derived=self.derived_columns,
+            globals=self.bus_interaction_encoder.get_globals(),
         )
 
 def convert_to_smt_formula(name: str, data: Any, basic_block: BasicBlock) -> FormulaWithAxioms:
