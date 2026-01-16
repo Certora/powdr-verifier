@@ -1,4 +1,5 @@
 from enum import Enum
+import itertools
 import logging
 from typing import Any
 
@@ -18,11 +19,19 @@ class InteractionEncoder:
     def __init__(self, encoders: list[single_interaction_encoder.SingleInteractionEncoder]):
         self.encoders = encoders
 
-    def encode(self, data: Any) -> FNode:
+    def add(self, data: Any):
         raise NotImplementedError
 
-    def encode_all(self, data: list[Any]) -> list[FNode]:
-        return list(without_trues(self.encode(d) for d in data))
+    def add_all(self, data: list[Any]):
+        for d in data:
+            self.add(d)
+    
+    def encode_all(self) -> list[FNode]:
+        return list(without_trues(
+            itertools.chain.from_iterable(
+                encoder.encode_all() for encoder in self.encoders
+            )
+        ))
 
     def get_axioms(self) -> list[FNode]:
         return list(without_trues(encoder.get_axioms() for encoder in self.encoders))
@@ -57,45 +66,44 @@ class OpenVMBusInteractionEncoder(InteractionEncoder):
             self.variable_range_checker, self.tuple_range_checker
         ])
     
-    def encode(self, data: Any) -> FNode:
+    def add(self, data: Any):
         match data:
             case {
                     'id': OpenVMBusInteraction.EXECUTION_BRIDGE.value,
                     'mult': mult,
                     'args': [pc, timestamp],
                 }:
-                return self.execution_bridge.encode(mult, pc, timestamp)
+                self.execution_bridge.add(mult, pc, timestamp)
             case {
                     'id': OpenVMBusInteraction.MEMORY.value,
                     'mult': mult,
                     'args': [address_space, pointer, *data, timestamp],
                 }:
-                return self.memory.encode(mult, address_space, pointer, data, timestamp)
+                self.memory.add(mult, address_space, pointer, data, timestamp)
             case {
                     'id': OpenVMBusInteraction.PC_LOOKUP.value,
                     'mult': mult,
                     'args': [pc, op, a, b, c, d, e, f, g]
                 }:
-                return self.pc_lookup.encode(mult, pc, op, a, b, c, d, e, f, g)
+                self.pc_lookup.add(mult, pc, op, a, b, c, d, e, f, g)
             case {
                     'id': OpenVMBusInteraction.VARIABLE_RANGE_CHECKER.value,
                     'mult': mult,
                     'args': [x, bits]
                 }:
-                return self.variable_range_checker.encode(mult, x, bits)
+                self.variable_range_checker.add(mult, x, bits)
             case {
                     'id': OpenVMBusInteraction.BITWISE_LOOKUP.value,
                     'mult': mult,
                     'args': [x, y, z, op]
                 }:
-                return self.bitwise_lookup.encode(mult, x, y, z, op)
+                self.bitwise_lookup.add(mult, x, y, z, op)
             case {
                     'id': OpenVMBusInteraction.TUPLE_RANGE_CHECKER.value,
                     'mult': mult,
                     'args': [x, y]
                 }:
-                return self.tuple_range_checker.encode(mult, x, y)
+                self.tuple_range_checker.add(mult, x, y)
             case _:
                 logging.error(f"Unsupported bus interaction: {data}")
-                return None
 
