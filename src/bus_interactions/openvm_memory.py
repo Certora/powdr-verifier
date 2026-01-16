@@ -11,8 +11,8 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
     Encodes memory bus interactions. It implements a permutation check on all
     interactions and requires their timestamps increase.
     """
-    def __init__(self, name: str) -> None:
-        super().__init__(name)
+    def __init__(self) -> None:
+        super().__init__()
         self.interactions = {}
         self.name_or_id = NameOrIdGenerator()
     
@@ -22,7 +22,6 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
         self.interactions[(address_space, pointer)].append((mult, data + [timestamp]))
 
     def encode(self, mult: FNode, address_space: FNode, pointer: FNode, data: list[FNode], timestamp: FNode) -> FNode:
-        self.__add_interaction(mult, address_space, pointer, data, timestamp)
         return with_comment(
             Implies(
                 #Equals(wrap_mod(mult), wrap_mod(Int(-1))),
