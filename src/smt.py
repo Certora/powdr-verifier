@@ -27,17 +27,17 @@ class SmtConverter:
                 logging.error(f"Unsupported bus interaction handler: {ARGS().bus_interaction_handler}")
                 self.bus_interaction_encoder = None
 
-    def __add_constraint(self, c: FNode, comment: str) -> None:
+    def __add_constraint(self, c: FNode, comment: str):
         self.constraints.append(with_comment(c, comment))
     
-    def convert_constraints(self, data: Iterable[Any]) -> Any:
+    def convert_constraints(self, data: Iterable[Any]):
         for id,c in enumerate(data):
             self.__add_constraint(
                 Equals(wrap_mod(c), Int(0)),
                 f"CONSTRAINT #{id}"
             )
     
-    def convert_derived(self, data: Iterable[Any]) -> Any:
+    def convert_derived(self, data: Iterable[Any]):
         for derived in data:
             match derived:
                 case [{'name': str(name), 'id': int}, value]:
@@ -50,39 +50,51 @@ class SmtConverter:
                 case _:
                     logging.error(f"Unsupported derived column: {derived}")
 
-    @log_conversion(level=logging.DEBUG)
-    def convert(self, data: Any) -> Any:
+    def convert_manual(self, data: Any) -> Any:
         match data:
-            case {'Number': int(value)}:
-                return Int(value)
-            case {'Constant': int(value)}:
-                return Int(value)
-            case {'Reference': { 'name': str(name), 'id': int() }}:
-                sym = Symbol(name, INT)
+            # general json structure
+            case {
+                'block': block,
+                'machine': {
+                    'constraints': list(cs),
+                    'bus_interactions': list(bis),
+                    'derived_columns': list(dc),
+                    **rest_machine,
+                },
+                'subs': subs,
+                'optimistic_constraints': _,
+                **rest_apc,
+            }:
+                assert not rest_machine
+                assert not rest_apc
+                self.convert_constraints(self.convert_manual(c) for c in cs)
+                self.bus_interaction_encoder.add_all(self.convert_manual(bi) for bi in bis)
+                self.convert_derived(self.convert_manual(dc) for dc in dc)
+
+            # expressions
+            case { 'expr': expr, **rest }:
+                assert rest == {}
+                return self.convert_manual(expr)
+            case [left, '+', right]: return Plus(self.convert_manual(left), self.convert_manual(right))
+            case [left, '-', right]: return Minus(self.convert_manual(left), self.convert_manual(right))
+            case [left, '*', right]: return Times(self.convert_manual(left), self.convert_manual(right))
+            case ['-', right]: return Minus(Int(0), self.convert_manual(right))
+            case int(value): return Int(value)
+            case str(var):
+                sym = Symbol(var, INT)
                 self.field_symbols.add(sym)
                 return sym
-            case {'UnaryOperation': { 'expr': expr, 'op': str(op) }}:
-                match op:
-                    case 'Minus': return Minus(Int(0), expr)
-                    case _: return None
-            case {'BinaryOperation': { 'left': left, 'right': right, 'op': str(op) }}:
-                match op:
-                    case 'Add': return Plus(left, right)
-                    case 'Sub': return Minus(left, right)
-                    case 'Mul': return Times(left, right)
-                    case _: return None
-            case {'expr': expr, **rest} if rest == {}:
-                return expr
-            case {'constraints': list(cs), 'bus_interactions': list(bis), 'derived_columns': list(dc)}:
-                self.convert_constraints(cs)
-                self.convert_derived(dc)
-                self.bus_interaction_encoder.add_all(bis)
-                return data
+
+            # bus interactions
+            case {'id': int(id), 'mult': mult, 'args': list(args)}:
+                return {
+                    'id': id,
+                    'mult': self.convert_manual(mult),
+                    'args': [ self.convert_manual(arg) for arg in args ],
+                }
+
             case _:
-                return None
-    
-    def convert_recursive(self, data: Any) -> Any:
-        return map_recursive(data, self.convert)
+                logging.error(f"Unsupported manual data: {data}")
     
     def __add_basic_range_axioms(self) -> list[FNode]:
         for sym in sorted(self.field_symbols, key=lambda x: str(x)):
@@ -95,7 +107,7 @@ class SmtConverter:
             )
 
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
-        self.convert_recursive(data)
+        self.convert_manual(data)
         self.__add_basic_range_axioms()
         bus_interactions = self.bus_interaction_encoder.encode_all()
         return FormulaWithAxioms(
