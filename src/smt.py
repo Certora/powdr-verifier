@@ -6,7 +6,7 @@ from typing import Any
 
 from . import bus_interactions
 from .basic_block import BasicBlock
-from .utils import get_smt_dump_filename, map_recursive, ARGS, log_conversion, BusInteractionHandlers
+from .utils import get_smt_dump_filename, ARGS, BusInteractionHandlers
 from .smt_utils import *
 
 LOGIC = UFNIA
@@ -130,10 +130,13 @@ def check_formula(f: FNode) -> bool:
     if ARGS().dump_smt:
         with open(get_smt_dump_filename(), 'w') as dump:
             print_formula_to_file(f, LOGIC, dump)
-    match is_sat(f, logic=LOGIC, solver_name=DEFAULT_SOLVER):
+
+    s = Solver(logic=LOGIC, name=DEFAULT_SOLVER)
+    s.add_assertion(f)
+    match s.solve():
         case True:
             print("SAT")
-            return get_model(f, logic=LOGIC, solver_name=DEFAULT_SOLVER)
+            return s.get_model()
         case False:
             print("UNSAT")
             return False
