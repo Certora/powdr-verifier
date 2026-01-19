@@ -28,7 +28,7 @@ class InteractionEncoder:
     def add(self, data: Any):
         raise NotImplementedError
 
-    def add_all(self, data: list[Any]):
+    def add_all(self, data: Iterable[Any]):
         for d in data:
             self.add(d)
     

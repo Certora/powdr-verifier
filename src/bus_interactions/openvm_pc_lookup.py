@@ -42,22 +42,26 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
             Equals(Function(self.UF_F, [pc]), f),
             Equals(Function(self.UF_G, [pc]), g),
         )
+    
+    def __encode_block(self) -> Iterable[FNode]:
+        for pc,stmt in enumerate(self.basic_block.statements):
+            op,a,b,c,d,e,f,g = stmt
+            yield with_comment(
+                And(
+                    Equals(Function(self.UF_OPCODE, [Int(4*pc)]), Int(op)),
+                    Equals(Function(self.UF_A, [Int(4*pc)]), Int(a)),
+                    Equals(Function(self.UF_B, [Int(4*pc)]), Int(b)),
+                    Equals(Function(self.UF_C, [Int(4*pc)]), Int(c)),
+                    Equals(Function(self.UF_D, [Int(4*pc)]), Int(d)),
+                    Equals(Function(self.UF_E, [Int(4*pc)]), Int(e)),
+                    Equals(Function(self.UF_F, [Int(4*pc)]), Int(f)),
+                    Equals(Function(self.UF_G, [Int(4*pc)]), Int(g)),
+                ),
+                f"PC LOOKUP for {pc}"
+            ) 
+
 
     def get_axioms(self) -> list[FNode]:
         if not self.needs_axioms:
             return TRUE()
-        return And(
-            with_comment(
-                And(
-                    Equals(Function(self.UF_OPCODE, [Int(4*pc)]), Int(stmt["opcode"])),
-                    Equals(Function(self.UF_A, [Int(4*pc)]), Int(stmt["a"])),
-                    Equals(Function(self.UF_B, [Int(4*pc)]), Int(stmt["b"])),
-                    Equals(Function(self.UF_C, [Int(4*pc)]), Int(stmt["c"])),
-                    Equals(Function(self.UF_D, [Int(4*pc)]), Int(stmt["d"])),
-                    Equals(Function(self.UF_E, [Int(4*pc)]), Int(stmt["e"])),
-                    Equals(Function(self.UF_F, [Int(4*pc)]), Int(stmt["f"])),
-                    Equals(Function(self.UF_G, [Int(4*pc)]), Int(stmt["g"])),
-                ),
-                f"PC LOOKUP for {pc}"
-            ) for pc,stmt in enumerate(self.basic_block.statements)
-        )
+        return And(self.__encode_block())
