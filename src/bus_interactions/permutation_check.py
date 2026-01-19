@@ -3,7 +3,7 @@ from typing import Callable
 from ..smt_utils import *
 
 def encode_permutation_check(
-    interactions: list[tuple[FNode, list[FNode]]],
+    interactions: list[tuple[tuple[FNode, list[FNode]], bool]],
     additional: Callable[[list[FNode], list[FNode]], FNode] = lambda _: TRUE()
 ) -> FNode:
     """
@@ -24,7 +24,8 @@ def encode_permutation_check(
         return TRUE()
 
     def encode():
-        for id,((m1,d1),(m2,d2)) in enumerate(pairwise(interactions)):
+        for id,(((m1,d1),impl1),((m2,d2),impl2)) in enumerate(pairwise(interactions)):
+            # TODO: Handle implied flags (impl1, impl2)
             if id % 2 == 0:
                 # correct additional on even->odd pairs
                 yield additional(d1, d2)
