@@ -30,7 +30,6 @@ class MemoryAnalysis:
     def __init__(self, constraints: list[FNode]):
         self.implied_classes = {}
         self.possible_aliases = {}
-        self.solver = None
         self.formula_selector = VarBaseFormulaSelector(constraints)
     
     def solve_implied_aliasing(self, accesses: list[tuple[FNode, FNode]]):
@@ -40,7 +39,7 @@ class MemoryAnalysis:
             if self.implied_classes[a] == self.implied_classes[b]:
                 continue
 
-            solver = Solver(logic=UFNIA, incremental=True)
+            solver = Solver(logic=QF_UFNIA, incremental=True)
             for c in self.formula_selector.resolve_shallow_for([*a, *b]):
                 solver.add_assertion(c)
 
@@ -82,6 +81,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
         super().__init__()
         self.interactions = {}
         self.name_or_id = NameOrIdGenerator()
+        self.analysis = None
     
     def _sorted_interactions(self) -> list[tuple[FNode, Any]]:
         return sorted(self._interactions, key=lambda i: i[1][0].size() + i[1][1].size())
@@ -92,16 +92,38 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
             [(i[1][0], i[1][1]) for i in self._interactions],
             key=lambda i: i[0].size() + i[1].size()
         )
-        m = MemoryAnalysis(self.constraints())
-        m.solve_implied_aliasing(accesses)
-        m.solve_possible_aliasing()
+        self.analysis = MemoryAnalysis(self.constraints())
+        self.analysis.solve_implied_aliasing(accesses)
+        self.analysis.solve_possible_aliasing()
 
-        print(m.get_equivalence_classes())
-        
-        print(m.implied_classes)
-        print(m.possible_aliases)
-        exit(1)
+        if ARGS().log_memory_analysis:
+            logging.warning(f"results of memory analysis")
+            for access, repr in self.analysis.implied_classes.items():
+                if access != repr:
+                    logging.warning(f"\t{repr} == {access}")
+            for access,possible in self.analysis.possible_aliases.items():
+                if possible:
+                    logging.warning(f"\t{access} possibly aliases with")
+                    for p in possible:
+                        logging.warning(f"\t\t{p}")
 
+
+    def group_interactions(self):
+        assert self.analysis is not None
+        res = {}
+
+        for i in self._interactions:
+            mult, (address_space, pointer, args, timestamp) = i
+            interaction = (mult, args + [timestamp])
+            access = (address_space, pointer)
+            repr = self.analysis.implied_classes[access]
+            if repr not in res:
+                res[repr] = []
+            res[repr].append((interaction, True))
+            for alias in self.analysis.possible_aliases[repr]:
+                res[alias].append((interaction, False))
+
+        return res
 
     def encode(self, mult: FNode, address_space: FNode, pointer: FNode, data: list[FNode], timestamp: FNode) -> FNode:
         return with_comment(
@@ -116,11 +138,12 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
         )
     
     def get_axioms(self) -> list[FNode]:
+        grouped = self.group_interactions()
         encode_timestamps = lambda i1, i2: LT(i1[4], i2[4])
         return And(
             with_comment(
                 encode_permutation_check(interactions, encode_timestamps),
                 f"MEMORY axioms for {address_space} {pointer}"
             )
-            for (address_space, pointer), interactions in self.interactions.items()
+            for (address_space, pointer), interactions in grouped.items()
         )
