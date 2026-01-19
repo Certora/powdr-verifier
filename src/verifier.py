@@ -8,11 +8,6 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
     before_smt = convert_to_smt_formula("before", before, block)
     after_smt = convert_to_smt_formula("after", after, block)
 
-    print("before_smt:")
-    print(before_smt)
-    print("after_smt:")
-    print(after_smt)
-
     vc = build_vc(before_smt, after_smt)
 
     match check_formula(vc):

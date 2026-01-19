@@ -36,7 +36,7 @@ def parse_args():
     parser.add_argument('--log-json', action='store_true')
     parser.add_argument('--log-rewrites', action='store_true')
     parser.add_argument('--log-smt', action='store_true')
-    parser.add_argument('--log-memory-analysis', action='store_true', default=True)
+    parser.add_argument('--log-memory-analysis', action='store_true')
     parser.add_argument('--dump-smt', action='store_true')
     parser.add_argument('--base-dump', type=Path, default=None)
 
@@ -50,6 +50,10 @@ def parse_args():
     sub_eval = sub.add_parser('eval')
     sub_eval.add_argument('input', type=Path)
     sub_eval.add_argument('model', type=Path)
+
+    sub_diff = sub.add_parser('diff')
+    sub_diff.add_argument('input_before', type=Path)
+    sub_diff.add_argument('input_after', type=Path)
 
     sub_verify = sub.add_parser('verify')
     sub_verify.add_argument('input_before', type=Path)
@@ -70,7 +74,6 @@ def get_smt_dump_filename() -> Path:
         case _:
             raise ValueError(f"Unknown command: {ARGS().command}")
     
-
 def load_json(file: Path, label: str) -> Any:
     with open(file, 'r') as f:
         data = json.load(f)

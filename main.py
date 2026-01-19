@@ -7,6 +7,7 @@ from src.utils import *
 from src.smt import *
 from src.tracer import trace
 from src.verifier import verify
+from src.diff import diff
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
@@ -32,11 +33,15 @@ if __name__ == '__main__':
 
             evaluate(input["machine"], smt, model)
 
+        case 'diff':
+            logging.info(f"diffing {ARGS().input_before} and {ARGS().input_after}")
+            diff()
+
         case 'verify':
             logging.info(f"verify equivalence of {ARGS().input_before} and {ARGS().input_after}")
-            before = load_json(ARGS().input_before, 'Before')
+            before = load_json(ARGS().input_before, 'before')
             before = add_base_dump(before)
-            after = load_json(ARGS().input_after, 'After')
+            after = load_json(ARGS().input_after, 'after')
             after = add_base_dump(after)
 
             before_block = BasicBlock(before["block"])

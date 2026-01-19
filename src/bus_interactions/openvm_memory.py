@@ -45,7 +45,6 @@ class MemoryAnalysis:
 
             same = And(Equals(a[0], b[0]), Equals(a[1], b[1]))
             if solver.is_valid(same):
-                logging.info(f"implied alias: {a} and {b}")
                 self.implied_classes[b] = self.implied_classes[a]
     
     def solve_possible_aliasing(self):
@@ -58,7 +57,6 @@ class MemoryAnalysis:
 
             same = And(Equals(a[0], b[0]), Equals(a[1], b[1]))
             if solver.is_sat(same):
-                logging.info(f"possible alias: {a} and {b}")
                 self.possible_aliases[a].append(b)
                 self.possible_aliases[b].append(a)
     
@@ -87,7 +85,6 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
         return sorted(self._interactions, key=lambda i: i[1][0].size() + i[1][1].size())
 
     def pre_analysis(self) -> None:
-        print(f"#constraints: {len(self.constraints())}")
         accesses = sorted(
             [(i[1][0], i[1][1]) for i in self._interactions],
             key=lambda i: i[0].size() + i[1].size()
