@@ -30,14 +30,14 @@ class SmtConverter:
     def __add_constraint(self, c: FNode, comment: str) -> None:
         self.constraints.append(with_comment(c, comment))
     
-    def convert_constraints(self, data: list[Any]) -> Any:
+    def convert_constraints(self, data: Iterable[Any]) -> Any:
         for id,c in enumerate(data):
             self.__add_constraint(
                 Equals(wrap_mod(c), Int(0)),
                 f"CONSTRAINT #{id}"
             )
     
-    def convert_derived(self, data: list[Any]) -> Any:
+    def convert_derived(self, data: Iterable[Any]) -> Any:
         for derived in data:
             match derived:
                 case [{'name': str(name), 'id': int}, value]:
