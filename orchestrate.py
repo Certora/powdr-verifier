@@ -33,9 +33,9 @@ def parse_args():
 
 def run_powdr(test):
     cmd = [
-        f"APC_CBOR_PATH={DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True)} cargo test {test} -- --no-capture"
+        f"APC_EXPORT_PATH={DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True)} APC_EXPORT_LEVEL=2 cargo test {test} -- --no-capture"
     ]
-    logging.info(f"running {cmd}")
+    logging.warning(f"running {' '.join(cmd)}")
     subprocess.run(cmd, shell=True, cwd=POWDR_DIR)
 
 def deserialize(cbor_file):
@@ -53,12 +53,6 @@ def deserialize_all():
         print(f"Deserializing {cbor_file}")
         deserialize(cbor_file)
 
-def run_tracer():
-    pass
-
-def run_evaluator():
-    pass
-
 def run_verifier():
     subprocess.run([
         "python3", VERIFIER_DIR / "main.py", "--dump-smt", "verify", DATA_DIR / "apc_candidate_unopt_0.json", DATA_DIR / "apc_candidate_0.json"
@@ -71,24 +65,26 @@ if __name__ == '__main__':
     match args.command:
         case 'trace':
             run_powdr(args.test)
-            deserialize_all()
+            #deserialize_all()
             subprocess.run([
                 "python3", VERIFIER_DIR / "main.py",
                 "--dump-smt",
+                "--base-dump", DATA_DIR / "apc_candidate_0_000_unopt.json",
                 "trace",
-                DATA_DIR / "apc_candidate_0.json",
-                "--dump-model", DATA_DIR / "apc_candidate_0.model"
+                DATA_DIR / "apc_candidate_0_000_unopt.json",
+                "--dump-model", DATA_DIR / "apc_candidate_0.model",
             ])
 
         case 'eval':
             run_powdr(args.test)
-            deserialize_all()
+            #deserialize_all()
             subprocess.run([
                 "python3", VERIFIER_DIR / "main.py",
                 "--dump-smt",
+                "--base-dump", DATA_DIR / "apc_candidate_0_000_unopt.json",
                 "trace",
                 DATA_DIR / "apc_candidate_0.json",
-                "--dump-model", DATA_DIR / "apc_candidate_0.model"
+                "--dump-model", DATA_DIR / "apc_candidate_0.model",
             ])
             subprocess.run([
                 "python3", VERIFIER_DIR / "main.py",
@@ -100,13 +96,15 @@ if __name__ == '__main__':
 
         case 'verify':
             run_powdr(args.test)
-            deserialize_all()
+            #deserialize_all()
+            target = sorted(list(DATA_DIR.glob("apc_candidate_0_*.json")))[-1]
             subprocess.run([
                 "python3", VERIFIER_DIR / "main.py",
                 "--dump-smt",
+                "--base-dump", DATA_DIR / "apc_candidate_0_000_unopt.json",
                 "verify",
-                DATA_DIR / "apc_candidate_unopt_0.json",
-                DATA_DIR / "apc_candidate_0.json",
+                DATA_DIR / "apc_candidate_0_000_unopt.json",
+                target,
             ])
         
         case 'preprocess':
