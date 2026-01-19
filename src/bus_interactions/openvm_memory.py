@@ -1,3 +1,5 @@
+import itertools
+import logging
 from typing import Any
 
 from .permutation_check import encode_permutation_check
@@ -7,46 +9,68 @@ from .single_interaction_encoder import SingleInteractionEncoder
 from ..smt_utils import *
 
 class MemoryAnalysis:
-    def __init__(self, constraints: list[FNode]):
-        self.representatives = []
-        self.belongs_to = {}
-        self.solver = SolverFor(logic=QF_UFNIA)
-        for c in constraints:
-            self.solver.add(c)
+    """
+    This class performs an alias analysis on a list of memory accesses,
+    represented by their address space and pointer. The result is a list of
+    equivalence classes where of such accesses that are equivalent.
+    Additionally, each equivalence class contains a list of possibly equivalent
+    accesses that can alias depending on the actual trace.
+
+    The analysis proceeds in two stages:
+    1. implied aliasing:
+       Groups memory accesses whose equivalence is implied by the constraints.
+    2. possible aliasing:
+       For each equivalence class, find all other equivalence classes that can
+       alias with it, but are not implied aliases.
     
-    def add_memory_access(self, address_space: FNode, pointer: FNode):
-        if (address_space, pointer) in self.belongs_to:
-            return
-        implied = []
-        possibly = []
+    The result is a set of enhanced equivalence classes, each consisting of a
+    set of accesses (that are implied aliases) and another set of accesses
+    (that are possible but not implied aliases).
+    """
+    def __init__(self, constraints: list[FNode]):
+        self.implied_classes = {}
+        self.possible_aliases = {}
+        self.solver = None
+        self.formula_selector = VarBaseFormulaSelector(constraints)
+    
+    def solve_implied_aliasing(self, accesses: list[tuple[FNode, FNode]]):
+        self.implied_classes = { (a[0], a[1]): (a[0], a[1]) for a in accesses }
 
-        for rid,(ras,rp) in enumerate(self.representatives):
-            same = And(Equals(ras, address_space), Equals(rp, pointer))
-            if is_valid(self.solver, same):
-                # aliasing is implied
-                print(f"aliasing is implied for {same}")
-                implied.append(rid)
-                break
-            elif is_sat(self.solver, same):
-                # aliasing is possible
-                print(f"aliasing is possible for {same}")
-                possibly.append(rid)
+        for a,b in itertools.combinations(self.implied_classes.values(), 2):
+            if self.implied_classes[a] == self.implied_classes[b]:
+                continue
 
-        if implied:
-            # a single implied alias is found
-            assert len(implied) == 1, "Multiple implied aliases for the same memory access"
-            assert len(possibly) == 0, "Implied alias and possible aliases for the same memory access"
-            self.belongs_to[(address_space, pointer)] = implied[0]
-        elif possibly:
-            # one or more possible aliases are found
-            rid = len(self.representatives)
-            self.representatives.append((address_space, pointer))
-            self.belongs_to[(address_space, pointer)] = [rid] + possibly
-        else:
-            # no aliases are found
-            rid = len(self.representatives)
-            self.representatives.append((address_space, pointer))
-            self.belongs_to[(address_space, pointer)] = rid
+            solver = Solver(logic=UFNIA, incremental=True)
+            for c in self.formula_selector.resolve_shallow_for([*a, *b]):
+                solver.add_assertion(c)
+
+            same = And(Equals(a[0], b[0]), Equals(a[1], b[1]))
+            if solver.is_valid(same):
+                logging.info(f"implied alias: {a} and {b}")
+                self.implied_classes[b] = self.implied_classes[a]
+    
+    def solve_possible_aliasing(self):
+        self.possible_aliases = { a: [] for a in self.implied_classes.values() }
+
+        for a,b in itertools.combinations(self.possible_aliases.keys(), 2):
+            solver = Solver(logic=UFNIA, incremental=True)
+            for c in self.formula_selector.resolve_shallow_for([*a, *b]):
+                solver.add_assertion(c)
+
+            same = And(Equals(a[0], b[0]), Equals(a[1], b[1]))
+            if solver.is_sat(same):
+                logging.info(f"possible alias: {a} and {b}")
+                self.possible_aliases[a].append(b)
+                self.possible_aliases[b].append(a)
+    
+    def get_equivalence_classes(self) -> frozenset[tuple[frozenset[FNode], frozenset[FNode]]]:
+        return frozenset([
+            (
+                frozenset([a for a in self.implied_classes if self.implied_classes[a] == representative]),
+                frozenset(self.possible_aliases[representative]),
+            )
+            for representative in set(self.implied_classes.values())
+        ])
 
 
 class OpenVMMemoryEncoder(SingleInteractionEncoder):
@@ -60,17 +84,23 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
         self.name_or_id = NameOrIdGenerator()
     
     def _sorted_interactions(self) -> list[tuple[FNode, Any]]:
-        return sorted(self._interactions, key=lambda i: size(i[1][0]) + size(i[1][1]))
+        return sorted(self._interactions, key=lambda i: i[1][0].size() + i[1][1].size())
 
     def pre_analysis(self) -> None:
         print(f"#constraints: {len(self.constraints())}")
-        #m = MemoryAnalysis(self.constraints())
-        #for mult, args in self._sorted_interactions():
-        #    address_space, pointer, *data, timestamp = args
-        #    m.add_memory_access(address_space, pointer)
-        #
-        #print(m.representatives)
-        #print(m.belongs_to)
+        accesses = sorted(
+            [(i[1][0], i[1][1]) for i in self._interactions],
+            key=lambda i: i[0].size() + i[1].size()
+        )
+        m = MemoryAnalysis(self.constraints())
+        m.solve_implied_aliasing(accesses)
+        m.solve_possible_aliasing()
+
+        print(m.get_equivalence_classes())
+        
+        print(m.implied_classes)
+        print(m.possible_aliases)
+        exit(1)
 
 
     def encode(self, mult: FNode, address_space: FNode, pointer: FNode, data: list[FNode], timestamp: FNode) -> FNode:

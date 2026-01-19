@@ -33,3 +33,32 @@ class NameOrIdGenerator:
         if x.is_constant() or x.is_symbol():
             return str(x)
         return self.mapping.setdefault(x, len(self.mapping))
+
+class VarBaseFormulaSelector:
+    def __init__(self, formulae: list[FNode]):
+        var_to_formulae = { f: f.get_free_variables() for f in formulae }
+        self.lookup = {
+            v: frozenset(f for f in var_to_formulae if v in var_to_formulae[f])
+            for v in frozenset.union(*var_to_formulae.values())
+        }
+    
+    def resolve_shallow(self, vars: list[FNode]) -> FNode:
+        if not vars:
+            return frozenset()
+        return frozenset.union(*[self.lookup[v] for v in vars])
+
+    def resolve_deep(self, vars: list[FNode]) -> FNode:
+        if not vars:
+            return frozenset()
+        last = frozenset()
+        cur = self.resolve_shallow(vars)
+        while cur != last:
+            last = cur
+            vars = vars | frozenset.union(*[f.get_free_variables() for f in last])
+            cur = self.resolve_shallow(vars)
+        return cur
+
+    def resolve_shallow_for(self, fs: list[FNode]) -> FNode:
+        return self.resolve_shallow(frozenset.union(*[f.get_free_variables() for f in fs]))
+    def resolve_deep_for(self, fs: list[FNode]) -> FNode:
+        return self.resolve_deep(frozenset.union(*[f.get_free_variables() for f in fs]))
