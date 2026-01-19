@@ -162,18 +162,26 @@ class SMTPrettyPrinter(script.SmtPrinter):
     @printers.write_annotations
     def _walk_quantifier(self, operator, formula):
         assert len(formula.quantifier_vars()) > 0
-        self.write_indented(f'({operator}\n')
+        self.write_indented(f'({operator}')
         with self.indented():
-            self.write_indented('(\n')
-
-            with self.indented():
-                for s in formula.quantifier_vars():
-                    self.write_indented('(')
-                    with self.collapsed():
+            if len(formula.quantifier_vars()) < 5:
+                self.write(' (')
+                with self.collapsed():
+                    for s in formula.quantifier_vars():
+                        self.write('(')
                         yield s
-                        self.write(f' {s.symbol_type().as_smtlib(False)})\n')
-
-            self.write_indented(')\n')
+                        self.write(f' {s.symbol_type().as_smtlib(False)}) ')
+                self.write(')\n')
+            else:
+                self.write('\n')
+                self.write_indented('(\n')
+                with self.indented():
+                    for s in formula.quantifier_vars():
+                        self.write_indented('(')
+                        with self.collapsed():
+                            yield s
+                            self.write(f' {s.symbol_type().as_smtlib(False)})\n')
+                self.write_indented(')\n')
         with self.indented():
             yield formula.arg(0)
         self.write('\n')
