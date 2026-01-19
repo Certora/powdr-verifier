@@ -39,11 +39,12 @@ class SmtConverter:
     
     def convert_derived(self, data: Iterable[Any]):
         for derived in data:
-            match derived:
-                case [{'name': str(name), 'id': int}, value]:
+            name, value = derived
+            match value:
+                case {'Constant': int(value)}:
                     self.derived_columns.append(
                         with_comment(
-                            Equals(Symbol(name, INT), value),
+                            Equals(Symbol(name, INT), Int(value)),
                             f"DERIVED COLUMN {name} = {value}"
                         )
                     )
@@ -58,7 +59,7 @@ class SmtConverter:
                 'machine': {
                     'constraints': list(cs),
                     'bus_interactions': list(bis),
-                    'derived_columns': list(dc),
+                    'derived_columns': list(dcs),
                     **rest_machine,
                 },
                 'subs': subs,
@@ -69,7 +70,7 @@ class SmtConverter:
                 assert not rest_apc
                 self.convert_constraints(self.convert_manual(c) for c in cs)
                 self.bus_interaction_encoder.add_all(self.convert_manual(bi) for bi in bis)
-                self.convert_derived(self.convert_manual(dc) for dc in dc)
+                self.convert_derived(dcs)
 
             # expressions
             case { 'expr': expr, **rest }:
@@ -94,7 +95,7 @@ class SmtConverter:
                 }
 
             case _:
-                logging.error(f"Unsupported manual data: {data}")
+                logging.error(f"Unsupported data in conversion: {data}")
     
     def __add_basic_range_axioms(self) -> list[FNode]:
         for sym in sorted(self.field_symbols, key=lambda x: str(x)):
