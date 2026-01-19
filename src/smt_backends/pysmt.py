@@ -23,8 +23,9 @@ Z3Solver.LOGICS = Z3Solver.LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA])
 
 # then patch all the formula manager and all the walkers
 from pysmt.formula import FormulaManager
+from pysmt.simplifier import Simplifier
 from pysmt.walkers import IdentityDagWalker
-from pysmt.printers import HRPrinter
+from pysmt.printers import HRPrinter, SmartPrinter
 from pysmt.oracles import AtomsOracle, FreeVarsOracle, QuantifierOracle, TheoryOracle, TypesOracle
 from pysmt.type_checker import SimpleTypeChecker
 
@@ -38,6 +39,9 @@ AtomsOracle.walk_mod = AtomsOracle.walk_theory_op
 TypesOracle.walk_mod = TypesOracle.walk_combine
 # printers.py
 HRPrinter.walk_mod = lambda self, formula: self.walk_nary(formula, '%')
+SmartPrinter.walk_mod = SmartPrinter.smart_walk
+# simplifier.py
+Simplifier.walk_mod = Simplifier.walk_identity
 # type_checker.py
 SimpleTypeChecker.walk_mod = SimpleTypeChecker.walk_realint_to_realint
 # solvers/z3.py
@@ -48,6 +52,7 @@ IdentityDagWalker.walk_mod = lambda self, formula, args, **kwargs: self.mgr.Mod(
 import pysmt.smtlib.printers
 # smtlib/printers.py
 pysmt.smtlib.printers.SmtPrinter.walk_mod = lambda self, formula: self.walk_nary(formula, 'mod')
+pysmt.smtlib.printers.SmtDagPrinter.walk_mod = lambda self, formula, args: self.walk_nary(formula, args, 'mod')
 
 # now go on with the rest
 
@@ -73,10 +78,10 @@ DEFAULT_SOLVER = 'z3'
 cvc5_path = Path('cvc5/build/bin/cvc5')
 if cvc5_path.exists():
     get_env().factory.add_generic_solver('cvc5ff',
-        [ 'cvc5/build/bin/cvc5', '--mod-range-solver', '--nia-intro-mm-mod' ],
+        [ 'cvc5/build/bin/cvc5', '--incremental', '--produce-models', '--mod-range-solver', '--nia-intro-mm-mod' ],
         [ logics.QF_UFNIA, logics.UFNIA ]
     )
-    #DEFAULT_SOLVER = 'cvc5ff'
+    DEFAULT_SOLVER = 'cvc5ff'
 
 UF_MOD = Symbol('uf_mod', FunctionType(INT, [INT, INT]))
 REAL_MOD = Symbol('mod', FunctionType(INT, [INT, INT]))
