@@ -39,4 +39,6 @@ class SingleInteractionEncoder:
     def encode_all(self) -> Iterable[FNode]:
         if hasattr(self, 'pre_analysis'):
             self.pre_analysis()
-        return (self.encode(mult, *args) for mult, args in self._interactions)
+        if hasattr(self, 'encode'):
+            return (self.encode(mult, *args) for mult, args in self._interactions)
+        return []
