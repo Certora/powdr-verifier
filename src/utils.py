@@ -36,6 +36,7 @@ def parse_args():
     parser.add_argument('--log-json', action='store_true')
     parser.add_argument('--log-rewrites', action='store_true')
     parser.add_argument('--log-smt', action='store_true')
+    parser.add_argument('--log-memory-analysis', action='store_true', default=True)
     parser.add_argument('--dump-smt', action='store_true')
     parser.add_argument('--base-dump', type=Path, default=None)
 
