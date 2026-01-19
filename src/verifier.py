@@ -22,5 +22,4 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             print("Could not solve formula")
         case x:
             print(x)
-            print("The two programs are equivalent")
-
+            print("The two programs are not equivalent")
