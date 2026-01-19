@@ -37,6 +37,7 @@ def parse_args():
     parser.add_argument('--log-rewrites', action='store_true')
     parser.add_argument('--log-smt', action='store_true')
     parser.add_argument('--dump-smt', action='store_true')
+    parser.add_argument('--base-dump', type=Path, default=None)
 
     sub = parser.add_subparsers(dest="command")
     
@@ -75,6 +76,18 @@ def load_json(file: Path, label: str) -> Any:
     if ARGS().log_json:
         logging.info(f'{label}:\n{json.dumps(data, indent=2)}')
     return data
+
+def add_base_dump(data: dict) -> Any:
+    if 'block' not in data:
+        if ARGS().base_dump is not None:
+            base_data = load_json(ARGS().base_dump, 'base_dump')
+            assert 'block' in base_data, 'No block found in base dump'
+            data = base_data |  { 'machine': data }
+            logging.info(f'took block from {ARGS().base_dump}')
+        else:
+            logging.error('no block found and no base dump provided')
+    return data
+
 
 def log_conversion(level=logging.INFO):
     def decorator(func):
