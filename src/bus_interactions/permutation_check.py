@@ -26,6 +26,7 @@ def encode_permutation_check(
     def encode():
         for id,(((m1,d1),impl1),((m2,d2),impl2)) in enumerate(pairwise(interactions)):
             # TODO: Handle implied flags (impl1, impl2)
+            assert impl1 and impl2, f"encoding for possible permutation not yet supported"
             if id % 2 == 0:
                 # correct additional on even->odd pairs
                 yield additional(d1, d2)
