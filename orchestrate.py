@@ -1,4 +1,5 @@
 import argparse
+import itertools
 import logging
 import subprocess
 from pathlib import Path
@@ -22,7 +23,10 @@ def parse_args():
     sub_eval = sub.add_parser('eval')
     sub_eval.add_argument('test', type=str, default='single_add_1')
 
-    sub_verify = sub.add_parser('verify')
+    sub_verify = sub.add_parser('verify-pair')
+    sub_verify.add_argument('test', type=str, default='single_add_1')
+
+    sub_verify = sub.add_parser('verify-full')
     sub_verify.add_argument('test', type=str, default='single_add_1')
 
     sub_ppsmt = sub.add_parser('preprocess')
@@ -94,7 +98,7 @@ if __name__ == '__main__':
                 DATA_DIR / "apc_candidate_0.model",
             ])
 
-        case 'verify':
+        case 'verify-pair':
             run_powdr(args.test)
             #deserialize_all()
             target = sorted(list(DATA_DIR.glob("apc_candidate_0_*.json")))[-1]
@@ -106,6 +110,22 @@ if __name__ == '__main__':
                 DATA_DIR / "apc_candidate_0_000_unopt.json",
                 target,
             ])
+
+        case 'verify-full':
+            run_powdr(args.test)
+            files = sorted(list(DATA_DIR.glob("apc_candidate_0_*.json")))
+
+            base = files[0]
+
+            for a,b in itertools.pairwise(files):
+                subprocess.run([
+                    "python3", VERIFIER_DIR / "main.py",
+                    "--dump-smt",
+                    "--base-dump", base,
+                    "verify",
+                    a,
+                    b,
+                ])
         
         case 'preprocess':
             subprocess.run([
