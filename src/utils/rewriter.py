@@ -4,15 +4,10 @@ from .smt_utils import *
 from .args import ARGS
 
 def rewrite_mul2or(input: FNode) -> FNode:
-    '''(= (uf_mod (* x (- x 1)) C) 0) --> (or (= (uf_mod x C) 0) (= (uf_mod x C) 1))'''
+    '''(= (mod (* x (- x 1)) C) 0) --> (or (= x 0) (= x 1))'''
     if not input.is_equals(): return None
     mod, zero = input.args()
-
-    if not mod.is_function_application(): return None
-    fname = mod.function_name()
-    if not fname.is_symbol(): return None
-    if not fname.symbol_name() == UF_MOD.symbol_name(): return None
-
+    if not mod.is_mod(): return None
     if not zero.is_zero(): return None
     times, const = mod.args()
     if not times.is_times(): return None
@@ -24,10 +19,7 @@ def rewrite_mul2or(input: FNode) -> FNode:
     if not x2 == x: return None
     if not one.is_one(): return None
     
-    return Or(
-        Equals(Function(fname, [x, const]), Int(0)),
-        Equals(Function(fname, [x, const]), Int(1))
-    )
+    return Or(Equals(x, Int(0)), Equals(x, Int(1)))
 
 def rewrite_reflexiveeq(input: FNode) -> FNode:
     '''(= x x) --> True'''
