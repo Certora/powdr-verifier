@@ -1,7 +1,7 @@
-from .basic_block import BasicBlock
-from .encoding import build_vc
-from .smt import check_formula, convert_to_smt_formula
-from .smt_utils import *
+from .utils.basic_block import BasicBlock
+from .utils.smt_encoding import build_vc
+from .utils.smt_conversion import check_formula, convert_to_smt_formula
+from .utils.smt_utils import *
 
 def verify(before: FNode, after: FNode, block: BasicBlock):
 

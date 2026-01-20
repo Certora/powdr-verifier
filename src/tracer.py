@@ -1,10 +1,10 @@
 import json
 import logging
 
-from .rewriter import rewrite
-from .smt import FormulaWithAxioms, check_formula
-from .smt_utils import *
-from .utils import ARGS
+from .utils.rewriter import rewrite
+from .utils.smt_conversion import FormulaWithAxioms
+from .utils.smt_utils import *
+from .utils.args import ARGS
 
 def trace(smt: FormulaWithAxioms):
 

@@ -1,5 +1,5 @@
 from typing import Iterator
-from ..smt_utils import *
+from ..utils.smt_utils import *
 
 class SingleInteractionEncoder:
     """

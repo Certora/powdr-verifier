@@ -1,10 +1,10 @@
 import logging
 
-from src.basic_block import *
-from src.encoding import *
+from src.utils.basic_block import *
+from src.utils.smt_encoding import *
 from src.evaluator import evaluate
-from src.utils import *
-from src.smt import *
+from src.utils.args import *
+from src.utils.smt_conversion import *
 from src.tracer import trace
 from src.verifier import verify
 from src.diff import diff

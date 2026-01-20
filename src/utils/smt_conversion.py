@@ -4,9 +4,9 @@ import logging
 import pprint
 from typing import Any
 
-from . import bus_interactions
+from .. import bus_interactions
 from .basic_block import BasicBlock
-from .utils import get_smt_dump_filename, ARGS, BusInteractionHandlers
+from .args import get_smt_dump_filename, ARGS, BusInteractionHandlers
 from .smt_utils import *
 
 LOGIC = UFNIA

@@ -1,8 +1,8 @@
 from typing import Any, Iterable, Optional
 
-from .utils import ARGS
+from .args import ARGS
 
-from .smt_backends.pysmt import *
+from ..smt_backends.pysmt import *
 
 def with_comment(f: FNode, comment: str) -> FNode:
     setattr(f, 'comment', comment)
