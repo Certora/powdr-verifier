@@ -25,7 +25,7 @@ def load_apc_dump(file: Path, label: str) -> Any:
             base_data = load_json(ARGS().base_dump, 'base_dump')
             assert 'block' in base_data, 'no block found in base dump'
             data = base_data |  { 'machine': data }
-            logging.info(f'took block from {ARGS().base_dump}')
+            logging.debug(f'took block from {ARGS().base_dump}')
         else:
             logging.error('no block found and no base dump provided')
     return data
