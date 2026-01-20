@@ -1,8 +1,7 @@
 import json
 
-from .utils.smt_utils import *
-
 from .utils.smt_conversion import FormulaWithAxioms
+from .utils.smt_utils import *
 
 class ModInterpreter(FunctionInterpretation):
     def __init__(self):

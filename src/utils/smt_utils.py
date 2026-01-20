@@ -1,6 +1,4 @@
-from typing import Any, Iterable, Optional
-
-from .args import ARGS
+from typing import Any, Iterable
 
 from ..smt_backends.pysmt import *
 

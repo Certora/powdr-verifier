@@ -1,4 +1,5 @@
 class BasicBlock:
+    """Represents a basic block of a program."""
     def __init__(self, data: dict):
         assert "start_pc" in data, "basic block has no start_pc"
         assert "statements" in data, "basic block has no statements"

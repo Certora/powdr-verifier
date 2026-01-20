@@ -2,7 +2,7 @@
 import collections
 import logging
 import pprint
-from typing import Any
+from typing import Any, Iterable
 
 from .. import bus_interactions
 from .basic_block import BasicBlock

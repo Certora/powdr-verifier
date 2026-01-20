@@ -1,6 +1,7 @@
 from enum import Enum
 
 class BusInteractionHandlers(Enum):
+    """An enum of all bus interaction handlers we support."""
     OPENVM = 'openvm'
     DEFAULT = OPENVM
 
