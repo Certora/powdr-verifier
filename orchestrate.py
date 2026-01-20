@@ -20,14 +20,17 @@ def parse_args():
     sub_trace = sub.add_parser('trace')
     sub_trace.add_argument('test', type=str, default='single_add_1')
 
+    sub_traceall = sub.add_parser('trace-all')
+    sub_traceall.add_argument('test', type=str, default='single_add_1')
+
     sub_eval = sub.add_parser('eval')
     sub_eval.add_argument('test', type=str, default='single_add_1')
 
-    sub_verify = sub.add_parser('verify-pair')
+    sub_verify = sub.add_parser('verify-end2end')
     sub_verify.add_argument('test', type=str, default='single_add_1')
 
-    sub_verify = sub.add_parser('verify-full')
-    sub_verify.add_argument('test', type=str, default='single_add_1')
+    sub_verifyall = sub.add_parser('verify-stepwise')
+    sub_verifyall.add_argument('test', type=str, default='single_add_1')
 
     sub_ppsmt = sub.add_parser('preprocess')
     sub_ppsmt.add_argument('file', type=Path)
@@ -42,21 +45,6 @@ def run_powdr(test):
     logging.warning(f"running {' '.join(cmd)}")
     subprocess.run(cmd, shell=True, cwd=POWDR_DIR)
 
-def deserialize(cbor_file):
-    DESERIALIZE_CONFIGS = [
-        ("human", ".txt"),
-        ("json", ".json"),
-    ]
-    for (format, suffix) in DESERIALIZE_CONFIGS:
-        subprocess.run([
-            "cargo", "run", "--bin", "deserialize", "babybear", cbor_file.relative_to(POWDR_DIR, walk_up=True), format, DATA_DIR / (cbor_file.with_suffix(suffix).name)
-        ], cwd=POWDR_DIR)
-
-def deserialize_all():
-    for cbor_file in DATA_DIR.glob("*.cbor"):
-        print(f"Deserializing {cbor_file}")
-        deserialize(cbor_file)
-
 def run_verifier():
     subprocess.run([
         "python3", VERIFIER_DIR / "main.py", "--dump-smt", "verify", DATA_DIR / "apc_candidate_unopt_0.json", DATA_DIR / "apc_candidate_0.json"
@@ -66,62 +54,71 @@ def run_verifier():
 if __name__ == '__main__':
     args = parse_args()
 
+    files = sorted(list(DATA_DIR.glob("apc_candidate_0_*.json")))
+    first = files[0]
+    last = files[-1]
+
     match args.command:
         case 'trace':
             run_powdr(args.test)
-            #deserialize_all()
             subprocess.run([
                 "python3", VERIFIER_DIR / "main.py",
                 "--dump-smt",
-                "--base-dump", DATA_DIR / "apc_candidate_0_000_unopt.json",
+                "--base-dump", first,
                 "trace",
-                DATA_DIR / "apc_candidate_0_000_unopt.json",
-                "--dump-model", DATA_DIR / "apc_candidate_0.model",
+                last,
+                "--dump-model", last.with_suffix(".model"),
             ])
+
+        case 'trace-all':
+            run_powdr(args.test)
+            for f in files:
+                subprocess.run([
+                    "python3", VERIFIER_DIR / "main.py",
+                    "--dump-smt",
+                    "--base-dump", first,
+                    "trace",
+                    f,
+                    "--dump-model", f.with_suffix(".model"),
+                ])
 
         case 'eval':
             run_powdr(args.test)
-            #deserialize_all()
+            model = last.with_suffix(".model")
             subprocess.run([
                 "python3", VERIFIER_DIR / "main.py",
                 "--dump-smt",
-                "--base-dump", DATA_DIR / "apc_candidate_0_000_unopt.json",
+                "--base-dump", first,
                 "trace",
-                DATA_DIR / "apc_candidate_0.json",
-                "--dump-model", DATA_DIR / "apc_candidate_0.model",
+                last,
+                "--dump-model", model,
             ])
             subprocess.run([
                 "python3", VERIFIER_DIR / "main.py",
                 "--dump-smt",
                 "eval",
-                DATA_DIR / "apc_candidate_0.json",
-                DATA_DIR / "apc_candidate_0.model",
+                last,
+                model,
             ])
 
-        case 'verify-pair':
+        case 'verify-end2end':
             run_powdr(args.test)
-            #deserialize_all()
-            target = sorted(list(DATA_DIR.glob("apc_candidate_0_*.json")))[-1]
             subprocess.run([
                 "python3", VERIFIER_DIR / "main.py",
                 "--dump-smt",
-                "--base-dump", DATA_DIR / "apc_candidate_0_000_unopt.json",
+                "--base-dump", first,
                 "verify",
-                DATA_DIR / "apc_candidate_0_000_unopt.json",
-                target,
+                first,
+                last,
             ])
 
-        case 'verify-full':
+        case 'verify-stepwise':
             run_powdr(args.test)
-            files = sorted(list(DATA_DIR.glob("apc_candidate_0_*.json")))
-
-            base = files[0]
-
             for a,b in itertools.pairwise(files):
                 subprocess.run([
                     "python3", VERIFIER_DIR / "main.py",
                     "--dump-smt",
-                    "--base-dump", base,
+                    "--base-dump", first,
                     "verify",
                     a,
                     b,
