@@ -63,7 +63,7 @@ from pysmt.shortcuts import *
 from pysmt.smtlib import script, printers
 from pysmt.substituter import FunctionInterpretation
 
-from ..utils import ARGS
+from ..utils.args import ARGS
 
 # make pysmt support QF_UFNIA and UFNIA
 UFNIA = logics.UFNIA

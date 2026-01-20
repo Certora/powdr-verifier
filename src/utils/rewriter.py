@@ -1,7 +1,7 @@
 import logging
 
 from .smt_utils import *
-from .utils import ARGS
+from .args import ARGS
 
 def rewrite_mul2or(input: FNode) -> FNode:
     '''(= (uf_mod (* x (- x 1)) C) 0) --> (or (= (uf_mod x C) 0) (= (uf_mod x C) 1))'''

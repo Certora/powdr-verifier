@@ -1,5 +1,5 @@
 from .rewriter import rewrite
-from .smt import *
+from .smt_conversion import *
 
 def collect_variables(data: FormulaWithAxioms) -> frozenset[FNode]:
     return frozenset.union(

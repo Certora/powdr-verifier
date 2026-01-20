@@ -1,7 +1,7 @@
 import json
 import subprocess
 
-from .utils import ARGS, load_json, add_base_dump
+from .utils.args import ARGS, load_json, add_base_dump
 
 def diff():
     before = load_json(ARGS().input_before, 'before')

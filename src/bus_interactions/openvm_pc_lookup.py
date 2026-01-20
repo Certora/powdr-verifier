@@ -3,8 +3,8 @@ from typing import Any
 
 from .single_interaction_encoder import SingleInteractionEncoder
 
-from ..basic_block import BasicBlock
-from ..smt_utils import *
+from ..utils.basic_block import BasicBlock
+from ..utils.smt_utils import *
 
 class OpenVMPCLookupEncoder(SingleInteractionEncoder):
     """
