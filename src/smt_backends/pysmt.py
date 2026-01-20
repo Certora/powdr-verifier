@@ -8,6 +8,7 @@ from typing import TextIO, Optional
 
 # first patch pysmt.operators
 from pysmt import operators
+from pysmt import walkers
 from pysmt.solvers.z3 import Z3Converter, Z3Solver, z3
 
 operators.MOD = operators.ALL_TYPES[-1] + 1
@@ -24,7 +25,7 @@ Z3Solver.LOGICS = Z3Solver.LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA])
 # then patch all the formula manager and all the walkers
 from pysmt.formula import FormulaManager
 from pysmt.simplifier import Simplifier
-from pysmt.walkers import IdentityDagWalker
+from pysmt.walkers import DagWalker, IdentityDagWalker
 from pysmt.printers import HRPrinter, SmartPrinter
 from pysmt.oracles import AtomsOracle, FreeVarsOracle, QuantifierOracle, TheoryOracle, TypesOracle
 from pysmt.type_checker import SimpleTypeChecker
@@ -67,6 +68,17 @@ from pysmt.smtlib import script, printers
 from pysmt.substituter import FunctionInterpretation
 
 from ..utils.args import ARGS
+
+class SimpleSizeOracle(DagWalker):
+    """Simple version of SizeOracle that does not throw a warning."""
+    def __init__(self, env=None):
+        DagWalker.__init__(self, env=env)
+    def get_size(self, formula, measure):
+        return self.walk(formula)
+    @walkers.handles(operators.ALL_TYPES)
+    def walk_all(self, formula, args, **kwargs):
+        return 1 + sum(args)
+get_env()._sizeo = SimpleSizeOracle(get_env())
 
 # make pysmt support QF_UFNIA and UFNIA
 UFNIA = logics.UFNIA
