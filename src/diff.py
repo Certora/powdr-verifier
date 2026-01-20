@@ -1,13 +1,12 @@
 import json
 import subprocess
 
-from .utils.args import ARGS, load_json, add_base_dump
+from .utils.args import ARGS
+from .utils.io import load_apc_dump
 
 def diff():
-    before = load_json(ARGS().input_before, 'before')
-    before = add_base_dump(before)
-    after = load_json(ARGS().input_after, 'after')
-    after = add_base_dump(after)
+    before = load_apc_dump(ARGS().input_before, 'before')
+    after = load_apc_dump(ARGS().input_after, 'after')
 
     before_formatted = ARGS().input_before.with_suffix('.formatted.json')
     after_formatted = ARGS().input_after.with_suffix('.formatted.json')

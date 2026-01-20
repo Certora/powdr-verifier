@@ -6,7 +6,7 @@ from typing import Any
 
 from .. import bus_interactions
 from .basic_block import BasicBlock
-from .args import get_smt_dump_filename, ARGS, BusInteractionHandlers
+from .args import ARGS, BusInteractionHandlers
 from .smt_utils import *
 
 LOGIC = UFNIA
@@ -128,7 +128,7 @@ def convert_to_smt_formula(name: str, data: Any, basic_block: BasicBlock) -> For
 
 def check_formula(f: FNode) -> bool:
     if ARGS().dump_smt:
-        with open(get_smt_dump_filename(), 'w') as dump:
+        with open(ARGS().smt_dump_filename, 'w') as dump:
             print_formula_to_file(f, LOGIC, dump)
 
     s = Solver(logic=LOGIC, name=DEFAULT_SOLVER)
