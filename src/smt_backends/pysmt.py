@@ -54,9 +54,12 @@ import pysmt.smtlib.printers
 pysmt.smtlib.printers.SmtPrinter.walk_mod = lambda self, formula: self.walk_nary(formula, 'mod')
 pysmt.smtlib.printers.SmtDagPrinter.walk_mod = lambda self, formula, args: self.walk_nary(formula, args, 'mod')
 
+from pysmt.fnode import FNode
+
+FNode.is_mod = lambda self: self.node_type() == operators.MOD
+
 # now go on with the rest
 
-from pysmt.fnode import FNode
 from pysmt import substituter
 from pysmt.logics import Logic
 from pysmt.shortcuts import *
