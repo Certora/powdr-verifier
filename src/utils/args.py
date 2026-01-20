@@ -1,25 +1,10 @@
 import argparse
-from enum import Enum
-import functools
-import json
 import logging
 from pathlib import Path
-from typing import Any, TextIO, Optional
+from typing import Optional
 
-class BusInteractionHandlers(Enum):
-    OPENVM = 'openvm'
-    DEFAULT = OPENVM
-
-    def __str__(self) -> str:
-        return self.value
-
-class FieldTypes(Enum):
-    BABYBEAR = 0x78000001
-    KOALABEAR = 0x7f000001
-    GOLDILOCKS = 0xFFFFFFFF00000001
-
-    def __str__(self) -> str:
-        return self.name.lower()
+from .bus_interaction_handlers import BusInteractionHandlers
+from .field_types import FieldTypes
 
 __ARGS: Optional[argparse.Namespace] = None
 
@@ -64,65 +49,11 @@ def parse_args():
     if ARGS().verbose > 0:
         logger = logging.getLogger()
         logger.setLevel(logger.level - 10 * ARGS().verbose)
-
-def get_smt_dump_filename() -> Path:
+    
     match ARGS().command:
         case 'trace':
-            return ARGS().input.parent / f"trace-{ARGS().input.stem}.smt2"
+            ARGS().smt_dump_filename = ARGS().input.parent / f"trace-{ARGS().input.stem}.smt2"
         case 'verify':
-            return ARGS().input_before.parent / f"verify-{ARGS().input_before.stem}-{ARGS().input_after.stem}.smt2"
+            ARGS().smt_dump_filename = ARGS().input_before.parent / f"verify-{ARGS().input_before.stem}-{ARGS().input_after.stem}.smt2"
         case _:
-            raise ValueError(f"Unknown command: {ARGS().command}")
-    
-def load_json(file: Path, label: str) -> Any:
-    with open(file, 'r') as f:
-        data = json.load(f)
-    if ARGS().log_json:
-        logging.info(f'{label}:\n{json.dumps(data, indent=2)}')
-    return data
-
-def add_base_dump(data: dict) -> Any:
-    if 'block' not in data:
-        if ARGS().base_dump is not None:
-            base_data = load_json(ARGS().base_dump, 'base_dump')
-            assert 'block' in base_data, 'No block found in base dump'
-            data = base_data |  { 'machine': data }
-            logging.info(f'took block from {ARGS().base_dump}')
-        else:
-            logging.error('no block found and no base dump provided')
-    return data
-
-
-def log_conversion(level=logging.INFO):
-    def decorator(func):
-        @functools.wraps(func)
-        def inner(self, before: Any) -> Any:
-            after = func(self, before)
-            if ARGS().log_conversion: # and after is not None:
-                logging.log(level, f'Converted {before}\nto {after}')
-            return after
-        return inner
-    return decorator
-
-def iterate_recursive(data: Any) -> Any:
-    match data:
-        case dict():
-            for value in data.values():
-                yield value
-                yield from iterate_recursive(value)
-        case list():
-            for item in data:
-                yield item
-                yield from iterate_recursive(item)
-        case _:
-            yield data
-
-def map_recursive(data: Any, f) -> Any:
-    match data:
-        case dict():
-            data = { k: map_recursive(v, f) for k, v in data.items() }
-        case list():
-            data = [ map_recursive(item, f) for item in data ]
-    match f(data):
-        case None: return data
-        case r: return r
+            pass

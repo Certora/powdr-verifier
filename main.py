@@ -5,9 +5,11 @@ from src.utils.smt_encoding import *
 from src.evaluator import evaluate
 from src.utils.args import *
 from src.utils.smt_conversion import *
+from src.utils.io import load_apc_dump, load_json
 from src.tracer import trace
 from src.verifier import verify
 from src.diff import diff
+
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
@@ -16,8 +18,7 @@ if __name__ == '__main__':
     match ARGS().command:
         case 'trace':
             logging.info(f"running tracer on {ARGS().input}")
-            input = load_json(ARGS().input, 'input')
-            input = add_base_dump(input)
+            input = load_apc_dump(ARGS().input, 'input')
 
             smt = convert_to_smt_formula("input", input, BasicBlock(input["block"]))
 
@@ -25,8 +26,7 @@ if __name__ == '__main__':
 
         case 'eval':
             logging.info(f"evaluating trace from {ARGS().model} on {ARGS().input}")
-            input = load_json(ARGS().input, 'input')
-            input = add_base_dump(input)
+            input = load_apc_dump(ARGS().input, 'input')
             model = load_json(ARGS().model, 'model')
 
             smt = convert_to_smt_formula("input", input, BasicBlock(input["block"]))
@@ -39,10 +39,8 @@ if __name__ == '__main__':
 
         case 'verify':
             logging.info(f"verify equivalence of {ARGS().input_before} and {ARGS().input_after}")
-            before = load_json(ARGS().input_before, 'before')
-            before = add_base_dump(before)
-            after = load_json(ARGS().input_after, 'after')
-            after = add_base_dump(after)
+            before = load_apc_dump(ARGS().input_before, 'before')
+            after = load_apc_dump(ARGS().input_after, 'after')
 
             before_block = BasicBlock(before["block"])
             assert before_block == BasicBlock(after["block"]), "The basic block has changed"
