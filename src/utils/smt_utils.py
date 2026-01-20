@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Iterable
 
 from ..smt_backends.pysmt import *
@@ -60,3 +61,22 @@ class VarBaseFormulaSelector:
         return self.resolve_shallow(frozenset.union(*[f.get_free_variables() for f in fs]))
     def resolve_deep_for(self, fs: list[FNode]) -> FNode:
         return self.resolve_deep(frozenset.union(*[f.get_free_variables() for f in fs]))
+
+def check_formula(f: FNode) -> bool:
+    if ARGS().dump_smt:
+        with open(ARGS().smt_dump_filename, 'w') as dump:
+            print_formula_to_file(f, UFNIA, dump)
+
+    logging.info(f"checking formula with logic {UFNIA} and solver {DEFAULT_SOLVER}")
+    s = Solver(logic=UFNIA, name=DEFAULT_SOLVER)
+    s.add_assertion(f)
+    match s.solve():
+        case True:
+            print("SAT")
+            return s.get_model()
+        case False:
+            print("UNSAT")
+            return False
+        case _:
+            print(f"UNKNOWN")
+            return None
