@@ -9,10 +9,12 @@ from .field_types import FieldTypes
 __ARGS: Optional[argparse.Namespace] = None
 
 def ARGS() -> argparse.Namespace:
+    """Retrieve the command line arguments."""
     assert __ARGS is not None
     return __ARGS
 
 def parse_args():
+    """Parse the command line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--verbose', action='count', default=0)
     parser.add_argument('--bus-interaction-handler', type=BusInteractionHandlers, default=BusInteractionHandlers.DEFAULT, choices=list(BusInteractionHandlers))
