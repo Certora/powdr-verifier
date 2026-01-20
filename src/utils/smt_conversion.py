@@ -9,8 +9,6 @@ from .basic_block import BasicBlock
 from .args import ARGS, BusInteractionHandlers
 from .smt_utils import *
 
-LOGIC = UFNIA
-
 FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['constraints', 'bus_interactions', 'axioms', 'derived', 'globals'])
 
 class SmtConverter:
@@ -125,21 +123,3 @@ def convert_to_smt_formula(name: str, data: Any, basic_block: BasicBlock) -> For
     if ARGS().log_smt:
         logging.info(f'after smt conversion:\n{pprint.pformat(formula, width=80)}')
     return formula
-
-def check_formula(f: FNode) -> bool:
-    if ARGS().dump_smt:
-        with open(ARGS().smt_dump_filename, 'w') as dump:
-            print_formula_to_file(f, LOGIC, dump)
-
-    s = Solver(logic=LOGIC, name=DEFAULT_SOLVER)
-    s.add_assertion(f)
-    match s.solve():
-        case True:
-            print("SAT")
-            return s.get_model()
-        case False:
-            print("UNSAT")
-            return False
-        case _:
-            print(f"UNKNOWN")
-            return None

@@ -79,6 +79,6 @@ def is_sat(s: Solver, f: FNode) -> bool:
     s.pop()
     return result == sat
 
-def print_formula_to_file(s, LOGIC, dump):
+def print_formula_to_file(s, dump):
     print(f"dumping to {dump.name}")
     dump.write(s.to_smt2())
