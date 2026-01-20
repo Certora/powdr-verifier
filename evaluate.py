@@ -44,19 +44,19 @@ def pp_constraint(input: Any):
     match input:
         case {'expr': expr, **rest} if rest == {}:
             return pp_constraint(expr)
-        case {'UnaryOperation': { 'expr': v, 'op': 'Minus' }}:
+        case ['-', v]:
             return f"-{pp_constraint(v)}"
-        case {'BinaryOperation': { 'left': l, 'op': 'Add', 'right': r }}:
+        case [l, '+', r]:
             return f"({pp_constraint(l)} + {pp_constraint(r)})"
-        case {'BinaryOperation': { 'left': l, 'op': 'Sub', 'right': r }}:
+        case [l, '-', r]:
             return f"({pp_constraint(l)} - {pp_constraint(r)})"
-        case {'BinaryOperation': { 'left': l, 'op': 'Mul', 'right': r }}:
+        case [l, '*', r]:
             return f"({pp_constraint(l)} * {pp_constraint(r)})"
-        case {'Number': int(value)}:
-            return str(value)
-        case {'Constant': value}:
-            return str(value)
-        case {'Reference': { 'name': str(name), 'id': int() }}:
+        case {'Constant': int(value)}:
+            return f"Constant({value})"
+        case int(value):
+            return value
+        case str(name):
             return name
         case _:
             return str(input)
@@ -103,19 +103,17 @@ class Evaluator:
             # constraints
             case {'expr': expr, **rest} if rest == {}:
                 return self.__evaluate(expr, model)
-            case {'UnaryOperation': { 'expr': v, 'op': 'Minus' }}:
+            case ['-', v]:
                 return (-self.__evaluate(v, model)) % BABYBEAR_PRIME
-            case {'BinaryOperation': { 'left': l, 'op': 'Add', 'right': r }}:
+            case [l, '+', r]:
                 return (self.__evaluate(l, model) + self.__evaluate(r, model)) % BABYBEAR_PRIME
-            case {'BinaryOperation': { 'left': l, 'op': 'Sub', 'right': r }}:
+            case [l, '-', r]:
                 return (self.__evaluate(l, model) - self.__evaluate(r, model)) % BABYBEAR_PRIME
-            case {'BinaryOperation': { 'left': l, 'op': 'Mul', 'right': r }}:
+            case [l, '*', r]:
                 return (self.__evaluate(l, model) * self.__evaluate(r, model)) % BABYBEAR_PRIME
-            case {'Number': int(value)}:
+            case int(value):
                 return value
-            case {'Constant': str(value)}:
-                return int(value)
-            case {'Reference': { 'name': str(name), 'id': int() }}:
+            case str(name):
                 assert name in model, f"{name} not found in model"
                 return model[name]
             
@@ -128,7 +126,7 @@ class Evaluator:
                 }
             
             # derived columns
-            case [{'name': str(name), 'id': int(id)}, {'Constant': int(value)}]:
+            case [str(name), {'Constant': int(value)}]:
                 return [name, value]
 
             case _:
@@ -138,6 +136,7 @@ class Evaluator:
     def __verify_constraints(self, constraints: list[tuple[Any, Any]]):
         """Verify that the constraints are satisfied."""
         for (input,evald) in constraints:
+            logging.debug(f'evaluating constraint {pp_constraint(input)}')
             assert evald == 0, f"constraint {pp_constraint(input)} == {evald}"
     
     def __verify_permutation(self, name: str, mults: list[Any]):
@@ -162,6 +161,7 @@ class Evaluator:
         ebs = []
         mems = {}
         for (input,evald) in bus_interactions:
+            logging.debug(f'verifying bus interaction {pp_bus_interaction(input)}')
             def err(msg: str):
                 return f"""
 original:  {pp_bus_interaction(input)}
@@ -246,6 +246,7 @@ evaluated: {pp_bus_interaction(evald)}
     def __verify_derived_columns(self, derived_columns: list[tuple[Any, Any]], model: dict[str, int]):
         """Verify that the derived columns match the model."""
         for ([_,expr],[var,v]) in derived_columns:
+            logging.debug(f'verifying derived column {var} = {pp_constraint(expr)}')
             assert v == model[var], f"derived {var} has incorrect value: {pp_constraint(expr)} != {v}"
     
     def __call__(self, model: dict[str, int]) -> Any:
