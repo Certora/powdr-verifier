@@ -67,8 +67,8 @@ def check_formula(f: FNode) -> bool:
         with open(ARGS().smt_dump_filename, 'w') as dump:
             print_formula_to_file(f, UFNIA, dump)
 
-    logging.info(f"checking formula with logic {UFNIA} and solver {DEFAULT_SOLVER}")
-    s = Solver(logic=UFNIA, name=DEFAULT_SOLVER)
+    logging.info(f"checking formula with logic {UFNIA} and solver {ARGS().solver}")
+    s = Solver(logic=UFNIA, name=ARGS().solver)
     s.add_assertion(f)
     match s.solve():
         case True:
