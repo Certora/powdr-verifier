@@ -44,6 +44,7 @@ class MemoryAnalysis:
                 solver.add_assertion(c)
 
             same = And(Equals(a[0], b[0]), Equals(a[1], b[1]))
+            logging.debug(f"checking if {same} is valid")
             if solver.is_valid(same):
                 self.implied_classes[b] = self.implied_classes[a]
     
@@ -56,6 +57,7 @@ class MemoryAnalysis:
                 solver.add_assertion(c)
 
             same = And(Equals(a[0], b[0]), Equals(a[1], b[1]))
+            logging.debug(f"checking if {same} is sat")
             if solver.is_sat(same):
                 self.possible_aliases[a].append(b)
                 self.possible_aliases[b].append(a)
