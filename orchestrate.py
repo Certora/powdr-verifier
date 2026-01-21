@@ -96,15 +96,19 @@ def run_verify(first, pairs):
 if __name__ == '__main__':
     args = parse_args()
 
-    files = sorted(DATA_DIR.glob(f"{args.test}_*.json"))
-
     match args.command:
         case 'powdr':
             if args.clean:
                 for file in DATA_DIR.glob(f"{args.test}_*"):
                     file.unlink()
             run_powdr(args.test)
+            exit(0)
 
+    files = sorted(DATA_DIR.glob(f"{args.test}_*.json"))
+    if not files:
+        logging.warning(f"no files found for {args.test}, did you run powdr?")
+
+    match args.command:
         case 'trace-first': run_trace(files[0])
         case 'trace-last': run_trace(files[-1])
         case 'trace-all': run_trace(*files)

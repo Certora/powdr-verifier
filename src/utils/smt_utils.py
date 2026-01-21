@@ -75,11 +75,8 @@ def check_formula(f: FNode) -> bool:
     s.add_assertion(f)
     match s.solve():
         case True:
-            print("SAT")
-            return s.get_model()
+            return True, s.get_model()
         case False:
-            print("UNSAT")
-            return False
+            return False, None
         case _:
-            print(f"UNKNOWN")
-            return None
+            return None, None
