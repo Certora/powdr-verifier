@@ -23,6 +23,10 @@ class RelationRewriter(substituter.Substituter):
     def __init__(self, env=None):
         substituter.Substituter.__init__(self, env=env)
     
+    @substituter.handles(set(operators.ALL_TYPES) - operators.RELATIONS)
+    def walk_identity(self, formula, args, **kwargs):
+        return keep_comment(substituter.Substituter.super(self, formula, args=args, **kwargs), formula)
+
     @substituter.handles(operators.RELATIONS)
     def walk_identity_or_replace(self, formula, args, **kwargs):
         res = rewrite_one(to_sympy(formula))
