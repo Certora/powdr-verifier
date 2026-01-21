@@ -11,10 +11,11 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
     vc = build_vc(before_smt, after_smt)
 
     match check_formula(vc):
-        case False:
+        case False,_:
             print("The two programs are equivalent")
-        case None:
-            print("Could not solve formula")
-        case x:
-            print(x)
+        case None,_:
+            print("Could not solve formula, solver returned UNKNOWN")
+        case True,model:
             print("The two programs are not equivalent")
+            model = to_nice_model(model)
+            print(json.dumps(model, indent=4))
