@@ -54,7 +54,7 @@ jobs:
       run: |
         for test in ${{ env.TEST_CASES }}; do
           echo "::group::run powdr on ${test}"
-          python3 verifier/orchestrate.py powdr ${test}
+          python3 verifier/orchestrate.py powdr ${test} || exit 1
           echo "::endgroup::"
         done
     
@@ -62,7 +62,7 @@ jobs:
       run: |
         for test in ${{ env.TEST_CASES }}; do
           echo "::group::run tracer on ${test}"
-          python3 verifier/orchestrate.py trace-all ${test}
+          python3 verifier/orchestrate.py trace-all ${test} || exit 1
           echo "::endgroup::"
         done
     
@@ -70,7 +70,7 @@ jobs:
       run: |
         for test in ${{ env.TEST_CASES }}; do
           echo "::group::run evaluator on ${test}"
-          python3 verifier/orchestrate.py eval-all ${test}
+          python3 verifier/orchestrate.py eval-all ${test} || exit 1
           echo "::endgroup::"
         done
     
@@ -78,7 +78,7 @@ jobs:
       run: |
         for test in ${{ env.TEST_CASES }}; do
           echo "::group::run separate evaluator on ${test}"
-          python3 verifier/orchestrate.py evaluate-all ${test}
+          python3 verifier/orchestrate.py evaluate-all ${test} || exit 1
           echo "::endgroup::"
         done
 
@@ -86,7 +86,7 @@ jobs:
       run: |
         for test in ${{ env.TEST_CASES }}; do
           echo "::group::run verifier on ${test}"
-          python3 verifier/orchestrate.py verify-stepwise ${test}
+          python3 verifier/orchestrate.py verify-stepwise ${test} || exit 1
           echo "::endgroup::"
         done
     
