@@ -29,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--verbose', action='count', default=0)
+    parser.add_argument('--base-dump', type=Path, default=None)
     parser.add_argument('input', type=Path)
     parser.add_argument('model', type=Path)
 
@@ -37,6 +38,30 @@ def parse_args() -> argparse.Namespace:
         logger = logging.getLogger()
         logger.setLevel(logger.level - 10 * args.verbose)
     return args
+
+
+def load_json(file: Path) -> Any:
+    """Load a json file and return the data. Use label for logging."""
+    with open(file, 'r') as f:
+        data = json.load(f)
+    return data
+
+def load_apc_dump(file: Path, args: argparse.Namespace) -> Any:
+    """
+    Load an apc dump and return the data. Use label for logging.
+    If the json is just the machine and not the whole apc dump,
+    take the apc from the base dump and only update the machine.
+    """
+    data = load_json(file)
+    if 'block' not in data:
+        if args.base_dump is not None:
+            base_data = load_json(args.base_dump)
+            assert 'block' in base_data, 'no block found in base dump'
+            data = base_data |  { 'machine': data }
+            logging.debug(f'took block from {args.base_dump}')
+        else:
+            logging.error('no block found and no base dump provided')
+    return data
 
 
 def pp_constraint(input: Any):
@@ -195,16 +220,17 @@ evaluated: {pp_bus_interaction(evald)}
                         'args': [pc, op, a, b, c, d, e, f, g]
                     }:
                     # verify the lookups into the basic block
+                    rop,ra,rb,rc,rd,re,rf,rg = self.basic_block['statements'][pc // 4]
                     assert pc % 4 == 0, f"pc {pc} is not a multiple of 4"
                     assert mult == 1, err(f"mult != 1")
-                    assert self.basic_block['statements'][pc // 4]['opcode'] == op, err(f"opcode != {self.basic_block['statements'][pc // 4]['opcode']}")
-                    assert self.basic_block['statements'][pc // 4]['a'] == a, err(f"a != {self.basic_block['statements'][pc // 4]['a']}")
-                    assert self.basic_block['statements'][pc // 4]['b'] == b, err(f"b != {self.basic_block['statements'][pc // 4]['b']}")
-                    assert self.basic_block['statements'][pc // 4]['c'] == c, err(f"c != {self.basic_block['statements'][pc // 4]['c']}")
-                    assert self.basic_block['statements'][pc // 4]['d'] == d, err(f"d != {self.basic_block['statements'][pc // 4]['d']}")
-                    assert self.basic_block['statements'][pc // 4]['e'] == e, err(f"e != {self.basic_block['statements'][pc // 4]['e']}")
-                    assert self.basic_block['statements'][pc // 4]['f'] == f, err(f"f != {self.basic_block['statements'][pc // 4]['f']}")
-                    assert self.basic_block['statements'][pc // 4]['g'] == g, err(f"g != {self.basic_block['statements'][pc // 4]['g']}")
+                    assert rop == op, err(f"opcode != {rop}")
+                    assert ra == a, err(f"a != {ra}")
+                    assert rb == b, err(f"b != {rb}")
+                    assert rc == c, err(f"c != {rc}")
+                    assert rd == d, err(f"d != {rd}")
+                    assert re == e, err(f"e != {re}")
+                    assert rf == f, err(f"f != {rf}")
+                    assert rg == g, err(f"g != {rg}")
                 case {
                         'id': OpenVMBusInteraction.VARIABLE_RANGE_CHECKER.value,
                         'mult': mult,
@@ -273,10 +299,8 @@ if __name__ == '__main__':
 
     logging.info(f"evaluating trace from {args.model} on {args.input}")
 
-    with open(args.input, 'r') as f:
-        input = json.load(f)
-    with open(args.model, 'r') as f:
-        model = json.load(f)
+    input = load_apc_dump(args.input, args)
+    model = load_json(args.model)
 
     evaluator = Evaluator(input)
     evaluator(model)
