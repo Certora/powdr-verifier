@@ -87,6 +87,10 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
         return sorted(self._interactions, key=lambda i: i[1][0].size() + i[1][1].size())
 
     def pre_analysis(self) -> None:
+        if ARGS().skip_memory_analysis:
+            logging.warning("skipping memory analysis")
+            return
+
         accesses = sorted(
             [(i[1][0], i[1][1]) for i in self._interactions],
             key=lambda i: i[0].size() + i[1].size()
@@ -108,7 +112,9 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
 
 
     def group_interactions(self):
-        assert self.analysis is not None
+        if not self.analysis:
+            logging.warning("no memory analysis performed, skipping memory bus")
+            return {}
         res = {}
 
         for i in self._interactions:
