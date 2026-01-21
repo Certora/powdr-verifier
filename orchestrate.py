@@ -8,7 +8,8 @@ DATA_DIR = Path.cwd() / "data"
 POWDR_DIR = Path.cwd() / "powdr"
 VERIFIER_DIR = Path.cwd() / "verifier"
 
-assert DATA_DIR.exists()
+if not DATA_DIR.exists():
+    DATA_DIR.mkdir(parents=True)
 assert POWDR_DIR.exists()
 assert VERIFIER_DIR.exists()
 
