@@ -27,6 +27,7 @@ def parse_args():
     parser.add_argument('--skip-memory-analysis', action='store_true')
     parser.add_argument('--dump-smt', action='store_true')
     parser.add_argument('--base-dump', type=Path, default=None)
+    parser.add_argument('--solver', type=str, default="z3")
 
     sub = parser.add_subparsers(dest="command")
     

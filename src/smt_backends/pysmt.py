@@ -89,14 +89,17 @@ def Mod(left, right):
     return get_env().formula_manager.Mod(left, right)
 
 
-DEFAULT_SOLVER = 'z3'
-cvc5_path = Path('cvc5/build/bin/cvc5')
-if cvc5_path.exists():
-    get_env().factory.add_generic_solver('cvc5ff',
-        [ 'cvc5/build/bin/cvc5', '--incremental', '--produce-models', '--mod-range-solver', '--nia-intro-mm-mod' ],
-        [ logics.QF_UFNIA, logics.UFNIA ]
-    )
-    DEFAULT_SOLVER = 'cvc5ff'
+cvc5_paths = [
+    Path('cvc5/build/bin/cvc5'),
+    Path('../cvc5/build/bin/cvc5')
+]
+for cvc5_path in cvc5_paths:
+    if cvc5_path.exists():
+        get_env().factory.add_generic_solver('cvc5ff',
+            [ cvc5_path, '--incremental', '--produce-models', '--mod-range-solver', '--nia-intro-mm-mod' ],
+            [ logics.QF_UFNIA, logics.UFNIA ]
+        )
+        break
 
 UF_MOD = Symbol('uf_mod', FunctionType(INT, [INT, INT]))
 REAL_MOD = Symbol('mod', FunctionType(INT, [INT, INT]))
