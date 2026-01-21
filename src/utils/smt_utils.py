@@ -3,11 +3,14 @@ from typing import Any, Iterable
 
 from ..smt_backends.pysmt import *
 
+SUPPORTS_COMMENTS = 'comment' in FNode.__slots__
+
 def with_comment(f: FNode, comment: str) -> FNode:
-    setattr(f, 'comment', comment)
+    if SUPPORTS_COMMENTS:
+        setattr(f, 'comment', comment)
     return f
 def keep_comment(new: FNode, old: FNode) -> FNode:
-    if hasattr(old, 'comment'):
+    if SUPPORTS_COMMENTS and hasattr(old, 'comment'):
         setattr(new, 'comment', old.comment)
     return new
 
