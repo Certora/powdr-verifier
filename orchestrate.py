@@ -8,7 +8,8 @@ DATA_DIR = Path.cwd() / "data"
 POWDR_DIR = Path.cwd() / "powdr"
 VERIFIER_DIR = Path.cwd() / "verifier"
 
-assert DATA_DIR.exists()
+if not DATA_DIR.exists():
+    DATA_DIR.mkdir(parents=True)
 assert POWDR_DIR.exists()
 assert VERIFIER_DIR.exists()
 
@@ -96,8 +97,6 @@ if __name__ == '__main__':
     args = parse_args()
 
     files = sorted(DATA_DIR.glob(f"{args.test}_*.json"))
-    first = files[0]
-    last = files[-1]
 
     match args.command:
         case 'powdr':
@@ -106,20 +105,20 @@ if __name__ == '__main__':
                     file.unlink()
             run_powdr(args.test)
 
-        case 'trace-first': run_trace(first)
-        case 'trace-last': run_trace(last)
+        case 'trace-first': run_trace(files[0])
+        case 'trace-last': run_trace(files[-1])
         case 'trace-all': run_trace(*files)
 
-        case 'evaluate-first': run_evaluate(first)
-        case 'evaluate-last': run_evaluate(last)
+        case 'evaluate-first': run_evaluate(files[0])
+        case 'evaluate-last': run_evaluate(files[-1])
         case 'evaluate-all': run_evaluate(*files)
 
-        case 'eval-first': run_eval(first)
-        case 'eval-last': run_eval(last)
+        case 'eval-first': run_eval(files[0])
+        case 'eval-last': run_eval(files[-1])
         case 'eval-all': run_eval(*files)
 
-        case 'verify-end2end': run_eval(first, (first, last))
-        case 'verify-stepwise': run_eval(first, itertools.pairwise(files))
+        case 'verify-end2end': run_eval(files[0], (files[0], files[-1]))
+        case 'verify-stepwise': run_eval(files[0], itertools.pairwise(files))
 
         case _:
             logging.error(f"unknown command: {args.command}")

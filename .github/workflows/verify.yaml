@@ -73,6 +73,14 @@ jobs:
           python3 verifier/orchestrate.py eval-all ${test}
           echo "::endgroup::"
         done
+    
+    - name: run separate evaluator
+      run: |
+        for test in ${{ env.TEST_CASES }}; do
+          echo "::group::run separate evaluator on ${test}"
+          python3 verifier/orchestrate.py evaluate-all ${test}
+          echo "::endgroup::"
+        done
 
     - name: run verifier
       run: |
