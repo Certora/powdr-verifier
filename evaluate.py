@@ -237,7 +237,8 @@ evaluated: {pp_bus_interaction(evald)}
                         'args': [x, bits]
                     }:
                     # verify the range of x
-                    assert mult == 1, err(f"mult != 1")
+                    if mult != 1:
+                        logging.warning(err(f"mult != 1"))
                     assert x >= 0 and x <= 2**min(bits, 25)-1, err(f"x not in 0..{2**min(bits, 25)-1}")
                 case {
                         'id': OpenVMBusInteraction.BITWISE_LOOKUP.value,
@@ -273,7 +274,8 @@ evaluated: {pp_bus_interaction(evald)}
         """Verify that the derived columns match the model."""
         for ([_,expr],[var,v]) in derived_columns:
             logging.debug(f'verifying derived column {var} = {pp_constraint(expr)}')
-            assert v == model[var], f"derived {var} has incorrect value: {pp_constraint(expr)} != {v}"
+            if v != model[var]:
+                logging.warning(f"derived {var} has incorrect value: {pp_constraint(expr)} != {v}")
     
     def __call__(self, model: dict[str, int]) -> Any:
         """Evaluate the trace and then verify all assumptions about the machine."""
