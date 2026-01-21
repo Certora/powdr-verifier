@@ -18,11 +18,21 @@ def trace(smt: FormulaWithAxioms):
     
     f = rewrite(f)
 
-    model = to_nice_model(check_formula(f))
-    print(json.dumps(model, indent=4))
+    res, model = check_formula(f)
 
-    if ARGS().dump_model:
-        logging.info(f"dumping model to {ARGS().dump_model}")
-        with open(ARGS().dump_model, 'w') as f:
-            json.dump(model, f, indent=4)
+    match res:
+        case True:
+            model = to_nice_model(model)
+            print(json.dumps(model, indent=4))
+
+            if ARGS().dump_model:
+                logging.info(f"dumping model to {ARGS().dump_model}")
+                with open(ARGS().dump_model, 'w') as f:
+                    json.dump(model, f, indent=4)
+        case False:
+            logging.info("no trace found, encoding is UNSAT")
+        case None:
+            logging.info("no trace found, solver returned UNKNOWN")
+
+
 
