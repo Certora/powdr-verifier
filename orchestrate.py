@@ -81,7 +81,7 @@ def run_eval(*files):
             model,
         ])
 
-def run_verify(first, *pairs):
+def run_verify(first, pairs):
     for a,b in pairs:
         subprocess.run([
             "python3", VERIFIER_DIR / "main.py",
@@ -117,8 +117,8 @@ if __name__ == '__main__':
         case 'eval-last': run_eval(files[-1])
         case 'eval-all': run_eval(*files)
 
-        case 'verify-end2end': run_eval(files[0], (files[0], files[-1]))
-        case 'verify-stepwise': run_eval(files[0], itertools.pairwise(files))
+        case 'verify-end2end': run_verify(files[0], (files[0], files[-1]))
+        case 'verify-stepwise': run_verify(files[0], itertools.pairwise(files))
 
         case _:
             logging.error(f"unknown command: {args.command}")
