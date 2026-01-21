@@ -42,7 +42,13 @@ TypesOracle.walk_mod = TypesOracle.walk_combine
 HRPrinter.walk_mod = lambda self, formula: self.walk_nary(formula, '%')
 SmartPrinter.walk_mod = SmartPrinter.smart_walk
 # simplifier.py
-Simplifier.walk_mod = Simplifier.walk_identity
+def simplify_mod(self, formula, args, **kwargs):
+    sl, sr = args
+    if sl.is_int_constant() and sr.is_int_constant():
+        return Int(sl.constant_value() % sr.constant_value())
+    if sl.is_zero(): return sl
+    return self.manager.Mod(sl, sr)
+Simplifier.walk_mod = simplify_mod
 # type_checker.py
 SimpleTypeChecker.walk_mod = SimpleTypeChecker.walk_realint_to_realint
 # solvers/z3.py
