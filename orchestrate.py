@@ -18,6 +18,7 @@ def parse_args():
     parser.add_argument('command', choices=[
         'powdr',
         'trace-first', 'trace-last','trace-all',
+        'evaluate-first', 'evaluate-last', 'evaluate-all',
         'eval-first', 'eval-last', 'eval-all',
         'verify-end2end', 'verify-stepwise',
     ])
@@ -45,10 +46,23 @@ def run_trace(*files):
             "python3", VERIFIER_DIR / "main.py",
             "--dump-smt",
             "--base-dump", first,
-            "--skip-memory-analysis",
             "trace",
             f,
             "--dump-model", f.with_suffix(".model"),
+        ])
+
+def run_evaluate(*files):
+    first = files[0]
+    for f in files:
+        model = f.with_suffix(".model")
+        if not model.exists():
+            logging.warning(f"can not eval {f} because there is no model")
+            continue
+        subprocess.run([
+            "python3", VERIFIER_DIR / "evaluate.py",
+            "--base-dump", first,
+            f,
+            model,
         ])
 
 def run_eval(*files):
@@ -59,8 +73,9 @@ def run_eval(*files):
             logging.warning(f"can not eval {f} because there is no model")
             continue
         subprocess.run([
-            "python3", VERIFIER_DIR / "evaluate.py",
+            "python3", VERIFIER_DIR / "main.py",
             "--base-dump", first,
+            "eval",
             f,
             model,
         ])
@@ -94,6 +109,10 @@ if __name__ == '__main__':
         case 'trace-first': run_trace(first)
         case 'trace-last': run_trace(last)
         case 'trace-all': run_trace(*files)
+
+        case 'evaluate-first': run_evaluate(first)
+        case 'evaluate-last': run_evaluate(last)
+        case 'evaluate-all': run_evaluate(*files)
 
         case 'eval-first': run_eval(first)
         case 'eval-last': run_eval(last)
