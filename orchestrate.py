@@ -36,7 +36,7 @@ def run_powdr(test):
         f"cargo test {test} -- --no-capture --exact",
     ]
     logging.warning(f"running {' '.join(cmd)}")
-    subprocess.run(' '.join(cmd), shell=True, cwd=POWDR_DIR)
+    subprocess.run(' '.join(cmd), shell=True, cwd=POWDR_DIR, check=True)
     for file in DATA_DIR.glob("apc_candidate_*.*"):
         file.rename(file.with_name(file.name.replace("apc_candidate", test)))
 
@@ -50,7 +50,7 @@ def run_trace(*files):
             "trace",
             f,
             "--dump-model", f.with_suffix(".model"),
-        ])
+        ], check=True)
 
 def run_evaluate(*files):
     first = files[0]
@@ -64,7 +64,7 @@ def run_evaluate(*files):
             "--base-dump", first,
             f,
             model,
-        ])
+        ], check=True)
 
 def run_eval(*files):
     first = files[0]
@@ -79,7 +79,7 @@ def run_eval(*files):
             "eval",
             f,
             model,
-        ])
+        ], check=True)
 
 def run_verify(first, pairs):
     for a,b in pairs:
@@ -90,7 +90,7 @@ def run_verify(first, pairs):
             "verify",
             a,
             b,
-        ])
+        ], check=True)
 
 
 if __name__ == '__main__':
