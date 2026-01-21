@@ -19,9 +19,7 @@ def evaluate(input: dict, smt: FormulaWithAxioms, model: dict[str, int]):
     substitutions = {
         Symbol(name, INT): Int(value) for name, value in model.items()
     }
-    interpretations = {
-        UF_MOD: ModInterpreter(),
-    }
+    interpretations = {}
 
     def subs(f: FNode) -> FNode:
         last = None

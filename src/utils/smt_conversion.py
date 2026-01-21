@@ -4,7 +4,7 @@ import logging
 import pprint
 from typing import Any, Iterable
 
-from .. import bus_interactions
+from .. import bus_interactions, rewriter
 from .basic_block import BasicBlock
 from .args import ARGS, BusInteractionHandlers
 from .smt_utils import *
@@ -26,7 +26,9 @@ class SmtConverter:
                 self.bus_interaction_encoder = None
 
     def __add_constraint(self, c: FNode, comment: str):
-        self.constraints.append(with_comment(c, comment))
+        self.constraints.append(
+            rewriter.rewrite(with_comment(c, comment))
+        )
     
     def convert_constraints(self, data: Iterable[Any]):
         for id,c in enumerate(data):
