@@ -33,6 +33,12 @@ jobs:
         path: powdr
         submodules: recursive
         ssh-key: ${{ secrets.DEPLOY_KEY_POWDR }}
+    
+    - name: get date for cache key
+      id: get-date
+      run: |
+        echo "date=$(/bin/date -u "+%Y%m%d")" >> $GITHUB_OUTPUT
+      shell: bash
 
     - name: setup cargo cache
       uses: actions/cache@v3
@@ -41,7 +47,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             powdr/target/
-          key: cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-${{ hashFiles('**/Cargo.lock') }}-${{ steps.get-date.outputs.date }}
           restore-keys: |
             cargo-
     
