@@ -40,7 +40,7 @@ def parse_args():
 
 def run_powdr(test):
     cmd = [
-        f"APC_EXPORT_PATH={DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True)} APC_EXPORT_LEVEL=2 cargo test {test} -- --no-capture"
+        f"APC_EXPORT_PATH={DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True)} APC_EXPORT_LEVEL=2 cargo test {test} -- --no-capture --exact"
     ]
     logging.warning(f"running {' '.join(cmd)}")
     subprocess.run(cmd, shell=True, cwd=POWDR_DIR)
