@@ -39,7 +39,7 @@ class MemoryAnalysis:
             if self.implied_classes[a] == self.implied_classes[b]:
                 continue
 
-            solver = Solver(logic=QF_UFNIA, incremental=True)
+            solver = Solver(logic=QF_UFNIA, incremental=True, solver_options={'timeout': 10000})
             for c in self.formula_selector.resolve_shallow_for([*a, *b]):
                 solver.add_assertion(c)
 
@@ -52,7 +52,7 @@ class MemoryAnalysis:
         self.possible_aliases = { a: [] for a in self.implied_classes.values() }
 
         for a,b in itertools.combinations(self.possible_aliases.keys(), 2):
-            solver = Solver(logic=UFNIA, incremental=True)
+            solver = Solver(logic=UFNIA, incremental=True, solver_options={'timeout': 10000})
             for c in self.formula_selector.resolve_shallow_for([*a, *b]):
                 solver.add_assertion(c)
 
