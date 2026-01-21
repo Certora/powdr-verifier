@@ -71,7 +71,7 @@ def check_formula(f: FNode) -> bool:
             print_formula_to_file(f, UFNIA, dump)
 
     logging.info(f"checking formula with logic {UFNIA} and solver {ARGS().solver}")
-    s = Solver(logic=UFNIA, name=ARGS().solver)
+    s = Solver(logic=UFNIA, name=ARGS().solver, solver_options={'timeout': 60000})
     s.add_assertion(f)
     match s.solve():
         case True:
