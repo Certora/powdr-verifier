@@ -1,4 +1,4 @@
-from .rewriter import rewrite
+from ..rewriter import rewrite
 from .smt_conversion import FormulaWithAxioms
 from .smt_utils import *
 

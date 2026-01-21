@@ -1,7 +1,7 @@
 import json
 import logging
 
-from .utils.rewriter import rewrite
+from .rewriter import rewrite
 from .utils.smt_conversion import FormulaWithAxioms
 from .utils.smt_utils import *
 from .utils.args import ARGS
