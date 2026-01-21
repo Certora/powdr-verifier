@@ -27,8 +27,9 @@ class RelationRewriter(substituter.Substituter):
     def walk_identity_or_replace(self, formula, args, **kwargs):
         res = rewrite_one(to_sympy(formula))
         if res is not None:
-            print(f"rewrote {formula} --> {res}")
-            return to_smt(res)
+            if ARGS().log_rewrites:
+                logging.info(f"rewrote {formula} --> {res}")
+            return keep_comment(to_smt(res), formula)
         return keep_comment(substituter.Substituter.super(self, formula, args=args, **kwargs), formula)
 
 

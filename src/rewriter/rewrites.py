@@ -18,9 +18,12 @@ def rewrite_mod_equality(node: Expr) -> Expr:
     match unpack_modeq(node):
         case expr, modulus:
             s = Wild("s", properties=[lambda k: k.is_Symbol])
+            s2 = Wild("s2", properties=[lambda k: k.is_Symbol])
             c = Wild("c", properties=[lambda k: k.is_Integer])
             if m := expr.match(s - c):
                 return Eq(m[s], Mod(m[c], modulus))
             if m := expr.match(c - s):
                 return Eq(m[s], Mod(m[c], modulus))
+            if m := expr.match(s - s2):
+                return Eq(m[s], m[s2])
     return None
