@@ -102,6 +102,7 @@ if __name__ == '__main__':
                 for file in DATA_DIR.glob(f"{args.test}_*"):
                     file.unlink()
             run_powdr(args.test)
+            exit(0)
 
     files = sorted(DATA_DIR.glob(f"{args.test}_*.json"))
     if not files:
