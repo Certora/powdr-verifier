@@ -14,27 +14,15 @@ assert VERIFIER_DIR.exists()
 
 def parse_args():
     parser = argparse.ArgumentParser()
+
+    parser.add_argument('command', choices=[
+        'powdr',
+        'trace-first', 'trace-last','trace-all',
+        'eval-first', 'eval-last', 'eval-all',
+        'verify-end2end', 'verify-stepwise',
+    ])
+    parser.add_argument('test', type=str)
     parser.add_argument('--clean', action='store_true')
-
-    sub = parser.add_subparsers(dest="command")
-    
-    sub_trace = sub.add_parser('trace')
-    sub_trace.add_argument('test', type=str)
-
-    sub_traceall = sub.add_parser('trace-all')
-    sub_traceall.add_argument('test', type=str)
-
-    sub_eval = sub.add_parser('eval')
-    sub_eval.add_argument('test', type=str)
-
-    sub_verify = sub.add_parser('verify-end2end')
-    sub_verify.add_argument('test', type=str)
-
-    sub_verifyall = sub.add_parser('verify-stepwise')
-    sub_verifyall.add_argument('test', type=str)
-
-    sub_ppsmt = sub.add_parser('preprocess')
-    sub_ppsmt.add_argument('file', type=Path)
 
     return parser.parse_args()
 
@@ -48,84 +36,71 @@ def run_powdr(test):
     logging.warning(f"running {' '.join(cmd)}")
     subprocess.run(' '.join(cmd), shell=True, cwd=POWDR_DIR)
     for file in DATA_DIR.glob("apc_candidate_*.*"):
-        new = file.with_name(file.name.replace("apc_candidate", test))
-        file.rename(new)
-        if new.suffix == ".json":
-            yield new
+        file.rename(file.with_name(file.name.replace("apc_candidate", test)))
+
+def run_trace(*files):
+    first = files[0]
+    for f in files:
+        subprocess.run([
+            "python3", VERIFIER_DIR / "main.py",
+            "--dump-smt",
+            "--base-dump", first,
+            "--skip-memory-analysis",
+            "trace",
+            f,
+            "--dump-model", f.with_suffix(".model"),
+        ])
+
+def run_eval(*files):
+    first = files[0]
+    for f in files:
+        model = f.with_suffix(".model")
+        if not model.exists():
+            logging.warning(f"can not eval {f} because there is no model")
+            continue
+        subprocess.run([
+            "python3", VERIFIER_DIR / "evaluate.py",
+            "--base-dump", first,
+            f,
+            model,
+        ])
+
+def run_verify(first, *pairs):
+    for a,b in pairs:
+        subprocess.run([
+            "python3", VERIFIER_DIR / "main.py",
+            "--dump-smt",
+            "--base-dump", first,
+            "verify",
+            a,
+            b,
+        ])
+
 
 if __name__ == '__main__':
     args = parse_args()
 
-    if args.clean:
-        for file in DATA_DIR.glob(f"{args.test}_*"):
-            file.unlink()
-
-    files = sorted(run_powdr(args.test))
+    files = sorted(DATA_DIR.glob(f"{args.test}_*.json"))
     first = files[0]
     last = files[-1]
 
     match args.command:
-        case 'trace':
-            subprocess.run([
-                "python3", VERIFIER_DIR / "main.py",
-                "-v",
-                "--skip-memory-analysis",
-                "--dump-smt",
-                "--base-dump", first,
-                "trace",
-                first,
-                "--dump-model", last.with_suffix(".model"),
-            ])
+        case 'powdr':
+            if args.clean:
+                for file in DATA_DIR.glob(f"{args.test}_*"):
+                    file.unlink()
+            run_powdr(args.test)
 
-        case 'trace-all':
-            for f in files:
-                subprocess.run([
-                    "python3", VERIFIER_DIR / "main.py",
-                    "--dump-smt",
-                    "--base-dump", first,
-                    "trace",
-                    f,
-                    "--dump-model", f.with_suffix(".model"),
-                ])
+        case 'trace-first': run_trace(first)
+        case 'trace-last': run_trace(last)
+        case 'trace-all': run_trace(*files)
 
-        case 'eval':
-            model = last.with_suffix(".model")
-            subprocess.run([
-                "python3", VERIFIER_DIR / "main.py",
-                "--dump-smt",
-                "--base-dump", first,
-                "trace",
-                last,
-                "--dump-model", model,
-            ])
-            subprocess.run([
-                "python3", VERIFIER_DIR / "main.py",
-                "--dump-smt",
-                "eval",
-                last,
-                model,
-            ])
+        case 'eval-first': run_eval(first)
+        case 'eval-last': run_eval(last)
+        case 'eval-all': run_eval(*files)
 
-        case 'verify-end2end':
-            subprocess.run([
-                "python3", VERIFIER_DIR / "main.py",
-                "--dump-smt",
-                "--base-dump", first,
-                "verify",
-                first,
-                last,
-            ])
-
-        case 'verify-stepwise':
-            for a,b in itertools.pairwise(files):
-                subprocess.run([
-                    "python3", VERIFIER_DIR / "main.py",
-                    "--dump-smt",
-                    "--base-dump", first,
-                    "verify",
-                    a,
-                    b,
-                ])
+        case 'verify-end2end': run_eval(first, (first, last))
+        case 'verify-stepwise': run_eval(first, itertools.pairwise(files))
 
         case _:
             logging.error(f"unknown command: {args.command}")
