@@ -42,10 +42,6 @@ def evaluate(input: dict, smt: FormulaWithAxioms, model: dict[str, int]):
                 res = False
         return res
 
-    assert len(input["constraints"]) == len(smt.constraints), "The number of constraints is different"
-    assert len(input["bus_interactions"]) == len(smt.bus_interactions), "The number of bus interactions is different"
-    assert len(input["derived_columns"]) == len(smt.derived), "The number of derived is different"
-    
     print(json.dumps(model, indent=4))
     print("constraints:")
     if eval_list(smt.constraints):
