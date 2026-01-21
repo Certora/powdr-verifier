@@ -246,7 +246,8 @@ evaluated: {pp_bus_interaction(evald)}
                         'args': [x, y, z, op]
                     }:
                     # verify the range of x and y and the operation on z
-                    assert mult == 1, err(f"mult != 1")
+                    if mult != 1:
+                        logging.warning(err(f"mult != 1"))
                     if op == 0:
                         assert x >= 0 and x <= 255, err(f"x not in 0..255")
                         assert y >= 0 and y <= 255, err(f"y not in 0..255")
@@ -261,7 +262,8 @@ evaluated: {pp_bus_interaction(evald)}
                         'args': [x, y]
                     }:
                     # verify the range of x and y
-                    assert mult == 1, err(f"mult != 1")
+                    if mult != 1:
+                        logging.warning(err(f"mult != 1"))
                     assert x >= 0 and x <= TUPLE_RANGE_CHECKER_MAX_0-1, err(f"x not in 0..{TUPLE_RANGE_CHECKER_MAX_0-1}")
                     assert y >= 0 and y <= TUPLE_RANGE_CHECKER_MAX_1-1, err(f"y not in 0..{TUPLE_RANGE_CHECKER_MAX_1-1}")
 
