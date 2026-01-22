@@ -1,3 +1,5 @@
+import json
+
 from .utils.basic_block import BasicBlock
 from .utils.smt_encoding import build_vc
 from .utils.smt_conversion import check_formula, convert_to_smt_formula
