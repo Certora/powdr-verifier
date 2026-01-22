@@ -73,10 +73,13 @@ def check_formula(f: FNode) -> bool:
     logging.info(f"checking formula with logic {UFNIA} and solver {ARGS().solver}")
     s = Solver(logic=UFNIA, name=ARGS().solver, solver_options={'timeout': 60000})
     s.add_assertion(f)
-    match s.solve():
-        case True:
-            return True, s.get_model()
-        case False:
-            return False, None
-        case _:
-            return None, None
+    try:
+        match s.solve():
+            case True:
+                return True, s.get_model()
+            case False:
+                return False, None
+            case _:
+                return None, None
+    except SolverReturnedUnknownResultError:
+        return None, None
