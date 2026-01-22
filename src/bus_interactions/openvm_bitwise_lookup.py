@@ -16,6 +16,7 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
     on a best-effort basis by some axioms.
     """
     UF_XOR = Symbol('uf_xor', FunctionType(INT, [INT, INT]))
+    interpreters = { UF_XOR: lambda x,y: Int(x ^ y) }
 
     def __init__(self) -> None:
         super().__init__()
