@@ -6,11 +6,20 @@ from .utils.smt_utils import *
 class GenericInterpreter(FunctionInterpretation):
     def __init__(self, fsym, f):
         self.fsym = fsym
-        self.f = f
+        if isinstance(f, tuple):
+            self.concrete, self.symbolic = f
+        elif callable(f):
+            self.concrete = f
+            self.symbolic = None
+        else:
+            logging.error(f"can not use {f} as interpreter for {fsym}")
 
     def interpret(self, env, args: list[FNode]) -> FNode:
         if all(arg.is_constant() for arg in args):
-            return self.f(*[arg.constant_value() for arg in args])
+            return self.concrete(*[arg.constant_value() for arg in args])
+        if self.symbolic is not None:
+            if res := self.symbolic(*args):
+                return res
         return Function(self.fsym, args)
 
 def evaluate(input: dict, smt: FormulaWithAxioms, model: dict[str, int], conv: SmtConverter):
