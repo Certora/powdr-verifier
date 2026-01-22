@@ -45,6 +45,13 @@ class InteractionEncoder:
     def get_globals(self) -> frozenset[FNode]:
         """Returns all global symbols that should not be part of any quantifier"""
         return frozenset.union(*[encoder.get_globals() for encoder in self.encoders])
+    
+    def get_interpreters(self) -> dict[FNode, FunctionInterpretation]:
+        """Returns interpreters for all UFs for evaluation."""
+        res = {}
+        for encoder in self.encoders:
+            res.update(getattr(encoder, 'interpreters', {}))
+        return res
 
 class OpenVMBusInteraction(Enum):
     EXECUTION_BRIDGE = 0

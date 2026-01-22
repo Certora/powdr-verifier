@@ -27,6 +27,16 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
         self.stmt_count = len(self.basic_block.statements)
         self.needs_axioms = False
         self.globals = frozenset([self.UF_OPCODE, self.UF_A, self.UF_B, self.UF_C, self.UF_D, self.UF_E, self.UF_F, self.UF_G])
+        self.interpreters = {
+            self.UF_OPCODE: lambda pc: Int(self.basic_block.statements[pc//4][0]),
+            self.UF_A: lambda pc: Int(self.basic_block.statements[pc//4][1]),
+            self.UF_B: lambda pc: Int(self.basic_block.statements[pc//4][2]),
+            self.UF_C: lambda pc: Int(self.basic_block.statements[pc//4][3]),
+            self.UF_D: lambda pc: Int(self.basic_block.statements[pc//4][4]),
+            self.UF_E: lambda pc: Int(self.basic_block.statements[pc//4][5]),
+            self.UF_F: lambda pc: Int(self.basic_block.statements[pc//4][6]),
+            self.UF_G: lambda pc: Int(self.basic_block.statements[pc//4][7]),
+        }
 
     def encode(self, mult: Any, pc: FNode, op: FNode, a: FNode, b: FNode, c: FNode, d: FNode, e: FNode, f: FNode, g: FNode) -> FNode:
         self.needs_axioms = True
