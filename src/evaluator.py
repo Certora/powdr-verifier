@@ -1,25 +1,27 @@
 import json
 
-from .utils.smt_conversion import FormulaWithAxioms
+from .utils.smt_conversion import FormulaWithAxioms, SmtConverter
 from .utils.smt_utils import *
 
-class ModInterpreter(FunctionInterpretation):
-    def __init__(self):
-        pass
+class GenericInterpreter(FunctionInterpretation):
+    def __init__(self, fsym, f):
+        self.fsym = fsym
+        self.f = f
 
     def interpret(self, env, args: list[FNode]) -> FNode:
-        assert len(args) == 2, "Mod interpreter expects 2 arguments"
-        x,y = args
-        if x.is_constant() and y.is_constant():
-            return Int(x.constant_value() % y.constant_value())
-        return Function(UF_MOD, args)
+        if all(arg.is_constant() for arg in args):
+            return self.f(*[arg.constant_value() for arg in args])
+        return Function(self.fsym, args)
 
-def evaluate(input: dict, smt: FormulaWithAxioms, model: dict[str, int]):
+def evaluate(input: dict, smt: FormulaWithAxioms, model: dict[str, int], conv: SmtConverter):
 
     substitutions = {
         Symbol(name, INT): Int(value) for name, value in model.items()
     }
-    interpretations = {}
+    interpretations = {
+        sym: GenericInterpreter(sym, f)
+        for sym, f in conv.bus_interaction_encoder.get_interpreters().items()
+    }
 
     def subs(f: FNode) -> FNode:
         last = None
