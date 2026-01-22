@@ -68,6 +68,7 @@ FNode.is_mod = lambda self: self.node_type() == operators.MOD
 # now go on with the rest
 
 from pysmt import substituter
+from pysmt.exceptions import SolverReturnedUnknownResultError
 from pysmt.logics import Logic
 from pysmt.shortcuts import *
 from pysmt.smtlib import script, printers
