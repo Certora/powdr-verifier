@@ -20,7 +20,7 @@ if __name__ == '__main__':
             logging.info(f"running tracer on {ARGS().input}")
             input = load_apc_dump(ARGS().input, 'input')
 
-            smt = convert_to_smt_formula("input", input, BasicBlock(input["block"]))
+            smt,_ = convert_to_smt_formula("input", input, BasicBlock(input["block"]))
 
             trace(smt)
 
@@ -29,9 +29,9 @@ if __name__ == '__main__':
             input = load_apc_dump(ARGS().input, 'input')
             model = load_json(ARGS().model, 'model')
 
-            smt = convert_to_smt_formula("input", input, BasicBlock(input["block"]))
+            smt,conv = convert_to_smt_formula("input", input, BasicBlock(input["block"]))
 
-            evaluate(input["machine"], smt, model)
+            evaluate(input["machine"], smt, model, conv)
 
         case 'diff':
             logging.info(f"diffing {ARGS().input_before} and {ARGS().input_after}")

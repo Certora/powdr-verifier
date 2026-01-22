@@ -124,4 +124,4 @@ def convert_to_smt_formula(name: str, data: Any, basic_block: BasicBlock) -> For
     formula = smt_converter.to_formula_with_axioms(data)
     if ARGS().log_smt:
         logging.info(f'after smt conversion:\n{pprint.pformat(formula, width=80)}')
-    return formula
+    return formula, smt_converter

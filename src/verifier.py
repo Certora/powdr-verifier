@@ -7,8 +7,8 @@ from .utils.smt_utils import *
 
 def verify(before: FNode, after: FNode, block: BasicBlock):
 
-    before_smt = convert_to_smt_formula("before", before, block)
-    after_smt = convert_to_smt_formula("after", after, block)
+    before_smt,_ = convert_to_smt_formula("before", before, block)
+    after_smt,_ = convert_to_smt_formula("after", after, block)
 
     vc = build_vc(before_smt, after_smt)
 
