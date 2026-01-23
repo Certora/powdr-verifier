@@ -62,7 +62,7 @@ class OpenVMBusInteraction(Enum):
     TUPLE_RANGE_CHECKER = 7
 
     def __str__(self) -> str:
-        return self.value
+        return str(self.value)
 
 class OpenVMBusInteractionEncoder(InteractionEncoder):
     """Encoder for the OpenVM bus interactions."""

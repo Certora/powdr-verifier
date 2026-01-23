@@ -9,6 +9,7 @@ from src.utils.io import load_apc_dump, load_json
 from src.tracer import trace
 from src.verifier import verify
 from src.diff import diff
+from src import converter
 
 
 if __name__ == '__main__':
@@ -32,6 +33,13 @@ if __name__ == '__main__':
         case 'diff':
             logging.info(f"diffing {ARGS().input_before} and {ARGS().input_after}")
             diff()
+
+        case 'text':
+            logging.info(f"converting {ARGS().input} to text")
+            input = load_apc_dump(ARGS().input, 'input')
+            s = StringIO()
+            converter.text(s, input)
+            print(s.getvalue())
 
         case 'verify':
             logging.info(f"verify equivalence of {ARGS().input_before} and {ARGS().input_after}")
