@@ -1,6 +1,7 @@
 import json
 
-from .utils.smt_conversion import FormulaWithAxioms, SmtConverter
+from .utils.basic_block import BasicBlock
+from .utils.smt_conversion import convert_to_smt_formula
 from .utils.smt_utils import *
 
 class GenericInterpreter(FunctionInterpretation):
@@ -22,32 +23,17 @@ class GenericInterpreter(FunctionInterpretation):
                 return res
         return Function(self.fsym, args)
 
-def evaluate(input: dict, smt: FormulaWithAxioms, model: dict[str, int], conv: SmtConverter):
+def evaluate(input: dict, model: dict[str, int]):
 
-    substitutions = {
-        Symbol(name, INT): Int(value) for name, value in model.items()
-    }
-    interpretations = {
-        sym: GenericInterpreter(sym, f)
-        for sym, f in conv.bus_interaction_encoder.get_interpreters().items()
-    }
-
-    def subs(f: FNode) -> FNode:
-        last = None
-        cnt = 3
-        while last != f and cnt > 0:
-            last = f
-            f = f.substitute(substitutions, interpretations).simplify()
-            cnt -= 1
-        return f
+    smt,conv = convert_to_smt_formula("input", input, BasicBlock(input["block"]))
 
     def eval_list(fs: list[FNode]) -> list[FNode]:
         res = True
         for f in fs:
-            s = subs(f)
+            s = partial_evaluate(f, model, conv.bus_interaction_encoder)
             if not s.is_true():
-                print(f"  {f}")
-                print(f"  -> {s}")
+                print(f"\t{f}")
+                print(f"->\t{s}")
                 res = False
         return res
 
