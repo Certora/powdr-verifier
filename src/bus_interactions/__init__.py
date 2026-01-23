@@ -12,7 +12,7 @@ from . import openvm_variable_range_checker
 from . import openvm_tuple_range_checker
 
 from ..utils.basic_block import BasicBlock
-from ..utils.smt_utils import *
+from ..smt.utils import *
 
 class InteractionEncoder:
     """Base class for an encoder of arbitrary bus interactions."""

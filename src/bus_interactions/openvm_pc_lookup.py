@@ -4,7 +4,7 @@ from typing import Any
 from .single_interaction_encoder import SingleInteractionEncoder
 
 from ..utils.basic_block import BasicBlock
-from ..utils.smt_utils import *
+from ..smt.utils import *
 
 class OpenVMPCLookupEncoder(SingleInteractionEncoder):
     """

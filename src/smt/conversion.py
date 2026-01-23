@@ -5,9 +5,9 @@ import pprint
 from typing import Any, Iterable
 
 from .. import bus_interactions, rewriter
-from .basic_block import BasicBlock
-from .args import ARGS, BusInteractionHandlers
-from .smt_utils import *
+from ..utils.basic_block import BasicBlock
+from ..utils.args import ARGS, BusInteractionHandlers
+from .utils import *
 
 FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['constraints', 'bus_interactions', 'axioms', 'derived', 'globals'])
 

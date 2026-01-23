@@ -1,8 +1,8 @@
 import json
 
 from .utils.basic_block import BasicBlock
-from .utils.smt_conversion import convert_to_smt_formula
-from .utils.smt_utils import *
+from .smt.conversion import convert_to_smt_formula
+from .smt.utils import *
 
 class GenericInterpreter(FunctionInterpretation):
     def __init__(self, fsym, f):

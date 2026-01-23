@@ -4,8 +4,8 @@ import logging
 from .rewriter import rewrite
 from .utils.args import ARGS
 from .utils.basic_block import BasicBlock
-from .utils.smt_conversion import FormulaWithAxioms, convert_to_smt_formula
-from .utils.smt_utils import *
+from .smt.conversion import convert_to_smt_formula
+from .smt.utils import *
 
 def trace(input: dict):
 
