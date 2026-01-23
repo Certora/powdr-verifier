@@ -1,4 +1,5 @@
 import contextlib
+from io import StringIO
 from pathlib import Path
 from typing import TextIO, Optional
 
@@ -228,6 +229,12 @@ def pretty_print_smtlib(smtlib: script.SmtLibScript, file: TextIO):
             case _:
                 cmd.serialize(file, daggify=False)
                 file.write('\n')
+
+def pretty_print_formula(f: FNode) -> str:
+    with StringIO() as s:
+        printer = SMTPrettyPrinter(s, depth=1)
+        printer.printer(f)
+        return s.getvalue()
 
 def convert_to_smt_script(f: FNode, logic: Logic) -> script.SmtLibScript:
     smtlib = script.smtlibscript_from_formula(f, logic)

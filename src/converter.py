@@ -1,0 +1,112 @@
+import logging
+from typing import Any, Optional, TextIO
+
+from .bus_interactions import OpenVMBusInteraction
+
+from .utils.args import ARGS
+from .utils.basic_block import BasicBlock
+from .utils.smt_conversion import SmtConverter, convert_to_smt_formula
+from .utils.smt_utils import partial_evaluate, TRUE, Int
+
+EMPTY_INPUT = {
+    'block': None,
+    'machine': {
+        'constraints': [],
+        'bus_interactions': [],
+        'derived_columns': [],
+    },
+    'subs': [],
+    'optimistic_constraints': [],
+}
+
+def _do_eval(eval, data):
+    match data:
+        case list(ls):
+            return [_do_eval(eval, a) for a in ls]
+        case _:
+            return eval(data)
+
+def _print(out: TextIO, eval, pattern = '{}', *args, ignore = TRUE()):
+    if eval is None:
+        out.write(f'{pattern.format(*args)}\n')
+    elif ARGS().only_simplified:
+        evald = _do_eval(eval, list(args))
+        if evald != [ignore]:
+            out.write(f'{pattern.format(*evald)}\n')
+    else:
+        out.write(f'{pattern.format(*args)}\n')
+        out.write(f'--{pattern.format(*_do_eval(eval, list(args)))}\n')
+
+def _dump_single_conversion(out: TextIO, data: Any, basic_block: BasicBlock, eval):
+    smt_converter = SmtConverter("tmp", basic_block)
+    formula = smt_converter.to_formula_with_axioms(data)
+    for c in formula.constraints:
+        _print(out, eval, '->\t{}', c)
+    for b in formula.bus_interactions:
+        _print(out, eval, '->\t{}', b)
+    for a in formula.axioms:
+        _print(out, eval, '->\t{}', a)
+    for d in formula.derived:
+        _print(out, eval, '->\t{}', d)
+
+
+def _text_bus_interaction(out: TextIO, bis: list, conv: SmtConverter, eval):
+    for val in OpenVMBusInteraction:
+        bs = [bi for bi in bis if bi['id'] == val.value]
+        if not bs: continue
+        out.write(f'// Bus {val} ({val.name})\n')
+
+        for b in bs:
+            mc = conv.convert_manual(b['mult'])
+            ac = [conv.convert_manual(a) for a in b['args']]
+            _print(out, eval, '\tmult={}, args={}', mc, ac)
+            input = EMPTY_INPUT
+            input['machine']['bus_interactions'] = [b]
+            _dump_single_conversion(out, input, conv.basic_block, eval)
+            out.write('\n')
+        
+        out.write(f'collective encoding for Bus {val} ({val.name}):\n')
+        input = EMPTY_INPUT
+        input['machine']['bus_interactions'] = bs
+        _dump_single_conversion(out, input, conv.basic_block, eval)
+        out.write('\n')
+
+def _text_constraints(out: TextIO, cs: list, conv: SmtConverter, eval):
+    out.write(f'constraints:\n')
+    for c in cs:
+        converted = conv.convert_manual(c)
+        _print(out, eval, '\t{}', converted, ignore=Int(0))
+
+
+def text(out: TextIO, input: dict, model: Optional[dict[str, int]] = None):
+
+    match input:
+        # general json structure
+        case {
+            'block': _,
+            'machine': {
+                'constraints': list(cs),
+                'bus_interactions': list(bis),
+                'derived_columns': list(dcs),
+                **rest_machine,
+            },
+            'subs': subs,
+            'optimistic_constraints': _,
+            **rest_apc,
+        }:
+            assert not rest_machine
+            assert not rest_apc
+
+            block = BasicBlock(input["block"])
+            conv = SmtConverter("tmp", block)
+
+            eval = None
+            if model is not None:
+                eval = lambda f: partial_evaluate(f, model, conv.bus_interaction_encoder)
+            
+            _text_bus_interaction(out, bis, conv, eval)
+            _text_constraints(out, cs, conv, eval)
+
+        case _:
+            logging.error(f"unsupported input for text conversion")
+
