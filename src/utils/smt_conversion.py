@@ -55,7 +55,7 @@ class SmtConverter:
         match data:
             # general json structure
             case {
-                'block': block,
+                'block': _,
                 'machine': {
                     'constraints': list(cs),
                     'bus_interactions': list(bis),

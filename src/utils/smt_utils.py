@@ -83,3 +83,39 @@ def check_formula(f: FNode) -> bool:
                 return None, None
     except SolverReturnedUnknownResultError:
         return None, None
+
+class GenericInterpreter(FunctionInterpretation):
+    def __init__(self, fsym, f):
+        self.fsym = fsym
+        if isinstance(f, tuple):
+            self.concrete, self.symbolic = f
+        elif callable(f):
+            self.concrete = f
+            self.symbolic = None
+        else:
+            logging.error(f"can not use {f} as interpreter for {fsym}")
+
+    def interpret(self, env, args: list[FNode]) -> FNode:
+        if all(arg.is_constant() for arg in args):
+            return self.concrete(*[arg.constant_value() for arg in args])
+        if self.symbolic is not None:
+            if res := self.symbolic(*args):
+                return res
+        return Function(self.fsym, args)
+
+def partial_evaluate(f: FNode, model: dict[str, int], bi):
+    substitutions = {
+        Symbol(name, INT): Int(value) for name, value in model.items()
+    }
+    interpretations = {
+        sym: GenericInterpreter(sym, f)
+        for sym, f in bi.get_interpreters().items()
+    }
+
+    last = None
+    cnt = 3
+    while last != f and cnt > 0 and not f.is_constant():
+        last = f
+        f = f.substitute(substitutions, interpretations).simplify()
+        cnt -= 1
+    return f
