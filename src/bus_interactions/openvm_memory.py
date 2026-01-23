@@ -108,7 +108,8 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
                 if possible:
                     logging.warning(f"\t{access} possibly aliases with")
                     for p in possible:
-                        logging.warning(f"\t\t{p}")
+                        if access != p:
+                            logging.warning(f"\t\t{p}")
 
 
     def group_interactions(self):
@@ -126,6 +127,8 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
                 res[repr] = []
             res[repr].append((interaction, True))
             for alias in self.analysis.possible_aliases[repr]:
+                if alias not in res:
+                    res[alias] = []
                 res[alias].append((interaction, False))
 
         return res
