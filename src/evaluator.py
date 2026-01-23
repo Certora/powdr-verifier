@@ -1,4 +1,5 @@
 import json
+import logging
 
 from .utils.basic_block import BasicBlock
 from .smt.conversion import convert_to_smt_formula
@@ -37,16 +38,12 @@ def evaluate(input: dict, model: dict[str, int]):
                 res = False
         return res
 
-    print(json.dumps(model, indent=4))
-    print("constraints:")
+    logging.debug(f"evaluate on\n{json.dumps(model, indent=4)}")
     if eval_list(smt.constraints):
         print("constraints are satisfied")
-    print("bus interactions:")
     if eval_list(smt.bus_interactions):
         print("bus interactions are satisfied")
-    print("axioms:")
     if eval_list(smt.axioms):
         print("axioms are satisfied")
-    print("derived:")
     if eval_list(smt.derived):
         print("derived are satisfied")
