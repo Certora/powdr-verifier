@@ -43,14 +43,14 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
         return And(
             LT(pc, Int(4*self.stmt_count - 3)),
             Equals(wrap_mod(pc, Int(4)), Int(0)),
-            Equals(Function(self.UF_OPCODE, [pc]), op),
-            Equals(Function(self.UF_A, [pc]), a),
-            Equals(Function(self.UF_B, [pc]), b),
-            Equals(Function(self.UF_C, [pc]), c),
-            Equals(Function(self.UF_D, [pc]), d),
-            Equals(Function(self.UF_E, [pc]), e),
-            Equals(Function(self.UF_F, [pc]), f),
-            Equals(Function(self.UF_G, [pc]), g),
+            Equals(Function(self.UF_OPCODE, [pc]), wrap_mod(op)),
+            Equals(Function(self.UF_A, [pc]), wrap_mod(a)),
+            Equals(Function(self.UF_B, [pc]), wrap_mod(b)),
+            Equals(Function(self.UF_C, [pc]), wrap_mod(c)),
+            Equals(Function(self.UF_D, [pc]), wrap_mod(d)),
+            Equals(Function(self.UF_E, [pc]), wrap_mod(e)),
+            Equals(Function(self.UF_F, [pc]), wrap_mod(f)),
+            Equals(Function(self.UF_G, [pc]), wrap_mod(g)),
         )
     
     def __encode_block(self) -> Iterable[FNode]:
