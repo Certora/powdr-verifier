@@ -19,6 +19,22 @@ EMPTY_INPUT = {
     'optimistic_constraints': [],
 }
 
+def _collect_variables(data) -> frozenset[str]:
+    match data:
+        case [left, '+', right]: return _collect_variables(left) | _collect_variables(right)
+        case [left, '-', right]: return _collect_variables(left) | _collect_variables(right)
+        case [left, '*', right]: return _collect_variables(left) | _collect_variables(right)
+        case ['-', right]: return _collect_variables(right)
+        case int(value): return frozenset()
+        case str(var):
+            return frozenset([var])
+        case {'id': int(id), 'mult': mult, 'args': list(args)}:
+            return _collect_variables(mult) | _collect_variables(args)
+        case list(ls):
+            return frozenset.union(*[_collect_variables(d) for d in ls])
+        case _:
+            logging.error(f"invalid data when collecting variables: {data}")
+
 def _do_eval(eval, data):
     match data:
         case list(ls):
@@ -103,6 +119,12 @@ def text(out: TextIO, input: dict, model: Optional[dict[str, int]] = None):
             eval = None
             if model is not None:
                 eval = lambda f: partial_evaluate(f, model, conv.bus_interaction_encoder)
+            
+            variables = _collect_variables([cs, bis])
+            out.write(f"variables:\n")
+            for var in sorted(variables):
+                out.write(f"\t{var}\n")
+            out.write("\n")
             
             _text_bus_interaction(out, bis, conv, eval)
             _text_constraints(out, cs, conv, eval)
