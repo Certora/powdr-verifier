@@ -43,6 +43,13 @@ def parse_args():
     sub_diff = sub.add_parser('diff')
     sub_diff.add_argument('input_before', type=Path)
     sub_diff.add_argument('input_after', type=Path)
+    sub_diff.add_argument('--format', type=str, choices=['text', 'json'])
+    sub_diff.add_argument('--with-model', type=Path)
+    sub_diff.add_argument('--only-simplified', action='store_true')
+
+
+    sub_text = sub.add_parser('text')
+    sub_text.add_argument('input', type=Path)
 
     sub_verify = sub.add_parser('verify')
     sub_verify.add_argument('input_before', type=Path)
