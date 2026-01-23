@@ -1,7 +1,7 @@
 from .permutation_check import encode_permutation_check
 from .single_interaction_encoder import SingleInteractionEncoder
 
-from ..utils.smt_utils import *
+from ..smt.utils import *
 
 class OpenVMExecutionBridgeEncoder(SingleInteractionEncoder):
     """

@@ -1,6 +1,6 @@
 from itertools import pairwise
 from typing import Callable
-from ..utils.smt_utils import *
+from ..smt.utils import *
 
 def encode_permutation_check(
     interactions: list[tuple[tuple[FNode, list[FNode]], bool]],

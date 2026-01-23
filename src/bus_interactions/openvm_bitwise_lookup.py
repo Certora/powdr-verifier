@@ -3,7 +3,7 @@ from typing import Any
 
 from .single_interaction_encoder import SingleInteractionEncoder
 
-from ..utils.smt_utils import *
+from ..smt.utils import *
 
 class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
     """

@@ -1,6 +1,6 @@
 from .single_interaction_encoder import SingleInteractionEncoder
 
-from ..utils.smt_utils import *
+from ..smt.utils import *
 
 class OpenVMTupleRangeCheckerEncoder(SingleInteractionEncoder):
     # taken from openvm/extensions/rv32im/circuit/src/extension/mod.rs:default_range_tuple_checker_sizes()

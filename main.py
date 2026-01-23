@@ -1,10 +1,9 @@
+from io import StringIO
 import logging
 
-from src.utils.basic_block import *
-from src.utils.smt_encoding import *
+from src.utils.basic_block import BasicBlock
 from src.evaluator import evaluate
-from src.utils.args import *
-from src.utils.smt_conversion import *
+from src.utils.args import parse_args, ARGS
 from src.utils.io import load_apc_dump, load_json
 from src.tracer import trace
 from src.verifier import verify

@@ -1,6 +1,6 @@
 import sympy
 
-from ..utils.smt_utils import *
+from ..smt.utils import *
 
 def to_sympy(expr: FNode) -> sympy.Expr:
     if expr.is_true():

@@ -3,7 +3,7 @@ import sympy
 from .conversion import to_sympy, to_smt
 from .rewrites import rewrite_choice, rewrite_mod_equality
 
-from ..utils.smt_utils import *
+from ..smt.utils import *
 
 REWRITES = [
     rewrite_choice,

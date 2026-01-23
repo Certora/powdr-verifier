@@ -1,9 +1,9 @@
 import json
 
 from .utils.basic_block import BasicBlock
-from .utils.smt_encoding import build_vc
-from .utils.smt_conversion import check_formula, convert_to_smt_formula
-from .utils.smt_utils import *
+from .smt.encoding import build_vc
+from .smt.conversion import check_formula, convert_to_smt_formula
+from .smt.utils import *
 
 def verify(before: FNode, after: FNode, block: BasicBlock):
 

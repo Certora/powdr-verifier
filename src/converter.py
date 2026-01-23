@@ -5,8 +5,8 @@ from .bus_interactions import OpenVMBusInteraction
 
 from .utils.args import ARGS
 from .utils.basic_block import BasicBlock
-from .utils.smt_conversion import SmtConverter, convert_to_smt_formula
-from .utils.smt_utils import partial_evaluate, TRUE, Int
+from .smt.conversion import SmtConverter
+from .smt.utils import partial_evaluate, TRUE, Int
 
 EMPTY_INPUT = {
     'block': None,
@@ -38,8 +38,8 @@ def _print(out: TextIO, eval, pattern = '{}', *args, ignore = TRUE()):
         out.write(f'--{pattern.format(*_do_eval(eval, list(args)))}\n')
 
 def _dump_single_conversion(out: TextIO, data: Any, basic_block: BasicBlock, eval):
-    smt_converter = SmtConverter("tmp", basic_block)
-    formula = smt_converter.to_formula_with_axioms(data)
+    conv = SmtConverter("tmp", basic_block)
+    formula = conv.to_formula_with_axioms(data)
     for c in formula.constraints:
         _print(out, eval, '->\t{}', c)
     for b in formula.bus_interactions:
