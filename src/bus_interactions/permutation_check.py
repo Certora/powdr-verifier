@@ -2,7 +2,7 @@ from itertools import pairwise
 from typing import Callable
 from ..smt.utils import *
 
-def encode_permutation_check(
+def ordered_permutation_check(
     interactions: list[tuple[tuple[FNode, list[FNode]], bool]],
     additional: Callable[[list[FNode], list[FNode]], FNode] = lambda _: TRUE()
 ) -> FNode:

@@ -1,4 +1,4 @@
-from .permutation_check import encode_permutation_check
+from .permutation_check import ordered_permutation_check
 from .single_interaction_encoder import SingleInteractionEncoder
 
 from ..smt.utils import *
@@ -13,7 +13,7 @@ class OpenVMExecutionBridgeEncoder(SingleInteractionEncoder):
 
     def get_axioms(self) -> list[FNode]:
         encode_timestamps = lambda i1, i2: LT(i1[1], i2[1])
-        r = encode_permutation_check(
+        r = ordered_permutation_check(
             [(i, True) for i in self._interactions],
             encode_timestamps
         )
