@@ -14,10 +14,6 @@ class SingleInteractionEncoder:
     * first call `add` for every interaction
     * then call `encode_all`
     * then call `get_axioms` and `get_globals`
-    
-    If an encoder needs to do some analysis before encoding, it should implement
-    a `pre_analysis` method that is called from `encode_all` before the
-    individual interactions are encoded.
     """
     def __init__(self):
         self._interactions = []
@@ -37,8 +33,6 @@ class SingleInteractionEncoder:
         return getattr(self, 'globals', frozenset())
 
     def encode_all(self) -> Iterable[FNode]:
-        if hasattr(self, 'pre_analysis'):
-            self.pre_analysis()
         if hasattr(self, 'encode'):
             return (self.encode(mult, *args) for mult, args in self._interactions)
         return []

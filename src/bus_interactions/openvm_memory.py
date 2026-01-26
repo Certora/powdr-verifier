@@ -146,12 +146,29 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
         )
     
     def get_axioms(self) -> list[FNode]:
-        grouped = self.group_interactions()
-        encode_timestamps = lambda i1, i2: LT(i1[4], i2[4])
-        return And(
-            with_comment(
-                encode_permutation_check(interactions, encode_timestamps),
-                f"MEMORY axioms for {address_space} {pointer}"
-            )
-            for (address_space, pointer), interactions in grouped.items()
-        )
+        match ARGS().memory_encoding:
+            case 'ordered':
+                self.pre_analysis()
+                grouped = self.group_interactions()
+                encode_timestamps = lambda i1, i2: LT(i1[4], i2[4])
+                return And(
+                    with_comment(
+                        ordered_permutation_check(interactions, encode_timestamps),
+                        f"MEMORY axioms for {address_space} {pointer}"
+                    )
+                    for (address_space, pointer), interactions in grouped.items()
+                )
+            case 'array':
+                timestamp_conditions = [
+                    LT(i[1][3], j[1][3]) for i,j in itertools.batched(self._interactions, 2)
+                ]
+                permutation_axioms = array_permutation_check('mem', 7, [
+                    (mult, [a, p, *args, t]) for mult, (a, p, args, t) in self._interactions
+                ])
+                return with_comment(
+                    And(*timestamp_conditions, *permutation_axioms),
+                    f"MEMORY axioms"
+                )
+            case _:
+                logging.error(f"unsupported memory encoding: {ARGS().memory_encoding}")
+                return FALSE()
