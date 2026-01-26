@@ -42,3 +42,34 @@ def ordered_permutation_check(
                 )
 
     return And(*encode())
+
+def array_permutation_check(
+    identifier: str,
+    width: int,
+    interactions: list[tuple[FNode, list[FNode]]],
+) -> list[FNode]:
+    """
+    Encodes a permutation check for the given list of interactions.
+    """
+
+    input = Symbol(f'{identifier}-0', MultiArrayType(INT, width, INT))
+    conjuncts = []
+    for id,i in enumerate(interactions):
+        mult, data = i
+        assert len(data) == width
+        cur = [input] + [
+            Symbol(f'{identifier}-{id}k{k}', MultiArrayType(INT, width - k, INT))
+            for k in range(1, width + 1)
+        ]
+        for k in range(width):
+            conjuncts.append(Equals(cur[k+1], Select(cur[k], data[k])))
+        
+        store = cur[-1] + mult
+        for k in range(width-1,-1,-1):
+            store = Store(cur[k], data[k], store)
+        
+        new = Symbol(f'{identifier}-{id+1}', MultiArrayType(INT, width, INT))
+        conjuncts.append(Equals(new, store))
+        input = new
+    
+    return conjuncts
