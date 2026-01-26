@@ -24,7 +24,9 @@ def as_constant(f: FNode) -> Any:
 
 def to_nice_model(model: Any) -> dict[str, Any]:
     return {
-        str(k): as_constant(v) for k,v in sorted(model, key=lambda x: str(x))
+        str(k): as_constant(v)
+        for k,v in sorted(model, key=lambda x: str(x))
+        if not v.is_array_value() and not v.is_array_op()
     }
 
 class NameOrIdGenerator:
