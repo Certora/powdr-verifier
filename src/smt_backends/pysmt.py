@@ -20,8 +20,34 @@ operators.__OP_STR__[operators.MOD] = 'MOD'
 # patch logics
 from pysmt import logics
 
-logics.PYSMT_LOGICS = logics.PYSMT_LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA])
-Z3Solver.LOGICS = Z3Solver.LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA])
+# make pysmt support QF_UFNIA and UFNIA
+logics.AUFNIA = logics.Logic(name="AUFNIA",
+                description=\
+"""Closed formulas with free function and predicate symbols over a
+theory of arrays of integers.""",
+                arrays=True,
+                integer_arithmetic=True,
+                real_arithmetic=False,
+                linear=False,
+                uninterpreted=True)
+logics.QF_AUFNIA = logics.Logic(name="QF_AUFNIA",
+                  description=\
+"""Closed quantifier-free formulas over the theory of integer
+arrays extended with free sort and function symbols.""",
+                  quantifier_free=True,
+                  arrays=True,
+                  integer_arithmetic=True,
+                  linear=False,
+                  uninterpreted=True)
+
+UFNIA = logics.UFNIA
+QF_UFNIA = logics.QF_UFNIA
+AUFNIA = logics.AUFNIA
+QF_AUFNIA = logics.QF_AUFNIA
+
+
+logics.PYSMT_LOGICS = logics.PYSMT_LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA])
+Z3Solver.LOGICS = Z3Solver.LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA])
 
 # then patch all the formula manager and all the walkers
 from pysmt.formula import FormulaManager
@@ -88,10 +114,6 @@ class SimpleSizeOracle(DagWalker):
         return 1 + sum(args)
 get_env()._sizeo = SimpleSizeOracle(get_env())
 
-# make pysmt support QF_UFNIA and UFNIA
-UFNIA = logics.UFNIA
-QF_UFNIA = logics.QF_UFNIA
-
 def Mod(left, right):
     r""".. math:: l % r """
     return get_env().formula_manager.Mod(left, right)
@@ -105,7 +127,7 @@ for cvc5_path in cvc5_paths:
     if cvc5_path.exists():
         get_env().factory.add_generic_solver('cvc5ff',
             [ cvc5_path, '--incremental', '--produce-models', '--mod-range-solver', '--nia-intro-mm-mod' ],
-            [ logics.QF_UFNIA, logics.UFNIA ]
+            [ logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA ]
         )
         break
 
