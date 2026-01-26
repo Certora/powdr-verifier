@@ -38,7 +38,6 @@ jobs:
       id: get-date
       run: |
         echo "date=$(/bin/date -u "+%Y%m%d")" >> $GITHUB_OUTPUT
-        ls powdr/Cargo.lock
       shell: bash
 
     - name: setup cargo cache
@@ -48,7 +47,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             powdr/target/
-          key: cargo-${{ hashFiles('powdr/Cargo.lock') }}-${{ steps.get-date.outputs.date }}
+          key: cargo-${{ hashFiles('powdr/Cargo.toml') }}-${{ steps.get-date.outputs.date }}
           restore-keys: |
             cargo-
     
@@ -56,6 +55,9 @@ jobs:
       run: |
         pip install -r verifier/requirements.txt
         pysmt-install --z3 --confirm-agreement
+
+    - name: cargo clean
+      run: cd powdr && cargo clean
 
     - name: run test cases
       run: |
