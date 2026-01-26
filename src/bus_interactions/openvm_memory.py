@@ -2,7 +2,7 @@ import itertools
 import logging
 from typing import Any
 
-from .permutation_check import encode_permutation_check
+from .permutation_check import array_permutation_check, ordered_permutation_check
 
 from .single_interaction_encoder import SingleInteractionEncoder
 
