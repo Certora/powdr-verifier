@@ -38,11 +38,15 @@ class RelationRewriter(substituter.Substituter):
 
 
 def rewrite(input: FNode) -> FNode:
-    relation_rewriter = RelationRewriter()
-    last = None
-    for _ in range(MAX_REWRITE_COUNT):
-        last = input
-        input = relation_rewriter.substitute(input)
-        if last == input:
-            break
-    return input
+    try:
+        relation_rewriter = RelationRewriter()
+        last = None
+        for _ in range(MAX_REWRITE_COUNT):
+            last = input
+            input = relation_rewriter.substitute(input)
+            if last == input:
+                break
+        return input
+    except AssertionError as e:
+        logging.error(f"rewriter assertion error: {e}")
+        return input
