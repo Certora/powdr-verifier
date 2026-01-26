@@ -2,7 +2,7 @@ import itertools
 import logging
 from typing import Any
 
-from .permutation_check import array_permutation_check, ordered_permutation_check
+from .permutation_check import array_permutation_check, ordered_permutation_check, ordered_timestamp_check
 
 from .single_interaction_encoder import SingleInteractionEncoder
 
@@ -150,23 +150,27 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
             case 'ordered':
                 self.pre_analysis()
                 grouped = self.group_interactions()
-                encode_timestamps = lambda i1, i2: LT(i1[4], i2[4])
                 return And(
-                    with_comment(
-                        ordered_permutation_check(interactions, encode_timestamps),
-                        f"MEMORY axioms for {address_space} {pointer}"
-                    )
-                    for (address_space, pointer), interactions in grouped.items()
+                    ordered_timestamp_check(
+                        [i[1][3] for i in self._interactions]
+                    ),
+                    *[
+                        with_comment(
+                            ordered_permutation_check(interactions),
+                            f"MEMORY axioms for {address_space} {pointer}"
+                        )
+                        for (address_space, pointer), interactions in grouped.items()
+                    ]
                 )
             case 'array':
-                timestamp_conditions = [
-                    LT(i[1][3], j[1][3]) for i,j in itertools.batched(self._interactions, 2)
-                ]
+                ts = ordered_timestamp_check(
+                    [i[1][3] for i in self._interactions]
+                )
                 permutation_axioms = array_permutation_check('mem', 7, [
                     (mult, [a, p, *args, t]) for mult, (a, p, args, t) in self._interactions
                 ])
                 return with_comment(
-                    And(*timestamp_conditions, *permutation_axioms),
+                    And(ts, *permutation_axioms),
                     f"MEMORY axioms"
                 )
             case _:
