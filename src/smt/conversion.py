@@ -47,7 +47,7 @@ class SmtConverter:
                 case {'Constant': int(value)}:
                     self.derived_columns.append(
                         with_comment(
-                            Equals(Symbol(name, INT), Int(value)),
+                            Equals(Symbol(f"{self.name}-{name}", INT), Int(value)),
                             f"DERIVED COLUMN {name} = {value}"
                         )
                     )
@@ -85,7 +85,7 @@ class SmtConverter:
             case ['-', right]: return Minus(Int(0), self.convert_manual(right))
             case int(value): return Int(value)
             case str(var):
-                sym = Symbol(var, INT)
+                sym = Symbol(f"{self.name}-{var}", INT)
                 self.field_symbols.add(sym)
                 return sym
 
