@@ -45,8 +45,8 @@ QF_UFNIA = logics.QF_UFNIA
 AUFNIA = logics.AUFNIA
 QF_AUFNIA = logics.QF_AUFNIA
 
-
 logics.PYSMT_LOGICS = logics.PYSMT_LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA])
+logics.SMTLIB2_LOGICS = logics.SMTLIB2_LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA])
 Z3Solver.LOGICS = Z3Solver.LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA])
 
 # then patch all the formula manager and all the walkers
