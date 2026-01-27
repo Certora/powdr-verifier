@@ -84,10 +84,10 @@ class VarBaseFormulaSelector:
 def check_formula(f: FNode) -> bool:
     if ARGS().dump_smt:
         with open(ARGS().smt_dump_filename, 'w') as dump:
-            print_formula_to_file(f, UFNIA, dump)
+            print_formula_to_file(f, AUFNIA, dump)
 
     logging.debug(f"checking formula with logic {UFNIA} and solver {ARGS().solver}")
-    s = Solver(logic=UFNIA, name=ARGS().solver, solver_options={'timeout': 60000})
+    s = Solver(logic=AUFNIA, name=ARGS().solver, solver_options={'timeout': 60000})
     s.add_assertion(f)
     try:
         match s.solve():
