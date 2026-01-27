@@ -1,4 +1,5 @@
 import json
+import logging
 import subprocess
 
 from . import converter
@@ -31,6 +32,9 @@ def diff():
             with open(after_formatted, 'w') as f:
                 converter.text(f, after, model)
                 f.flush()
+        
+        case _:
+            logging.error(f"unknown format: {ARGS().format}")
 
     subprocess.run(['meld',  before_formatted, after_formatted])
 
