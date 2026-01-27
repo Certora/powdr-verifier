@@ -18,3 +18,9 @@ class OpenVMExecutionBridgeEncoder(SingleInteractionEncoder):
             And(ts, r),
             f"EXECUTION BRIDGE axioms"
         )
+
+    def get_inputs(self) -> dict:
+        return { 'execution bridge': self._interactions[0][1] }
+    
+    def get_outputs(self) -> dict:
+        return { 'execution bridge': self._interactions[-1][1] }

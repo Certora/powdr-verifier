@@ -11,8 +11,9 @@ from . import openvm_pc_lookup
 from . import openvm_variable_range_checker
 from . import openvm_tuple_range_checker
 
-from ..utils.basic_block import BasicBlock
 from ..smt.utils import *
+from ..utils.basic_block import BasicBlock
+from ..utils.utils import merge_dicts
 
 class InteractionEncoder:
     """Base class for an encoder of arbitrary bus interactions."""
@@ -48,10 +49,12 @@ class InteractionEncoder:
     
     def get_interpreters(self) -> dict[FNode, FunctionInterpretation]:
         """Returns interpreters for all UFs for evaluation."""
-        res = {}
-        for encoder in self.encoders:
-            res.update(getattr(encoder, 'interpreters', {}))
-        return res
+        return merge_dicts(self.encoders, lambda encoder: getattr(encoder, 'interpreters', {}))
+    
+    def get_inputs(self) -> dict:
+        return merge_dicts(self.encoders, lambda encoder: encoder.get_inputs())
+    def get_outputs(self) -> dict:
+        return merge_dicts(self.encoders, lambda encoder: encoder.get_outputs())
 
 class OpenVMBusInteraction(Enum):
     EXECUTION_BRIDGE = 0
