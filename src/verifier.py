@@ -7,10 +7,10 @@ from .smt.utils import *
 
 def verify(before: FNode, after: FNode, block: BasicBlock):
 
-    before_smt,_ = convert_to_smt_formula("before", before, block)
-    after_smt,_ = convert_to_smt_formula("after", after, block)
+    before_smt, before_conv = convert_to_smt_formula("before", before, block)
+    after_smt, after_conv = convert_to_smt_formula("after", after, block)
 
-    vc = build_vc(before_smt, after_smt)
+    vc = build_vc(before_smt, before_conv, after_smt, after_conv)
 
     match check_formula(vc):
         case False,_:
