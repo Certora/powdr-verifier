@@ -1,6 +1,7 @@
 import argparse
 import itertools
 import logging
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -31,14 +32,12 @@ def parse_args():
 
 def run_powdr(test):
     cmd = [
-        f"APC_EXPORT_PATH={DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True)}",
+        f"APC_EXPORT_PATH={DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True) / test}",
         "APC_EXPORT_LEVEL=3",
         f"cargo test {test} -- --no-capture --exact",
     ]
     logging.warning(f"running {' '.join(cmd)}")
     subprocess.run(' '.join(cmd), shell=True, cwd=POWDR_DIR, check=True)
-    for file in DATA_DIR.glob("apc_candidate_*.*"):
-        file.rename(file.with_name(file.name.replace("apc_candidate", test)))
 
 def run_trace(*files):
     first = files[0]
@@ -99,12 +98,11 @@ if __name__ == '__main__':
     match args.command:
         case 'powdr':
             if args.clean:
-                for file in DATA_DIR.glob(f"{args.test}_*"):
-                    file.unlink()
+                shutil.rmtree(DATA_DIR / args.test)
             run_powdr(args.test)
             exit(0)
 
-    files = sorted(DATA_DIR.glob(f"{args.test}_*.json"))
+    files = sorted((DATA_DIR / args.test).glob(f"*.json"))
     if not files:
         logging.warning(f"no files found for {args.test}, did you run powdr?")
 
