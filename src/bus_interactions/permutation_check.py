@@ -6,7 +6,7 @@ def ordered_timestamp_check(
     interaction_timestamps: list[FNode],
 ) -> FNode:
     return And(
-        LT(i, j) for i,j in batched(interaction_timestamps, 2)
+        LT(b[0], b[1]) for b in batched(interaction_timestamps, 2) if len(b) == 2
     )
 
 def ordered_permutation_check(
