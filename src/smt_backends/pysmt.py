@@ -258,8 +258,27 @@ def pretty_print_formula(f: FNode) -> str:
         printer.printer(f)
         return s.getvalue()
 
+def script_with_sorted_declarefuns(smtlib: script.SmtLibScript) -> script.SmtLibScript:
+    cmds = smtlib.commands
+    newcmds = []
+    declares = []
+
+    while cmds:
+        c = cmds.pop(0)
+        match c:
+            case script.SmtLibCommand(name='declare-fun'):
+                declares.append(c)
+            case _:
+                newcmds.extend(sorted(declares, key=lambda cmd: cmd.args[0].symbol_name()))
+                declares = []
+                newcmds.append(c)
+
+    smtlib.commands = newcmds
+    return smtlib
+
 def convert_to_smt_script(f: FNode, logic: Logic) -> script.SmtLibScript:
     smtlib = script.smtlibscript_from_formula(f, logic)
+    smtlib = script_with_sorted_declarefuns(smtlib)
 
     # replace "declare-fun uf_mod" by "define-fun uf_mod"
     for id,cmd in enumerate(smtlib.commands):
