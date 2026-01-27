@@ -78,8 +78,8 @@ def array_permutation_check(
     We return the encoding itself (list of conjuncts) as well as the inputs and outputs.
     """
     def def_vars(id: int, deg = keywidth):
-        return [ Symbol(f'{identifier}-mult-{id}k{deg}', MultiArrayType(INT, deg, INT)) ] + [
-            Symbol(f'{identifier}-data{k}-{id}k{deg}', MultiArrayType(INT, deg, INT)) for k in range(datawidth) ]
+        return [ Symbol(f'{identifier}-{id}-mult-{deg}', MultiArrayType(INT, deg, INT)) ] + [
+            Symbol(f'{identifier}-{id}-data{k}-{deg}', MultiArrayType(INT, deg, INT)) for k in range(datawidth) ]
     
     actual_inputs = def_vars(0)
     inputs = actual_inputs
@@ -109,9 +109,9 @@ def array_permutation_check(
         
         # fresh variables to simplify the updates
         stores = [
-            Symbol(f'{identifier}-mult-{id}new', INT),
+            Symbol(f'{identifier}-{id}-mult-new', INT),
             *[
-                Symbol(f'{identifier}-data{k}-{id}new', INT)
+                Symbol(f'{identifier}-{id}-data{k}-new', INT)
                 for k in range(datawidth)
             ]
         ]
