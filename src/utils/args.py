@@ -44,7 +44,7 @@ def parse_args():
     sub_diff = sub.add_parser('diff')
     sub_diff.add_argument('input_before', type=Path)
     sub_diff.add_argument('input_after', type=Path)
-    sub_diff.add_argument('--format', type=str, choices=['text', 'json'])
+    sub_diff.add_argument('--format', type=str, choices=['text', 'json'], default='text')
     sub_diff.add_argument('--with-model', type=Path)
     sub_diff.add_argument('--only-simplified', action='store_true')
 
