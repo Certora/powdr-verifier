@@ -29,7 +29,10 @@ class RelationRewriter(substituter.Substituter):
 
     @substituter.handles(operators.RELATIONS)
     def walk_identity_or_replace(self, formula, args, **kwargs):
-        res = rewrite_one(to_sympy(formula))
+        try:
+            res = rewrite_one(to_sympy(formula))
+        except AssertionError as e:
+            res = None
         if res is not None:
             if ARGS().log_rewrites:
                 logging.info(f"rewrote {formula} --> {res}")
@@ -38,15 +41,11 @@ class RelationRewriter(substituter.Substituter):
 
 
 def rewrite(input: FNode) -> FNode:
-    try:
-        relation_rewriter = RelationRewriter()
-        last = None
-        for _ in range(MAX_REWRITE_COUNT):
-            last = input
-            input = relation_rewriter.substitute(input)
-            if last == input:
-                break
-        return input
-    except AssertionError as e:
-        logging.error(f"rewriter assertion error: {e}")
-        return input
+    relation_rewriter = RelationRewriter()
+    last = None
+    for _ in range(MAX_REWRITE_COUNT):
+        last = input
+        input = relation_rewriter.substitute(input)
+        if last == input:
+            break
+    return input
