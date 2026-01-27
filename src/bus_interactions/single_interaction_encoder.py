@@ -36,3 +36,9 @@ class SingleInteractionEncoder:
         if hasattr(self, 'encode'):
             return (self.encode(mult, *args) for mult, args in self._interactions)
         return []
+    
+    def get_inputs(self) -> dict:
+        return {}
+    
+    def get_outputs(self) -> dict:
+        return {}
