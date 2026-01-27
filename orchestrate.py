@@ -121,7 +121,7 @@ if __name__ == '__main__':
         case 'eval-last': run_eval(files[-1])
         case 'eval-all': run_eval(*files)
 
-        case 'verify-end2end': run_verify(files[0], (files[0], files[-1]))
+        case 'verify-end2end': run_verify(files[0], [(files[0], files[-1])])
         case 'verify-stepwise': run_verify(files[0], itertools.pairwise(files))
 
         case _:
