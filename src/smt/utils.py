@@ -29,6 +29,15 @@ def to_nice_model(model: Any) -> dict[str, Any]:
         if not v.is_array_value() and not v.is_array_op()
     }
 
+def field_symbol(sym: FNode) -> FNode:
+    return with_comment(
+        And(
+            LE(Int(0), sym),
+            LT(sym, Int(ARGS().field_type.value))
+        ),
+        f"BASIC RANGE axiom for {sym}"
+    )
+
 def MultiArrayType(index, width, value) -> FNode:
     if width > 0:
         return ArrayType(index, MultiArrayType(index, width-1, value))
