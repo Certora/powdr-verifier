@@ -17,6 +17,7 @@ class SmtConverter:
         self.field_symbols = set()
         self.constraints = []
         self.derived_columns = []
+        self.name = name
 
         match ARGS().bus_interaction_handler:
             case BusInteractionHandlers.OPENVM:
@@ -25,9 +26,11 @@ class SmtConverter:
                 logging.error(f"Unsupported bus interaction handler: {ARGS().bus_interaction_handler}")
                 self.bus_interaction_encoder = None
 
-    def __add_constraint(self, c: FNode, comment: str):
+    def __add_constraint(self, c: FNode, comment: Optional[str] = None):
+        if comment is not None:
+            c = with_comment(c, comment)
         self.constraints.append(
-            rewriter.rewrite(with_comment(c, comment))
+            rewriter.rewrite(c)
         )
     
     def convert_constraints(self, data: Iterable[Any]):
@@ -99,13 +102,7 @@ class SmtConverter:
     
     def __add_basic_range_axioms(self) -> list[FNode]:
         for sym in sorted(self.field_symbols, key=lambda x: str(x)):
-            self.__add_constraint(
-                And(
-                    LE(Int(0), sym),
-                    LT(sym, Int(ARGS().field_type.value))
-                ),
-                f"BASIC RANGE axiom for {sym}"
-            )
+            self.__add_constraint(field_symbol(sym))
 
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
         self.convert_manual(data)

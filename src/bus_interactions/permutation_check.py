@@ -41,31 +41,123 @@ def ordered_permutation_check(
 
 def array_permutation_check(
     identifier: str,
-    width: int,
-    interactions: list[tuple[FNode, list[FNode]]],
+    keywidth: int,
+    datawidth: int,
+    interactions: list[tuple[FNode, list[FNode], list[FNode]]],
 ) -> list[FNode]:
     """
-    Encodes a permutation check for the given list of interactions.
-    """
+    Encodes a permutation check for the given list of interactions using an
+    array encoding. This encoding is pretty specific to the memory bus, so we
+    explain it using the memory bus as an example.
+    We encode the state of the bus as arrays indexed by the address space and
+    pointer, one array for the multiplicity and each data (including the
+    timestamps).
+    
+    For each interaction, we update the arrays as follows where we have the
+    "old" multiplicity and data (read/selected from the array), the "current"
+    multiplicity and data (from the current interaction), and the "new"
+    multiplicity and data (written/stored to the array).
+    - if current mult == -1 (receive):
+      - require that the interaction permutes with the current bus state:
+        - require that the old multiplicity is one
+        - require that the old data is equal to the current data
+      - empty the bus:
+        - set the new multiplicity to zero
+        - set the new data to zero
+    - if mult == 1 (send):
+      - require that the bus is empty:
+        - require that the previous multiplicity is zero
+        - require that the old data is zero
+      - send the interaction to the bus:
+        - set the new multiplicity to one
+        - set the new data to the current data
 
-    input = Symbol(f'{identifier}-0', MultiArrayType(INT, width, INT))
+    Given that the array theory does not support n-ary selects and stores, the
+    array updates are a bit convoluted.
+    """
+    def def_vars(id: int, deg = keywidth):
+        return [ Symbol(f'{identifier}-mult-{id}k{deg}', MultiArrayType(INT, deg, INT)) ] + [
+            Symbol(f'{identifier}-data{k}-{id}k{deg}', MultiArrayType(INT, deg, INT)) for k in range(datawidth) ]
+    inputs = def_vars(0)
+    # accumulates everything needed to describe the permutation check
     conjuncts = []
     for id,i in enumerate(interactions):
-        mult, data = i
-        assert len(data) == width
-        cur = [input] + [
-            Symbol(f'{identifier}-{id}k{k}', MultiArrayType(INT, width - k, INT))
-            for k in range(1, width + 1)
+        mult, keys, data = i
+        assert len(keys) == keywidth
+        assert len(data) == datawidth
+
+        data = [mult, *data]
+
+        # here we accumulate the stepwise selections from the nested arrays
+        # the first entry is the full array, then the selected array of
+        # dimension n-1 etc until the last entry is the selected value.
+        newcurs = [[i] for i in inputs]
+
+        # stepwise select, add to newcurs and conjuncts as we go
+        for deg in range(keywidth-1, -1, -1):        
+            newcur = def_vars(id, deg=deg)
+            for k,nc in enumerate(newcurs):
+                conjuncts.append(Equals(newcur[k], Select(nc[-1], keys[keywidth - deg - 1])))
+                newcurs[k].append(newcur[k])
+        
+        # ensure that the selected values are in range, just for sanity
+        conjuncts.extend([field_symbol(s[-1]) for s in newcurs])
+        
+        # fresh variables to simplify the updates
+        stores = [
+            Symbol(f'{identifier}-mult-{id}new', INT),
+            *[
+                Symbol(f'{identifier}-data{k}-{id}new', INT)
+                for k in range(datawidth)
+            ]
         ]
-        for k in range(width):
-            conjuncts.append(Equals(cur[k+1], Select(cur[k], data[k])))
+        conjuncts.extend([field_symbol(s) for s in stores])
+
+        # encode the receive case
+        conjuncts.append(
+            with_comment(
+                Implies( # receive: data[0] == -1
+                    Equals(wrap_mod(Plus(data[0], Int(1))), Int(0)),
+                    And(
+                        # multiplicities
+                        Equals(wrap_mod(newcurs[0][-1]), Int(1)),
+                        Equals(stores[0], Int(0)),
+                        # data + timestamps
+                        *[ Equals(newcurs[k+1][-1], data[k+1]) for k in range(len(stores)-1) ],
+                        *[ Equals(stores[k+1], Int(0)) for k in range(len(stores)-1) ]
+                    )
+                ),
+                f"receive: mult == -1"
+            )
+        )
+        # encode the send case
+        conjuncts.append(
+            with_comment(
+                Implies( # send: data[0] == 1
+                    Equals(wrap_mod(Minus(data[0], Int(1))), Int(0)),
+                    And(
+                        # multiplicities
+                        Equals(newcurs[0][-1], Int(0)),
+                        Equals(stores[0], Int(1)),
+                        # data + timestamps
+                        *[ Equals(newcurs[k+1][-1], Int(0)) for k in range(len(stores)-1) ],
+                        *[ Equals(stores[k+1], data[k+1]) for k in range(len(stores)-1) ]
+                    )
+                ),
+                f"send: mult == 1"
+            )
+        )
         
-        store = cur[-1] + mult
-        for k in range(width-1,-1,-1):
-            store = Store(cur[k], data[k], store)
+        # now stepwise construct the stores. No need to keep the intermediates,
+        # just overwrite the stores as we go.
+        for deg in range(keywidth-1, -1, -1):
+            for k,nc in enumerate(newcurs):
+                stores[k] = Store(nc[deg], keys[deg], stores[k])
         
-        new = Symbol(f'{identifier}-{id+1}', MultiArrayType(INT, width, INT))
-        conjuncts.append(Equals(new, store))
-        input = new
+        # finally introduce fresh variables for the updated arrays.
+        news = def_vars(id+1)
+        for k,s in enumerate(stores):
+            conjuncts.append(Equals(news[k], s))
+        inputs = news
     
     return conjuncts

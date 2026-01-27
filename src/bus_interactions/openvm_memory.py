@@ -166,8 +166,9 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
                 ts = ordered_timestamp_check(
                     [i[1][3] for i in self._interactions]
                 )
-                permutation_axioms = array_permutation_check('mem', 7, [
-                    (mult, [a, p, *args, t]) for mult, (a, p, args, t) in self._interactions
+                permutation_axioms = array_permutation_check(f'{self._cur_state.name}-mem',
+                    keywidth=2, datawidth=5, interactions=[
+                    (mult, [a,p], [*args, t]) for mult, (a, p, args, t) in self._interactions
                 ])
                 return with_comment(
                     And(ts, *permutation_axioms),
