@@ -15,7 +15,7 @@ def build_input_output_relation(name: str, a: dict, b: dict) -> FNode:
     return And(
         *[
             with_comment(
-                And(Equals(x, y) for x in a[k] for y in b[k]),
+                And(Equals(x, y) for x,y in zip(a[k], b[k])),
                 f"{name} for {k}"
             )
             for k in keys

@@ -44,7 +44,7 @@ def array_permutation_check(
     keywidth: int,
     datawidth: int,
     interactions: list[tuple[FNode, list[FNode], list[FNode]]],
-) -> list[FNode]:
+) -> (list[FNode],list[FNode],list[FNode]):
     """
     Encodes a permutation check for the given list of interactions using an
     array encoding. This encoding is pretty specific to the memory bus, so we
@@ -74,11 +74,15 @@ def array_permutation_check(
 
     Given that the array theory does not support n-ary selects and stores, the
     array updates are a bit convoluted.
+
+    We return the encoding itself (list of conjuncts) as well as the inputs and outputs.
     """
     def def_vars(id: int, deg = keywidth):
         return [ Symbol(f'{identifier}-mult-{id}k{deg}', MultiArrayType(INT, deg, INT)) ] + [
             Symbol(f'{identifier}-data{k}-{id}k{deg}', MultiArrayType(INT, deg, INT)) for k in range(datawidth) ]
-    inputs = def_vars(0)
+    
+    actual_inputs = def_vars(0)
+    inputs = actual_inputs
     # accumulates everything needed to describe the permutation check
     conjuncts = []
     for id,i in enumerate(interactions):
@@ -160,4 +164,4 @@ def array_permutation_check(
             conjuncts.append(Equals(news[k], s))
         inputs = news
     
-    return conjuncts
+    return conjuncts, actual_inputs, inputs
