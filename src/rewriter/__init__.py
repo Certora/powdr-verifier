@@ -16,7 +16,7 @@ def rewrite_one(node: sympy.Expr) -> sympy.Expr:
         res = r(node)
         if res is not None:
             return res
-    return None
+    return node
 
 
 class RelationRewriter(substituter.Substituter):
@@ -30,13 +30,13 @@ class RelationRewriter(substituter.Substituter):
     @substituter.handles(operators.RELATIONS)
     def walk_identity_or_replace(self, formula, args, **kwargs):
         try:
-            res = rewrite_one(to_sympy(formula))
+            res = to_smt(rewrite_one(to_sympy(formula)))
         except AssertionError as e:
-            res = None
-        if res is not None:
+            res = formula
+        if res != formula:
             if ARGS().log_rewrites:
                 logging.info(f"rewrote {formula} --> {res}")
-            return keep_comment(to_smt(res), formula)
+            return keep_comment(res, formula)
         return keep_comment(substituter.Substituter.super(self, formula, args=args, **kwargs), formula)
 
 
