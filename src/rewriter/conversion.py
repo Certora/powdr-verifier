@@ -47,7 +47,7 @@ def to_smt(expr: sympy.Expr) -> FNode:
     elif expr == sympy.false:
         return FALSE()
     elif isinstance(expr, sympy.Symbol):
-        return Symbol(expr.name, INT)
+        return get_env().formula_manager.symbols[expr.name]
     elif isinstance(expr, sympy.Integer):
         return Int(int(expr))
     elif isinstance(expr, sympy.And):
