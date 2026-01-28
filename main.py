@@ -5,6 +5,7 @@ from src.utils.basic_block import BasicBlock
 from src.evaluator import evaluate
 from src.utils.args import parse_args, ARGS
 from src.utils.io import load_apc_dump, load_json
+from src.utils.profiling import print_profile
 from src.tracer import trace
 from src.verifier import verify
 from src.diff import diff
@@ -52,3 +53,5 @@ if __name__ == '__main__':
         case _:
             logging.error(f"unknown command: {ARGS().command}")
             exit(1)
+
+    print_profile()

@@ -2,6 +2,7 @@ import logging
 from typing import Any, Iterable
 
 from ..smt_backends.pysmt import *
+from ..utils.profiling import simple_profile
 
 SUPPORTS_COMMENTS = 'comment' in FNode.__slots__
 
@@ -81,6 +82,7 @@ class VarBaseFormulaSelector:
     def resolve_deep_for(self, fs: list[FNode]) -> FNode:
         return self.resolve_deep(frozenset.union(*[f.get_free_variables() for f in fs]))
 
+@simple_profile
 def check_formula(f: FNode) -> bool:
     if ARGS().dump_smt:
         with open(ARGS().smt_dump_filename, 'w') as dump:
