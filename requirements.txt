@@ -1,3 +1,4 @@
 pysmt
 setuptools
 sympy
+tabulate

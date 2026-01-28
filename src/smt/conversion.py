@@ -4,9 +4,11 @@ import logging
 import pprint
 from typing import Any, Iterable
 
+
 from .. import bus_interactions, rewriter
 from ..utils.basic_block import BasicBlock
 from ..utils.args import ARGS, BusInteractionHandlers
+from ..utils.profiling import simple_profile
 from .utils import *
 
 FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['constraints', 'bus_interactions', 'axioms', 'derived', 'globals'])
@@ -116,6 +118,7 @@ class SmtConverter:
             globals=self.bus_interaction_encoder.get_globals(),
         )
 
+@simple_profile
 def convert_to_smt_formula(name: str, data: Any, basic_block: BasicBlock) -> FormulaWithAxioms:
     smt_converter = SmtConverter(name, basic_block)
     formula = smt_converter.to_formula_with_axioms(data)

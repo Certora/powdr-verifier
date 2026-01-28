@@ -24,11 +24,13 @@ def parse_args():
     parser.add_argument('--log-rewrites', action='store_true')
     parser.add_argument('--log-smt', action='store_true')
     parser.add_argument('--log-memory-analysis', action='store_true')
+    parser.add_argument('--log-profile', action='store_true')
     parser.add_argument('--skip-memory-analysis', action='store_true')
     parser.add_argument('--dump-smt', action='store_true')
     parser.add_argument('--base-dump', type=Path, default=None)
     parser.add_argument('--solver', type=str, default="z3")
     parser.add_argument('--memory-encoding', type=str, choices=['ordered', 'array'], default='array')
+
 
     sub = parser.add_subparsers(dest="command")
     
