@@ -78,8 +78,11 @@ class OpenVMBusInteractionEncoder(InteractionEncoder):
         self.tuple_range_checker = openvm_tuple_range_checker.OpenVMTupleRangeCheckerEncoder()
 
         super().__init__([
-            self.bitwise_lookup, self.execution_bridge, self.pc_lookup,
-            self.variable_range_checker, self.tuple_range_checker,
+            self.bitwise_lookup,
+            self.execution_bridge,
+            self.pc_lookup,
+            self.variable_range_checker,
+            self.tuple_range_checker,
             self.memory
         ], cur_state)
     
