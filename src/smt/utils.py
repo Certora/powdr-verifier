@@ -23,9 +23,13 @@ def as_constant(f: FNode) -> Any:
         return f.constant_value()
     return str(f)
 
-def to_nice_model(model: Any) -> dict[str, Any]:
+def to_nice_model(model: Any, strip_prefix: Optional[str] = None) -> dict[str, Any]:
+    def cleanup(name: str) -> str:
+        if strip_prefix is not None and name.startswith(strip_prefix):
+            name = name[len(strip_prefix):]
+        return name
     return {
-        str(k): as_constant(v)
+        cleanup(str(k)): as_constant(v)
         for k,v in sorted(model, key=lambda x: str(x))
         if not v.is_array_value() and not v.is_array_op()
     }

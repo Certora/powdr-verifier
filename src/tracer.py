@@ -25,7 +25,7 @@ def trace(input: dict):
 
     match res:
         case True:
-            model = to_nice_model(model)
+            model = to_nice_model(model, strip_prefix='input-')
             print(json.dumps(model, indent=4))
 
             if ARGS().dump_model:
