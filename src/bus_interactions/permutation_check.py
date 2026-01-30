@@ -1,12 +1,16 @@
 from itertools import batched, pairwise
 from typing import Callable
+
+from .single_interaction_encoder import BusInteraction
 from ..smt.utils import *
 
 def ordered_timestamp_check(
-    interaction_timestamps: list[FNode],
-) -> FNode:
+    interaction_timestamps: list[BusInteraction],
+) -> Iterable[FNode]:
+    # TODO: handle mult = 0 case. It may not actually happen in practice, but we should handle it anyway.
     return And(
-        LT(b[0], b[1]) for b in batched(interaction_timestamps, 2) if len(b) == 2
+        LT(b[0].args[-1], b[1].args[-1])
+        for b in batched(interaction_timestamps, 2) if len(b) == 2
     )
 
 def ordered_permutation_check(
