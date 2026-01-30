@@ -100,7 +100,7 @@ def check_formula(f: FNode, name: Optional[str] = None, logic: Logic = AUFNIA) -
             print_formula_to_file(f, AUFNIA, dump)
 
     logging.debug(f"checking formula with logic {logic} and solver {ARGS().solver}")
-    s = Solver(logic=logic, name=ARGS().solver, solver_options={'timeout': 60000})
+    s = Solver(logic=logic, name=ARGS().solver, solver_options={':timeout': 60000})
     s.add_assertion(f)
     try:
         match s.solve():
