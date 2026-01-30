@@ -56,6 +56,7 @@ class SmtConverter:
                 case _:
                     logging.error(f"Unsupported derived column: {derived}")
 
+    @simple_profile
     def convert_manual(self, data: Any) -> Any:
         match data:
             # general json structure
@@ -101,7 +102,8 @@ class SmtConverter:
 
             case _:
                 logging.error(f"Unsupported data in conversion: {data}")
-    
+
+    @simple_profile
     def __add_basic_range_axioms(self) -> list[FNode]:
         for sym in sorted(self.field_symbols, key=lambda x: str(x)):
             self.__add_constraint(field_symbol(sym))

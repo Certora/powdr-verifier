@@ -33,6 +33,7 @@ class InteractionEncoder:
         for d in data:
             self.add(d)
     
+    @simple_profile
     def encode_all(self) -> list[FNode]:
         return list(without_trues(
             itertools.chain.from_iterable(
@@ -40,9 +41,11 @@ class InteractionEncoder:
             )
         ))
 
+    @simple_profile
     def get_axioms(self) -> list[FNode]:
         return list(without_trues(encoder.get_axioms() for encoder in self.encoders))
     
+    @simple_profile
     def get_globals(self) -> frozenset[FNode]:
         """Returns all global symbols that should not be part of any quantifier"""
         return frozenset.union(*[encoder.get_globals() for encoder in self.encoders])
