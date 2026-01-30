@@ -293,21 +293,8 @@ def script_with_sorted_declarefuns(smtlib: script.SmtLibScript) -> script.SmtLib
     return smtlib
 
 def convert_to_smt_script(f: FNode, logic: Logic) -> script.SmtLibScript:
-    smtlib = script.smtlibscript_from_formula(f, logic)
+    smtlib = script.smtlibscript_from_formula(f, None)
     smtlib = script_with_sorted_declarefuns(smtlib)
-
-    # replace "declare-fun uf_mod" by "define-fun uf_mod"
-    for id,cmd in enumerate(smtlib.commands):
-        match cmd:
-            case script.SmtLibCommand(name='declare-fun') if cmd.args == [UF_MOD]:
-                args = [Symbol('x', INT), Symbol('y', INT)]
-                define_fun = script.SmtLibCommand(
-                    name='define-fun',
-                    args=[UF_MOD, args, INT, Function(REAL_MOD, args)]
-                )
-                smtlib.commands[id] = define_fun
-            case _:
-                pass
 
     # add model production and model retrieval
     smtlib.commands.insert(1, script.SmtLibCommand(name='set-option', args=[':produce-models', 'true']))
