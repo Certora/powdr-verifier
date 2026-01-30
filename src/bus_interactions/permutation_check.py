@@ -1,4 +1,5 @@
 from itertools import batched, pairwise
+import itertools
 from typing import Callable
 
 from .single_interaction_encoder import BusInteraction
@@ -81,9 +82,45 @@ def array_permutation_check(
 
     We return the encoding itself (list of conjuncts) as well as the inputs and outputs.
     """
-    def def_vars(id: int, deg = keywidth):
-        return [ Symbol(f'{identifier}-{id}-mult-{deg}', MultiArrayType(INT, deg, INT)) ] + [
-            Symbol(f'{identifier}-{id}-data{k}-{deg}', MultiArrayType(INT, deg, INT)) for k in range(datawidth) ]
+    def def_vars(id: int):
+        return [ Symbol(f'{identifier}-{id}-mult', MultiArrayType(INT, keywidth, INT)) ] + [
+            Symbol(f'{identifier}-{id}-data{k}', MultiArrayType(INT, keywidth, INT)) for k in range(datawidth) ]
+    
+
+    def update_multidim_array(
+        input: FNode,
+        keys: list[FNode]
+    ) -> (FNode, FNode, FNode, list[FNode]):
+        """
+        Constructs the skeleton for an array update.
+        - input: the old array of dimension len(keys)
+        - keys: indices into the array
+        returns:
+        - oldval: the value of input at the given keys
+        - newval: the new value at the given keys
+        - store: the store operation resulting in a new array
+        - conjuncts: the conjuncts to encode the update
+        """
+        conjuncts = []
+        selects = [input]
+        # stepwise select, add to selects and conjuncts as we go
+        for id,key in enumerate(keys):
+            newsym = Symbol(f'{input.symbol_name()}-{id+1}', selects[-1].get_type().elem_type)
+            conjuncts.append(Equals(newsym, Select(selects[-1], key)))
+            selects.append(newsym)
+        
+        # fresh variable for the new value
+        newval = Symbol(f'{input.symbol_name()}-new', INT)
+        # ensure selected and new value are in range
+        conjuncts.append(field_symbol(selects[-1]))
+        conjuncts.append(field_symbol(newval))
+
+        # stepwise store, add to store as we go
+        store = newval
+        for id,key in enumerate(reversed(keys)):
+            store = Store(selects[1 - id], key, store)
+        
+        return selects[-1], newval, store, conjuncts
     
     actual_inputs = def_vars(0)
     inputs = actual_inputs
@@ -96,30 +133,11 @@ def array_permutation_check(
 
         data = [mult, *data]
 
-        # here we accumulate the stepwise selections from the nested arrays
-        # the first entry is the full array, then the selected array of
-        # dimension n-1 etc until the last entry is the selected value.
-        newcurs = [[i] for i in inputs]
+        # generate skeletons for array updates
+        updates = [ update_multidim_array(input, keys) for input in inputs ]
+        oldvals, newvals, stores, conj = zip(*updates)
 
-        # stepwise select, add to newcurs and conjuncts as we go
-        for deg in range(keywidth-1, -1, -1):        
-            newcur = def_vars(id, deg=deg)
-            for k,nc in enumerate(newcurs):
-                conjuncts.append(Equals(newcur[k], Select(nc[-1], keys[keywidth - deg - 1])))
-                newcurs[k].append(newcur[k])
-        
-        # ensure that the selected values are in range, just for sanity
-        conjuncts.extend([field_symbol(s[-1]) for s in newcurs])
-        
-        # fresh variables to simplify the updates
-        stores = [
-            Symbol(f'{identifier}-{id}-mult-new', INT),
-            *[
-                Symbol(f'{identifier}-{id}-data{k}-new', INT)
-                for k in range(datawidth)
-            ]
-        ]
-        conjuncts.extend([field_symbol(s) for s in stores])
+        conjuncts.extend(itertools.chain(*conj))
 
         # encode the receive case
         conjuncts.append(
@@ -128,11 +146,11 @@ def array_permutation_check(
                     Equals(wrap_mod(Plus(data[0], Int(1))), Int(0)),
                     And(
                         # multiplicities
-                        Equals(wrap_mod(newcurs[0][-1]), Int(1)),
-                        Equals(stores[0], Int(0)),
+                        Equals(wrap_mod(oldvals[0]), Int(1)),
+                        Equals(newvals[0], Int(0)),
                         # data + timestamps
-                        *[ Equals(newcurs[k+1][-1], data[k+1]) for k in range(len(stores)-1) ],
-                        *[ Equals(stores[k+1], Int(0)) for k in range(len(stores)-1) ]
+                        *[ Equals(oldvals[k], data[k]) for k in range(1, len(newvals)) ],
+                        *[ Equals(newvals[k], Int(0)) for k in range(1, len(newvals)) ]
                     )
                 ),
                 f"receive: mult == -1"
@@ -145,24 +163,17 @@ def array_permutation_check(
                     Equals(wrap_mod(Minus(data[0], Int(1))), Int(0)),
                     And(
                         # multiplicities
-                        Equals(newcurs[0][-1], Int(0)),
-                        Equals(stores[0], Int(1)),
+                        Equals(oldvals[0], Int(0)),
+                        Equals(newvals[0], Int(1)),
                         # data + timestamps
-                        *[ Equals(newcurs[k+1][-1], Int(0)) for k in range(len(stores)-1) ],
-                        *[ Equals(stores[k+1], data[k+1]) for k in range(len(stores)-1) ]
+                        *[ Equals(oldvals[k], Int(0)) for k in range(1, len(newvals)) ],
+                        *[ Equals(newvals[k], data[k]) for k in range(1, len(newvals)) ]
                     )
                 ),
                 f"send: mult == 1"
             )
         )
-        
-        # now stepwise construct the stores. No need to keep the intermediates,
-        # just overwrite the stores as we go.
-        for deg in range(keywidth-1, -1, -1):
-            for k,nc in enumerate(newcurs):
-                stores[k] = Store(nc[deg], keys[deg], stores[k])
-        
-        # finally introduce fresh variables for the updated arrays.
+
         news = def_vars(id+1)
         for k,s in enumerate(stores):
             conjuncts.append(Equals(news[k], s))
