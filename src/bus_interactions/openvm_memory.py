@@ -151,9 +151,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
                 self.pre_analysis()
                 grouped = self.group_interactions()
                 return And(
-                    ordered_timestamp_check(
-                        [i[1][3] for i in self._interactions]
-                    ),
+                    ordered_timestamp_check(self._interactions),
                     *[
                         with_comment(
                             ordered_permutation_check(interactions),
@@ -163,9 +161,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
                     ]
                 )
             case 'array':
-                ts = ordered_timestamp_check(
-                    [i[1][3] for i in self._interactions]
-                )
+                ts = ordered_timestamp_check(self._interactions)
                 permutation_axioms, inputs, outputs = array_permutation_check(f'{self._cur_state.name}-mem',
                     keywidth=2, datawidth=5, interactions=[
                     (mult, [a,p], [*args, t]) for mult, (a, p, args, t) in self._interactions
