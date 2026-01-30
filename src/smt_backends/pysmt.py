@@ -118,21 +118,37 @@ def Mod(left, right):
     r""".. math:: l % r """
     return get_env().formula_manager.Mod(left, right)
 
-
-cvc5_paths = [
-    Path('cvc5/build/bin/cvc5'),
-    Path('../cvc5/build/bin/cvc5')
+solvers = [
+    {
+        'name': 'cvc5ff',
+        'paths': [
+            Path('cvc5/build/bin/cvc5'),
+            Path('../cvc5/build/bin/cvc5')
+        ],
+        'options': [
+            '--incremental', '--produce-models', '--mod-range-solver', '--nia-intro-mm-mod'
+        ],
+        'logics': [ logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA ],
+    },
+    {
+        'name': 'z3-latest',
+        'paths': [
+            Path('stuff/z3/build/bin/z3'),
+        ],
+        'options': [ '--produce-models' ],
+        'logics': logics.SMTLIB2_LOGICS,
+    }
 ]
-for cvc5_path in cvc5_paths:
-    if cvc5_path.exists():
-        get_env().factory.add_generic_solver('cvc5ff',
-            [ cvc5_path, '--incremental', '--produce-models', '--mod-range-solver', '--nia-intro-mm-mod' ],
-            [ logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA ]
-        )
-        break
 
-UF_MOD = Symbol('uf_mod', FunctionType(INT, [INT, INT]))
-REAL_MOD = Symbol('mod', FunctionType(INT, [INT, INT]))
+for solver in solvers.items():
+    for path in solver['paths']:
+        if path.exists():
+            get_env().factory.add_generic_solver(solver['name'],
+                [ path ] + solver['options'],
+                solver['logics']
+            )
+            break
+
 
 def wrap_mod(input: FNode, modulus: Optional[FNode] = None) -> FNode:
     if modulus is None:
