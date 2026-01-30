@@ -31,22 +31,28 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
     def encode(self, mult: Any, x: Any, y: Any, z: Any, op: Any) -> FNode:
         if op == Int(0) and z == Int(0):
             return with_comment(
-                And(
-                    LE(Int(0), x), LE(x, Int(255)),
-                    LE(Int(0), y), LE(y, Int(255)),
-                    Equals(z, Int(0)),
-                    Equals(op, Int(0)),
+                Implies(
+                    Not(Equals(mult, Int(0))),
+                    And(
+                        LE(Int(0), x), LE(x, Int(255)),
+                        LE(Int(0), y), LE(y, Int(255)),
+                        Equals(z, Int(0)),
+                        Equals(op, Int(0)),
+                    )
                 ),
                 f"BITWISE LOOKUP {x} {y} {z} 0"
             )
         elif op == Int(1):
             self.needs_xor_axioms = True
             return with_comment(
-                And(
-                    LE(Int(0), x), LE(x, Int(255)),
-                    LE(Int(0), y), LE(y, Int(255)),
-                    Equals(Function(self.UF_XOR, [x, y]), z),
-                    Equals(op, Int(1)),
+                Implies(
+                    Not(Equals(mult, Int(0))),
+                    And(
+                        LE(Int(0), x), LE(x, Int(255)),
+                        LE(Int(0), y), LE(y, Int(255)),
+                        Equals(Function(self.UF_XOR, [x, y]), z),
+                        Equals(op, Int(1)),
+                    )
                 ),
                 f"BITWISE LOOKUP {x} {y} {z} 1"
             )
