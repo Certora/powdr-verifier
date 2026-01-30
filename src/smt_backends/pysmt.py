@@ -1,5 +1,6 @@
 import contextlib
 from io import StringIO
+import logging
 from pathlib import Path
 from typing import TextIO, Optional
 
@@ -133,19 +134,20 @@ solvers = [
     {
         'name': 'z3-latest',
         'paths': [
-            Path('stuff/z3/build/bin/z3'),
+            Path('~/stuff/z3/build/z3').expanduser(),
         ],
-        'options': [ '--produce-models' ],
+        'options': ['-smt2', '-in'],
         'logics': logics.SMTLIB2_LOGICS,
     }
 ]
 
-for solver in solvers.items():
+for solver in solvers:
     for path in solver['paths']:
         if path.exists():
+            logging.debug(f"adding solver {solver['name']} from {path}")
             get_env().factory.add_generic_solver(solver['name'],
                 [ path ] + solver['options'],
-                solver['logics']
+                solver['logics'],
             )
             break
 
