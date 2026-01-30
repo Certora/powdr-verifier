@@ -16,9 +16,9 @@ def simple_profile(func):
         end_time = time.perf_counter_ns()
         run_time = end_time - start_time
         global PROFILE_TIME
-        PROFILE_TIME[func.__name__] = PROFILE_TIME.get(func.__name__, 0) + run_time
+        PROFILE_TIME[func.__qualname__] = PROFILE_TIME.get(func.__qualname__, 0) + run_time
         global PROFILE_COUNT
-        PROFILE_COUNT[func.__name__] = PROFILE_COUNT.get(func.__name__, 0) + 1
+        PROFILE_COUNT[func.__qualname__] = PROFILE_COUNT.get(func.__qualname__, 0) + 1
         return value
     return wrapper_timer
 

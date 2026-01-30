@@ -31,7 +31,6 @@ def parse_args():
     parser.add_argument('--solver', type=str, default="z3")
     parser.add_argument('--memory-encoding', type=str, choices=['ordered', 'array'], default='array')
 
-
     sub = parser.add_subparsers(dest="command")
     
     sub_trace = sub.add_parser('trace')
