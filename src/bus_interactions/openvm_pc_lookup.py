@@ -40,17 +40,23 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
 
     def encode(self, mult: Any, pc: FNode, op: FNode, a: FNode, b: FNode, c: FNode, d: FNode, e: FNode, f: FNode, g: FNode) -> FNode:
         self.needs_axioms = True
-        return And(
-            LT(pc, Int(4*self.stmt_count - 3)),
-            Equals(wrap_mod(pc, Int(4)), Int(0)),
-            Equals(Function(self.UF_OPCODE, [pc]), wrap_mod(op)),
-            Equals(Function(self.UF_A, [pc]), wrap_mod(a)),
-            Equals(Function(self.UF_B, [pc]), wrap_mod(b)),
-            Equals(Function(self.UF_C, [pc]), wrap_mod(c)),
-            Equals(Function(self.UF_D, [pc]), wrap_mod(d)),
-            Equals(Function(self.UF_E, [pc]), wrap_mod(e)),
-            Equals(Function(self.UF_F, [pc]), wrap_mod(f)),
-            Equals(Function(self.UF_G, [pc]), wrap_mod(g)),
+        return with_comment(
+            Implies(
+                Not(Equals(mult, Int(0))),
+                And(
+                    LT(pc, Int(4*self.stmt_count - 3)),
+                    Equals(wrap_mod(pc, Int(4)), Int(0)),
+                    Equals(Function(self.UF_OPCODE, [pc]), wrap_mod(op)),
+                    Equals(Function(self.UF_A, [pc]), wrap_mod(a)),
+                    Equals(Function(self.UF_B, [pc]), wrap_mod(b)),
+                    Equals(Function(self.UF_C, [pc]), wrap_mod(c)),
+                    Equals(Function(self.UF_D, [pc]), wrap_mod(d)),
+                    Equals(Function(self.UF_E, [pc]), wrap_mod(e)),
+                    Equals(Function(self.UF_F, [pc]), wrap_mod(f)),
+                    Equals(Function(self.UF_G, [pc]), wrap_mod(g)),
+                )
+            ),
+            f"PC LOOKUP for {pc}"
         )
     
     def __encode_block(self) -> Iterable[FNode]:
@@ -67,7 +73,7 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
                     Equals(Function(self.UF_F, [Int(4*pc)]), Int(f)),
                     Equals(Function(self.UF_G, [Int(4*pc)]), Int(g)),
                 ),
-                f"PC LOOKUP for {pc}"
+                f"PC LOOKUP definition for {pc}"
             ) 
 
 

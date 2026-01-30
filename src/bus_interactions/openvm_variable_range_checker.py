@@ -15,9 +15,12 @@ class OpenVMVariableRangeCheckerEncoder(SingleInteractionEncoder):
             curbits = bits.constant_value()
 
         return with_comment(
-            And(
-                LE(Int(0), x),
-                LT(x, Int(2 ** curbits)),
+            Implies(
+                Not(Equals(mult, Int(0))),
+                And(
+                    LE(Int(0), x),
+                    LT(x, Int(2 ** curbits)),
+                ),
             ),
             f"VARIABLE RANGE CHECKER {x} {bits}"
         )
