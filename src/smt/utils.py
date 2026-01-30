@@ -16,7 +16,7 @@ def keep_comment(new: FNode, old: FNode) -> FNode:
     return new
 
 def without_trues(fs: Iterable[FNode]) -> Iterable[FNode]:
-    return filter(lambda x: not x.is_true(), fs)
+    return filter(lambda x: x is not None and not x.is_true(), fs)
 
 def as_constant(f: FNode) -> Any:
     if f.is_constant():

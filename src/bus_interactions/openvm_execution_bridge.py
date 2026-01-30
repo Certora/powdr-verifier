@@ -11,7 +11,7 @@ class OpenVMExecutionBridgeEncoder(SingleInteractionEncoder):
     def __init__(self) -> None:
         super().__init__()
 
-    def get_axioms(self) -> list[FNode]:
+    def get_axioms(self) -> Optional[FNode]:
         ts = ordered_timestamp_check(self._interactions)
         r = ordered_permutation_check([(i, True) for i in self._interactions])
         return with_comment(

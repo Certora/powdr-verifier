@@ -77,7 +77,7 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
             ) 
 
 
-    def get_axioms(self) -> list[FNode]:
+    def get_axioms(self) -> Optional[FNode]:
         if not self.needs_axioms:
-            return TRUE()
-        return And(self.__encode_block())
+            return None
+        return And(*self.__encode_block())
