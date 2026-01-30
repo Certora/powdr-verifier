@@ -62,11 +62,3 @@ def parse_args():
     if ARGS().verbose > 0:
         logger = logging.getLogger()
         logger.setLevel(logger.level - 10 * ARGS().verbose)
-    
-    match ARGS().command:
-        case 'trace':
-            ARGS().smt_dump_filename = ARGS().input.parent / f"trace-{ARGS().input.stem}.smt2"
-        case 'verify':
-            ARGS().smt_dump_filename = ARGS().input_before.parent / f"verify-{ARGS().input_before.stem}-{ARGS().input_after.stem}.smt2"
-        case _:
-            pass

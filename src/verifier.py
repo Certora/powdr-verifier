@@ -46,7 +46,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             And(*after_smt.axioms),
         )
     )
-    match check_formula(soundness):
+    match check_formula(soundness, "sound"):
         case False,_:
             print("Soundness is proven")
         case None,_:
@@ -76,7 +76,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             And(*after_smt.axioms),
         )
     )
-    match check_formula(completeness):
+    match check_formula(completeness, "complete"):
         case False,_:
             print("Completeness is proven")
         case None,_:

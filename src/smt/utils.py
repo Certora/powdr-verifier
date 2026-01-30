@@ -87,13 +87,20 @@ class VarBaseFormulaSelector:
         return self.resolve_deep(frozenset.union(*[f.get_free_variables() for f in fs]))
 
 @simple_profile
-def check_formula(f: FNode) -> bool:
+def check_formula(f: FNode, name: Optional[str] = None, logic: Logic = AUFNIA) -> bool:
     if ARGS().dump_smt:
-        with open(ARGS().smt_dump_filename, 'w') as dump:
+        match ARGS().command:
+            case 'trace':
+                filename = ARGS().input.parent / f"trace-{ARGS().input.stem}.smt2"
+            case 'verify':
+                filename = ARGS().input_before.parent / f"verify-{name}-{ARGS().input_before.stem}-{ARGS().input_after.stem}.smt2"
+            case _:
+                pass
+        with open(filename, 'w') as dump:
             print_formula_to_file(f, AUFNIA, dump)
 
-    logging.debug(f"checking formula with logic {UFNIA} and solver {ARGS().solver}")
-    s = Solver(logic=AUFNIA, name=ARGS().solver, solver_options={'timeout': 60000})
+    logging.debug(f"checking formula with logic {logic} and solver {ARGS().solver}")
+    s = Solver(logic=logic, name=ARGS().solver, solver_options={'timeout': 60000})
     s.add_assertion(f)
     try:
         match s.solve():
