@@ -134,6 +134,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
         return res
 
     def encode(self, mult: FNode, address_space: FNode, pointer: FNode, data: list[FNode], timestamp: FNode) -> FNode:
+        return None
         return with_comment(
             Implies(
                 #Equals(wrap_mod(mult), wrap_mod(Int(-1))),
@@ -145,7 +146,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
             f"MEMORY interaction for {address_space} {pointer}"
         )
     
-    def get_axioms(self) -> list[FNode]:
+    def get_axioms(self) -> Optional[FNode]:
         match ARGS().memory_encoding:
             case 'ordered':
                 self.pre_analysis()
@@ -174,7 +175,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
                 )
             case _:
                 logging.error(f"unsupported memory encoding: {ARGS().memory_encoding}")
-                return FALSE()
+                return None
 
     def get_inputs(self) -> dict:
         return { 'memory': self.inputs }

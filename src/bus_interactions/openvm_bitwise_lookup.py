@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from .single_interaction_encoder import SingleInteractionEncoder
 
@@ -60,9 +60,9 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
             logging.error(f"Unsupported bitwise operation: {op}")
             return None
 
-    def get_axioms(self) -> list[FNode]:
+    def get_axioms(self) -> Optional[FNode]:
         if not self.needs_xor_axioms:
-            return TRUE()
+            return None
         x = Symbol('x', INT)
         return with_comment(
             And(
