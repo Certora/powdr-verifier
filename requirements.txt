@@ -1,4 +1,5 @@
 pysmt
+requests
 semver
 setuptools
 sympy
