@@ -7,35 +7,19 @@ from ..smt.utils import *
 
 def ordered_timestamp_check(
     interactions: list[BusInteraction],
-    solver: Solver = None,
+    solver: Solver,
 ) -> Iterable[FNode]:
-    def skip_to_next_non_zero(k: int) -> int:
-        # skip over interactions that we know to have mult = 0
-        while k < len(interactions) and solver.is_valid(Equals(interactions[k].mult, Int(0))):
-            k += 1
-            continue
-        # and assert that the new one has mult != 0
-        # this likely fails eventually, if the multiplicity can not be derived from the constraints
-        assert solver.is_valid(Not(Equals(interactions[k].mult, Int(0))))
-        return k
-
-    if solver is None:
-        logging.warning('ordered timestamp check: no solver provided, may be incorrect')
-        return And(
-            LT(b[0].args[-1], b[1].args[-1])
-            for b in batched(interactions, 2) if len(b) == 2
-        )
-
+    # sanity check: interactions with mult = 0 should not exist
+    if solver is not None:
+        assert all(solver.is_sat(Not(Equals(i.mult, Int(0)))) for i in interactions)
+        
     res = []
-    i = 0
-    while i < len(interactions) - 1:
-        i = skip_to_next_non_zero(i)
-        j = skip_to_next_non_zero(i + 1)
-        if j >= len(interactions):
-            break
-        res.append(LT(interactions[i].args[-1], interactions[j].args[-1]))
-        i = j + 1
-    
+    for a,b in batched(interactions, 2):
+        if len(b) != 2: continue
+        # for now we assume that zeroness of a.mult and b.mult are equivalent
+        assert solver.is_valid(Iff(Equals(a.mult, Int(0)), Equals(b.mult, Int(0))))
+        res.append(Implies(Equals(a.mult, Int(0)), LT(a.args[-1], b.args[-1])))
+
     return And(*res)
             
 
