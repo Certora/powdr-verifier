@@ -2,6 +2,9 @@ import contextlib
 from io import StringIO
 import logging
 from pathlib import Path
+import re
+import semver
+import subprocess
 from typing import TextIO, Optional
 
 
@@ -122,34 +125,33 @@ def Mod(left, right):
 solvers = [
     {
         'name': 'cvc5ff',
-        'paths': [
-            Path('cvc5/build/bin/cvc5'),
-            Path('../cvc5/build/bin/cvc5')
-        ],
-        'options': [
-            '--incremental', '--produce-models', '--mod-range-solver', '--nia-intro-mm-mod'
-        ],
+        'path': Path('~/certora/powdr/cvc5/build/bin/cvc5').expanduser(),
+        'options': [ '--incremental', '--produce-models', '--mod-range-solver', '--nia-intro-mm-mod' ],
         'logics': [ logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA ],
     },
     {
         'name': 'z3-latest',
-        'paths': [
-            Path('~/stuff/z3/build/z3').expanduser(),
-        ],
+        'path': Path('~/bin/z3-4.15.4').expanduser(),
         'options': ['-smt2', '-in'],
         'logics': logics.SMTLIB2_LOGICS,
+        'min-version': ('Z3 version ([0-9.]+)', '4.12.2'),
     }
 ]
 
 for solver in solvers:
-    for path in solver['paths']:
-        if path.exists():
-            logging.debug(f"adding solver {solver['name']} from {path}")
-            get_env().factory.add_generic_solver(solver['name'],
-                [ path ] + solver['options'],
-                solver['logics'],
-            )
-            break
+    if not solver['path'].exists():
+        logging.warning(f"did not add solver {solver['name']}: {solver['path']} does not exist")
+    if 'min-version' in solver:
+        res = subprocess.run([solver['path'], '--version'], capture_output=True, text=True)
+        version = re.search(solver['min-version'][0], res.stdout).group(1)
+        if semver.compare(version, solver['min-version'][1]) < 0:
+            logging.warning(f"did not add solver {solver['name']} because it is too old (version {version} < {solver['min-version'][1]})")
+            continue
+    logging.info(f"adding solver {solver['name']} from {solver['path']}")
+    get_env().factory.add_generic_solver(solver['name'],
+        [ solver['path'] ] + solver['options'],
+        solver['logics'],
+    )
 
 
 def wrap_mod(input: FNode, modulus: Optional[FNode] = None) -> FNode:
