@@ -26,6 +26,9 @@ class SingleInteractionEncoder:
     def constraints(self) -> list[FNode]:
         return self._cur_state.constraints
     
+    def solver(self) -> Solver:
+        return self._cur_state.solver
+    
     def add(self, mult: FNode, *args: Any) -> FNode:
         self._interactions.append(BusInteraction(mult, args))
 

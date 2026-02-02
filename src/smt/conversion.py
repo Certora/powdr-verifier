@@ -111,6 +111,8 @@ class SmtConverter:
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
         self.convert_manual(data)
         self.__add_basic_range_axioms()
+        self.solver = Solver()
+        self.solver.add_assertions(self.constraints)
         bus_interactions = self.bus_interaction_encoder.encode_all()
         return FormulaWithAxioms(
             constraints=self.constraints,

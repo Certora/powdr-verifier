@@ -6,13 +6,38 @@ from .single_interaction_encoder import BusInteraction
 from ..smt.utils import *
 
 def ordered_timestamp_check(
-    interaction_timestamps: list[BusInteraction],
+    interactions: list[BusInteraction],
+    solver: Solver = None,
 ) -> Iterable[FNode]:
-    # TODO: handle mult = 0 case. It may not actually happen in practice, but we should handle it anyway.
-    return And(
-        LT(b[0].args[-1], b[1].args[-1])
-        for b in batched(interaction_timestamps, 2) if len(b) == 2
-    )
+    def skip_to_next_non_zero(k: int) -> int:
+        # skip over interactions that we know to have mult = 0
+        while k < len(interactions) and solver.is_valid(Equals(interactions[k].mult, Int(0))):
+            k += 1
+            continue
+        # and assert that the new one has mult != 0
+        # this likely fails eventually, if the multiplicity can not be derived from the constraints
+        assert solver.is_valid(Not(Equals(interactions[k].mult, Int(0))))
+        return k
+
+    if solver is None:
+        logging.warning('ordered timestamp check: no solver provided, may be incorrect')
+        return And(
+            LT(b[0].args[-1], b[1].args[-1])
+            for b in batched(interactions, 2) if len(b) == 2
+        )
+
+    res = []
+    i = 0
+    while i < len(interactions) - 1:
+        i = skip_to_next_non_zero(i)
+        j = skip_to_next_non_zero(i + 1)
+        if j >= len(interactions):
+            break
+        res.append(LT(interactions[i].args[-1], interactions[j].args[-1]))
+        i = j + 1
+    
+    return And(*res)
+            
 
 def ordered_permutation_check(
     interactions: list[tuple[tuple[FNode, list[FNode]], bool]]
