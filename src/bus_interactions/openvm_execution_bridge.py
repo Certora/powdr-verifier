@@ -1,9 +1,9 @@
-from .permutation_check import ordered_permutation_check, ordered_timestamp_check
+from .permutation_check import PermutationCheckMixin, TimestampCheckMixin
 from .single_interaction_encoder import SingleInteractionEncoder
 
 from ..smt.utils import *
 
-class OpenVMExecutionBridgeEncoder(SingleInteractionEncoder):
+class OpenVMExecutionBridgeEncoder(SingleInteractionEncoder, TimestampCheckMixin, PermutationCheckMixin):
     """
     Encodes execution bridge bus interactions. It implements a permutation
     check on all interactions and requires their timestamps increase.
@@ -12,8 +12,8 @@ class OpenVMExecutionBridgeEncoder(SingleInteractionEncoder):
         super().__init__()
 
     def get_axioms(self) -> Optional[FNode]:
-        ts = ordered_timestamp_check(self._interactions, solver=self.solver())
-        r = ordered_permutation_check(self._interactions, solver=self.solver())
+        ts = self.ordered_timestamp_check()
+        r = self.ordered_permutation_check()
         return with_comment(
             And(ts, r),
             f"EXECUTION BRIDGE axioms"

@@ -2,7 +2,7 @@ import itertools
 import logging
 from typing import Any
 
-from .permutation_check import array_permutation_check, ordered_timestamp_check
+from .permutation_check import PermutationCheckMixin, TimestampCheckMixin
 
 from .single_interaction_encoder import SingleInteractionEncoder
 
@@ -72,7 +72,7 @@ class MemoryAnalysis:
         ])
 
 
-class OpenVMMemoryEncoder(SingleInteractionEncoder):
+class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, TimestampCheckMixin):
     """
     Encodes memory bus interactions. It implements a permutation check on all
     interactions and requires their timestamps increase.
@@ -147,8 +147,8 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
         )
     
     def get_axioms(self) -> Optional[FNode]:
-        ts = ordered_timestamp_check(self._interactions, solver=self.solver())
-        permutation_axioms, inputs, outputs = array_permutation_check(f'{self._cur_state.name}-mem',
+        ts = self.ordered_timestamp_check()
+        permutation_axioms, inputs, outputs = self.array_permutation_check(f'{self._cur_state.name}-mem',
             keywidth=2, datawidth=5, interactions=[
             (mult, [a,p], [*args, t]) for mult, (a, p, args, t) in self._interactions
         ])
