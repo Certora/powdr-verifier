@@ -193,6 +193,9 @@ original:  {pp_bus_interaction(input)}
 evaluated: {pp_bus_interaction(evald)}
     {msg}
 """
+            if evald.get('mult', 1) == 0:
+                logging.debug(f'skipping bus interaction with mult = 0')
+                continue
             match evald:
                 case {
                         'id': OpenVMBusInteraction.EXECUTION_BRIDGE.value,
