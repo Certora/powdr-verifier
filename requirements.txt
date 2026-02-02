@@ -1,4 +1,5 @@
 pysmt
+semver
 setuptools
 sympy
 tabulate
