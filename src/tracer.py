@@ -4,12 +4,13 @@ import logging
 from .rewriter import rewrite
 from .utils.args import ARGS
 from .utils.basic_block import BasicBlock
-from .smt.conversion import convert_to_smt_formula
+from .smt.conversion import SmtConverter
 from .smt.utils import *
 
 def trace(input: dict):
 
-    smt,_ = convert_to_smt_formula("input", input, BasicBlock(input["block"]))
+    with SmtConverter("input", BasicBlock(input["block"])) as conv:
+        smt = conv.to_formula_with_axioms(input)
 
     f = And(
         *smt.constraints,

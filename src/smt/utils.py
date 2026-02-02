@@ -100,18 +100,19 @@ def check_formula(f: FNode, name: Optional[str] = None, logic: Logic = AUFNIA) -
             print_formula_to_file(f, AUFNIA, dump)
 
     logging.debug(f"checking formula with logic {logic} and solver {ARGS().solver}")
-    s = Solver(logic=logic, name=ARGS().solver, solver_options={':timeout': 60000})
-    s.add_assertion(f)
-    try:
-        match s.solve():
-            case True:
-                return True, s.get_model()
-            case False:
-                return False, None
-            case _:
-                return None, None
-    except SolverReturnedUnknownResultError:
-        return None, None
+    with Solver(logic=logic, name=ARGS().solver, solver_options={':timeout': 60000}) as s:
+        try:
+            s.add_assertion(f)
+            match s.solve():
+                case True:
+                    return True, s.get_model()
+                case False:
+                    return False, None
+                case _:
+                    return None, None
+        except SolverReturnedUnknownResultError:
+            return None, None
+
 
 class GenericInterpreter(FunctionInterpretation):
     def __init__(self, fsym, f):

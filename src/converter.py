@@ -54,16 +54,16 @@ def _print(out: TextIO, eval, pattern = '{}', *args, ignore = TRUE()):
         out.write(f'--{pattern.format(*_do_eval(eval, list(args)))}\n')
 
 def _dump_single_conversion(out: TextIO, data: Any, basic_block: BasicBlock, eval):
-    conv = SmtConverter("tmp", basic_block)
-    formula = conv.to_formula_with_axioms(data)
-    for c in formula.constraints:
-        _print(out, eval, '->\t{}', c)
-    for b in formula.bus_interactions:
-        _print(out, eval, '->\t{}', b)
-    for a in formula.axioms:
-        _print(out, eval, '->\t{}', a)
-    for d in formula.derived:
-        _print(out, eval, '->\t{}', d)
+    with SmtConverter("tmp", basic_block) as conv:
+        formula = conv.to_formula_with_axioms(data)
+        for c in formula.constraints:
+            _print(out, eval, '->\t{}', c)
+        for b in formula.bus_interactions:
+            _print(out, eval, '->\t{}', b)
+        for a in formula.axioms:
+            _print(out, eval, '->\t{}', a)
+        for d in formula.derived:
+            _print(out, eval, '->\t{}', d)
 
 
 def _text_bus_interaction(out: TextIO, bis: list, conv: SmtConverter, eval):
@@ -114,20 +114,19 @@ def text(out: TextIO, input: dict, model: Optional[dict[str, int]] = None):
             assert not rest_apc
 
             block = BasicBlock(input["block"])
-            conv = SmtConverter("tmp", block)
-
-            eval = None
-            if model is not None:
-                eval = lambda f: partial_evaluate(f, model, conv.bus_interaction_encoder)
-            
-            variables = _collect_variables([cs, bis])
-            out.write(f"variables:\n")
-            for var in sorted(variables):
-                out.write(f"\t{var}\n")
-            out.write("\n")
-            
-            _text_bus_interaction(out, bis, conv, eval)
-            _text_constraints(out, cs, conv, eval)
+            with SmtConverter("tmp", block) as conv:
+                eval = None
+                if model is not None:
+                    eval = lambda f: partial_evaluate(f, model, conv.bus_interaction_encoder)
+                
+                variables = _collect_variables([cs, bis])
+                out.write(f"variables:\n")
+                for var in sorted(variables):
+                    out.write(f"\t{var}\n")
+                out.write("\n")
+                
+                _text_bus_interaction(out, bis, conv, eval)
+                _text_constraints(out, cs, conv, eval)
 
         case _:
             logging.error(f"unsupported input for text conversion")
