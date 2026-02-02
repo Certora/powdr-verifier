@@ -16,7 +16,7 @@ class TimestampCheckMixin:
             if len(b) != 2: continue
             # for now we assume that zeroness of a.mult and b.mult are equivalent
             assert self.solver().is_valid(Iff(Equals(a.mult, Int(0)), Equals(b.mult, Int(0))))
-            res.append(Implies(Equals(a.mult, Int(0)), LT(a.args[-1], b.args[-1])))
+            res.append(Implies(Not(Equals(a.mult, Int(0))), LT(a.args[-1], b.args[-1])))
 
         return And(*res)
             
