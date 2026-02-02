@@ -50,6 +50,18 @@ jobs:
           key: cargo-${{ hashFiles('powdr/Cargo.toml') }}-${{ steps.get-date.outputs.date }}
           restore-keys: |
             cargo-
+
+    - name: setup custom binary cache
+      uses: actions/cache@v3
+      with:
+          path: ~/bin/
+          key: bin-${{ hashFiles('.github/**') }}-${{ steps.get-date.outputs.date }}
+          restore-keys: |
+            bin-
+    
+    - name: install custom binaries
+      run: |
+        python3 verifier/download_z3.py z3-4.15.4 ~/bin/
     
     - name: install python dependencies
       run: |
