@@ -50,6 +50,12 @@ jobs:
           key: cargo-${{ hashFiles('powdr/Cargo.toml') }}-${{ steps.get-date.outputs.date }}
           restore-keys: |
             cargo-
+    
+    - name: install python dependencies
+      run: |
+        pip install -r verifier/requirements.txt
+        pysmt-install --z3 --confirm-agreement
+
 
     - name: setup custom binary cache
       uses: actions/cache@v3
@@ -62,12 +68,6 @@ jobs:
     - name: install custom binaries
       run: |
         python3 verifier/download_z3.py z3-4.15.4 ~/bin/
-    
-    - name: install python dependencies
-      run: |
-        pip install -r verifier/requirements.txt
-        pysmt-install --z3 --confirm-agreement
-
     - name: cargo clean
       run: cd powdr && cargo clean
 
