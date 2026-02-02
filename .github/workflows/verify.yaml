@@ -68,6 +68,7 @@ jobs:
       run: |
         mkdir -p ~/bin/
         python3 verifier/download_z3.py z3-4.15.4 ~/bin/
+        chmod +x ~/bin/*
 
     - name: cargo clean
       run: cd powdr && cargo clean
