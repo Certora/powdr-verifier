@@ -30,9 +30,11 @@ class SmtConverter:
                 self.bus_interaction_encoder = None
     
     def __enter__(self):
+        """No-op when entering a resource management context."""
         return self
     
     def __exit__(self, exc_type, exc_value, traceback):
+        """Kill the solver when exiting a resource management context."""
         self.constraint_solver.exit()
 
     def __add_constraint(self, c: FNode, comment: Optional[str] = None):

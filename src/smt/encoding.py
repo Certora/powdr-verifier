@@ -1,5 +1,4 @@
-from ..rewriter import rewrite
-from .conversion import FormulaWithAxioms, SmtConverter
+from .conversion import FormulaWithAxioms
 from .utils import *
 
 def collect_variables(data: FormulaWithAxioms) -> frozenset[FNode]:
