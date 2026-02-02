@@ -162,7 +162,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
                     ]
                 )
             case 'array':
-                ts = ordered_timestamp_check(self._interactions)
+                ts = ordered_timestamp_check(self._interactions, solver=self.solver())
                 permutation_axioms, inputs, outputs = array_permutation_check(f'{self._cur_state.name}-mem',
                     keywidth=2, datawidth=5, interactions=[
                     (mult, [a,p], [*args, t]) for mult, (a, p, args, t) in self._interactions

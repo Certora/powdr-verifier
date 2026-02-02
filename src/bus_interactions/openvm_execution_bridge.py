@@ -12,7 +12,7 @@ class OpenVMExecutionBridgeEncoder(SingleInteractionEncoder):
         super().__init__()
 
     def get_axioms(self) -> Optional[FNode]:
-        ts = ordered_timestamp_check(self._interactions)
+        ts = ordered_timestamp_check(self._interactions, solver=self.solver())
         r = ordered_permutation_check([(i, True) for i in self._interactions])
         return with_comment(
             And(ts, r),
