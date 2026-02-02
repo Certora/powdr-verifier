@@ -72,5 +72,5 @@ match args.version:
         download_release_asset(release)
 
     case _:
-        release,_ = get_api_json(f"https://api.github.com/repos/Z3Prover/z3/releases/tags/{args.release}")
+        release,_ = get_api_json(f"https://api.github.com/repos/Z3Prover/z3/releases/tags/{args.version}")
         download_release_asset(release)
