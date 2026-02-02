@@ -20,6 +20,7 @@ class SmtConverter:
         self.constraints = []
         self.derived_columns = []
         self.name = name
+        self.constraint_solver = Solver()
 
         match ARGS().bus_interaction_handler:
             case BusInteractionHandlers.OPENVM:
@@ -31,9 +32,8 @@ class SmtConverter:
     def __add_constraint(self, c: FNode, comment: Optional[str] = None):
         if comment is not None:
             c = with_comment(c, comment)
-        self.constraints.append(
-            rewriter.rewrite(c)
-        )
+        self.constraints.append(rewriter.rewrite(c))
+        self.constraint_solver.add_assertion(self.constraints[-1])
     
     def convert_constraints(self, data: Iterable[Any]):
         for id,c in enumerate(data):
@@ -111,8 +111,6 @@ class SmtConverter:
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
         self.convert_manual(data)
         self.__add_basic_range_axioms()
-        self.solver = Solver()
-        self.solver.add_assertions(self.constraints)
         bus_interactions = self.bus_interaction_encoder.encode_all()
         return FormulaWithAxioms(
             constraints=self.constraints,

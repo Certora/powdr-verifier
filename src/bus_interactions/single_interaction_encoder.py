@@ -27,9 +27,12 @@ class SingleInteractionEncoder:
         return self._cur_state.constraints
     
     def solver(self) -> Solver:
-        return self._cur_state.solver
+        return self._cur_state.constraint_solver
     
     def add(self, mult: FNode, *args: Any) -> FNode:
+        if self.solver() is not None and self.solver().is_valid(Equals(mult, Int(0))):
+            logging.debug(f"dropping interaction with mult = 0")
+            return
         self._interactions.append(BusInteraction(mult, args))
 
     def get_axioms(self) -> list[FNode]:
