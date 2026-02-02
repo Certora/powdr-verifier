@@ -2,23 +2,28 @@ import json
 
 from .utils.basic_block import BasicBlock
 from .smt.encoding import build_input_output_relation, collect_variables
-from .smt.conversion import check_formula, convert_to_smt_formula
+from .smt.conversion import SmtConverter, check_formula
 from .smt.utils import *
 
 def verify(before: FNode, after: FNode, block: BasicBlock):
 
-    before_smt, before_conv = convert_to_smt_formula("before", before, block)
-    after_smt, after_conv = convert_to_smt_formula("after", after, block)
+    with (
+        SmtConverter("before", block) as before_conv,
+        SmtConverter("after", block) as after_conv
+    ):
+        before_smt = before_conv.to_formula_with_axioms(before)
+        after_smt = after_conv.to_formula_with_axioms(after)
 
-    # obtain input and output info
-    inputs1 = before_conv.bus_interaction_encoder.get_inputs()
-    inputs2 = after_conv.bus_interaction_encoder.get_inputs()
-    outputs1 = before_conv.bus_interaction_encoder.get_outputs()
-    outputs2 = after_conv.bus_interaction_encoder.get_outputs()
-    iorelation = And(
-        build_input_output_relation("INPUT RELATION", inputs1, inputs2),
-        build_input_output_relation("OUTPUT RELATION", outputs1, outputs2),
-    )
+
+        # obtain input and output info
+        inputs1 = before_conv.bus_interaction_encoder.get_inputs()
+        inputs2 = after_conv.bus_interaction_encoder.get_inputs()
+        outputs1 = before_conv.bus_interaction_encoder.get_outputs()
+        outputs2 = after_conv.bus_interaction_encoder.get_outputs()
+        iorelation = And(
+            build_input_output_relation("INPUT RELATION", inputs1, inputs2),
+            build_input_output_relation("OUTPUT RELATION", outputs1, outputs2),
+        )
 
 
     # obtain variables and globals

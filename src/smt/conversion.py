@@ -28,6 +28,14 @@ class SmtConverter:
             case _:
                 logging.error(f"Unsupported bus interaction handler: {ARGS().bus_interaction_handler}")
                 self.bus_interaction_encoder = None
+    
+    def __enter__(self):
+        """No-op when entering a resource management context."""
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        """Kill the solver when exiting a resource management context."""
+        self.constraint_solver.exit()
 
     def __add_constraint(self, c: FNode, comment: Optional[str] = None):
         if comment is not None:
@@ -108,22 +116,18 @@ class SmtConverter:
         for sym in sorted(self.field_symbols, key=lambda x: str(x)):
             self.__add_constraint(field_symbol(sym))
 
+    @simple_profile
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
         self.convert_manual(data)
         self.__add_basic_range_axioms()
         bus_interactions = self.bus_interaction_encoder.encode_all()
-        return FormulaWithAxioms(
+        fwa = FormulaWithAxioms(
             constraints=self.constraints,
             bus_interactions=bus_interactions,
             axioms=self.bus_interaction_encoder.get_axioms(),
             derived=self.derived_columns,
             globals=self.bus_interaction_encoder.get_globals(),
         )
-
-@simple_profile
-def convert_to_smt_formula(name: str, data: Any, basic_block: BasicBlock) -> FormulaWithAxioms:
-    smt_converter = SmtConverter(name, basic_block)
-    formula = smt_converter.to_formula_with_axioms(data)
-    if ARGS().log_smt:
-        logging.info(f'after smt conversion:\n{pprint.pformat(formula, width=80)}')
-    return formula, smt_converter
+        if ARGS().log_smt:
+            logging.info(f'after smt conversion:\n{pprint.pformat(fwa, width=80)}')
+        return fwa

@@ -39,28 +39,28 @@ class MemoryAnalysis:
             if self.implied_classes[a] == self.implied_classes[b]:
                 continue
 
-            solver = Solver(logic=QF_UFNIA, incremental=True, solver_options={'timeout': 10000})
-            for c in self.formula_selector.resolve_shallow_for([*a, *b]):
-                solver.add_assertion(c)
+            with Solver(logic=QF_UFNIA, incremental=True, solver_options={'timeout': 10000}) as solver:
+                for c in self.formula_selector.resolve_shallow_for([*a, *b]):
+                    solver.add_assertion(c)
 
-            same = And(Equals(a[0], b[0]), Equals(a[1], b[1]))
-            logging.debug(f"checking if {same} is valid")
-            if solver.is_valid(same):
-                self.implied_classes[b] = self.implied_classes[a]
+                same = And(Equals(a[0], b[0]), Equals(a[1], b[1]))
+                logging.debug(f"checking if {same} is valid")
+                if solver.is_valid(same):
+                    self.implied_classes[b] = self.implied_classes[a]
     
     def solve_possible_aliasing(self):
         self.possible_aliases = { a: [] for a in self.implied_classes.values() }
 
         for a,b in itertools.combinations(self.possible_aliases.keys(), 2):
-            solver = Solver(logic=UFNIA, incremental=True, solver_options={'timeout': 10000})
-            for c in self.formula_selector.resolve_shallow_for([*a, *b]):
-                solver.add_assertion(c)
+            with Solver(logic=UFNIA, incremental=True, solver_options={'timeout': 10000}) as solver:
+                for c in self.formula_selector.resolve_shallow_for([*a, *b]):
+                    solver.add_assertion(c)
 
-            same = And(Equals(a[0], b[0]), Equals(a[1], b[1]))
-            logging.debug(f"checking if {same} is sat")
-            if solver.is_sat(same):
-                self.possible_aliases[a].append(b)
-                self.possible_aliases[b].append(a)
+                same = And(Equals(a[0], b[0]), Equals(a[1], b[1]))
+                logging.debug(f"checking if {same} is sat")
+                if solver.is_sat(same):
+                    self.possible_aliases[a].append(b)
+                    self.possible_aliases[b].append(a)
     
     def get_equivalence_classes(self) -> frozenset[tuple[frozenset[FNode], frozenset[FNode]]]:
         return frozenset([
