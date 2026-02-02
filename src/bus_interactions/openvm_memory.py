@@ -2,7 +2,7 @@ import itertools
 import logging
 from typing import Any
 
-from .permutation_check import array_permutation_check, ordered_permutation_check, ordered_timestamp_check
+from .permutation_check import array_permutation_check, ordered_timestamp_check
 
 from .single_interaction_encoder import SingleInteractionEncoder
 
@@ -147,35 +147,17 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder):
         )
     
     def get_axioms(self) -> Optional[FNode]:
-        match ARGS().memory_encoding:
-            case 'ordered':
-                self.pre_analysis()
-                grouped = self.group_interactions()
-                return And(
-                    ordered_timestamp_check(self._interactions),
-                    *[
-                        with_comment(
-                            ordered_permutation_check(interactions),
-                            f"MEMORY axioms for {address_space} {pointer}"
-                        )
-                        for (address_space, pointer), interactions in grouped.items()
-                    ]
-                )
-            case 'array':
-                ts = ordered_timestamp_check(self._interactions, solver=self.solver())
-                permutation_axioms, inputs, outputs = array_permutation_check(f'{self._cur_state.name}-mem',
-                    keywidth=2, datawidth=5, interactions=[
-                    (mult, [a,p], [*args, t]) for mult, (a, p, args, t) in self._interactions
-                ])
-                self.inputs = inputs
-                self.outputs = outputs
-                return with_comment(
-                    And(ts, *permutation_axioms),
-                    f"MEMORY axioms"
-                )
-            case _:
-                logging.error(f"unsupported memory encoding: {ARGS().memory_encoding}")
-                return None
+        ts = ordered_timestamp_check(self._interactions, solver=self.solver())
+        permutation_axioms, inputs, outputs = array_permutation_check(f'{self._cur_state.name}-mem',
+            keywidth=2, datawidth=5, interactions=[
+            (mult, [a,p], [*args, t]) for mult, (a, p, args, t) in self._interactions
+        ])
+        self.inputs = inputs
+        self.outputs = outputs
+        return with_comment(
+            And(ts, *permutation_axioms),
+            f"MEMORY axioms"
+        )
 
     def get_inputs(self) -> dict:
         return { 'memory': self.inputs }
