@@ -26,6 +26,8 @@ class GenericInterpreter(FunctionInterpretation):
 
 def evaluate(input: dict, model: dict[str, int]):
 
+    model = { f'input-{m}': v for m, v in model.items() }
+
     with SmtConverter("input", BasicBlock(input["block"])) as conv:
         smt = conv.to_formula_with_axioms(input)
 
