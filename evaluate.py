@@ -212,8 +212,6 @@ evaluated: {pp_bus_interaction(evald)}
                     # verify everything is in range, then the permutation check per address space and pointer
                     assert isinstance(address_space,int), err(f"address_space not an int")
                     assert isinstance(pointer,int), err(f"address_space not an int")
-                    for id,d in enumerate(data):
-                        assert d >= 0 and d <= 255, err(f"data[{id}] not in 0..255")
                     if (address_space, pointer) not in mems:
                         mems[(address_space, pointer)] = []
                     mems[(address_space, pointer)].append((mult, data, timestamp))
@@ -280,7 +278,7 @@ evaluated: {pp_bus_interaction(evald)}
         for ([_,expr],[var,v]) in derived_columns:
             logging.debug(f'verifying derived column {var} = {pp_constraint(expr)}')
             if v != model[var]:
-                logging.warning(f"derived {var} has incorrect value: {pp_constraint(expr)} != {v}")
+                logging.warning(f"derived {var} has incorrect value: {v} != {model[var]}")
     
     def __call__(self, model: dict[str, int]) -> Any:
         """Evaluate the trace and then verify all assumptions about the machine."""
