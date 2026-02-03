@@ -11,6 +11,7 @@ def trace(input: dict):
 
     with SmtConverter("input", BasicBlock(input["block"])) as conv:
         smt = conv.to_formula_with_axioms(input)
+        interpreters = conv.bus_interaction_encoder.get_interpreters()
 
     f = And(
         *smt.constraints,
@@ -28,6 +29,12 @@ def trace(input: dict):
         case True:
             model = to_nice_model(model, strip_prefix='input-')
             print(json.dumps(model, indent=4))
+
+            eval_model = { f'input-{m}': v for m, v in model.items() }
+            for derived in smt.derived:
+                evald = partial_evaluate(derived, eval_model, interpreters)
+                if not evald.is_true():
+                    logging.warning(f"derived column is not true:\n\t{derived}\n->\t{evald}")
 
             if ARGS().dump_model:
                 logging.info(f"dumping model to {ARGS().dump_model}")
