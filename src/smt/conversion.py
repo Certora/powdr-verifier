@@ -53,13 +53,28 @@ class SmtConverter:
     
     def convert_derived(self, data: Iterable[Any]):
         for derived in data:
-            name, value = derived
-            match value:
-                case {'Constant': int(value)}:
+            match derived:
+                case [str(name), {'Constant': int(value)}]:
                     self.derived_columns.append(
                         with_comment(
                             Equals(Symbol(f"{self.name}-{name}", INT), Int(value)),
                             f"DERIVED COLUMN {name} = {value}"
+                        )
+                    )
+                case [str(name), {'QuotientOrZero': [a, b] }] | {"variable": str(name), "computation_method": {'QuotientOrZero': [a, b] }}:
+                    a = self.convert_manual(a)
+                    b = self.convert_manual(b)
+                    self.derived_columns.append(
+                        with_comment(
+                            Equals(
+                                Symbol(f"{self.name}-{name}", INT),
+                                Ite(
+                                    Equals(b, Int(0)),
+                                    Int(0),
+                                    wrap_mod(Div(a, b))
+                                )
+                            ),
+                            f"DERIVED COLUMN {name} = QuotientOrZero({a}, {b})"
                         )
                     )
                 case _:
