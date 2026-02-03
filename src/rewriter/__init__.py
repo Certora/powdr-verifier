@@ -11,6 +11,7 @@ REWRITES = [
 ]
 MAX_REWRITE_COUNT = 3
 
+@simple_profile
 def rewrite_one(node: sympy.Expr) -> sympy.Expr:
     for r in REWRITES:
         res = r(node)
@@ -39,7 +40,7 @@ class RelationRewriter(substituter.Substituter):
             return keep_comment(res, formula)
         return keep_comment(substituter.Substituter.super(self, formula, args=args, **kwargs), formula)
 
-
+@simple_profile
 def rewrite(input: FNode) -> FNode:
     relation_rewriter = RelationRewriter()
     last = None

@@ -5,7 +5,8 @@ import pprint
 from typing import Any, Iterable
 
 
-from .. import bus_interactions, rewriter
+from .. import bus_interactions
+from ..rewriter import rewrite
 from ..utils.basic_block import BasicBlock
 from ..utils.args import ARGS, BusInteractionHandlers
 from ..utils.profiling import simple_profile
@@ -40,7 +41,7 @@ class SmtConverter:
     def __add_constraint(self, c: FNode, comment: Optional[str] = None):
         if comment is not None:
             c = with_comment(c, comment)
-        self.constraints.append(rewriter.rewrite(c))
+        self.constraints.append(rewrite(c))
         self.constraint_solver.add_assertion(self.constraints[-1])
     
     def convert_constraints(self, data: Iterable[Any]):
