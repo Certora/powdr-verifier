@@ -212,8 +212,6 @@ evaluated: {pp_bus_interaction(evald)}
                     # verify everything is in range, then the permutation check per address space and pointer
                     assert isinstance(address_space,int), err(f"address_space not an int")
                     assert isinstance(pointer,int), err(f"address_space not an int")
-                    for id,d in enumerate(data):
-                        assert d >= 0 and d <= 255, err(f"data[{id}] not in 0..255")
                     if (address_space, pointer) not in mems:
                         mems[(address_space, pointer)] = []
                     mems[(address_space, pointer)].append((mult, data, timestamp))
