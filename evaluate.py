@@ -278,7 +278,7 @@ evaluated: {pp_bus_interaction(evald)}
         for ([_,expr],[var,v]) in derived_columns:
             logging.debug(f'verifying derived column {var} = {pp_constraint(expr)}')
             if v != model[var]:
-                logging.warning(f"derived {var} has incorrect value: {pp_constraint(expr)} != {v}")
+                logging.warning(f"derived {var} has incorrect value: {v} != {model[var]}")
     
     def __call__(self, model: dict[str, int]) -> Any:
         """Evaluate the trace and then verify all assumptions about the machine."""
