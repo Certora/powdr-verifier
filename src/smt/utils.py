@@ -133,13 +133,13 @@ class GenericInterpreter(FunctionInterpretation):
                 return res
         return Function(self.fsym, args)
 
-def partial_evaluate(f: FNode, model: dict[str, int], bi):
+def partial_evaluate(f: FNode, model: dict[str, int], interpreters):
     substitutions = {
         Symbol(name, INT): Int(value) for name, value in model.items()
     }
     interpretations = {
         sym: GenericInterpreter(sym, f)
-        for sym, f in bi.get_interpreters().items()
+        for sym, f in interpreters.items()
     }
 
     last = None
