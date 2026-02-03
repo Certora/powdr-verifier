@@ -1,6 +1,8 @@
 import json
 
+
 from .utils.basic_block import BasicBlock
+from .rewriter import rewrite
 from .smt.encoding import build_input_output_relation, collect_variables
 from .smt.conversion import SmtConverter, check_formula
 from .smt.utils import *
@@ -51,6 +53,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             And(*after_smt.axioms),
         )
     )
+    soundness = rewrite(soundness)
     match check_formula(soundness, "sound"):
         case False,_:
             print("Soundness is proven")
@@ -81,6 +84,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             And(*after_smt.axioms),
         )
     )
+    completeness = rewrite(completeness)
     match check_formula(completeness, "complete"):
         case False,_:
             print("Completeness is proven")

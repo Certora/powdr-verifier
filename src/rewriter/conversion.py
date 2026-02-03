@@ -2,6 +2,7 @@ import sympy
 
 from ..smt.utils import *
 
+@simple_profile
 def to_sympy(expr: FNode) -> sympy.Expr:
     if expr.is_true():
         return sympy.true
@@ -41,6 +42,7 @@ def to_sympy(expr: FNode) -> sympy.Expr:
     else:
         assert False, f"Unknown expression type: {expr}"
 
+@simple_profile
 def to_smt(expr: sympy.Expr) -> FNode:
     if expr == sympy.true:
         return TRUE()
