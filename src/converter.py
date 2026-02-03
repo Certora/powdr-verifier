@@ -117,7 +117,7 @@ def text(out: TextIO, input: dict, model: Optional[dict[str, int]] = None):
             with SmtConverter("tmp", block) as conv:
                 eval = None
                 if model is not None:
-                    eval = lambda f: partial_evaluate(f, model, conv.bus_interaction_encoder)
+                    eval = lambda f: partial_evaluate(f, model, conv.bus_interaction_encoder.get_interpreters())
                 
                 variables = _collect_variables([cs, bis])
                 out.write(f"variables:\n")

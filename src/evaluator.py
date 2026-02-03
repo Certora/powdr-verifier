@@ -30,11 +30,12 @@ def evaluate(input: dict, model: dict[str, int]):
 
     with SmtConverter("input", BasicBlock(input["block"])) as conv:
         smt = conv.to_formula_with_axioms(input)
+        interpreters = conv.bus_interaction_encoder.get_interpreters()
 
         def eval_list(fs: list[FNode]) -> list[FNode]:
             res = True
             for f in fs:
-                s = partial_evaluate(f, model, conv.bus_interaction_encoder)
+                s = partial_evaluate(f, model, interpreters)
                 if not s.is_true():
                     print(f"\t{f}")
                     print(f"->\t{s}")
