@@ -1,19 +1,27 @@
 from sympy import *
 
+from ..utils.args import ARGS
+
+from ..utils.profiling import simple_profile
 from .utils import unpack_modeq
 
 ### This is sympy land! Do not use pysmt here!
 
+def normalize(e: Expr) -> Expr:
+    return expand(e, modulus=ARGS().field_type.value)
+
+@simple_profile
 def rewrite_choice(node: Expr) -> Expr:
     match unpack_modeq(node):
         case e, c:
             factors = factor(e)
             if isinstance(factors, Mul):
                 return Or(
-                    *[Eq(Mod(f, c), 0) for f in factors.args]
+                    *[Eq(Mod(normalize(f), c), 0) for f in factors.args]
                 )
     return None
 
+@simple_profile
 def rewrite_mod_equality(node: Expr) -> Expr:
     match unpack_modeq(node):
         case expr, modulus:
