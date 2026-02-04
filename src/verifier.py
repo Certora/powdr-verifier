@@ -33,18 +33,18 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
     globals = before_smt.globals | after_smt.globals
 
     # check soundness
-    soundness = ForAll((var1 | var2) - globals,
+    soundness =  ForAll(var1 - globals,
         And(
             Not(
                 Implies(
                     And(
-                        *before_smt.constraints,
-                        *before_smt.bus_interactions,
                         iorelation,
-                    ),
-                    And(
                         *after_smt.constraints,
                         *after_smt.bus_interactions,
+                    ),
+                    And(
+                        *before_smt.constraints,
+                        *before_smt.bus_interactions,
                     )
                 )
             ),
@@ -64,18 +64,18 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             print(json.dumps(model, indent=4))
 
     # check completeness
-    completeness = ForAll((var1 | var2) - globals,
+    completeness = ForAll(var2 - globals,
         And(
             Not(
                 Implies(
                     And(
-                        *after_smt.constraints,
-                        *after_smt.bus_interactions,
+                        *before_smt.constraints,
+                        *before_smt.bus_interactions,
                         iorelation,
                     ),
                     And(
-                        *before_smt.constraints,
-                        *before_smt.bus_interactions,
+                        *after_smt.constraints,
+                        *after_smt.bus_interactions,
                     )
                 )
             ),
