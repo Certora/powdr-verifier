@@ -42,6 +42,8 @@ class RelationRewriter(substituter.Substituter):
 
 @simple_profile
 def rewrite(input: FNode) -> FNode:
+    if isinstance(input, list):
+        return [rewrite(i) for i in input]
     relation_rewriter = RelationRewriter()
     last = None
     for _ in range(MAX_REWRITE_COUNT):
