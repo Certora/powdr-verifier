@@ -128,20 +128,19 @@ class SmtConverter:
                 logging.error(f"Unsupported data in conversion: {data}")
 
     @simple_profile
-    def __add_basic_range_axioms(self) -> list[FNode]:
+    def __add_basic_range_axioms(self) -> Iterable[FNode]:
         for sym in sorted(self.field_symbols, key=lambda x: str(x)):
-            self.__add_constraint(field_symbol(sym))
+            yield field_symbol(sym)
 
     @simple_profile
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
         self.convert_manual(data)
-        self.__add_basic_range_axioms()
         bus_interactions = self.bus_interaction_encoder.encode_all()
         fwa = FormulaWithAxioms(
             constraints=self.constraints,
-            bus_interactions=bus_interactions,
-            axioms=self.bus_interaction_encoder.get_axioms(),
-            derived=self.derived_columns,
+            bus_interactions=rewrite(bus_interactions),
+            axioms=rewrite(self.bus_interaction_encoder.get_axioms() + list(self.__add_basic_range_axioms())),
+            derived=rewrite(self.derived_columns),
             globals=self.bus_interaction_encoder.get_globals(),
         )
         if ARGS().log_smt:
