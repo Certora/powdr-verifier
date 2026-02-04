@@ -12,8 +12,9 @@ class TimestampCheckMixin:
             assert all(self.solver().is_sat(Not(Equals(i.mult, Int(0)))) for i in self._interactions)
             
         res = []
-        for a,b in batched(self._interactions, 2):
-            if len(b) != 2: continue
+        for batch in batched(self._interactions, 2):
+            if len(batch) != 2: continue
+            a,b = batch
             # for now we assume that zeroness of a.mult and b.mult are equivalent
             assert self.solver().is_valid(Iff(Equals(a.mult, Int(0)), Equals(b.mult, Int(0))))
             res.append(Implies(Not(Equals(a.mult, Int(0))), LT(a.args[-1], b.args[-1])))
