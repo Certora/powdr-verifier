@@ -1,3 +1,4 @@
+import functools
 import logging
 from typing import Any, Iterable
 
@@ -14,6 +15,19 @@ def keep_comment(new: FNode, old: FNode) -> FNode:
     if SUPPORTS_COMMENTS and hasattr(old, 'comment'):
         setattr(new, 'comment', old.comment)
     return new
+
+
+def attach_comment(comment: str):
+    def inner(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            res = func(*args, **kwargs)
+            if res is None:
+                return None
+            return with_comment(res, comment.format(*args, **kwargs))
+        return wrapper
+    return inner
+
 
 def without_trues(fs: Iterable[FNode]) -> Iterable[FNode]:
     return filter(lambda x: x is not None and not x.is_true(), fs)
@@ -34,13 +48,11 @@ def to_nice_model(model: Any, strip_prefix: Optional[str] = None) -> dict[str, A
         if not v.is_array_value() and not v.is_array_op()
     }
 
+@attach_comment("BASIC RANGE axiom for {0}")
 def field_symbol(sym: FNode) -> FNode:
-    return with_comment(
-        And(
-            LE(Int(0), sym),
-            LT(sym, Int(ARGS().field_type.value))
-        ),
-        f"BASIC RANGE axiom for {sym}"
+    return And(
+        LE(Int(0), sym),
+        LT(sym, Int(ARGS().field_type.value))
     )
 
 def MultiArrayType(index, width, value) -> FNode:

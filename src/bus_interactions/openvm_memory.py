@@ -146,6 +146,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
             f"MEMORY interaction for {address_space} {pointer}"
         )
     
+    @attach_comment("MEMORY axioms")
     def get_axioms(self) -> Optional[FNode]:
         ts = self.ordered_timestamp_check()
         permutation_axioms, inputs, outputs = self.array_permutation_check(f'{self._cur_state.name}-mem',
@@ -154,10 +155,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
         ])
         self.inputs = inputs
         self.outputs = outputs
-        return with_comment(
-            And(ts, *permutation_axioms),
-            f"MEMORY axioms"
-        )
+        return And(ts, *permutation_axioms)
 
     def get_inputs(self) -> dict:
         return { 'memory': self.inputs }
