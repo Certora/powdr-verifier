@@ -8,16 +8,23 @@ from ..utils.profiling import simple_profile
 SUPPORTS_COMMENTS = 'comment' in FNode.__slots__
 
 def with_comment(f: FNode, comment: str) -> FNode:
+    """Set the comment of f to comment."""
     if SUPPORTS_COMMENTS:
         setattr(f, 'comment', comment)
     return f
 def keep_comment(new: FNode, old: FNode) -> FNode:
+    """Copy the comment from old to new."""
     if SUPPORTS_COMMENTS and hasattr(old, 'comment'):
         setattr(new, 'comment', old.comment)
     return new
 
 
 def attach_comment(comment: str):
+    f"""
+    Decorator that attaches a comment to the result of a function.
+    The comment string can use all arguments and keyword arguments of the
+    function via the format string syntax.
+    """
     def inner(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
