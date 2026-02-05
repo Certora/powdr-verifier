@@ -34,7 +34,7 @@ def trace(input: dict):
             for v,expr in smt.derived:
                 evald = partial_evaluate(Equals(v, expr), eval_model, interpreters)
                 if not evald.is_true():
-                    logging.warning(f"derived column is not true:\n\t{derived}\n->\t{evald}")
+                    logging.warning(f"derived column is not true:\n\t{v} = {expr}\n->\t{evald}")
 
             if ARGS().dump_model:
                 logging.info(f"dumping model to {ARGS().dump_model}")
