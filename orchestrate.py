@@ -81,7 +81,6 @@ def run_eval(first, *files):
 
 def run_verify(first, pairs):
     for a,b in pairs:
-        logging.warning(f"running verifier on {a} and {b.relative_to(first.parent, walk_up=True)}")
         subprocess.run([
             "python3", VERIFIER_DIR / "main.py",
             "--dump-smt",
