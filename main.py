@@ -13,7 +13,7 @@ from src import converter
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, force=True)
     parse_args()
 
     match ARGS().command:
