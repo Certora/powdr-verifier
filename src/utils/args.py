@@ -59,5 +59,4 @@ def parse_args():
     global __ARGS
     __ARGS = parser.parse_args()
     if ARGS().verbose > 0:
-        logger = logging.getLogger()
-        logger.setLevel(logger.level - 10 * ARGS().verbose)
+        logging.root.setLevel(logging.root.level - 10 * ARGS().verbose)
