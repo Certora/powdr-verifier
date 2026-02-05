@@ -19,12 +19,14 @@ def parse_args():
 
     parser.add_argument('command', choices=[
         'powdr',
-        'trace-first', 'trace-last','trace-all',
-        'evaluate-first', 'evaluate-last', 'evaluate-all',
-        'eval-first', 'eval-last', 'eval-all',
+        'trace-first', 'trace-k', 'trace-last','trace-all',
+        'evaluate-first', 'evaluate-k','evaluate-last', 'evaluate-all',
+        'eval-first', 'eval-k', 'eval-last', 'eval-all',
+        'verify-first', 'verify-k', 'verify-last',
         'verify-end2end', 'verify-stepwise',
     ])
     parser.add_argument('test', type=str)
+    parser.add_argument('k', type=int, nargs='*')
     parser.add_argument('--clean', action='store_true')
 
     return parser.parse_args()
@@ -112,19 +114,33 @@ if __name__ == '__main__':
 
     match args.command:
         case 'trace-first': run_trace(files[0])
+        case 'trace-k':
+            assert all([k in range(len(files)) for k in args.k]), f"all k must be in range 0..{len(files)-1}"
+            run_trace(*[files[k] for k in args.k])
         case 'trace-last': run_trace(files[-1])
         case 'trace-all': run_trace(*files)
 
         case 'evaluate-first': run_evaluate(files[0])
+        case 'evaluate-k':
+            assert all([k in range(len(files)) for k in args.k]), f"all k must be in range 0..{len(files)-1}"
+            run_evaluate(*[files[k] for k in args.k])
         case 'evaluate-last': run_evaluate(files[-1])
         case 'evaluate-all': run_evaluate(*files)
 
         case 'eval-first': run_eval(files[0])
+        case 'eval-k':
+            assert all([k in range(len(files)) for k in args.k]), f"all k must be in range 0..{len(files)-1}"
+            run_eval(*[files[k] for k in args.k])
         case 'eval-last': run_eval(files[-1])
         case 'eval-all': run_eval(*files)
 
         case 'verify-end2end': run_verify(files[0], [(files[0], files[-1])])
         case 'verify-stepwise': run_verify(files[0], itertools.pairwise(files))
+        case 'verify-first': run_verify(files[0], [files[:2]])
+        case 'verify-k':
+            assert all([k in range(len(files)-1) for k in args.k]), f"all k must be in range 0..{len(files)-2}"
+            run_verify(files[0], [(files[k], files[k+1]) for k in args.k])
+        case 'verify-last': run_verify(files[0], [files[-2:]])
 
         case _:
             logging.error(f"unknown command: {args.command}")
