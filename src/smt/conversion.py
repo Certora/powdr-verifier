@@ -128,7 +128,6 @@ class SmtConverter:
             case _:
                 logging.error(f"Unsupported data in conversion: {data}")
 
-    @simple_profile
     def __add_basic_range_axioms(self) -> Iterable[FNode]:
         for sym in sorted(self.field_symbols, key=lambda x: str(x)):
             yield field_symbol(sym)
