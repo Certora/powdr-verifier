@@ -55,19 +55,20 @@ class SmtConverter:
         for derived in data:
             match derived:
                 case [str(name), {'Constant': int(value)}]:
-                    self.derived_columns.append(
+                    self.derived_columns.append((
+                        Symbol(f"{self.name}-{name}", INT),
                         with_comment(
-                            Equals(Symbol(f"{self.name}-{name}", INT), Int(value)),
+                            Int(value),
                             f"DERIVED COLUMN {name} = {value}"
                         )
-                    )
+                    ))
                 case [str(name), {'QuotientOrZero': [a, b] }] | {"variable": str(name), "computation_method": {'QuotientOrZero': [a, b] }}:
                     a = self.convert_manual(a)
                     b = self.convert_manual(b)
-                    self.derived_columns.append(
+                    self.derived_columns.append((
+                        Symbol(f"{self.name}-{name}", INT),
                         with_comment(
-                            Equals(
-                                Symbol(f"{self.name}-{name}", INT),
+                            rewrite(
                                 Ite(
                                     Equals(b, Int(0)),
                                     Int(0),
@@ -76,7 +77,7 @@ class SmtConverter:
                             ),
                             f"DERIVED COLUMN {name} = QuotientOrZero({a}, {b})"
                         )
-                    )
+                    ))
                 case _:
                     logging.error(f"Unsupported derived column: {derived}")
 
@@ -140,7 +141,7 @@ class SmtConverter:
             constraints=self.constraints,
             bus_interactions=rewrite(bus_interactions),
             axioms=rewrite(self.bus_interaction_encoder.get_axioms() + list(self.__add_basic_range_axioms())),
-            derived=rewrite(self.derived_columns),
+            derived=self.derived_columns,
             globals=self.bus_interaction_encoder.get_globals(),
         )
         if ARGS().log_smt:
