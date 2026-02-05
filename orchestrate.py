@@ -41,8 +41,7 @@ def run_powdr(test):
     logging.warning(f"running {' '.join(cmd)}")
     subprocess.run(' '.join(cmd), shell=True, cwd=POWDR_DIR, check=True)
 
-def run_trace(*files):
-    first = files[0]
+def run_trace(first, *files):
     for f in files:
         logging.warning(f"running tracer on {f}")
         subprocess.run([
@@ -54,8 +53,7 @@ def run_trace(*files):
             "--dump-model", f.with_suffix(".model"),
         ], check=True)
 
-def run_evaluate(*files):
-    first = files[0]
+def run_evaluate(first, *files):
     for f in files:
         model = f.with_suffix(".model")
         if not model.exists():
@@ -69,8 +67,7 @@ def run_evaluate(*files):
             model,
         ], check=True)
 
-def run_eval(*files):
-    first = files[0]
+def run_eval(first, *files):
     for f in files:
         model = f.with_suffix(".model")
         if not model.exists():
@@ -113,26 +110,26 @@ if __name__ == '__main__':
         logging.warning(f"no files found for {args.test}, did you run powdr?")
 
     match args.command:
-        case 'trace-first': run_trace(files[0])
+        case 'trace-first': run_trace(files[0], files[0])
         case 'trace-k':
             assert all([k in range(len(files)) for k in args.k]), f"all k must be in range 0..{len(files)-1}"
-            run_trace(*[files[k] for k in args.k])
-        case 'trace-last': run_trace(files[-1])
-        case 'trace-all': run_trace(*files)
+            run_trace(files[0], *[files[k] for k in args.k])
+        case 'trace-last': run_trace(files[0], files[-1])
+        case 'trace-all': run_trace(files[0], *files)
 
-        case 'evaluate-first': run_evaluate(files[0])
+        case 'evaluate-first': run_evaluate(files[0], files[0])
         case 'evaluate-k':
             assert all([k in range(len(files)) for k in args.k]), f"all k must be in range 0..{len(files)-1}"
-            run_evaluate(*[files[k] for k in args.k])
-        case 'evaluate-last': run_evaluate(files[-1])
-        case 'evaluate-all': run_evaluate(*files)
+            run_evaluate(files[0], *[files[k] for k in args.k])
+        case 'evaluate-last': run_evaluate(files[0], files[-1])
+        case 'evaluate-all': run_evaluate(files[0], *files)
 
-        case 'eval-first': run_eval(files[0])
+        case 'eval-first': run_eval(files[0], files[0])
         case 'eval-k':
             assert all([k in range(len(files)) for k in args.k]), f"all k must be in range 0..{len(files)-1}"
-            run_eval(*[files[k] for k in args.k])
-        case 'eval-last': run_eval(files[-1])
-        case 'eval-all': run_eval(*files)
+            run_eval(files[0], *[files[k] for k in args.k])
+        case 'eval-last': run_eval(files[0], files[-1])
+        case 'eval-all': run_eval(files[0], *files)
 
         case 'verify-end2end': run_verify(files[0], [(files[0], files[-1])])
         case 'verify-stepwise': run_verify(files[0], itertools.pairwise(files))
