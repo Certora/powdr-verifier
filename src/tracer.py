@@ -31,8 +31,8 @@ def trace(input: dict):
             print(json.dumps(model, indent=4))
 
             eval_model = { f'input-{m}': v for m, v in model.items() }
-            for derived in smt.derived:
-                evald = partial_evaluate(derived, eval_model, interpreters)
+            for v,expr in smt.derived:
+                evald = partial_evaluate(Equals(v, expr), eval_model, interpreters)
                 if not evald.is_true():
                     logging.warning(f"derived column is not true:\n\t{derived}\n->\t{evald}")
 
