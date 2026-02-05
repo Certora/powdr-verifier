@@ -49,5 +49,5 @@ def evaluate(input: dict, model: dict[str, int]):
             print("bus interactions are satisfied")
         if eval_list(smt.axioms):
             print("axioms are satisfied")
-        if eval_list(smt.derived):
+        if eval_list([Equals(v, expr) for v, expr in smt.derived]):
             print("derived are satisfied")
