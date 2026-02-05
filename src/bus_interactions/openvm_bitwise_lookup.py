@@ -28,47 +28,40 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
         self.needs_xor_axioms = False
         self.globals = frozenset([self.UF_XOR])
 
+    @attach_comment("BITWISE LOOKUP {2} {3} {4} {5}")
     def encode(self, mult: Any, x: Any, y: Any, z: Any, op: Any) -> FNode:
         if op == Int(0) and z == Int(0):
-            return with_comment(
-                Implies(
-                    Not(Equals(mult, Int(0))),
-                    And(
-                        LE(Int(0), x), LE(x, Int(255)),
-                        LE(Int(0), y), LE(y, Int(255)),
-                        Equals(z, Int(0)),
-                        Equals(op, Int(0)),
-                    )
-                ),
-                f"BITWISE LOOKUP {x} {y} {z} 0"
+            return Implies(
+                Not(Equals(mult, Int(0))),
+                And(
+                    LE(Int(0), x), LE(x, Int(255)),
+                    LE(Int(0), y), LE(y, Int(255)),
+                    Equals(z, Int(0)),
+                    Equals(op, Int(0)),
+                )
             )
         elif op == Int(1):
             self.needs_xor_axioms = True
-            return with_comment(
-                Implies(
-                    Not(Equals(mult, Int(0))),
-                    And(
-                        LE(Int(0), x), LE(x, Int(255)),
-                        LE(Int(0), y), LE(y, Int(255)),
-                        Equals(Function(self.UF_XOR, [x, y]), z),
-                        Equals(op, Int(1)),
-                    )
-                ),
-                f"BITWISE LOOKUP {x} {y} {z} 1"
+            return Implies(
+                Not(Equals(mult, Int(0))),
+                And(
+                    LE(Int(0), x), LE(x, Int(255)),
+                    LE(Int(0), y), LE(y, Int(255)),
+                    Equals(Function(self.UF_XOR, [x, y]), z),
+                    Equals(op, Int(1)),
+                )
             )
         else:
             logging.error(f"Unsupported bitwise operation: {op}")
             return None
 
+    @attach_comment("BITWISE LOOKUP XOR AXIOMS")
     def get_axioms(self) -> Optional[FNode]:
         if not self.needs_xor_axioms:
             return None
         x = Symbol('x', INT)
-        return with_comment(
-            And(
-                ForAll([x], Equals(Function(self.UF_XOR, [x, Int(0)]), x)),
-                ForAll([x], Equals(Function(self.UF_XOR, [Int(0), x]), x)),
-                ForAll([x], Equals(Function(self.UF_XOR, [x, x]), Int(0))),
-            ),
-            f"BITWISE LOOKUP XOR AXIOMS"
+        return And(
+            ForAll([x], Equals(Function(self.UF_XOR, [x, Int(0)]), x)),
+            ForAll([x], Equals(Function(self.UF_XOR, [Int(0), x]), x)),
+            ForAll([x], Equals(Function(self.UF_XOR, [x, x]), Int(0))),
         )

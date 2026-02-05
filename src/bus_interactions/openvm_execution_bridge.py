@@ -11,13 +11,11 @@ class OpenVMExecutionBridgeEncoder(SingleInteractionEncoder, TimestampCheckMixin
     def __init__(self) -> None:
         super().__init__()
 
+    @attach_comment("EXECUTION BRIDGE axioms")
     def get_axioms(self) -> Optional[FNode]:
         ts = self.ordered_timestamp_check()
         r = self.ordered_permutation_check()
-        return with_comment(
-            And(ts, r),
-            f"EXECUTION BRIDGE axioms"
-        )
+        return And(ts, r)
 
     def get_inputs(self) -> dict:
         return { 'execution bridge': self._interactions[0][1] }

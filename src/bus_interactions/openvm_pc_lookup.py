@@ -38,45 +38,40 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
             self.UF_G: lambda pc: Int(self.basic_block.statements[pc//4][7]),
         }
 
+    @attach_comment("PC LOOKUP for {2}")
     def encode(self, mult: Any, pc: FNode, op: FNode, a: FNode, b: FNode, c: FNode, d: FNode, e: FNode, f: FNode, g: FNode) -> FNode:
         self.needs_axioms = True
-        return with_comment(
-            Implies(
-                Not(Equals(mult, Int(0))),
-                And(
-                    LT(pc, Int(4*self.stmt_count - 3)),
-                    Equals(wrap_mod(pc, Int(4)), Int(0)),
-                    Equals(Function(self.UF_OPCODE, [pc]), wrap_mod(op)),
-                    Equals(Function(self.UF_A, [pc]), wrap_mod(a)),
-                    Equals(Function(self.UF_B, [pc]), wrap_mod(b)),
-                    Equals(Function(self.UF_C, [pc]), wrap_mod(c)),
-                    Equals(Function(self.UF_D, [pc]), wrap_mod(d)),
-                    Equals(Function(self.UF_E, [pc]), wrap_mod(e)),
-                    Equals(Function(self.UF_F, [pc]), wrap_mod(f)),
-                    Equals(Function(self.UF_G, [pc]), wrap_mod(g)),
-                )
-            ),
-            f"PC LOOKUP for {pc}"
+        return Implies(
+            Not(Equals(mult, Int(0))),
+            And(
+                LT(pc, Int(4*self.stmt_count - 3)),
+                Equals(wrap_mod(pc, Int(4)), Int(0)),
+                Equals(Function(self.UF_OPCODE, [pc]), wrap_mod(op)),
+                Equals(Function(self.UF_A, [pc]), wrap_mod(a)),
+                Equals(Function(self.UF_B, [pc]), wrap_mod(b)),
+                Equals(Function(self.UF_C, [pc]), wrap_mod(c)),
+                Equals(Function(self.UF_D, [pc]), wrap_mod(d)),
+                Equals(Function(self.UF_E, [pc]), wrap_mod(e)),
+                Equals(Function(self.UF_F, [pc]), wrap_mod(f)),
+                Equals(Function(self.UF_G, [pc]), wrap_mod(g)),
+            )
         )
     
     def __encode_block(self) -> Iterable[FNode]:
         for pc,stmt in enumerate(self.basic_block.statements):
             op,a,b,c,d,e,f,g = stmt
-            yield with_comment(
-                And(
-                    Equals(Function(self.UF_OPCODE, [Int(4*pc)]), Int(op)),
-                    Equals(Function(self.UF_A, [Int(4*pc)]), Int(a)),
-                    Equals(Function(self.UF_B, [Int(4*pc)]), Int(b)),
-                    Equals(Function(self.UF_C, [Int(4*pc)]), Int(c)),
-                    Equals(Function(self.UF_D, [Int(4*pc)]), Int(d)),
-                    Equals(Function(self.UF_E, [Int(4*pc)]), Int(e)),
-                    Equals(Function(self.UF_F, [Int(4*pc)]), Int(f)),
-                    Equals(Function(self.UF_G, [Int(4*pc)]), Int(g)),
-                ),
-                f"PC LOOKUP definition for {pc}"
-            ) 
+            yield And(
+                Equals(Function(self.UF_OPCODE, [Int(4*pc)]), Int(op)),
+                Equals(Function(self.UF_A, [Int(4*pc)]), Int(a)),
+                Equals(Function(self.UF_B, [Int(4*pc)]), Int(b)),
+                Equals(Function(self.UF_C, [Int(4*pc)]), Int(c)),
+                Equals(Function(self.UF_D, [Int(4*pc)]), Int(d)),
+                Equals(Function(self.UF_E, [Int(4*pc)]), Int(e)),
+                Equals(Function(self.UF_F, [Int(4*pc)]), Int(f)),
+                Equals(Function(self.UF_G, [Int(4*pc)]), Int(g)),
+            )
 
-
+    @attach_comment("PC LOOKUP definition")
     def get_axioms(self) -> Optional[FNode]:
         if not self.needs_axioms:
             return None
