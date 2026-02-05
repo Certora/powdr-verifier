@@ -43,7 +43,6 @@ def run_powdr(test):
 
 def run_trace(first, *files):
     for f in files:
-        logging.warning(f"running tracer on {f}")
         subprocess.run([
             "python3", VERIFIER_DIR / "main.py",
             "--dump-smt",
@@ -59,7 +58,6 @@ def run_evaluate(first, *files):
         if not model.exists():
             logging.warning(f"can not eval {f} because there is no model")
             continue
-        logging.warning(f"running separate evaluator on {f}")
         subprocess.run([
             "python3", VERIFIER_DIR / "evaluate.py",
             "--base-dump", first,
@@ -73,7 +71,6 @@ def run_eval(first, *files):
         if not model.exists():
             logging.warning(f"can not eval {f} because there is no model")
             continue
-        logging.warning(f"running evaluator on {f}")
         subprocess.run([
             "python3", VERIFIER_DIR / "main.py",
             "--base-dump", first,
