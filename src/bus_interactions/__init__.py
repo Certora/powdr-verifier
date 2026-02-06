@@ -66,6 +66,7 @@ class InteractionEncoder:
         return frozenset.union(*[encoder.get_auxiliaries() for encoder in self.encoders])
 
 class OpenVMBusInteraction(Enum):
+    """Numeric identifiers for the supported OpenVM bus interactions."""
     EXECUTION_BRIDGE = 0
     MEMORY = 1
     PC_LOOKUP = 2
