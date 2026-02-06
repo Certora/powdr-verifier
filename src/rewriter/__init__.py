@@ -1,20 +1,32 @@
 import sympy
 
 from .conversion import to_sympy, to_smt
-from .rewrites import rewrite_choice, rewrite_mod_equality
+from .rewrites import rewrite_mod
+from .rewrites_sympy import rewrite_choice, rewrite_mod_equality
 
 from ..smt.utils import *
 
-REWRITES = [
-    rewrite_choice,
-    rewrite_mod_equality,
-]
+REWRITES = {
+    operators.MOD: [ rewrite_mod ],
+}
+REWRITES_SYMPY = {
+    operators.EQUALS: [ rewrite_choice, rewrite_mod_equality ],
+}
 MAX_REWRITE_COUNT = 3
 
 @simple_profile
-def rewrite_one(node: sympy.Expr) -> sympy.Expr:
+def rewrite_one(node: FNode, rewrites) -> FNode:
     """Apply the first matching rewrite rule to a single SymPy node."""
-    for r in REWRITES:
+    for r in rewrites:
+        res = r(node)
+        if res is not None:
+            return res
+    return node
+
+@simple_profile
+def rewrite_one_sympy(node: sympy.Expr, rewrites) -> sympy.Expr:
+    """Apply the first matching rewrite rule to a single SymPy node."""
+    for r in rewrites:
         res = r(node)
         if res is not None:
             return res
@@ -26,22 +38,30 @@ class RelationRewriter(substituter.Substituter):
         """Create a PySMT substituter that may rewrite equalities via SymPy."""
         substituter.Substituter.__init__(self, env=env)
     
-    @substituter.handles(set(operators.ALL_TYPES) - frozenset([operators.EQUALS]))
+    @substituter.handles(set(operators.ALL_TYPES) - frozenset([operators.EQUALS, operators.MOD]))
     def walk_identity(self, formula, args, **kwargs):
         """Rebuild non-equality nodes unchanged, preserving any attached comment."""
         return keep_comment(substituter.Substituter.super(self, formula, args=args, **kwargs), formula)
 
-    @substituter.handles(frozenset([operators.EQUALS]))
+    @substituter.handles(frozenset([operators.EQUALS, operators.MOD]))
     def walk_identity_or_replace(self, formula, args, **kwargs):
         """Try to rewrite equality formulas (modulo field) via SymPy, otherwise keep them."""
-        try:
-            res = to_smt(rewrite_one(to_sympy(formula)))
-        except AssertionError:
-            res = formula
-        if res != formula:
-            if ARGS().log_rewrites:
-                logging.info(f"rewrote {formula} --> {res}")
-            return keep_comment(res, formula)
+        op = formula.node_type()
+        if op in REWRITES:
+            res = rewrite_one(formula, REWRITES[formula.node_type()])
+            if res != formula:
+                if ARGS().log_rewrites:
+                    logging.info(f"rewrote {formula} --> {res}")
+                return keep_comment(res, formula)
+        if op in REWRITES_SYMPY:
+            try:
+                res = to_smt(rewrite_one_sympy(to_sympy(formula), REWRITES_SYMPY[formula.node_type()]))
+            except AssertionError:
+                res = formula
+            if res != formula:
+                if ARGS().log_rewrites:
+                    logging.info(f"rewrote {formula} --> {res}")
+                return keep_comment(res, formula)
         return keep_comment(substituter.Substituter.super(self, formula, args=args, **kwargs), formula)
 
 @simple_profile
