@@ -54,3 +54,6 @@ class SingleInteractionEncoder:
     
     def get_outputs(self) -> dict:
         return {}
+    
+    def get_auxiliaries(self) -> dict:
+        return getattr(self, 'auxiliaries', frozenset())

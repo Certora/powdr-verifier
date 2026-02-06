@@ -55,6 +55,8 @@ class InteractionEncoder:
         return merge_dicts(self.encoders, lambda encoder: encoder.get_inputs())
     def get_outputs(self) -> dict:
         return merge_dicts(self.encoders, lambda encoder: encoder.get_outputs())
+    def get_auxiliaries(self) -> frozenset[FNode]:
+        return frozenset.union(*[encoder.get_auxiliaries() for encoder in self.encoders])
 
 class OpenVMBusInteraction(Enum):
     EXECUTION_BRIDGE = 0
