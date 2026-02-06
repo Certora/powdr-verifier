@@ -73,6 +73,9 @@ jobs:
 
     - name: cargo clean
       run: cd powdr && cargo clean
+    
+    - name: run linter
+      run: ruff check verifier/
 
     - name: run test cases
       run: |
