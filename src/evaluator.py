@@ -5,26 +5,8 @@ from .utils.basic_block import BasicBlock
 from .smt.conversion import SmtConverter
 from .smt.utils import *
 
-class GenericInterpreter(FunctionInterpretation):
-    def __init__(self, fsym, f):
-        self.fsym = fsym
-        if isinstance(f, tuple):
-            self.concrete, self.symbolic = f
-        elif callable(f):
-            self.concrete = f
-            self.symbolic = None
-        else:
-            logging.error(f"can not use {f} as interpreter for {fsym}")
-
-    def interpret(self, env, args: list[FNode]) -> FNode:
-        if all(arg.is_constant() for arg in args):
-            return self.concrete(*[arg.constant_value() for arg in args])
-        if self.symbolic is not None:
-            if res := self.symbolic(*args):
-                return res
-        return Function(self.fsym, args)
-
 def evaluate(input: dict, model: dict[str, int]):
+    """Check which parts of the SMT encoding hold under a provided variable assignment."""
 
     model = { f'input-{m}': v for m, v in model.items() }
 
@@ -33,6 +15,7 @@ def evaluate(input: dict, model: dict[str, int]):
         interpreters = conv.bus_interaction_encoder.get_interpreters()
 
         def eval_list(fs: list[FNode]) -> list[FNode]:
+            """Evaluate a list of formulas, printing any that do not simplify to True."""
             res = True
             for f in fs:
                 s = partial_evaluate(f, model, interpreters)

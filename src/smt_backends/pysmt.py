@@ -74,6 +74,7 @@ HRPrinter.walk_mod = lambda self, formula: self.walk_nary(formula, '%')
 SmartPrinter.walk_mod = SmartPrinter.smart_walk
 # simplifier.py
 def simplify_mod(self, formula, args, **kwargs):
+    """Simplify MOD applications for constant arguments and a few trivial identities."""
     sl, sr = args
     if sl.is_int_constant() and sr.is_int_constant():
         return Int(sl.constant_value() % sr.constant_value())

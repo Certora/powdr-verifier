@@ -5,6 +5,7 @@ from ..smt.utils import *
 
 class TimestampCheckMixin:
     def ordered_timestamp_check(self) -> FNode:
+        """Constrain timestamps of consecutive interaction pairs to be strictly increasing."""
         # sanity check: interactions with mult = 0 should not exist
         if self.solver() is not None:
             assert all(self.solver().is_sat(Not(Equals(i.mult, Int(0)))) for i in self._interactions)
@@ -83,6 +84,7 @@ class PermutationCheckMixin:
         We return the encoding itself (list of conjuncts) as well as the inputs and outputs.
         """
         def def_vars(id: int):
+            """Create the per-step array symbols (mult + data arrays) for step `id`."""
             return [ Symbol(f'{identifier}-{id}-mult', MultiArrayType(INT, keywidth, INT)) ] + [
                 Symbol(f'{identifier}-{id}-data{k}', MultiArrayType(INT, keywidth, INT)) for k in range(datawidth) ]
         

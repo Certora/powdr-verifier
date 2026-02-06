@@ -28,11 +28,13 @@ class MemoryAnalysis:
     (that are possible but not implied aliases).
     """
     def __init__(self, constraints: list[FNode]):
+        """Initialize alias-analysis state for the given global constraints."""
         self.implied_classes = {}
         self.possible_aliases = {}
         self.formula_selector = VarBaseFormulaSelector(constraints)
     
     def solve_implied_aliasing(self, accesses: list[tuple[FNode, FNode]]):
+        """Compute alias equivalence classes that are implied by the constraints."""
         self.implied_classes = { (a[0], a[1]): (a[0], a[1]) for a in accesses }
 
         for a,b in itertools.combinations(self.implied_classes.values(), 2):
@@ -49,6 +51,7 @@ class MemoryAnalysis:
                     self.implied_classes[b] = self.implied_classes[a]
     
     def solve_possible_aliasing(self):
+        """For each implied class, find other classes that can alias in some model."""
         self.possible_aliases = { a: [] for a in self.implied_classes.values() }
 
         for a,b in itertools.combinations(self.possible_aliases.keys(), 2):
@@ -63,6 +66,7 @@ class MemoryAnalysis:
                     self.possible_aliases[b].append(a)
     
     def get_equivalence_classes(self) -> frozenset[tuple[frozenset[FNode], frozenset[FNode]]]:
+        """Return implied alias sets paired with their corresponding possible-alias sets."""
         return frozenset([
             (
                 frozenset([a for a in self.implied_classes if self.implied_classes[a] == representative]),
@@ -78,15 +82,18 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
     interactions and requires their timestamps increase.
     """
     def __init__(self) -> None:
+        """Initialize encoder state for memory interactions (analysis computed in `pre_analysis`)."""
         super().__init__()
         self.interactions = {}
         self.name_or_id = NameOrIdGenerator()
         self.analysis = None
     
     def _sorted_interactions(self) -> list[tuple[FNode, Any]]:
+        """Return interactions sorted by syntactic size of `(address_space, pointer)`."""
         return sorted(self._interactions, key=lambda i: i[1][0].size() + i[1][1].size())
 
     def pre_analysis(self) -> None:
+        """Run alias analysis to compute implied and possible pointer aliasing classes."""
         if ARGS().skip_memory_analysis:
             logging.warning("skipping memory analysis")
             return
@@ -113,6 +120,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
 
 
     def group_interactions(self):
+        """Group interactions by implied alias class and replicate into possible-alias buckets."""
         if not self.analysis:
             logging.warning("no memory analysis performed, skipping memory bus")
             return {}
@@ -134,6 +142,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
         return res
 
     def encode(self, mult: FNode, address_space: FNode, pointer: FNode, data: list[FNode], timestamp: FNode) -> FNode:
+        """(Currently a stub) Placeholder for per-interaction local memory constraints."""
         if address_space.is_int_constant() and address_space.constant_value() == 0:
             assert mult.is_int_constant() and mult.constant_value() == 0
         return None
@@ -150,6 +159,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
     
     @attach_comment("MEMORY axioms")
     def get_axioms(self) -> Optional[FNode]:
+        """Return timestamp + array-based permutation axioms for the memory bus."""
         ts = self.ordered_timestamp_check()
         permutation_axioms, inputs, intermediates, outputs = self.array_permutation_check(f'{self._cur_state.name}-mem',
             keywidth=2, datawidth=5, interactions=[
@@ -161,7 +171,9 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
         return And(ts, *permutation_axioms)
 
     def get_inputs(self) -> dict:
+        """Expose array symbols representing the initial bus state."""
         return { 'memory': self.inputs }
     
     def get_outputs(self) -> dict:
+        """Expose array symbols representing the final bus state."""
         return { 'memory': self.outputs }

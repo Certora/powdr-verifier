@@ -21,6 +21,7 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
     UF_G = Symbol('pc_g', FunctionType(INT, [INT]))
 
     def __init__(self, basic_block: BasicBlock) -> None:
+        """Initialize the lookup UFs and interpreters from the given `basic_block`."""
         super().__init__()
         self.basic_block = basic_block
         self.stmt_count = len(self.basic_block.statements)
@@ -39,6 +40,7 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
 
     @attach_comment("PC LOOKUP for {2}")
     def encode(self, mult: Any, pc: FNode, op: FNode, a: FNode, b: FNode, c: FNode, d: FNode, e: FNode, f: FNode, g: FNode) -> FNode:
+        """Constrain `(op,a..g)` to match the instruction at program counter `pc` (when enabled)."""
         self.needs_axioms = True
         return Implies(
             Not(Equals(mult, Int(0))),
@@ -57,9 +59,11 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
         )
     
     def _get_instruction(self, pc: int):
+        """Return the concrete instruction tuple for `pc` (expects `pc` is 4-byte aligned)."""
         return self.basic_block.statements[pc//4]
     
     def __encode_block(self) -> Iterable[FNode]:
+        """Encode the full instruction table as equalities over the PC lookup UFs."""
         for id,stmt in enumerate(self.basic_block.statements):
             op,a,b,c,d,e,f,g = stmt
             yield And(
@@ -75,6 +79,7 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
 
     @attach_comment("PC LOOKUP definition")
     def get_axioms(self) -> Optional[FNode]:
+        """Return the UF-definition axioms for the instruction table (if `encode` was used)."""
         if not self.needs_axioms:
             return None
         return And(*self.__encode_block())

@@ -8,6 +8,7 @@ from .smt.conversion import SmtConverter
 from .smt.utils import *
 
 def trace(input: dict):
+    """Solve for a satisfying trace of the given dump and print the resulting model (if any)."""
 
     with SmtConverter("input", BasicBlock(input["block"])) as conv:
         smt = conv.to_formula_with_axioms(input)

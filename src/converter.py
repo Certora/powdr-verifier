@@ -20,6 +20,7 @@ EMPTY_INPUT = {
 }
 
 def _collect_variables(data) -> frozenset[str]:
+    """Collect variable names appearing in the JSON expression format used by dumps."""
     match data:
         case [left, '+', right]:
             return _collect_variables(left) | _collect_variables(right)
@@ -41,6 +42,7 @@ def _collect_variables(data) -> frozenset[str]:
             logging.error(f"invalid data when collecting variables: {data}")
 
 def _do_eval(eval, data):
+    """Recursively apply `eval` and automatically expand lists."""
     match data:
         case list(ls):
             return [_do_eval(eval, a) for a in ls]
@@ -48,6 +50,7 @@ def _do_eval(eval, data):
             return eval(data)
 
 def _print(out: TextIO, eval, pattern = '{}', *args, ignore = TRUE()):
+    """Write either original or simplified (and optionally both) renderings of `args` to `out`."""
     if eval is None:
         out.write(f'{pattern.format(*args)}\n')
     elif ARGS().only_simplified:
@@ -59,6 +62,7 @@ def _print(out: TextIO, eval, pattern = '{}', *args, ignore = TRUE()):
         out.write(f'--{pattern.format(*_do_eval(eval, list(args)))}\n')
 
 def _dump_single_conversion(out: TextIO, data: Any, basic_block: BasicBlock, eval):
+    """Convert a single APC dump fragment and emit its constraints/interactions/axioms/derived."""
     with SmtConverter("tmp", basic_block) as conv:
         formula = conv.to_formula_with_axioms(data)
         for c in formula.constraints:
@@ -72,6 +76,7 @@ def _dump_single_conversion(out: TextIO, data: Any, basic_block: BasicBlock, eva
 
 
 def _text_bus_interaction(out: TextIO, bis: list, conv: SmtConverter, eval):
+    """Pretty-print bus interactions, grouped by bus id, including per-interaction and collective encodings."""
     for val in OpenVMBusInteraction:
         bs = [bi for bi in bis if bi['id'] == val.value]
         if not bs:
@@ -94,6 +99,7 @@ def _text_bus_interaction(out: TextIO, bis: list, conv: SmtConverter, eval):
         out.write('\n')
 
 def _text_constraints(out: TextIO, cs: list, conv: SmtConverter, eval):
+    """Pretty-print converted constraints (optionally simplified/evaluated under a model)."""
     out.write('constraints:\n')
     for c in cs:
         converted = conv.convert_manual(c)
@@ -101,6 +107,7 @@ def _text_constraints(out: TextIO, cs: list, conv: SmtConverter, eval):
 
 
 def text(out: TextIO, input: dict, model: Optional[dict[str, int]] = None):
+    """Render an APC dump to a human-readable text format (optionally evaluated under `model`)."""
 
     match input:
         # general json structure
