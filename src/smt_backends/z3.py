@@ -1,4 +1,4 @@
-from typing import Optional, TextIO
+from typing import Optional
 
 from z3 import *
 from z3.z3util import *

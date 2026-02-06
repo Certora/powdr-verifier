@@ -33,7 +33,7 @@ class ModelMapBuilder:
 
     def __check(self):
         if self.nmap:
-            logging.warning(f"model map is not complete, this can produce false positives")
+            logging.warning("model map is not complete, this can produce false positives")
             logging.debug(f"have: {self.result.keys()}")
             logging.warning(f"missing: {', '.join(self.nmap.keys())}")
             return False

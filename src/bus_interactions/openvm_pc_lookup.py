@@ -1,4 +1,3 @@
-import logging
 from typing import Any
 
 from .single_interaction_encoder import SingleInteractionEncoder

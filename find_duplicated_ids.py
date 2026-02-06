@@ -13,7 +13,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('basedir', type=Path)
 args = parser.parse_args()
 
-r = re.compile(f"\\(declare-fun (.*)@([0-9]+) ")
+r = re.compile("\\(declare-fun (.*)@([0-9]+) ")
 
 for test in args.basedir.glob("*"):
     print(f'looking for duplicates in {test}...')
