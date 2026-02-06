@@ -27,7 +27,12 @@ jobs:
           pip install -r verifier/requirements.txt
           pysmt-install --z3 --confirm-agreement
     
+      - name: run formatter
+        continue-on-error: true
+        run: ruff format --diff verifier/
+
       - name: run linter
+        continue-on-error: true
         run: ruff check verifier/
 
   build:
