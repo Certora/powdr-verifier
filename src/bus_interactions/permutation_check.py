@@ -50,7 +50,7 @@ class PermutationCheckMixin:
         keywidth: int,
         datawidth: int,
         interactions: list[tuple[FNode, list[FNode], list[FNode]]],
-    ) -> (list[FNode],list[FNode],list[FNode]):
+    ) -> (list[FNode],list[FNode],list[FNode],list[FNode]):
         """
         Encodes a permutation check for the given list of interactions using an
         array encoding. This encoding is pretty specific to the memory bus, so we
@@ -87,6 +87,7 @@ class PermutationCheckMixin:
             return [ Symbol(f'{identifier}-{id}-mult', MultiArrayType(INT, keywidth, INT)) ] + [
                 Symbol(f'{identifier}-{id}-data{k}', MultiArrayType(INT, keywidth, INT)) for k in range(datawidth) ]
         
+        intermediates = set()
 
         def update_multidim_array(
             input: FNode,
@@ -109,21 +110,24 @@ class PermutationCheckMixin:
                 newsym = Symbol(f'{input.symbol_name()}-{id+1}', selects[-1].get_type().elem_type)
                 conjuncts.append(Equals(newsym, Select(selects[-1], key)))
                 selects.append(newsym)
+                intermediates.add(newsym)
             
             # fresh variable for the new value
             newval = Symbol(f'{input.symbol_name()}-new', INT)
             # ensure selected and new value are in range
             conjuncts.append(field_symbol(selects[-1]))
             conjuncts.append(field_symbol(newval))
+            intermediates.add(newval)
 
             # stepwise store, add to store as we go
             store = newval
             for id,key in enumerate(reversed(keys)):
                 store = Store(selects[1 - id], key, store)
             
-            return selects[-1], newval, store, conjuncts
+            return selects[-1], newval, store, conjuncts,
         
         actual_inputs = def_vars(0)
+        intermediates |= set(actual_inputs)
         inputs = actual_inputs
         # accumulates everything needed to describe the permutation check
         conjuncts = []
@@ -176,8 +180,9 @@ class PermutationCheckMixin:
             )
 
             news = def_vars(id+1)
+            intermediates |= set(news)
             for k,s in enumerate(stores):
                 conjuncts.append(Equals(news[k], s))
             inputs = news
         
-        return conjuncts, actual_inputs, inputs
+        return conjuncts, actual_inputs, intermediates, inputs
