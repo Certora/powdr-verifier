@@ -57,18 +57,21 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
             )
         )
     
+    def _get_instruction(self, pc: int):
+        return self.basic_block.statements[pc//4]
+    
     def __encode_block(self) -> Iterable[FNode]:
-        for pc,stmt in enumerate(self.basic_block.statements):
+        for id,stmt in enumerate(self.basic_block.statements):
             op,a,b,c,d,e,f,g = stmt
             yield And(
-                Equals(Function(self.UF_OPCODE, [Int(4*pc)]), Int(op)),
-                Equals(Function(self.UF_A, [Int(4*pc)]), Int(a)),
-                Equals(Function(self.UF_B, [Int(4*pc)]), Int(b)),
-                Equals(Function(self.UF_C, [Int(4*pc)]), Int(c)),
-                Equals(Function(self.UF_D, [Int(4*pc)]), Int(d)),
-                Equals(Function(self.UF_E, [Int(4*pc)]), Int(e)),
-                Equals(Function(self.UF_F, [Int(4*pc)]), Int(f)),
-                Equals(Function(self.UF_G, [Int(4*pc)]), Int(g)),
+                Equals(Function(self.UF_OPCODE, [Int(4*id)]), Int(op)),
+                Equals(Function(self.UF_A, [Int(4*id)]), Int(a)),
+                Equals(Function(self.UF_B, [Int(4*id)]), Int(b)),
+                Equals(Function(self.UF_C, [Int(4*id)]), Int(c)),
+                Equals(Function(self.UF_D, [Int(4*id)]), Int(d)),
+                Equals(Function(self.UF_E, [Int(4*id)]), Int(e)),
+                Equals(Function(self.UF_F, [Int(4*id)]), Int(f)),
+                Equals(Function(self.UF_G, [Int(4*id)]), Int(g)),
             )
 
     @attach_comment("PC LOOKUP definition")
