@@ -130,7 +130,9 @@ class SmtConverter:
 
     def __add_basic_range_axioms(self) -> Iterable[FNode]:
         for sym in sorted(self.field_symbols, key=lambda x: str(x)):
-            yield field_symbol(sym)
+            fs = field_symbol(sym)
+            self.constraint_solver.add_assertion(fs)
+            yield fs
 
     @simple_profile
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
