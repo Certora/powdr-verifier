@@ -6,4 +6,5 @@ class BusInteractionHandlers(Enum):
     DEFAULT = OPENVM
 
     def __str__(self) -> str:
+        """Return the string representation for this enum value."""
         return self.value

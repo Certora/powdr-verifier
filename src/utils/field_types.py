@@ -7,4 +7,5 @@ class FieldTypes(Enum):
     GOLDILOCKS = 0xFFFFFFFF00000001
 
     def __str__(self) -> str:
+        """Return the string representation for this field type."""
         return self.name.lower()

@@ -11,6 +11,7 @@ def simple_profile(func):
     """Print the runtime of the decorated function"""
     @functools.wraps(func)
     def wrapper_timer(*args, **kwargs):
+        """Time `func` and accumulate count/total time in the global profile tables."""
         start_time = time.perf_counter_ns()
         value = func(*args, **kwargs)
         end_time = time.perf_counter_ns()
