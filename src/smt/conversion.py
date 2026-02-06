@@ -15,6 +15,7 @@ from .utils import *
 FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['constraints', 'bus_interactions', 'axioms', 'derived', 'globals'])
 
 class SmtConverter:
+    """Convert JSON-like APC dumps (constraints + bus interactions) into SMT constraints and axioms."""
     def __init__(self, name: str, basic_block: BasicBlock):
         """Create a converter that turns JSON-like dumps into SMT, namespacing symbols by `name`."""
         self.basic_block = basic_block

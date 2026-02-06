@@ -60,6 +60,7 @@ def to_nice_model(model: Any, strip_prefix: Optional[str] = None) -> dict[str, A
 
 @attach_comment("BASIC RANGE axiom for {0}")
 def field_symbol(sym: FNode) -> FNode:
+    """Constrain `sym` to lie in the field range \(0 \le sym < p\) for the configured modulus."""
     return And(
         LE(Int(0), sym),
         LT(sym, Int(ARGS().field_type.value))
@@ -72,6 +73,7 @@ def MultiArrayType(index, width, value) -> FNode:
     return value
 
 class NameOrIdGenerator:
+    """Stable naming helper: use symbol/constant names, else assign fresh ids to compound terms."""
     def __init__(self):
         """Initialize an empty mapping from expressions to stable integer ids."""
         self.mapping = {}
@@ -83,6 +85,7 @@ class NameOrIdGenerator:
         return self.mapping.setdefault(x, len(self.mapping))
 
 class VarBaseFormulaSelector:
+    """Index formulas by free variables to support quick relevance selection (shallow/deep)."""
     def __init__(self, formulae: list[FNode]):
         """Index formulas by free variables to support shallow/deep relevance selection."""
         var_to_formulae = { f: f.get_free_variables() for f in formulae }

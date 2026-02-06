@@ -4,6 +4,7 @@ import itertools
 from ..smt.utils import *
 
 class TimestampCheckMixin:
+    """Mixin providing axioms that enforce monotonic timestamps over bus interactions."""
     def ordered_timestamp_check(self) -> FNode:
         """Constrain timestamps of consecutive interaction pairs to be strictly increasing."""
         # sanity check: interactions with mult = 0 should not exist
@@ -23,6 +24,7 @@ class TimestampCheckMixin:
             
 
 class PermutationCheckMixin:
+    """Mixin providing permutation-check encodings (pairwise and array-based) for bus interactions."""
     def ordered_permutation_check(self) -> FNode:
         """
         Encodes a permutation check for the given list of interactions. We assume
@@ -34,6 +36,7 @@ class PermutationCheckMixin:
             return TRUE()
 
         def encode():
+            """Yield conjuncts enforcing that odd/even interaction pairs permute and cancel."""
             for id,(a,b) in enumerate(pairwise(self._interactions)):
                 if id % 2 == 1:
                     # correct permutation on odd->even pairs
