@@ -168,3 +168,19 @@ def partial_evaluate(f: FNode, model: dict[str, int], interpreters):
         f = f.substitute(substitutions, interpretations).simplify()
         cnt -= 1
     return f
+
+def find_unique_solution(s: Solver, f: FNode) -> Optional[dict[str, int]]:
+    s.push()
+    s.add_assertion(f)
+    if s.solve():
+        model = s.get_model()
+        vars = f.get_free_variables()
+        s.add_assertion(Or(*[Not(Equals(v, c)) for v,c in model if v in vars]))
+        res = s.solve()
+        s.pop()
+        if res:
+            return None
+        return { v: c for v,c in model if v in vars }
+    
+    s.pop()
+    return None
