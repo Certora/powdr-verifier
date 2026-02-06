@@ -175,11 +175,11 @@ class Evaluator:
     {msg}
 """
             if id % 2 == 0:
-                assert (m1 + m2) % BABYBEAR_PRIME == 0, err(f"mults do not permute")
-                assert t1 < t2, err(f"timestamp should increment")
+                assert (m1 + m2) % BABYBEAR_PRIME == 0, err("mults do not permute")
+                assert t1 < t2, err("timestamp should increment")
             else:
-                assert d1 == d2, err(f"data changed")
-                assert t1 == t2, err(f"timestamp changed")
+                assert d1 == d2, err("data changed")
+                assert t1 == t2, err("timestamp changed")
 
     def __verify_bus_interactions(self, bus_interactions: list[tuple[Any, Any]]):
         """Verify that all bus interactions constraints are satisfied."""
@@ -194,7 +194,7 @@ evaluated: {pp_bus_interaction(evald)}
     {msg}
 """
             if evald.get('mult', 1) == 0:
-                logging.debug(f'skipping bus interaction with mult = 0')
+                logging.debug('skipping bus interaction with mult = 0')
                 continue
             match evald:
                 case {
@@ -210,8 +210,8 @@ evaluated: {pp_bus_interaction(evald)}
                         'args': [address_space, pointer, *data, timestamp],
                     }:
                     # verify everything is in range, then the permutation check per address space and pointer
-                    assert isinstance(address_space,int), err(f"address_space not an int")
-                    assert isinstance(pointer,int), err(f"address_space not an int")
+                    assert isinstance(address_space,int), err("address_space not an int")
+                    assert isinstance(pointer,int), err("address_space not an int")
                     if (address_space, pointer) not in mems:
                         mems[(address_space, pointer)] = []
                     mems[(address_space, pointer)].append((mult, data, timestamp))
@@ -223,7 +223,7 @@ evaluated: {pp_bus_interaction(evald)}
                     # verify the lookups into the basic block
                     rop,ra,rb,rc,rd,re,rf,rg = self.basic_block['statements'][pc // 4]
                     assert pc % 4 == 0, f"pc {pc} is not a multiple of 4"
-                    assert mult == 1, err(f"mult != 1")
+                    assert mult == 1, err("mult != 1")
                     assert rop == op, err(f"opcode != {rop}")
                     assert ra == a, err(f"a != {ra}")
                     assert rb == b, err(f"b != {rb}")
@@ -239,7 +239,7 @@ evaluated: {pp_bus_interaction(evald)}
                     }:
                     # verify the range of x
                     if mult != 1:
-                        logging.warning(err(f"mult != 1"))
+                        logging.warning(err("mult != 1"))
                     assert x >= 0 and x <= 2**min(bits, 25)-1, err(f"x not in 0..{2**min(bits, 25)-1}")
                 case {
                         'id': OpenVMBusInteraction.BITWISE_LOOKUP.value,
@@ -248,15 +248,15 @@ evaluated: {pp_bus_interaction(evald)}
                     }:
                     # verify the range of x and y and the operation on z
                     if mult != 1:
-                        logging.warning(err(f"mult != 1"))
+                        logging.warning(err("mult != 1"))
                     if op == 0:
-                        assert x >= 0 and x <= 255, err(f"x not in 0..255")
-                        assert y >= 0 and y <= 255, err(f"y not in 0..255")
-                        assert z == 0, err(f"z != 0")
+                        assert x >= 0 and x <= 255, err("x not in 0..255")
+                        assert y >= 0 and y <= 255, err("y not in 0..255")
+                        assert z == 0, err("z != 0")
                     elif op == 1:
-                        assert x >= 0 and x <= 255, err(f"x not in 0..255")
-                        assert y >= 0 and y <= 255, err(f"y not in 0..255")
-                        assert z == x ^ y, err(f"z != x ^ y")
+                        assert x >= 0 and x <= 255, err("x not in 0..255")
+                        assert y >= 0 and y <= 255, err("y not in 0..255")
+                        assert z == x ^ y, err("z != x ^ y")
                 case {
                         'id': OpenVMBusInteraction.TUPLE_RANGE_CHECKER.value,
                         'mult': mult,
@@ -264,7 +264,7 @@ evaluated: {pp_bus_interaction(evald)}
                     }:
                     # verify the range of x and y
                     if mult != 1:
-                        logging.warning(err(f"mult != 1"))
+                        logging.warning(err("mult != 1"))
                     assert x >= 0 and x <= TUPLE_RANGE_CHECKER_MAX_0-1, err(f"x not in 0..{TUPLE_RANGE_CHECKER_MAX_0-1}")
                     assert y >= 0 and y <= TUPLE_RANGE_CHECKER_MAX_1-1, err(f"y not in 0..{TUPLE_RANGE_CHECKER_MAX_1-1}")
 

@@ -21,14 +21,19 @@ EMPTY_INPUT = {
 
 def _collect_variables(data) -> frozenset[str]:
     match data:
-        case [left, '+', right]: return _collect_variables(left) | _collect_variables(right)
-        case [left, '-', right]: return _collect_variables(left) | _collect_variables(right)
-        case [left, '*', right]: return _collect_variables(left) | _collect_variables(right)
-        case ['-', right]: return _collect_variables(right)
-        case int(value): return frozenset()
+        case [left, '+', right]:
+            return _collect_variables(left) | _collect_variables(right)
+        case [left, '-', right]:
+            return _collect_variables(left) | _collect_variables(right)
+        case [left, '*', right]:
+            return _collect_variables(left) | _collect_variables(right)
+        case ['-', right]:
+            return _collect_variables(right)
+        case int():
+            return frozenset()
         case str(var):
             return frozenset([var])
-        case {'id': int(id), 'mult': mult, 'args': list(args)}:
+        case {'id': int(), 'mult': mult, 'args': list(args)}:
             return _collect_variables(mult) | _collect_variables(args)
         case list(ls):
             return frozenset.union(*[_collect_variables(d) for d in ls])
@@ -69,7 +74,8 @@ def _dump_single_conversion(out: TextIO, data: Any, basic_block: BasicBlock, eva
 def _text_bus_interaction(out: TextIO, bis: list, conv: SmtConverter, eval):
     for val in OpenVMBusInteraction:
         bs = [bi for bi in bis if bi['id'] == val.value]
-        if not bs: continue
+        if not bs:
+            continue
         out.write(f'// Bus {val} ({val.name})\n')
 
         for b in bs:
@@ -88,7 +94,7 @@ def _text_bus_interaction(out: TextIO, bis: list, conv: SmtConverter, eval):
         out.write('\n')
 
 def _text_constraints(out: TextIO, cs: list, conv: SmtConverter, eval):
-    out.write(f'constraints:\n')
+    out.write('constraints:\n')
     for c in cs:
         converted = conv.convert_manual(c)
         _print(out, eval, '\t{}', converted, ignore=Int(0))
@@ -103,10 +109,10 @@ def text(out: TextIO, input: dict, model: Optional[dict[str, int]] = None):
             'machine': {
                 'constraints': list(cs),
                 'bus_interactions': list(bis),
-                'derived_columns': list(dcs),
+                'derived_columns': list(),
                 **rest_machine,
             },
-            'subs': subs,
+            'subs': _,
             'optimistic_constraints': _,
             **rest_apc,
         }:
@@ -120,7 +126,7 @@ def text(out: TextIO, input: dict, model: Optional[dict[str, int]] = None):
                     eval = lambda f: partial_evaluate(f, model, conv.bus_interaction_encoder.get_interpreters())
                 
                 variables = _collect_variables([cs, bis])
-                out.write(f"variables:\n")
+                out.write("variables:\n")
                 for var in sorted(variables):
                     out.write(f"\t{var}\n")
                 out.write("\n")
@@ -129,5 +135,5 @@ def text(out: TextIO, input: dict, model: Optional[dict[str, int]] = None):
                 _text_constraints(out, cs, conv, eval)
 
         case _:
-            logging.error(f"unsupported input for text conversion")
+            logging.error("unsupported input for text conversion")
 

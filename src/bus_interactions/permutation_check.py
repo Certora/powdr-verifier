@@ -1,8 +1,6 @@
 from itertools import batched, pairwise
 import itertools
-from typing import Callable
 
-from .single_interaction_encoder import BusInteraction
 from ..smt.utils import *
 
 class TimestampCheckMixin:
@@ -13,7 +11,8 @@ class TimestampCheckMixin:
             
         res = []
         for batch in batched(self._interactions, 2):
-            if len(batch) != 2: continue
+            if len(batch) != 2:
+                continue
             a,b = batch
             # for now we assume that zeroness of a.mult and b.mult are equivalent
             assert self.solver().is_valid(Iff(Equals(a.mult, Int(0)), Equals(b.mult, Int(0))))
@@ -158,7 +157,7 @@ class PermutationCheckMixin:
                             *[ Equals(newvals[k], Int(0)) for k in range(1, len(newvals)) ]
                         )
                     ),
-                    f"receive: mult == -1"
+                    "receive: mult == -1"
                 )
             )
             # encode the send case
@@ -175,7 +174,7 @@ class PermutationCheckMixin:
                             *[ Equals(newvals[k], data[k]) for k in range(1, len(newvals)) ]
                         )
                     ),
-                    f"send: mult == 1"
+                    "send: mult == 1"
                 )
             )
 

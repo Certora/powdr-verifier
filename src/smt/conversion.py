@@ -93,7 +93,7 @@ class SmtConverter:
                     'derived_columns': list(dcs),
                     **rest_machine,
                 },
-                'subs': subs,
+                'subs': _,
                 'optimistic_constraints': _,
                 **rest_apc,
             }:
@@ -107,11 +107,16 @@ class SmtConverter:
             case { 'expr': expr, **rest }:
                 assert rest == {}
                 return self.convert_manual(expr)
-            case [left, '+', right]: return Plus(self.convert_manual(left), self.convert_manual(right))
-            case [left, '-', right]: return Minus(self.convert_manual(left), self.convert_manual(right))
-            case [left, '*', right]: return Times(self.convert_manual(left), self.convert_manual(right))
-            case ['-', right]: return Minus(Int(0), self.convert_manual(right))
-            case int(value): return Int(value)
+            case [left, '+', right]:
+                return Plus(self.convert_manual(left), self.convert_manual(right))
+            case [left, '-', right]:
+                return Minus(self.convert_manual(left), self.convert_manual(right))
+            case [left, '*', right]:
+                return Times(self.convert_manual(left), self.convert_manual(right))
+            case ['-', right]:
+                return Minus(Int(0), self.convert_manual(right))
+            case int(value):
+                return Int(value)
             case str(var):
                 sym = Symbol(f"{self.name}-{var}", INT)
                 self.field_symbols.add(sym)

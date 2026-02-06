@@ -20,7 +20,7 @@ def keep_comment(new: FNode, old: FNode) -> FNode:
 
 
 def attach_comment(comment: str):
-    f"""
+    """
     Decorator that attaches a comment to the result of a function.
     The comment string can use all arguments and keyword arguments of the
     function via the format string syntax.

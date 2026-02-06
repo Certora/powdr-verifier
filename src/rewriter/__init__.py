@@ -32,7 +32,7 @@ class RelationRewriter(substituter.Substituter):
     def walk_identity_or_replace(self, formula, args, **kwargs):
         try:
             res = to_smt(rewrite_one(to_sympy(formula)))
-        except AssertionError as e:
+        except AssertionError:
             res = formula
         if res != formula:
             if ARGS().log_rewrites:

@@ -32,7 +32,7 @@ class SingleInteractionEncoder:
     @simple_profile
     def add(self, mult: FNode, *args: Any) -> FNode:
         if self.solver() is not None and self.solver().is_valid(Equals(mult, Int(0))):
-            logging.debug(f"dropping interaction with mult = 0")
+            logging.debug("dropping interaction with mult = 0")
             return
         self._interactions.append(BusInteraction(mult, args))
 

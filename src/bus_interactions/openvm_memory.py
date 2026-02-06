@@ -100,7 +100,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
         self.analysis.solve_possible_aliasing()
 
         if ARGS().log_memory_analysis:
-            logging.warning(f"results of memory analysis")
+            logging.warning("results of memory analysis")
             for access, repr in self.analysis.implied_classes.items():
                 if access != repr:
                     logging.warning(f"\t{repr} == {access}")

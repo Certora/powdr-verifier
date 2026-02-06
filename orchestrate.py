@@ -101,7 +101,7 @@ if __name__ == '__main__':
             run_powdr(args.test)
             exit(0)
 
-    files = sorted((DATA_DIR / args.test).glob(f"*.json"))
+    files = sorted((DATA_DIR / args.test).glob("*.json"))
     if not files:
         logging.warning(f"no files found for {args.test}, did you run powdr?")
 
@@ -140,5 +140,5 @@ if __name__ == '__main__':
                 logging.error(f"unknown command: {args.command}")
                 exit(1)
     
-    except subprocess.CalledProcessError as e:
+    except subprocess.CalledProcessError:
         pass

@@ -29,7 +29,8 @@ def get_all_releases():
 
     while len(todo) > 0:
         url = todo.pop()
-        if url in seen: continue
+        if url in seen:
+            continue
         seen.add(url)
         releases,links = get_api_json(url)
         res.extend(releases)
@@ -55,7 +56,8 @@ def download_and_extract_asset(url: str, target: Path):
 def download_release_asset(*releases: dict):
     for release in releases:
         name = release['tag_name']
-        if name in ['Nightly']: continue
+        if name in ['Nightly']:
+            continue
         for asset in release['assets']:
             if re_asset.match(asset['name']) is not None:
                 download_and_extract_asset(asset['browser_download_url'], args.target / release['tag_name'])
@@ -68,7 +70,7 @@ match args.version:
         download_and_extract_asset(*get_all_releases())
 
     case 'latest':
-        release,_ = get_api_json(f"https://api.github.com/repos/Z3Prover/z3/releases/latest")
+        release,_ = get_api_json("https://api.github.com/repos/Z3Prover/z3/releases/latest")
         download_release_asset(release)
 
     case _:
