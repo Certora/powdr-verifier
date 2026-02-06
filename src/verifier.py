@@ -72,13 +72,30 @@ class ModelMapBuilder:
                         self.result[self.nmap[target]] = v
                         del self.nmap[target]
 
+    def __heuristic_pclookup(self, conv):
+        encoder = conv.bus_interaction_encoder.pc_lookup
+        for i in encoder._interactions:
+            mult,(spc,sop,sa,sb,sc,sd,se,sf,sg) = i
+            if spc in self.result and self.result[spc].is_constant():
+                op,a,b,c,d,e,f,g = encoder._get_instruction(self.result[spc].constant_value())
 
-    @attach_comment("MODEL MAP")
-    def build(self) -> dict:
+                res = find_unique_solution(conv.constraint_solver, Equals(sop, Int(op)))
+                for v,c in res.items():
+                    logging.info(f"pclookup: found {v} = {c}")
+                    self.result[v] = c
+                    del self.nmap[strip_prefix(v.symbol_name())]
+
+
+    def build(self, newconv):
         self.__heuristic_same_name()
         self.__heuristic_derived()
         self.__heuristic_simple_equality()
+        self.__heuristic_pclookup(newconv)
+        self.__heuristic_simple_equality()
         self.__check()
+    
+    @attach_comment("MODEL MAP")
+    def get_map(self):
         return And(*[ Equals(a,b) for a,b in self.result.items() ])
 
 def do_check(f: FNode, name: str):
@@ -110,84 +127,85 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
         input_relation = build_input_output_relation("INPUT RELATION", inputs1, inputs2)
         output_relation = build_input_output_relation("OUTPUT RELATION", outputs1, outputs2)
 
+        # obtain variables and globals
+        var1 = collect_variables(before_smt)
+        var2 = collect_variables(after_smt)
+        globals = before_smt.globals | after_smt.globals
 
-    # obtain variables and globals
-    var1 = collect_variables(before_smt)
-    var2 = collect_variables(after_smt)
-    globals = before_smt.globals | after_smt.globals
-
-    def completeness():
-        forward_builder = ModelMapBuilder(var1 - globals, var2 - globals, before_smt, after_smt)
-        completeness = ForAll(var2 - globals,
-            And(
+        def completeness():
+            forward_builder = ModelMapBuilder(var1 - globals, var2 - globals, before_smt, after_smt)
+            forward_builder.build()
+            completeness = ForAll(var2 - globals,
                 And(
-                    *before_smt.constraints,
-                    *before_smt.bus_interactions,
-                    forward_builder.build(),
-                    input_relation,
-                    output_relation,
-                ),
-                Not(
                     And(
-                        *after_smt.constraints,
-                        *after_smt.bus_interactions,
-                    )
-                ),
-                And(*before_smt.axioms),
-                And(*after_smt.axioms),
-            )
-        )
-        do_check(completeness, "completeness")
-    completeness()
-
-    
-    def soundness():
-        backward_builder = ModelMapBuilder(var2 - globals, var1 - globals, after_smt, before_smt)
-        soundness =  ForAll(var1 - globals,
-            And(
-                Not(
-                    Implies(
+                        *before_smt.constraints,
+                        *before_smt.bus_interactions,
+                        forward_builder.get_map(),
+                        input_relation,
+                        output_relation,
+                    ),
+                    Not(
                         And(
                             *after_smt.constraints,
                             *after_smt.bus_interactions,
-                            backward_builder.build(),
-                            input_relation,
-                            output_relation,
-                        ),
+                        )
+                    ),
+                    And(*before_smt.axioms),
+                    And(*after_smt.axioms),
+                )
+            )
+            do_check(completeness, "completeness")
+        #completeness()
+
+        
+        def soundness():
+            backward_builder = ModelMapBuilder(var2 - globals, var1 - globals, after_smt, before_smt)
+            backward_builder.build(before_conv)
+            soundness =  ForAll(var1 - globals,
+                And(
+                    Not(
+                        Implies(
+                            And(
+                                *after_smt.constraints,
+                                *after_smt.bus_interactions,
+                                backward_builder.get_map(),
+                                input_relation,
+                                output_relation,
+                            ),
+                            And(
+                                *before_smt.constraints,
+                                *before_smt.bus_interactions,
+                            )
+                        )
+                    ),
+                    And(*before_smt.axioms),
+                    And(*after_smt.axioms),
+                )
+            )
+            do_check(soundness, "soundness")
+        soundness()
+
+
+        def determinism():
+            # determinism: if an input has a trace for both programs, the outputs are the same
+            determinism = And(
+                Not(
+                    Implies(
                         And(
                             *before_smt.constraints,
                             *before_smt.bus_interactions,
+                            *after_smt.constraints,
+                            *after_smt.bus_interactions,
+                            input_relation,
+                        ),
+                        And(
+                            common_intermediates,
+                            output_relation
                         )
                     )
                 ),
                 And(*before_smt.axioms),
                 And(*after_smt.axioms),
             )
-        )
-        do_check(soundness, "soundness")
-    soundness()
-
-
-    def determinism():
-        # determinism: if an input has a trace for both programs, the outputs are the same
-        determinism = And(
-            Not(
-                Implies(
-                    And(
-                        *before_smt.constraints,
-                        *before_smt.bus_interactions,
-                        *after_smt.constraints,
-                        *after_smt.bus_interactions,
-                        input_relation,
-                    ),
-                    And(
-                        common_intermediates,
-                        output_relation
-                    )
-                )
-            ),
-            And(*before_smt.axioms),
-            And(*after_smt.axioms),
-        )
-        do_check(determinism, "determinism")
-
+            do_check(determinism, "determinism")
+        #determinism()
