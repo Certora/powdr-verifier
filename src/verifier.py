@@ -3,6 +3,7 @@ import sympy
 
 
 from .rewriter.conversion import to_smt, to_sympy
+from .rewriter import rewrite
 from .smt.encoding import build_input_output_relation, collect_variables
 from .smt.conversion import FormulaWithAxioms, SmtConverter, check_formula
 from .smt.utils import *
@@ -47,6 +48,7 @@ class ModelMapBuilder:
     def __heuristic_derived(self):
         """Add derived variables to the result"""
         for v in self.nderivedmap.values():
+            logging.info(f"derived: found {v[0]} = {v[1]}")
             self.result[v[0]] = v[1]
         self.nderivedmap = {}
     
@@ -56,13 +58,14 @@ class ModelMapBuilder:
             if not c.is_equals():
                 continue
             c = c.substitute({ v: c for v,c in self.result.items() if c.is_constant() })
+            c = rewrite(c)
             vars = c.get_free_variables()
             if len(vars) == 1:
                 solution = sympy.solve(to_sympy(c), dict=True)
                 if len(solution) == 1:
                     for r,v in solution[0].items():
                         target = strip_prefix(r.name)
-                        print(f"found {target} = {v}")
+                        logging.info(f"simpeq: found {target} = {v}")
                         assert target in self.nmap
                         assert target not in self.omap
                         v = to_smt(v)
