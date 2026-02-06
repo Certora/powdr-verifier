@@ -60,7 +60,7 @@ def to_nice_model(model: Any, strip_prefix: Optional[str] = None) -> dict[str, A
 
 @attach_comment("BASIC RANGE axiom for {0}")
 def field_symbol(sym: FNode) -> FNode:
-    """Constrain `sym` to lie in the field range \(0 \le sym < p\) for the configured modulus."""
+    """Constrain `sym` to lie in the field range (0 ... p-1) for the configured modulus."""
     return And(
         LE(Int(0), sym),
         LT(sym, Int(ARGS().field_type.value))
