@@ -132,9 +132,10 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
         var1 = collect_variables(before_smt)
         var2 = collect_variables(after_smt)
         globals = before_smt.globals | after_smt.globals
+        auxiliaries = before_conv.bus_interaction_encoder.get_auxiliaries() | after_conv.bus_interaction_encoder.get_auxiliaries()
 
         def completeness():
-            forward_builder = ModelMapBuilder(var1 - globals, var2 - globals, before_smt, after_smt)
+            forward_builder = ModelMapBuilder(var1 - globals - auxiliaries, var2 - globals - auxiliaries, before_smt, after_smt)
             forward_builder.build()
             completeness = ForAll(var2 - globals,
                 And(
@@ -160,7 +161,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
 
         
         def soundness():
-            backward_builder = ModelMapBuilder(var2 - globals, var1 - globals, after_smt, before_smt)
+            backward_builder = ModelMapBuilder(var2 - globals - auxiliaries, var1 - globals - auxiliaries, after_smt, before_smt)
             backward_builder.build(before_conv)
             soundness =  ForAll(var1 - globals,
                 And(

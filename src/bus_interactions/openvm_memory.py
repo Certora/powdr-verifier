@@ -156,7 +156,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
             (mult, [a,p], [*args, t]) for mult, (a, p, args, t) in self._interactions
         ])
         self.inputs = inputs
-        self.globals = intermediates
+        self.auxiliaries = intermediates
         self.outputs = outputs
         return And(ts, *permutation_axioms)
 
