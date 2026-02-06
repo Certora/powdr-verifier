@@ -33,10 +33,11 @@ class ModelMapBuilder:
 
     def __check(self):
         if self.nmap:
-            logging.error(f"model map is not complete")
+            logging.warning(f"model map is not complete, this can produce false positives")
             logging.debug(f"have: {self.result.keys()}")
-            logging.error(f"missing: {self.nmap.keys()}")
-            assert False
+            logging.warning(f"missing: {', '.join(self.nmap.keys())}")
+            return False
+        return True
     
     def __heuristic_same_name(self):
         """Add variables with the same name to the result"""
@@ -48,7 +49,7 @@ class ModelMapBuilder:
     def __heuristic_derived(self):
         """Add derived variables to the result"""
         for v in self.nderivedmap.values():
-            logging.info(f"derived: found {v[0]} = {v[1]}")
+            logging.debug(f"derived: found {v[0]} = {v[1]}")
             self.result[v[0]] = v[1]
         self.nderivedmap = {}
     
@@ -65,7 +66,7 @@ class ModelMapBuilder:
                 if len(solution) == 1:
                     for r,v in solution[0].items():
                         target = strip_prefix(r.name)
-                        logging.info(f"simpeq: found {target} = {v}")
+                        logging.debug(f"simpeq: found {target} = {v}")
                         assert target in self.nmap
                         assert target not in self.omap
                         v = to_smt(v)
@@ -81,7 +82,7 @@ class ModelMapBuilder:
 
                 res = find_unique_solution(conv.constraint_solver, Equals(sop, Int(op)))
                 for v,c in res.items():
-                    logging.info(f"pclookup: found {v} = {c}")
+                    logging.debug(f"pclookup: found {v} = {c}")
                     self.result[v] = c
                     del self.nmap[strip_prefix(v.symbol_name())]
 
