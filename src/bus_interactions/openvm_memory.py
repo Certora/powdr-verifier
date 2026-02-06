@@ -134,6 +134,8 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
         return res
 
     def encode(self, mult: FNode, address_space: FNode, pointer: FNode, data: list[FNode], timestamp: FNode) -> FNode:
+        if address_space.is_int_constant() and address_space.constant_value() == 0:
+            assert mult.is_int_constant() and mult.constant_value() == 0
         return None
         return with_comment(
             Implies(
