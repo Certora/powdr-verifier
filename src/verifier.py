@@ -1,12 +1,12 @@
 import json
+import sympy
 
-# TODO: verify determinism for a couple of examples
 
-
-from .utils.basic_block import BasicBlock
+from .rewriter.conversion import to_smt, to_sympy
 from .smt.encoding import build_input_output_relation, collect_variables
 from .smt.conversion import FormulaWithAxioms, SmtConverter, check_formula
 from .smt.utils import *
+from .utils.basic_block import BasicBlock
 
 BEFORE_PREFIX = "before"
 AFTER_PREFIX = "after"
@@ -18,18 +18,65 @@ def strip_prefix(name: str) -> str:
         return name[len(AFTER_PREFIX)+1:]
     return name
 
-def build_model_map(old: frozenset[FNode], new: frozenset[FNode], oldf: FormulaWithAxioms, newf: FormulaWithAxioms) -> dict:
-    omap = { strip_prefix(v.symbol_name()): v for v in old }
-    nmap = { strip_prefix(v.symbol_name()): v for v in new }
-    ndmap = { strip_prefix(v[0].symbol_name()): v for v in newf.derived }
+class ModelMapBuilder:
+    def __init__(self, old: frozenset[FNode], new: frozenset[FNode], oldf: FormulaWithAxioms, newf: FormulaWithAxioms):
+        self.old = old
+        self.new = new
+        self.oldf = oldf
+        self.newf = newf
 
-    res = {
-        k: Equals(nmap[k], omap[k]) for k in (omap.keys() & nmap.keys())
-    } | {
-        k: Equals(v[0], v[1]) for (k,v) in ndmap.items()
-    }
-    assert nmap.keys() == res.keys(), "model map for is not complete"
-    return res
+        self.omap = { strip_prefix(v.symbol_name()): v for v in old }
+        self.nmap = { strip_prefix(v.symbol_name()): v for v in new }
+        self.nderivedmap = { strip_prefix(v[0].symbol_name()): v for v in newf.derived }
+        self.result = {}
+
+    def __check(self):
+        if self.nmap:
+            logging.error(f"model map is not complete")
+            logging.debug(f"have: {self.result.keys()}")
+            logging.error(f"missing: {self.nmap.keys()}")
+            assert False
+    
+    def __heuristic_same_name(self):
+        """Add variables with the same name to the result"""
+        for k in (self.omap.keys() & self.nmap.keys()):
+            self.result[self.nmap[k]] = self.omap[k]
+            del self.nmap[k]
+            del self.omap[k]
+    
+    def __heuristic_derived(self):
+        """Add derived variables to the result"""
+        for v in self.nderivedmap.values():
+            self.result[v[0]] = v[1]
+        self.nderivedmap = {}
+    
+    def __heuristic_simple_equality(self):
+        """Add variables that have a unique solution from some constraint to the result"""
+        for c in self.newf.constraints:
+            if not c.is_equals():
+                continue
+            c = c.substitute({ v: c for v,c in self.result.items() if c.is_constant() })
+            vars = c.get_free_variables()
+            if len(vars) == 1:
+                solution = sympy.solve(to_sympy(c), dict=True)
+                if len(solution) == 1:
+                    for r,v in solution[0].items():
+                        target = strip_prefix(r.name)
+                        print(f"found {target} = {v}")
+                        assert target in self.nmap
+                        assert target not in self.omap
+                        v = to_smt(v)
+                        self.result[self.nmap[target]] = v
+                        del self.nmap[target]
+
+
+    @attach_comment("MODEL MAP")
+    def build(self) -> dict:
+        self.__heuristic_same_name()
+        self.__heuristic_derived()
+        self.__heuristic_simple_equality()
+        self.__check()
+        return And(*[ Equals(a,b) for a,b in self.result.items() ])
 
 def do_check(f: FNode, name: str):
     match check_formula(f, name):
@@ -66,71 +113,78 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
     var2 = collect_variables(after_smt)
     globals = before_smt.globals | after_smt.globals
 
-    model_map = build_model_map(var1 - globals, var2 - globals, before_smt, after_smt)
-
-    # check completeness
-    completeness = ForAll(var2 - globals,
-        And(
-            Not(
-                Implies(
-                    And(
-                        *before_smt.constraints,
-                        *before_smt.bus_interactions,
-                        with_comment(And(*model_map.values()), "MODEL MAP"),
-                    ),
-                    And(
-                        *after_smt.constraints,
-                        *after_smt.bus_interactions,
-                    )
-                )
-            ),
-            And(*before_smt.axioms),
-            And(*after_smt.axioms),
-        )
-    )
-    do_check(completeness, "completeness")
-    return
-
-    # determinism: if an input has a trace for both programs, the outputs are the same
-    determinism = And(
-        Not(
-            Implies(
+    def completeness():
+        forward_builder = ModelMapBuilder(var1 - globals, var2 - globals, before_smt, after_smt)
+        completeness = ForAll(var2 - globals,
+            And(
                 And(
                     *before_smt.constraints,
                     *before_smt.bus_interactions,
-                    *after_smt.constraints,
-                    *after_smt.bus_interactions,
+                    forward_builder.build(),
                     input_relation,
+                    output_relation,
                 ),
-                And(
-                    common_intermediates,
-                    output_relation
-                )
+                Not(
+                    And(
+                        *after_smt.constraints,
+                        *after_smt.bus_interactions,
+                    )
+                ),
+                And(*before_smt.axioms),
+                And(*after_smt.axioms),
             )
-        ),
-        And(*before_smt.axioms),
-        And(*after_smt.axioms),
-    )
-    do_check(determinism, "determinism")
+        )
+        do_check(completeness, "completeness")
+    completeness()
 
-    # check soundness
-    soundness =  ForAll(var1 - globals,
-        And(
+    
+    def soundness():
+        backward_builder = ModelMapBuilder(var2 - globals, var1 - globals, after_smt, before_smt)
+        soundness =  ForAll(var1 - globals,
+            And(
+                Not(
+                    Implies(
+                        And(
+                            *after_smt.constraints,
+                            *after_smt.bus_interactions,
+                            backward_builder.build(),
+                            input_relation,
+                            output_relation,
+                        ),
+                        And(
+                            *before_smt.constraints,
+                            *before_smt.bus_interactions,
+                        )
+                    )
+                ),
+                And(*before_smt.axioms),
+                And(*after_smt.axioms),
+            )
+        )
+        do_check(soundness, "soundness")
+    soundness()
+
+
+    def determinism():
+        # determinism: if an input has a trace for both programs, the outputs are the same
+        determinism = And(
             Not(
                 Implies(
                     And(
-                        iorelation,
-                        *after_smt.constraints,
-                        *after_smt.bus_interactions,
-                    ),
-                    And(
                         *before_smt.constraints,
                         *before_smt.bus_interactions,
+                        *after_smt.constraints,
+                        *after_smt.bus_interactions,
+                        input_relation,
+                    ),
+                    And(
+                        common_intermediates,
+                        output_relation
                     )
                 )
             ),
             And(*before_smt.axioms),
             And(*after_smt.axioms),
         )
-    )
-    do_check(soundness, "soundness")
+        do_check(determinism, "determinism")
+
