@@ -43,7 +43,7 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
         """Constrain `(op,a..g)` to match the instruction at program counter `pc` (when enabled)."""
         self.needs_axioms = True
         return Implies(
-            Not(Equals(mult, Int(0))),
+            Not(Equals(wrap_mod(mult), Int(0))),
             And(
                 LT(pc, Int(4*self.stmt_count - 3)),
                 Equals(wrap_mod(pc, Int(4)), Int(0)),

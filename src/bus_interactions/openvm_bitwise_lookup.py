@@ -34,7 +34,7 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
         """Encode byte-range constraints and XOR relation depending on `op`."""
         if op == Int(0) and z == Int(0):
             return Implies(
-                Not(Equals(mult, Int(0))),
+                Not(Equals(wrap_mod(mult), Int(0))),
                 And(
                     LE(Int(0), x), LE(x, Int(255)),
                     LE(Int(0), y), LE(y, Int(255)),
@@ -45,7 +45,7 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
         elif op == Int(1):
             self.needs_xor_axioms = True
             return Implies(
-                Not(Equals(mult, Int(0))),
+                Not(Equals(wrap_mod(mult), Int(0))),
                 And(
                     LE(Int(0), x), LE(x, Int(255)),
                     LE(Int(0), y), LE(y, Int(255)),

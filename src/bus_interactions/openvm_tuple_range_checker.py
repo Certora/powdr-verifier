@@ -16,7 +16,7 @@ class OpenVMTupleRangeCheckerEncoder(SingleInteractionEncoder):
         `MAX_0` and `MAX_1` are constants from the VM config.
         """
         return Implies(
-            Not(Equals(mult, Int(0))),
+            Not(Equals(wrap_mod(mult), Int(0))),
             And(
                 LE(Int(0), x), LT(x, Int(self.MAX_0)),
                 LE(Int(0), y), LT(y, Int(self.MAX_1)),
