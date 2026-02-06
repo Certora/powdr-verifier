@@ -1,6 +1,8 @@
 from itertools import batched, pairwise
 import itertools
 
+from ..rewriter import rewrite
+
 from ..smt.utils import *
 
 class TimestampCheckMixin:
@@ -18,7 +20,7 @@ class TimestampCheckMixin:
             a,b = batch
             # for now we assume that zeroness of a.mult and b.mult are equivalent
             assert self.solver().is_valid(Iff(Equals(a.mult, Int(0)), Equals(b.mult, Int(0))))
-            res.append(Implies(Not(Equals(a.mult, Int(0))), LT(a.args[-1], b.args[-1])))
+            res.append(Implies(Not(Equals(wrap_mod(a.mult), Int(0))), LT(a.args[-1], b.args[-1])))
 
         return And(*res)
             
@@ -149,13 +151,14 @@ class PermutationCheckMixin:
             conjuncts.extend(itertools.chain(*conj))
 
             # encode the receive case
+            assert oldvals[0].is_symbol()
             conjuncts.append(
                 with_comment(
                     Implies( # receive: data[0] == -1
                         Equals(wrap_mod(Plus(data[0], Int(1))), Int(0)),
                         And(
                             # multiplicities
-                            Equals(wrap_mod(oldvals[0]), Int(1)),
+                            Equals(oldvals[0], Int(1)),
                             Equals(newvals[0], Int(0)),
                             # data + timestamps
                             *[ Equals(oldvals[k], data[k]) for k in range(1, len(newvals)) ],
@@ -189,4 +192,5 @@ class PermutationCheckMixin:
                 conjuncts.append(Equals(news[k], s))
             inputs = news
         
+        conjuncts = [ rewrite(c) for c in conjuncts ]
         return conjuncts, actual_inputs, intermediates, inputs
