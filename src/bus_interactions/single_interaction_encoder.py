@@ -21,16 +21,20 @@ class SingleInteractionEncoder:
     _interactions: list[BusInteraction]
 
     def __init__(self):
+        """Initialize an empty interaction buffer for this bus."""
         self._interactions = []
     
     def constraints(self) -> list[FNode]:
+        """Return the current global constraint list from the owning converter state."""
         return self._cur_state.constraints
     
     def solver(self) -> Solver:
+        """Return the incremental solver used by the owning converter state (if any)."""
         return self._cur_state.constraint_solver
     
     @simple_profile
     def add(self, mult: FNode, *args: Any) -> FNode:
+        """Add a single interaction (skipping it if `mult` is provably zero)."""
         if self.solver() is not None and self.solver().is_valid(Equals(mult, Int(0))):
             logging.debug("dropping interaction with mult = 0")
             return
@@ -45,15 +49,19 @@ class SingleInteractionEncoder:
         return getattr(self, 'globals', frozenset())
 
     def encode_all(self) -> Iterable[FNode]:
+        """Encode all buffered interactions by calling `encode` for each one (if provided)."""
         if hasattr(self, 'encode'):
             return (self.encode(bi.mult, *bi.args) for bi in self._interactions)
         return []
     
     def get_inputs(self) -> dict:
+        """Return per-bus input symbols (if the encoder exposes them)."""
         return {}
     
     def get_outputs(self) -> dict:
+        """Return per-bus output symbols (if the encoder exposes them)."""
         return {}
     
     def get_auxiliaries(self) -> dict:
+        """Return auxiliary symbols introduced by this encoder (defaults to empty)."""
         return getattr(self, 'auxiliaries', frozenset())

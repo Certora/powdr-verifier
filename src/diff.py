@@ -7,6 +7,7 @@ from .utils.args import ARGS
 from .utils.io import load_apc_dump, load_json
 
 def diff():
+    """Format two inputs (as JSON or text) and launch an external diff viewer (`meld`)."""
     before = load_apc_dump(ARGS().input_before, 'before')
     after = load_apc_dump(ARGS().input_after, 'after')
 

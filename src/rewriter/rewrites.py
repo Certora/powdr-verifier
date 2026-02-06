@@ -8,10 +8,12 @@ from .utils import unpack_modeq
 ### This is sympy land! Do not use pysmt here!
 
 def normalize(e: Expr) -> Expr:
+    """Expand and reduce `e` modulo the configured field modulus."""
     return expand(e, modulus=ARGS().field_type.value)
 
 @simple_profile
 def rewrite_choice(node: Expr) -> Expr:
+    """Rewrite `Mod(f1*...*fn, p) == 0` into a disjunction of `Mod(fi, p) == 0` (best-effort)."""
     match unpack_modeq(node):
         case e, c:
             factors = factor(e)
@@ -23,6 +25,7 @@ def rewrite_choice(node: Expr) -> Expr:
 
 @simple_profile
 def rewrite_mod_equality(node: Expr) -> Expr:
+    """Rewrite simple modular equalities like `s - c == 0 (mod p)` into `s == c mod p`."""
     match unpack_modeq(node):
         case expr, modulus:
             s = Wild("s", properties=[lambda k: k.is_Symbol])

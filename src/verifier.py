@@ -13,6 +13,7 @@ BEFORE_PREFIX = "before"
 AFTER_PREFIX = "after"
 
 def strip_prefix(name: str) -> str:
+    """Remove the verifier-added `before-`/`after-` prefix from a symbol name."""
     if name.startswith(BEFORE_PREFIX):
         return name[len(BEFORE_PREFIX)+1:]
     elif name.startswith(AFTER_PREFIX):
@@ -21,6 +22,7 @@ def strip_prefix(name: str) -> str:
 
 class ModelMapBuilder:
     def __init__(self, old: frozenset[FNode], new: frozenset[FNode], oldf: FormulaWithAxioms, newf: FormulaWithAxioms):
+        """Initialize a heuristic builder for mapping variables between two encodings."""
         self.old = old
         self.new = new
         self.oldf = oldf
@@ -32,6 +34,7 @@ class ModelMapBuilder:
         self.result = {}
 
     def __check(self):
+        """Warn if not all `new` variables were mapped; return True iff the map is complete."""
         if self.nmap:
             logging.warning("model map is not complete, this can produce false positives")
             logging.debug(f"have: {self.result.keys()}")
@@ -74,6 +77,7 @@ class ModelMapBuilder:
                         del self.nmap[target]
 
     def __heuristic_pclookup(self, conv):
+        """Derive variable values from a resolved PC lookup interaction when possible."""
         encoder = conv.bus_interaction_encoder.pc_lookup
         for i in encoder._interactions:
             mult,(spc,sop,sa,sb,sc,sd,se,sf,sg) = i
@@ -88,6 +92,7 @@ class ModelMapBuilder:
 
 
     def build(self, newconv):
+        """Run all heuristics in sequence to populate the variable mapping."""
         self.__heuristic_same_name()
         self.__heuristic_derived()
         self.__heuristic_simple_equality()
@@ -97,9 +102,11 @@ class ModelMapBuilder:
     
     @attach_comment("MODEL MAP")
     def get_map(self):
+        """Return the computed mapping as a conjunction of equalities."""
         return And(*[ Equals(a,b) for a,b in self.result.items() ])
 
 def do_check(f: FNode, name: str):
+    """Check satisfiability of `f` and print a human-friendly result (and counterexample if any)."""
     match check_formula(f, name):
         case False,_:
             print(f"{name} is proven")
@@ -111,6 +118,7 @@ def do_check(f: FNode, name: str):
             print(json.dumps(model, indent=4))
 
 def verify(before: FNode, after: FNode, block: BasicBlock):
+    """Verify our versions of equivalence."""
 
     with (
         SmtConverter(BEFORE_PREFIX, block) as before_conv,

@@ -4,6 +4,7 @@ from ..smt.utils import *
 
 @simple_profile
 def to_sympy(expr: FNode) -> sympy.Expr:
+    """Convert a PySMT term into the equivalent SymPy expression."""
     if expr.is_true():
         return sympy.true
     if expr.is_false():
@@ -44,6 +45,7 @@ def to_sympy(expr: FNode) -> sympy.Expr:
 
 @simple_profile
 def to_smt(expr: sympy.Expr) -> FNode:
+    """Convert a SymPy expression into an equivalent PySMT term."""
     if expr == sympy.true:
         return TRUE()
     elif expr == sympy.false:

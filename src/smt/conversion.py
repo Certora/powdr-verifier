@@ -16,6 +16,7 @@ FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['constraints', 
 
 class SmtConverter:
     def __init__(self, name: str, basic_block: BasicBlock):
+        """Create a converter that turns JSON-like dumps into SMT, namespacing symbols by `name`."""
         self.basic_block = basic_block
         self.field_symbols = set()
         self.constraints = []
@@ -39,12 +40,14 @@ class SmtConverter:
         self.constraint_solver.exit()
 
     def __add_constraint(self, c: FNode, comment: Optional[str] = None):
+        """Rewrite and store a constraint. Assert it to the utility solver"""
         if comment is not None:
             c = with_comment(c, comment)
         self.constraints.append(rewrite(c))
         self.constraint_solver.add_assertion(self.constraints[-1])
     
     def convert_constraints(self, data: Iterable[Any]):
+        """Convert raw constraint expressions to `wrap_mod(expr) == 0` and add them."""
         for id,c in enumerate(data):
             self.__add_constraint(
                 Equals(wrap_mod(c), Int(0)),
@@ -52,6 +55,7 @@ class SmtConverter:
             )
     
     def convert_derived(self, data: Iterable[Any]):
+        """Convert derived-column definitions into symbolic equalities (stored for later use)."""
         for derived in data:
             match derived:
                 case [str(name), {'Constant': int(value)}]:
@@ -83,6 +87,7 @@ class SmtConverter:
 
     @simple_profile
     def convert_manual(self, data: Any) -> Any:
+        """Convert a JSON-like dump fragment (expression, machine, or interaction) into SMT terms."""
         match data:
             # general json structure
             case {
@@ -134,6 +139,7 @@ class SmtConverter:
                 logging.error(f"Unsupported data in conversion: {data}")
 
     def __add_basic_range_axioms(self) -> Iterable[FNode]:
+        """Generate and assert basic field-range axioms for all seen variable symbols."""
         for sym in sorted(self.field_symbols, key=lambda x: str(x)):
             fs = field_symbol(sym)
             self.constraint_solver.add_assertion(fs)
@@ -141,6 +147,7 @@ class SmtConverter:
 
     @simple_profile
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
+        """Convert input data and return constraints, interactions, axioms, derived columns, and globals."""
         self.convert_manual(data)
         bus_interactions = self.bus_interaction_encoder.encode_all()
         fwa = FormulaWithAxioms(
