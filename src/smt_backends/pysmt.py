@@ -310,3 +310,13 @@ def convert_to_smt_script(f: FNode, logic: Logic) -> script.SmtLibScript:
 def print_formula_to_file(f, LOGIC, dump):
     smtlib = convert_to_smt_script(f, LOGIC)
     pretty_print_smtlib(smtlib, dump)
+
+def z3_simplify(f: FNode) -> FNode:
+    s = Solver()
+    if isinstance(s, Z3Solver):
+        simplifier = z3.Tactic('simplify')
+        convf = s.converter.convert(f)
+        simp = simplifier(convf, elim_and=True, pull_cheap_ite=True, ite_extra_rules=True).as_expr()
+        return s.converter.back(simp)
+    logging.warning("z3_simplify: not a Z3Solver")
+    return None
