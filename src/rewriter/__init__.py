@@ -78,6 +78,5 @@ def rewrite(input: FNode) -> FNode:
         next = relation_rewriter.substitute(last)
         if last == next:
             break
-        print(f"REWROTE {last} --> {next}")
         last = next
     return last
