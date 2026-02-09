@@ -4,6 +4,11 @@ from ..utils.profiling import simple_profile
 from ..smt.utils import *
 
 @simple_profile
+def rewrite_z3simplify(node_type: int, args: list[FNode]) -> FNode:
+    node = get_env().formula_manager.create_node(node_type, tuple(args))
+    return z3_simplify(node)
+
+@simple_profile
 def rewrite_simplify(node_type: int, args: list[FNode]) -> FNode:
     node = get_env().formula_manager.create_node(node_type, tuple(args))
     res = simplify(node)
