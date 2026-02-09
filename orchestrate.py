@@ -142,3 +142,5 @@ if __name__ == '__main__':
     
     except subprocess.CalledProcessError:
         pass
+    except KeyboardInterrupt:
+        pass
