@@ -23,7 +23,7 @@ class SmtConverter:
         self.constraints = []
         self.derived_columns = []
         self.name = name
-        self.constraint_solver = Solver()
+        self.constraint_solver = Solver(solver_options={':timeout': 5000})
 
         match ARGS().bus_interaction_handler:
             case BusInteractionHandlers.OPENVM:

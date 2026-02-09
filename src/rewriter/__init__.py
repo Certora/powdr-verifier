@@ -1,27 +1,28 @@
 import sympy
 
 from .conversion import to_sympy, to_smt
-from .rewrites import rewrite_mod
+from .rewrites import rewrite_eqmod, rewrite_mod, rewrite_simplify
 from .rewrites_sympy import rewrite_choice, rewrite_mod_equality
 
 from ..smt.utils import *
 
 REWRITES = {
+    operators.EQUALS: [ rewrite_simplify, rewrite_eqmod ],
     operators.MOD: [ rewrite_mod ],
 }
 REWRITES_SYMPY = {
-    operators.EQUALS: [ rewrite_choice, rewrite_mod_equality ],
+    operators.EQUALS: [ rewrite_choice ],
 }
-MAX_REWRITE_COUNT = 3
+MAX_REWRITE_COUNT = 5
 
 @simple_profile
-def rewrite_one(node: FNode, rewrites) -> FNode:
+def rewrite_one(node_type: int, args: list[FNode], rewrites) -> FNode:
     """Apply the first matching rewrite rule to a single SymPy node."""
     for r in rewrites:
-        res = r(node)
+        res = r(node_type, args)
         if res is not None:
             return res
-    return node
+    return None
 
 @simple_profile
 def rewrite_one_sympy(node: sympy.Expr, rewrites) -> sympy.Expr:
@@ -30,7 +31,7 @@ def rewrite_one_sympy(node: sympy.Expr, rewrites) -> sympy.Expr:
         res = r(node)
         if res is not None:
             return res
-    return node
+    return None
 
 
 class RelationRewriter(substituter.Substituter):
@@ -48,19 +49,20 @@ class RelationRewriter(substituter.Substituter):
         """Try to rewrite equality formulas (modulo field) via SymPy, otherwise keep them."""
         op = formula.node_type()
         if op in REWRITES:
-            res = rewrite_one(formula, REWRITES[formula.node_type()])
-            if res != formula:
+            res = rewrite_one(op, args, REWRITES[formula.node_type()])
+            if res is not None and res != formula:
                 if ARGS().log_rewrites:
                     logging.info(f"rewrote {formula} --> {res}")
                 return keep_comment(res, formula)
         if op in REWRITES_SYMPY:
             try:
-                res = to_smt(rewrite_one_sympy(to_sympy(formula), REWRITES_SYMPY[formula.node_type()]))
+                node = get_env().formula_manager.create_node(op, tuple(args))
+                res = to_smt(rewrite_one_sympy(to_sympy(node), REWRITES_SYMPY[formula.node_type()]))
             except AssertionError:
                 res = formula
             if res != formula:
                 if ARGS().log_rewrites:
-                    logging.info(f"rewrote {formula} --> {res}")
+                    logging.info(f"rewrote sympy {formula} --> {res}")
                 return keep_comment(res, formula)
         return keep_comment(substituter.Substituter.super(self, formula, args=args, **kwargs), formula)
 
@@ -70,10 +72,12 @@ def rewrite(input: FNode) -> FNode:
     if isinstance(input, list):
         return [rewrite(i) for i in input]
     relation_rewriter = RelationRewriter()
-    last = None
+    last = input
+    next = None
     for _ in range(MAX_REWRITE_COUNT):
-        last = input
-        input = relation_rewriter.substitute(input)
-        if last == input:
+        next = relation_rewriter.substitute(last)
+        if last == next:
             break
-    return input
+        print(f"REWROTE {last} --> {next}")
+        last = next
+    return last
