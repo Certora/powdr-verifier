@@ -3,6 +3,15 @@ from ..utils.args import ARGS
 from ..utils.profiling import simple_profile
 from ..smt.utils import *
 
+def is_mul_by_minus_one(node: FNode) -> Optional[FNode]:
+    if node.is_times() and len(node.args()) == 2:
+        a, b = node.args()
+        if a.is_int_constant(-1):
+            return b
+        if b.is_int_constant(-1):
+            return a
+    return None
+
 @simple_profile
 def rewrite_z3simplify(node_type: int, args: list[FNode]) -> FNode:
     node = get_env().formula_manager.create_node(node_type, tuple(args))
@@ -40,13 +49,28 @@ def rewrite_eqmod(node_type: int, args: list[FNode]) -> FNode:
         return None
     if expr.is_plus() and len(expr.args()) == 2:
         a, b = expr.args()
+        # c + s = 0 -> s = -c mod p
         if a.is_int_constant() and b.is_symbol():
             return Equals(b, wrap_mod(Int(-a.constant_value())))
+        # s + c = 0 -> s = -c mod p
         if a.is_symbol() and b.is_int_constant():
             return Equals(a, wrap_mod(Int(-b.constant_value())))
+        # -x + c = 0 -> c = x mod p
+        # -x + s = 0 -> s = x mod p
+        minusa = is_mul_by_minus_one(a)
+        if minusa is not None and (b.is_symbol() or b.is_int_constant()):
+            return Equals(b, wrap_mod(minusa))
+        # c + -x = 0 -> c = x mod p
+        # s + -x = 0 -> s = x mod p
+        minusb = is_mul_by_minus_one(b)
+        if minusb is not None and (a.is_symbol() or a.is_int_constant()):
+            return Equals(a, wrap_mod(minusb))
     if expr.is_minus() and len(expr.args()) == 2:
         a, b = expr.args()
+        # c - s = 0 -> s = c mod p
         if a.is_int_constant() and b.is_symbol():
             return Equals(b, wrap_mod(Int(a.constant_value())))
+        # s - c = 0 -> s = c mod p
         if a.is_symbol() and b.is_int_constant():
             return Equals(a, wrap_mod(Int(b.constant_value())))
+    return None
