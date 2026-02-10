@@ -35,13 +35,9 @@ class SingleInteractionEncoder:
     @simple_profile
     def add(self, mult: FNode, *args: Any) -> FNode:
         """Add a single interaction (skipping it if `mult` is provably zero)."""
-        try:
-            if self.solver() is not None and self.solver().is_valid(Equals(mult, Int(0))):
-                logging.debug("dropping interaction with mult = 0")
-                return
-        except:
-            logging.debug(f"failed to check whether {mult} is zero")
-            pass
+        if self.solver().check_is_valid(Equals(mult, Int(0))):
+            logging.debug("dropping interaction with mult = 0")
+            return
         self._interactions.append(BusInteraction(mult, args))
 
     def get_axioms(self) -> list[FNode]:
