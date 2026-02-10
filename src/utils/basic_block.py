@@ -5,6 +5,7 @@ class BasicBlock:
         assert "start_pc" in data, "basic block has no start_pc"
         assert "statements" in data, "basic block has no statements"
         self.start_pc = data["start_pc"]
+        assert self.start_pc == 0
         self.statements = data["statements"]
 
     def __eq__(self, other: 'BasicBlock') -> bool:
