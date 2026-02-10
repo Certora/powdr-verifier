@@ -14,6 +14,28 @@ from .utils import *
 
 FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['constraints', 'bus_interactions', 'axioms', 'derived', 'globals'])
 
+def _check_is_valid(self: Solver, f: FNode, assert_true = False) -> bool:
+    try:
+        logging.debug(f"checking whether {f} is valid")
+        res = self.is_valid(f)
+    except:
+        logging.warning(f"failed to check whether {f} is valid")
+        res = False
+    if assert_true:
+        assert res
+    return res
+
+def _check_is_sat(self: Solver, f: FNode, assert_true = False) -> bool:
+    try:
+        logging.debug(f"checking whether {f} is sat")
+        res = self.is_sat(f)
+    except:
+        logging.warning(f"failed to check whether {f} is sat")
+        res = False
+    if assert_true:
+        assert res
+    return res
+
 class SmtConverter:
     """Convert JSON-like APC dumps (constraints + bus interactions) into SMT constraints and axioms."""
     def __init__(self, name: str, basic_block: BasicBlock):
@@ -24,6 +46,8 @@ class SmtConverter:
         self.derived_columns = []
         self.name = name
         self.constraint_solver = Solver(solver_options={':timeout': 5000})
+        type(self.constraint_solver).check_is_valid = _check_is_valid
+        type(self.constraint_solver).check_is_sat = _check_is_sat
 
         match ARGS().bus_interaction_handler:
             case BusInteractionHandlers.OPENVM:
