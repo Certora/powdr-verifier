@@ -7,6 +7,7 @@ from ..smt.utils import *
 
 class TimestampCheckMixin:
     """Mixin providing axioms that enforce monotonic timestamps over bus interactions."""
+    @simple_profile
     def ordered_timestamp_check(self) -> FNode:
         """Constrain timestamps of consecutive interaction pairs to be strictly increasing."""
         # sanity check: interactions with mult = 0 should not exist
@@ -27,6 +28,7 @@ class TimestampCheckMixin:
 
 class PermutationCheckMixin:
     """Mixin providing permutation-check encodings (pairwise and array-based) for bus interactions."""
+    @simple_profile
     def ordered_permutation_check(self) -> FNode:
         """
         Encodes a permutation check for the given list of interactions. We assume
@@ -49,6 +51,7 @@ class PermutationCheckMixin:
 
         return And(*encode())
 
+    @simple_profile
     def array_permutation_check(
         self,
         identifier: str,
