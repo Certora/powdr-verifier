@@ -35,6 +35,10 @@ jobs:
         continue-on-error: true
         run: ruff check verifier/
 
+      - name: run tests
+        continue-on-error: true
+        run: pytest
+
   build:
     runs-on: ubuntu-latest
 
