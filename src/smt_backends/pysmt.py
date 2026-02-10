@@ -1,4 +1,5 @@
 import contextlib
+from datetime import datetime
 from io import StringIO
 import logging
 from pathlib import Path
@@ -309,6 +310,7 @@ def convert_to_smt_script(f: FNode, logic: Logic) -> script.SmtLibScript:
 
 def print_formula_to_file(f, LOGIC, dump):
     smtlib = convert_to_smt_script(f, LOGIC)
+    smtlib.commands.insert(0, script.SmtLibCommand(name='set-info', args=[':source', f'generated {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}']))
     pretty_print_smtlib(smtlib, dump)
 
 def z3_simplify(f: FNode) -> FNode:
