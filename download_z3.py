@@ -39,6 +39,9 @@ def get_all_releases():
     return res
 
 def download_and_extract_asset(url: str, target: Path):
+    if target.exists():
+        logging.warning(f'{target} already exists, skipping...')
+        return
     logging.warning(f'downloading {url}...')
     r = requests.get(url)
     if r.status_code != 200:
