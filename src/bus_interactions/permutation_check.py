@@ -93,8 +93,12 @@ class PermutationCheckMixin:
         """
         def def_vars(id: int):
             """Create the per-step array symbols (mult + data arrays) for step `id`."""
-            return [ Symbol(f'{identifier}-{id}-mult', MultiArrayType(INT, keywidth, INT)) ] + [
-                Symbol(f'{identifier}-{id}-data{k}', MultiArrayType(INT, keywidth, INT)) for k in range(datawidth) ]
+            return [
+                Symbol(f'{identifier}-{id}-hadinput', MultiArrayType(INT, keywidth, BOOL)),
+                Symbol(f'{identifier}-{id}-mult', MultiArrayType(INT, keywidth, INT)),
+            ] + [
+                Symbol(f'{identifier}-{id}-data{k}', MultiArrayType(INT, keywidth, INT)) for k in range(datawidth)
+            ]
         
         intermediates = set()
 
@@ -122,10 +126,11 @@ class PermutationCheckMixin:
                 intermediates.add(newsym)
             
             # fresh variable for the new value
-            newval = Symbol(f'{input.symbol_name()}-new', INT)
+            newval = Symbol(f'{input.symbol_name()}-new', newsym.get_type())
             # ensure selected and new value are in range
-            conjuncts.append(field_symbol(selects[-1]))
-            conjuncts.append(field_symbol(newval))
+            if newsym.get_type().is_int_type():
+                conjuncts.append(field_symbol(selects[-1]))
+                conjuncts.append(field_symbol(newval))
             intermediates.add(newval)
 
             # stepwise store, add to store as we go
@@ -139,13 +144,18 @@ class PermutationCheckMixin:
         intermediates |= set(actual_inputs)
         inputs = actual_inputs
         # accumulates everything needed to describe the permutation check
-        conjuncts = []
+        conjuncts = [
+            Equals(actual_inputs[0], Array(INT, Array(INT, Bool(False))))
+        ]
+        isinputs = [
+            Symbol(f'{identifier}-{id}-isinput', BOOL) for id in range(len(interactions))
+        ]
         for id,i in enumerate(interactions):
             mult, keys, data = i
             assert len(keys) == keywidth
             assert len(data) == datawidth
 
-            data = [mult, *data]
+            data = [None, mult, *data]
 
             # generate skeletons for array updates
             updates = [ update_multidim_array(input, keys) for input in inputs ]
@@ -153,19 +163,32 @@ class PermutationCheckMixin:
 
             conjuncts.extend(itertools.chain(*conj))
 
+            # encode hadinput
+            conjuncts.append(
+                with_comment(
+                    Implies(
+                        Not(Equals(data[1], Int(0))),
+                        And(
+                            newvals[0],
+                            Implies(Not(oldvals[0]), isinputs[id])
+                        )
+                    ),
+                    "encode hadinput and isinput"
+                )
+            )
             # encode the receive case
-            assert oldvals[0].is_symbol()
+            assert oldvals[1].is_symbol()
             conjuncts.append(
                 with_comment(
                     Implies( # receive: data[0] == -1
-                        Equals(wrap_mod(Plus(data[0], Int(1))), Int(0)),
+                        Equals(wrap_mod(Plus(data[1], Int(1))), Int(0)),
                         And(
                             # multiplicities
-                            Equals(oldvals[0], Int(1)),
-                            Equals(newvals[0], Int(0)),
+                            Equals(oldvals[1], Int(1)),
+                            Equals(newvals[1], Int(0)),
                             # data + timestamps
-                            *[ Equals(oldvals[k], data[k]) for k in range(1, len(newvals)) ],
-                            *[ Equals(newvals[k], Int(0)) for k in range(1, len(newvals)) ]
+                            *[ Equals(oldvals[k], data[k]) for k in range(2, len(newvals)) ],
+                            *[ Equals(newvals[k], Int(0)) for k in range(2, len(newvals)) ]
                         )
                     ),
                     "receive: mult == -1"
@@ -175,14 +198,14 @@ class PermutationCheckMixin:
             conjuncts.append(
                 with_comment(
                     Implies( # send: data[0] == 1
-                        Equals(wrap_mod(Minus(data[0], Int(1))), Int(0)),
+                        Equals(wrap_mod(Minus(data[1], Int(1))), Int(0)),
                         And(
                             # multiplicities
-                            Equals(oldvals[0], Int(0)),
-                            Equals(newvals[0], Int(1)),
+                            Equals(oldvals[1], Int(0)),
+                            Equals(newvals[1], Int(1)),
                             # data + timestamps
-                            *[ Equals(oldvals[k], Int(0)) for k in range(1, len(newvals)) ],
-                            *[ Equals(newvals[k], data[k]) for k in range(1, len(newvals)) ]
+                            *[ Equals(oldvals[k], Int(0)) for k in range(2, len(newvals)) ],
+                            *[ Equals(newvals[k], data[k]) for k in range(2, len(newvals)) ]
                         )
                     ),
                     "send: mult == 1"
@@ -196,4 +219,4 @@ class PermutationCheckMixin:
             inputs = news
         
         conjuncts = [ rewrite(c) for c in conjuncts ]
-        return conjuncts, actual_inputs, intermediates, inputs
+        return conjuncts, actual_inputs, intermediates, inputs, isinputs

@@ -161,7 +161,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
     def get_axioms(self) -> Optional[FNode]:
         """Return timestamp + array-based permutation axioms for the memory bus."""
         ts = self.ordered_timestamp_check()
-        permutation_axioms, inputs, intermediates, outputs = self.array_permutation_check(f'{self._cur_state.name}-mem',
+        permutation_axioms, inputs, intermediates, outputs, isinputs = self.array_permutation_check(f'{self._cur_state.name}-mem',
             keywidth=2, datawidth=5, interactions=[
             (mult, [a,p], [*args, t]) for mult, (a, p, args, t) in self._interactions
         ])
