@@ -7,74 +7,79 @@ env:
     TEST_CASES: single_add_1 single_loadbu
 
 jobs:
-  custom-binaries:
+  binaries:
     runs-on: ubuntu-latest
+    outputs:
+      date: ${{ steps.get-date.outputs.date }}
 
     steps:
-      - name: checkout verifier
-        uses: actions/checkout@v6
-        with:
-          path: verifier
-          submodules: recursive
+    - name: checkout verifier
+      uses: actions/checkout@v6
+      with:
+        path: verifier
+        submodules: recursive
+    
+    - name: get date for cache key
+      id: get-date
+      run: echo "date=$(/bin/date -u "+%Y%m%d")" >> $GITHUB_OUTPUT
+      shell: bash
 
-      - name: setup custom binary cache
-        uses: actions/cache@v3
-        with:
-            path: ~/bin/
-            key: bin-${{ hashFiles('.github/**') }}-${{ steps.get-date.outputs.date }}
-            restore-keys: |
-              bin-
+    - name: setup custom binary cache
+      uses: actions/cache@v3
+      with:
+          path: ~/bin/
+          key: bin-${{ steps.get-date.outputs.date }}
+          restore-keys: bin-
 
-      - name: install python dependencies
-        run: |
-          mkdir -p ~/bin/
-          python3 verifier/download_z3.py z3-4.15.4 ~/bin/
-          chmod +x ~/bin/*
+    - name: install custom binaries
+      run: |
+        mkdir -p ~/bin/
+        python3 verifier/download_z3.py z3-4.15.4 ~/bin/
+        chmod +x ~/bin/*
 
   lint:
     runs-on: ubuntu-latest
-    needs: custom-binaries
+    needs: binaries
 
     steps:
-      - name: checkout verifier
-        uses: actions/checkout@v6
-        with:
-          path: verifier
-          submodules: recursive
+    - name: checkout verifier
+      uses: actions/checkout@v6
+      with:
+        path: verifier
+        submodules: recursive
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-          cache: 'pip'
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.13'
+        cache: 'pip'
 
-      - name: setup custom binary cache
-        uses: actions/cache/restore@v5
-        with:
-            path: ~/bin/
-            fail-on-cache-miss: true
-            restore-keys: |
-              bin-
-        
-      - name: install python dependencies
-        run: |
-          pip install -r verifier/requirements.txt
-          pysmt-install --z3 --confirm-agreement
-    
-      - name: run formatter
-        continue-on-error: true
-        run: ruff format --diff verifier/
+    - name: setup custom binary cache
+      uses: actions/cache/restore@v5
+      with:
+        path: ~/bin/
+        fail-on-cache-miss: true
+        key: bin-${{ needs.binaries.outputs.date }}
+      
+    - name: install python dependencies
+      run: |
+        pip install -r verifier/requirements.txt
+        pysmt-install --z3 --confirm-agreement
+  
+    - name: run formatter
+      continue-on-error: true
+      run: ruff format --diff verifier/
 
-      - name: run linter
-        continue-on-error: true
-        run: ruff check verifier/
+    - name: run linter
+      continue-on-error: true
+      run: ruff check verifier/
 
-      - name: run tests
-        continue-on-error: true
-        run: pytest
+    - name: run tests
+      continue-on-error: true
+      run: pytest
 
   build:
     runs-on: ubuntu-latest
-    needs: custom-binaries
+    needs: binaries
 
     steps:
     - name: checkout verifier
@@ -108,17 +113,16 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             powdr/target/
-          key: cargo-${{ hashFiles('powdr/Cargo.toml') }}-${{ steps.get-date.outputs.date }}
+          key: cargo-${{ hashFiles('powdr/Cargo.toml') }}-${{ needs.binaries.outputs.date }}
           restore-keys: |
             cargo-
 
     - name: setup custom binary cache
       uses: actions/cache/restore@v5
       with:
-          path: ~/bin/
-          fail-on-cache-miss: true
-          restore-keys: |
-            bin-
+        path: ~/bin/
+        fail-on-cache-miss: true
+        key: bin-${{ needs.binaries.outputs.date }}
     
     - name: install python dependencies
       run: |
@@ -140,7 +144,7 @@ jobs:
       run: |
         for test in ${{ env.TEST_CASES }}; do
           echo "::group::run tracer on ${test}"
-          python3 verifier/orchestrate.py trace-all ${test} || exit 1
+          python3 verifier/orchestrate.py trace ${test} : || exit 1
           echo "::endgroup::"
         done
     
@@ -148,7 +152,7 @@ jobs:
       run: |
         for test in ${{ env.TEST_CASES }}; do
           echo "::group::run evaluator on ${test}"
-          python3 verifier/orchestrate.py eval-all ${test} || exit 1
+          python3 verifier/orchestrate.py eval ${test} : || exit 1
           echo "::endgroup::"
         done
     
@@ -156,7 +160,7 @@ jobs:
       run: |
         for test in ${{ env.TEST_CASES }}; do
           echo "::group::run separate evaluator on ${test}"
-          python3 verifier/orchestrate.py evaluate-all ${test} || exit 1
+          python3 verifier/orchestrate.py evaluate ${test} : || exit 1
           echo "::endgroup::"
         done
 
@@ -164,7 +168,7 @@ jobs:
       run: |
         for test in ${{ env.TEST_CASES }}; do
           echo "::group::run verifier on ${test}"
-          python3 verifier/orchestrate.py verify-stepwise ${test} || exit 1
+          python3 verifier/orchestrate.py verify ${test} : || exit 1
           echo "::endgroup::"
         done
     
