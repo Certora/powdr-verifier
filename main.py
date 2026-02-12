@@ -54,5 +54,7 @@ if __name__ == '__main__':
             case _:
                 logging.error(f"unknown command: {ARGS().command}")
                 exit(1)
-    except KeyboardInterrupt:
+    except Exception as e:
+        raise e
+    finally:
         print_profile()
