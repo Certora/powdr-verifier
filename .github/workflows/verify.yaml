@@ -7,8 +7,33 @@ env:
     TEST_CASES: single_add_1 single_loadbu
 
 jobs:
+  custom-binaries:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout verifier
+        uses: actions/checkout@v6
+        with:
+          path: verifier
+          submodules: recursive
+
+      - name: setup custom binary cache
+        uses: actions/cache@v3
+        with:
+            path: ~/bin/
+            key: bin-${{ hashFiles('.github/**') }}-${{ steps.get-date.outputs.date }}
+            restore-keys: |
+              bin-
+
+      - name: install python dependencies
+        run: |
+          mkdir -p ~/bin/
+          python3 verifier/download_z3.py z3-4.15.4 ~/bin/
+          chmod +x ~/bin/*
+
   lint:
     runs-on: ubuntu-latest
+    needs: custom-binaries
 
     steps:
       - name: checkout verifier
@@ -21,7 +46,15 @@ jobs:
         with:
           python-version: '3.13'
           cache: 'pip'
-    
+
+      - name: setup custom binary cache
+        uses: actions/cache/restore@v5
+        with:
+            path: ~/bin/
+            fail-on-cache-miss: true
+            restore-keys: |
+              bin-
+        
       - name: install python dependencies
         run: |
           pip install -r verifier/requirements.txt
@@ -41,6 +74,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    needs: custom-binaries
 
     steps:
     - name: checkout verifier
@@ -67,12 +101,6 @@ jobs:
       with:
         toolchain: 1.82.0
 
-    - name: get date for cache key
-      id: get-date
-      run: |
-        echo "date=$(/bin/date -u "+%Y%m%d")" >> $GITHUB_OUTPUT
-      shell: bash
-
     - name: setup cargo cache
       uses: actions/cache@v3
       with:
@@ -83,25 +111,19 @@ jobs:
           key: cargo-${{ hashFiles('powdr/Cargo.toml') }}-${{ steps.get-date.outputs.date }}
           restore-keys: |
             cargo-
+
+    - name: setup custom binary cache
+      uses: actions/cache/restore@v5
+      with:
+          path: ~/bin/
+          fail-on-cache-miss: true
+          restore-keys: |
+            bin-
     
     - name: install python dependencies
       run: |
         pip install -r verifier/requirements.txt
         pysmt-install --z3 --confirm-agreement
-
-    - name: setup custom binary cache
-      uses: actions/cache@v3
-      with:
-          path: ~/bin/
-          key: bin-${{ hashFiles('.github/**') }}-${{ steps.get-date.outputs.date }}
-          restore-keys: |
-            bin-
-    
-    - name: install custom binaries
-      run: |
-        mkdir -p ~/bin/
-        python3 verifier/download_z3.py z3-4.15.4 ~/bin/
-        chmod +x ~/bin/*
 
     - name: cargo clean
       run: cd powdr && cargo clean
