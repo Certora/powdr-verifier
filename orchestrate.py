@@ -14,6 +14,8 @@ if not DATA_DIR.exists():
 assert POWDR_DIR.exists()
 assert VERIFIER_DIR.exists()
 
+_ARGS = None
+
 def parse_args():
     parser = argparse.ArgumentParser()
 
@@ -28,8 +30,12 @@ def parse_args():
     parser.add_argument('test', type=str)
     parser.add_argument('k', type=int, nargs='*')
     parser.add_argument('--clean', action='store_true')
+    parser.add_argument("-v", "--verbose", action="count", default=0)
 
-    return parser.parse_args()
+    global _ARGS
+    _ARGS = parser.parse_args()
+    _ARGS.verbose_args = ["-v"] * _ARGS.verbose
+    return _ARGS
 
 
 def run_powdr(test):
@@ -45,6 +51,7 @@ def run_trace(first, *files):
     for f in files:
         subprocess.run([
             "python3", VERIFIER_DIR / "main.py",
+            *_ARGS.verbose_args,
             "--dump-smt",
             "--base-dump", first,
             "trace",
@@ -73,6 +80,7 @@ def run_eval(first, *files):
             continue
         subprocess.run([
             "python3", VERIFIER_DIR / "main.py",
+            *_ARGS.verbose_args,
             "--base-dump", first,
             "eval",
             f,
@@ -83,6 +91,7 @@ def run_verify(first, pairs):
     for a,b in pairs:
         subprocess.run([
             "python3", VERIFIER_DIR / "main.py",
+            *_ARGS.verbose_args,
             "--dump-smt",
             "--base-dump", first,
             "verify",
