@@ -60,6 +60,8 @@ class RelationRewriter(substituter.Substituter):
                 res = to_smt(rewrite_one_sympy(to_sympy(node), REWRITES_SYMPY[formula.node_type()]))
             except AssertionError:
                 res = formula
+            except sympy.SympifyError:
+                res = formula
             if res != formula:
                 if ARGS().log_rewrites:
                     logging.info(f"rewrote sympy {formula} --> {res}")
