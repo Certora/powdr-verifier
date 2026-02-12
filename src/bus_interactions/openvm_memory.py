@@ -168,7 +168,17 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
         self.inputs = inputs
         self.auxiliaries = intermediates
         self.outputs = outputs
-        return And(ts, *permutation_axioms)
+        assume_bytes = [
+            with_comment(
+                Implies(
+                    isinput,
+                    And(*[And(LE(Int(0), d), LE(d, Int(255))) for d in self._interactions[id].args[2]])
+                ),
+                f"assume bytes if #{id} is input"
+            )
+            for id, isinput in enumerate(isinputs)
+        ]
+        return And(ts, *permutation_axioms, *assume_bytes)
 
     def get_inputs(self) -> dict:
         """Expose array symbols representing the initial bus state."""
