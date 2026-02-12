@@ -3,6 +3,7 @@ from typing import Optional
 
 from ..utils.args import ARGS
 
+
 def unpack_modeq(node: Expr) -> Optional[tuple[Expr, Expr]]:
     """If `node` is of the form `Eq(Mod(e, p), 0)` extract `(e, p)`, else return None."""
     e = Wild("e")

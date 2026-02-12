@@ -7,6 +7,7 @@ from .utils.basic_block import BasicBlock
 from .smt.conversion import SmtConverter
 from .smt.utils import *
 
+
 def trace(input: dict):
     """Solve for a satisfying trace of the given dump and print the resulting model (if any)."""
 
@@ -21,30 +22,29 @@ def trace(input: dict):
     )
     if ARGS().use_derived and len(smt.derived) > 0:
         f = And(f, *smt.derived)
-    
+
     f = rewrite(f)
 
     res, model = check_formula(f)
 
     match res:
         case True:
-            model = to_nice_model(model, strip_prefix='input-')
+            model = to_nice_model(model, strip_prefix="input-")
             print(json.dumps(model, indent=4))
 
-            eval_model = { f'input-{m}': v for m, v in model.items() }
-            for v,expr in smt.derived:
+            eval_model = {f"input-{m}": v for m, v in model.items()}
+            for v, expr in smt.derived:
                 evald = partial_evaluate(Equals(v, expr), eval_model, interpreters)
                 if not evald.is_true():
-                    logging.warning(f"derived column is not true:\n\t{v} = {expr}\n->\t{evald}")
+                    logging.warning(
+                        f"derived column is not true:\n\t{v} = {expr}\n->\t{evald}"
+                    )
 
             if ARGS().dump_model:
                 logging.info(f"dumping model to {ARGS().dump_model}")
-                with open(ARGS().dump_model, 'w') as f:
+                with open(ARGS().dump_model, "w") as f:
                     json.dump(model, f, indent=4)
         case False:
             logging.info("no trace found, encoding is UNSAT")
         case None:
             logging.info("no trace found, solver returned UNKNOWN")
-
-
-

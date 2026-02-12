@@ -2,6 +2,7 @@ import sympy
 
 from ..smt.utils import *
 
+
 @simple_profile
 def to_sympy(expr: FNode) -> sympy.Expr:
     """Convert a PySMT term into the equivalent SymPy expression."""
@@ -41,9 +42,12 @@ def to_sympy(expr: FNode) -> sympy.Expr:
         elif expr.is_times():
             return sympy.Mul(*[to_sympy(arg) for arg in expr.args()])
     elif expr.is_function_application():
-        return sympy.Function(expr.function_name().symbol_name())(*[to_sympy(arg) for arg in expr.args()])
+        return sympy.Function(expr.function_name().symbol_name())(
+            *[to_sympy(arg) for arg in expr.args()]
+        )
     else:
         assert False, f"Unknown expression type: {expr}"
+
 
 @simple_profile
 def to_smt(expr: sympy.Expr) -> FNode:

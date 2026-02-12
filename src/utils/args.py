@@ -8,53 +8,66 @@ from .field_types import FieldTypes
 
 __ARGS: Optional[argparse.Namespace] = None
 
+
 def ARGS() -> argparse.Namespace:
     """Retrieve the command line arguments."""
     assert __ARGS is not None
     return __ARGS
 
-def parse_args(args = None):
+
+def parse_args(args=None):
     """Parse the command line arguments."""
     parser = argparse.ArgumentParser()
-    parser.add_argument('-v', '--verbose', action='count', default=0)
-    parser.add_argument('--bus-interaction-handler', type=BusInteractionHandlers, default=BusInteractionHandlers.DEFAULT, choices=list(BusInteractionHandlers))
-    parser.add_argument('--field-type', type=FieldTypes, default=FieldTypes.BABYBEAR, choices=list(FieldTypes))
-    parser.add_argument('--log-conversion', action='store_true')
-    parser.add_argument('--log-json', action='store_true')
-    parser.add_argument('--log-rewrites', action='store_true')
-    parser.add_argument('--log-smt', action='store_true')
-    parser.add_argument('--log-memory-analysis', action='store_true')
-    parser.add_argument('--log-profile', action='store_true')
-    parser.add_argument('--skip-memory-analysis', action='store_true')
-    parser.add_argument('--dump-smt', action='store_true')
-    parser.add_argument('--base-dump', type=Path, default=None)
-    parser.add_argument('--solver', type=str, default="z3-latest")
+    parser.add_argument("-v", "--verbose", action="count", default=0)
+    parser.add_argument(
+        "--bus-interaction-handler",
+        type=BusInteractionHandlers,
+        default=BusInteractionHandlers.DEFAULT,
+        choices=list(BusInteractionHandlers),
+    )
+    parser.add_argument(
+        "--field-type",
+        type=FieldTypes,
+        default=FieldTypes.BABYBEAR,
+        choices=list(FieldTypes),
+    )
+    parser.add_argument("--log-conversion", action="store_true")
+    parser.add_argument("--log-json", action="store_true")
+    parser.add_argument("--log-rewrites", action="store_true")
+    parser.add_argument("--log-smt", action="store_true")
+    parser.add_argument("--log-memory-analysis", action="store_true")
+    parser.add_argument("--log-profile", action="store_true")
+    parser.add_argument("--skip-memory-analysis", action="store_true")
+    parser.add_argument("--dump-smt", action="store_true")
+    parser.add_argument("--base-dump", type=Path, default=None)
+    parser.add_argument("--solver", type=str, default="z3-latest")
 
     sub = parser.add_subparsers(dest="command")
-    
-    sub_trace = sub.add_parser('trace')
-    sub_trace.add_argument('input', type=Path)
-    sub_trace.add_argument('--use-derived', action='store_true')
-    sub_trace.add_argument('--dump-model', type=Path, default=None)
 
-    sub_eval = sub.add_parser('eval')
-    sub_eval.add_argument('input', type=Path)
-    sub_eval.add_argument('model', type=Path)
+    sub_trace = sub.add_parser("trace")
+    sub_trace.add_argument("input", type=Path)
+    sub_trace.add_argument("--use-derived", action="store_true")
+    sub_trace.add_argument("--dump-model", type=Path, default=None)
 
-    sub_diff = sub.add_parser('diff')
-    sub_diff.add_argument('input_before', type=Path)
-    sub_diff.add_argument('input_after', type=Path)
-    sub_diff.add_argument('--format', type=str, choices=['text', 'json'], default='text')
-    sub_diff.add_argument('--with-model', type=Path)
-    sub_diff.add_argument('--only-simplified', action='store_true')
+    sub_eval = sub.add_parser("eval")
+    sub_eval.add_argument("input", type=Path)
+    sub_eval.add_argument("model", type=Path)
 
+    sub_diff = sub.add_parser("diff")
+    sub_diff.add_argument("input_before", type=Path)
+    sub_diff.add_argument("input_after", type=Path)
+    sub_diff.add_argument(
+        "--format", type=str, choices=["text", "json"], default="text"
+    )
+    sub_diff.add_argument("--with-model", type=Path)
+    sub_diff.add_argument("--only-simplified", action="store_true")
 
-    sub_text = sub.add_parser('text')
-    sub_text.add_argument('input', type=Path)
+    sub_text = sub.add_parser("text")
+    sub_text.add_argument("input", type=Path)
 
-    sub_verify = sub.add_parser('verify')
-    sub_verify.add_argument('input_before', type=Path)
-    sub_verify.add_argument('input_after', type=Path)
+    sub_verify = sub.add_parser("verify")
+    sub_verify.add_argument("input_before", type=Path)
+    sub_verify.add_argument("input_after", type=Path)
 
     global __ARGS
     __ARGS = parser.parse_args(args)

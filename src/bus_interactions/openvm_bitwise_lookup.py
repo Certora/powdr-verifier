@@ -5,6 +5,7 @@ from .single_interaction_encoder import SingleInteractionEncoder
 
 from ..smt.utils import *
 
+
 class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
     """
     Encodes bitwise lookup bus interactions. It implements two cases:
@@ -15,11 +16,16 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
     The xor is encoded as an overapproximating `uf_xor` that is restricted
     on a best-effort basis by some axioms.
     """
-    UF_XOR = Symbol('uf_xor', FunctionType(INT, [INT, INT]))
+
+    UF_XOR = Symbol("uf_xor", FunctionType(INT, [INT, INT]))
     interpreters = {
         UF_XOR: (
-            lambda x,y: Int(x ^ y),
-            lambda x,y: y if x.is_zero() else (x if y.is_zero() else (Int(0) if x == y else None))
+            lambda x, y: Int(x ^ y),
+            lambda x, y: (
+                y
+                if x.is_zero()
+                else (x if y.is_zero() else (Int(0) if x == y else None))
+            ),
         ),
     }
 
@@ -36,22 +42,26 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
             return Implies(
                 Not(Equals(wrap_mod(mult), Int(0))),
                 And(
-                    LE(Int(0), x), LE(x, Int(255)),
-                    LE(Int(0), y), LE(y, Int(255)),
+                    LE(Int(0), x),
+                    LE(x, Int(255)),
+                    LE(Int(0), y),
+                    LE(y, Int(255)),
                     Equals(z, Int(0)),
                     Equals(op, Int(0)),
-                )
+                ),
             )
         elif op == Int(1):
             self.needs_xor_axioms = True
             return Implies(
                 Not(Equals(wrap_mod(mult), Int(0))),
                 And(
-                    LE(Int(0), x), LE(x, Int(255)),
-                    LE(Int(0), y), LE(y, Int(255)),
+                    LE(Int(0), x),
+                    LE(x, Int(255)),
+                    LE(Int(0), y),
+                    LE(y, Int(255)),
                     Equals(Function(self.UF_XOR, [x, y]), z),
                     Equals(op, Int(1)),
-                )
+                ),
             )
         else:
             logging.error(f"Unsupported bitwise operation: {op}")
@@ -62,7 +72,7 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
         """Return basic axioms restricting `uf_xor` when XOR is used in any interaction."""
         if not self.needs_xor_axioms:
             return None
-        x = Symbol('x', INT)
+        x = Symbol("x", INT)
         return And(
             ForAll([x], Equals(Function(self.UF_XOR, [x, Int(0)]), x)),
             ForAll([x], Equals(Function(self.UF_XOR, [Int(0), x]), x)),

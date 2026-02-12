@@ -2,6 +2,7 @@ from .single_interaction_encoder import SingleInteractionEncoder
 
 from ..smt.utils import *
 
+
 class OpenVMTupleRangeCheckerEncoder(SingleInteractionEncoder):
     # taken from openvm/extensions/rv32im/circuit/src/extension/mod.rs:default_range_tuple_checker_sizes()
     # but openvm/extensions/bigint/circuit/src/extension/mod.rs has other values...
@@ -18,7 +19,9 @@ class OpenVMTupleRangeCheckerEncoder(SingleInteractionEncoder):
         return Implies(
             Not(Equals(wrap_mod(mult), Int(0))),
             And(
-                LE(Int(0), x), LT(x, Int(self.MAX_0)),
-                LE(Int(0), y), LT(y, Int(self.MAX_1)),
+                LE(Int(0), x),
+                LT(x, Int(self.MAX_0)),
+                LE(Int(0), y),
+                LT(y, Int(self.MAX_1)),
             ),
         )

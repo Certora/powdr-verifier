@@ -3,11 +3,15 @@ from .single_interaction_encoder import SingleInteractionEncoder
 
 from ..smt.utils import *
 
-class OpenVMExecutionBridgeEncoder(SingleInteractionEncoder, TimestampCheckMixin, PermutationCheckMixin):
+
+class OpenVMExecutionBridgeEncoder(
+    SingleInteractionEncoder, TimestampCheckMixin, PermutationCheckMixin
+):
     """
     Encodes execution bridge bus interactions. It implements a permutation
     check on all interactions and requires their timestamps increase.
     """
+
     def __init__(self) -> None:
         """Initialize an empty execution-bridge interaction list."""
         super().__init__()
@@ -21,8 +25,8 @@ class OpenVMExecutionBridgeEncoder(SingleInteractionEncoder, TimestampCheckMixin
 
     def get_inputs(self) -> dict:
         """Expose the first interaction's args as the bus input (if present)."""
-        return { 'execution bridge': self._interactions[0][1] }
-    
+        return {"execution bridge": self._interactions[0][1]}
+
     def get_outputs(self) -> dict:
         """Expose the last interaction's args as the bus output (if present)."""
-        return { 'execution bridge': self._interactions[-1][1] }
+        return {"execution bridge": self._interactions[-1][1]}
