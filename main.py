@@ -13,7 +13,7 @@ from src import converter
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, force=True)
+    logging.basicConfig(level=logging.INFO, force=True, format='%(levelname)s:%(relativeCreated)dms %(message)s')
     parse_args()
 
     try:

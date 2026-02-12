@@ -138,10 +138,13 @@ class SmtConverter:
             }:
                 assert not rest_machine
                 assert not rest_apc
+                logging.debug(f"{self.name}: converting constraints")
                 self.convert_constraints(self.convert_manual(c) for c in cs)
+                logging.debug(f"{self.name}: adding bus interaction")
                 self.bus_interaction_encoder.add_all(
                     self.convert_manual(bi) for bi in bis
                 )
+                logging.debug(f"{self.name}: converting derived")
                 self.convert_derived(dcs)
 
             # expressions
@@ -184,8 +187,11 @@ class SmtConverter:
     @simple_profile
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
         """Convert input data and return constraints, interactions, axioms, derived columns, and globals."""
+        logging.debug(f"{self.name}: converting")
         self.convert_manual(data)
+        logging.debug(f"{self.name}: encoding bus interactions")
         bus_interactions = self.bus_interaction_encoder.encode_all()
+        logging.debug(f"{self.name}: rewrite and assemble")
         fwa = FormulaWithAxioms(
             constraints=self.constraints,
             bus_interactions=rewrite(bus_interactions),
@@ -198,4 +204,5 @@ class SmtConverter:
         )
         if ARGS().log_smt:
             logging.info(f"after smt conversion:\n{pprint.pformat(fwa, width=80)}")
+        logging.debug(f"{self.name}: done converting")
         return fwa
