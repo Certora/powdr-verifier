@@ -5,39 +5,41 @@ from ..smt.utils import *
 @simple_profile
 def to_sympy(expr: FNode) -> sympy.Expr:
     """Convert a PySMT term into the equivalent SymPy expression."""
-    if expr.is_true():
-        return sympy.true
-    if expr.is_false():
-        return sympy.false
     if expr.is_symbol():
         return sympy.Symbol(expr.symbol_name())
-    elif expr.is_and():
-        return sympy.And(*[to_sympy(arg) for arg in expr.args()])
-    elif expr.is_or():
-        return sympy.Or(*[to_sympy(arg) for arg in expr.args()])
-    elif expr.is_not():
-        return sympy.Not(to_sympy(expr.args()[0]))
-    elif expr.is_implies():
-        return sympy.Implies(to_sympy(expr.args()[0]), to_sympy(expr.args()[1]))
-    elif expr.is_iff():
-        return sympy.Equivalent(to_sympy(expr.args()[0]), to_sympy(expr.args()[1]))
-    elif expr.is_equals():
-        return sympy.Eq(to_sympy(expr.args()[0]), to_sympy(expr.args()[1]))
-    elif expr.is_lt():
-        return sympy.Lt(to_sympy(expr.args()[0]), to_sympy(expr.args()[1]))
-    elif expr.is_le():
-        return sympy.Le(to_sympy(expr.args()[0]), to_sympy(expr.args()[1]))
-    elif expr.is_mod():
-        return sympy.Mod(to_sympy(expr.args()[0]), to_sympy(expr.args()[1]))
-    elif expr.is_int_constant():
-        return sympy.Integer(expr.constant_value())
-    elif expr.is_plus():
-        return sympy.Add(*[to_sympy(arg) for arg in expr.args()])
-    elif expr.is_minus():
-        first, *tail = expr.args()
-        return sympy.Add(to_sympy(first), *[-to_sympy(arg) for arg in tail])
-    elif expr.is_times():
-        return sympy.Mul(*[to_sympy(arg) for arg in expr.args()])
+    elif expr.get_type().is_bool_type():
+        if expr.is_true():
+            return sympy.true
+        elif expr.is_false():
+            return sympy.false
+        elif expr.is_and():
+            return sympy.And(*[to_sympy(arg) for arg in expr.args()])
+        elif expr.is_or():
+            return sympy.Or(*[to_sympy(arg) for arg in expr.args()])
+        elif expr.is_not():
+            return sympy.Not(to_sympy(expr.args()[0]))
+        elif expr.is_implies():
+            return sympy.Implies(to_sympy(expr.args()[0]), to_sympy(expr.args()[1]))
+        elif expr.is_iff():
+            return sympy.Equivalent(to_sympy(expr.args()[0]), to_sympy(expr.args()[1]))
+        elif expr.is_equals():
+            return sympy.Eq(to_sympy(expr.args()[0]), to_sympy(expr.args()[1]))
+        elif expr.is_lt():
+            return sympy.Lt(to_sympy(expr.args()[0]), to_sympy(expr.args()[1]))
+        elif expr.is_le():
+            return sympy.Le(to_sympy(expr.args()[0]), to_sympy(expr.args()[1]))
+    elif expr.get_type().is_int_type():
+        if expr.is_mod():
+            return sympy.Mod(to_sympy(expr.args()[0]), to_sympy(expr.args()[1]))
+        elif expr.is_int_constant():
+            return sympy.Integer(expr.constant_value())
+        elif expr.is_plus():
+            return sympy.Add(*[to_sympy(arg) for arg in expr.args()])
+        elif expr.is_minus():
+            first, *tail = expr.args()
+            return sympy.Add(to_sympy(first), *[-to_sympy(arg) for arg in tail])
+        elif expr.is_times():
+            return sympy.Mul(*[to_sympy(arg) for arg in expr.args()])
     elif expr.is_function_application():
         return sympy.Function(expr.function_name().symbol_name())(*[to_sympy(arg) for arg in expr.args()])
     else:
