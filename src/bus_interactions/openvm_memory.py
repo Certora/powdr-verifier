@@ -8,6 +8,7 @@ from .single_interaction_encoder import SingleInteractionEncoder
 
 from ..smt.utils import *
 
+
 class MemoryAnalysis:
     """
     This class performs an alias analysis on a list of memory accesses,
@@ -22,26 +23,29 @@ class MemoryAnalysis:
     2. possible aliasing:
        For each equivalence class, find all other equivalence classes that can
        alias with it, but are not implied aliases.
-    
+
     The result is a set of enhanced equivalence classes, each consisting of a
     set of accesses (that are implied aliases) and another set of accesses
     (that are possible but not implied aliases).
     """
+
     def __init__(self, constraints: list[FNode]):
         """Initialize alias-analysis state for the given global constraints."""
         self.implied_classes = {}
         self.possible_aliases = {}
         self.formula_selector = VarBaseFormulaSelector(constraints)
-    
+
     def solve_implied_aliasing(self, accesses: list[tuple[FNode, FNode]]):
         """Compute alias equivalence classes that are implied by the constraints."""
-        self.implied_classes = { (a[0], a[1]): (a[0], a[1]) for a in accesses }
+        self.implied_classes = {(a[0], a[1]): (a[0], a[1]) for a in accesses}
 
-        for a,b in itertools.combinations(self.implied_classes.values(), 2):
+        for a, b in itertools.combinations(self.implied_classes.values(), 2):
             if self.implied_classes[a] == self.implied_classes[b]:
                 continue
 
-            with Solver(logic=QF_UFNIA, incremental=True, solver_options={'timeout': 10000}) as solver:
+            with Solver(
+                logic=QF_UFNIA, incremental=True, solver_options={"timeout": 10000}
+            ) as solver:
                 for c in self.formula_selector.resolve_shallow_for([*a, *b]):
                     solver.add_assertion(c)
 
@@ -49,13 +53,15 @@ class MemoryAnalysis:
                 logging.debug(f"checking if {same} is valid")
                 if solver.is_valid(same):
                     self.implied_classes[b] = self.implied_classes[a]
-    
+
     def solve_possible_aliasing(self):
         """For each implied class, find other classes that can alias in some model."""
-        self.possible_aliases = { a: [] for a in self.implied_classes.values() }
+        self.possible_aliases = {a: [] for a in self.implied_classes.values()}
 
-        for a,b in itertools.combinations(self.possible_aliases.keys(), 2):
-            with Solver(logic=UFNIA, incremental=True, solver_options={'timeout': 10000}) as solver:
+        for a, b in itertools.combinations(self.possible_aliases.keys(), 2):
+            with Solver(
+                logic=UFNIA, incremental=True, solver_options={"timeout": 10000}
+            ) as solver:
                 for c in self.formula_selector.resolve_shallow_for([*a, *b]):
                     solver.add_assertion(c)
 
@@ -64,30 +70,43 @@ class MemoryAnalysis:
                 if solver.is_sat(same):
                     self.possible_aliases[a].append(b)
                     self.possible_aliases[b].append(a)
-    
-    def get_equivalence_classes(self) -> frozenset[tuple[frozenset[FNode], frozenset[FNode]]]:
+
+    def get_equivalence_classes(
+        self,
+    ) -> frozenset[tuple[frozenset[FNode], frozenset[FNode]]]:
         """Return implied alias sets paired with their corresponding possible-alias sets."""
-        return frozenset([
-            (
-                frozenset([a for a in self.implied_classes if self.implied_classes[a] == representative]),
-                frozenset(self.possible_aliases[representative]),
-            )
-            for representative in set(self.implied_classes.values())
-        ])
+        return frozenset(
+            [
+                (
+                    frozenset(
+                        [
+                            a
+                            for a in self.implied_classes
+                            if self.implied_classes[a] == representative
+                        ]
+                    ),
+                    frozenset(self.possible_aliases[representative]),
+                )
+                for representative in set(self.implied_classes.values())
+            ]
+        )
 
 
-class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, TimestampCheckMixin):
+class OpenVMMemoryEncoder(
+    SingleInteractionEncoder, PermutationCheckMixin, TimestampCheckMixin
+):
     """
     Encodes memory bus interactions. It implements a permutation check on all
     interactions and requires their timestamps increase.
     """
+
     def __init__(self) -> None:
         """Initialize encoder state for memory interactions (analysis computed in `pre_analysis`)."""
         super().__init__()
         self.interactions = {}
         self.name_or_id = NameOrIdGenerator()
         self.analysis = None
-    
+
     def _sorted_interactions(self) -> list[tuple[FNode, Any]]:
         """Return interactions sorted by syntactic size of `(address_space, pointer)`."""
         return sorted(self._interactions, key=lambda i: i[1][0].size() + i[1][1].size())
@@ -100,7 +119,7 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
 
         accesses = sorted(
             [(i[1][0], i[1][1]) for i in self._interactions],
-            key=lambda i: i[0].size() + i[1].size()
+            key=lambda i: i[0].size() + i[1].size(),
         )
         self.analysis = MemoryAnalysis(self.constraints())
         self.analysis.solve_implied_aliasing(accesses)
@@ -111,13 +130,12 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
             for access, repr in self.analysis.implied_classes.items():
                 if access != repr:
                     logging.warning(f"\t{repr} == {access}")
-            for access,possible in self.analysis.possible_aliases.items():
+            for access, possible in self.analysis.possible_aliases.items():
                 if possible:
                     logging.warning(f"\t{access} possibly aliases with")
                     for p in possible:
                         if access != p:
                             logging.warning(f"\t\t{p}")
-
 
     def group_interactions(self):
         """Group interactions by implied alias class and replicate into possible-alias buckets."""
@@ -141,30 +159,42 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
 
         return res
 
-    def encode(self, mult: FNode, address_space: FNode, pointer: FNode, data: list[FNode], timestamp: FNode) -> FNode:
+    def encode(
+        self,
+        mult: FNode,
+        address_space: FNode,
+        pointer: FNode,
+        data: list[FNode],
+        timestamp: FNode,
+    ) -> FNode:
         """(Currently a stub) Placeholder for per-interaction local memory constraints."""
         if address_space.is_int_constant() and address_space.constant_value() == 0:
             assert mult.is_int_constant() and mult.constant_value() == 0
         return None
         return with_comment(
             Implies(
-                #Equals(wrap_mod(mult), wrap_mod(Int(-1))),
+                # Equals(wrap_mod(mult), wrap_mod(Int(-1))),
                 TRUE(),
-                And(
-                    *[ And(LE(Int(0), d), LE(d, Int(255))) for d in data ]
-                )
+                And(*[And(LE(Int(0), d), LE(d, Int(255))) for d in data]),
             ),
-            f"MEMORY interaction for {address_space} {pointer}"
+            f"MEMORY interaction for {address_space} {pointer}",
         )
-    
+
     @attach_comment("MEMORY axioms")
     def get_axioms(self) -> Optional[FNode]:
         """Return timestamp + array-based permutation axioms for the memory bus."""
         ts = self.ordered_timestamp_check()
-        permutation_axioms, inputs, intermediates, outputs, isinputs = self.array_permutation_check(f'{self._cur_state.name}-mem',
-            keywidth=2, datawidth=5, interactions=[
-            (mult, [a,p], [*args, t]) for mult, (a, p, args, t) in self._interactions
-        ])
+        permutation_axioms, inputs, intermediates, outputs, isinputs = (
+            self.array_permutation_check(
+                f"{self._cur_state.name}-mem",
+                keywidth=2,
+                datawidth=5,
+                interactions=[
+                    (mult, [a, p], [*args, t])
+                    for mult, (a, p, args, t) in self._interactions
+                ],
+            )
+        )
         self.inputs = inputs
         self.auxiliaries = intermediates
         self.outputs = outputs
@@ -172,9 +202,14 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
             with_comment(
                 Implies(
                     isinput,
-                    And(*[And(LE(Int(0), d), LE(d, Int(255))) for d in self._interactions[id].args[2]])
+                    And(
+                        *[
+                            And(LE(Int(0), d), LE(d, Int(255)))
+                            for d in self._interactions[id].args[2]
+                        ]
+                    ),
                 ),
-                f"assume bytes if #{id} is input"
+                f"assume bytes if #{id} is input",
             )
             for id, isinput in enumerate(isinputs)
         ]
@@ -182,8 +217,8 @@ class OpenVMMemoryEncoder(SingleInteractionEncoder, PermutationCheckMixin, Times
 
     def get_inputs(self) -> dict:
         """Expose array symbols representing the initial bus state."""
-        return { 'memory': self.inputs }
-    
+        return {"memory": self.inputs}
+
     def get_outputs(self) -> dict:
         """Expose array symbols representing the final bus state."""
-        return { 'memory': self.outputs }
+        return {"memory": self.outputs}

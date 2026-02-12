@@ -1,4 +1,3 @@
-
 import collections
 import logging
 import pprint
@@ -12,9 +11,13 @@ from ..utils.args import ARGS, BusInteractionHandlers
 from ..utils.profiling import simple_profile
 from .utils import *
 
-FormulaWithAxioms = collections.namedtuple('FormulaWithAxioms', ['constraints', 'bus_interactions', 'axioms', 'derived', 'globals'])
+FormulaWithAxioms = collections.namedtuple(
+    "FormulaWithAxioms",
+    ["constraints", "bus_interactions", "axioms", "derived", "globals"],
+)
 
-def _check_is_valid(self: Solver, f: FNode, assert_true = False) -> bool:
+
+def _check_is_valid(self: Solver, f: FNode, assert_true=False) -> bool:
     try:
         logging.debug(f"checking whether {f} is valid")
         res = self.is_valid(f)
@@ -25,7 +28,8 @@ def _check_is_valid(self: Solver, f: FNode, assert_true = False) -> bool:
         assert res
     return res
 
-def _check_is_sat(self: Solver, f: FNode, assert_true = False) -> bool:
+
+def _check_is_sat(self: Solver, f: FNode, assert_true=False) -> bool:
     try:
         logging.debug(f"checking whether {f} is sat")
         res = self.is_sat(f)
@@ -36,8 +40,10 @@ def _check_is_sat(self: Solver, f: FNode, assert_true = False) -> bool:
         assert res
     return res
 
+
 class SmtConverter:
     """Convert JSON-like APC dumps (constraints + bus interactions) into SMT constraints and axioms."""
+
     def __init__(self, name: str, basic_block: BasicBlock):
         """Create a converter that turns JSON-like dumps into SMT, namespacing symbols by `name`."""
         self.basic_block = basic_block
@@ -45,21 +51,25 @@ class SmtConverter:
         self.constraints = []
         self.derived_columns = []
         self.name = name
-        self.constraint_solver = Solver(solver_options={':timeout': 5000})
+        self.constraint_solver = Solver(solver_options={":timeout": 5000})
         type(self.constraint_solver).check_is_valid = _check_is_valid
         type(self.constraint_solver).check_is_sat = _check_is_sat
 
         match ARGS().bus_interaction_handler:
             case BusInteractionHandlers.OPENVM:
-                self.bus_interaction_encoder = bus_interactions.OpenVMBusInteractionEncoder(basic_block, self)
+                self.bus_interaction_encoder = (
+                    bus_interactions.OpenVMBusInteractionEncoder(basic_block, self)
+                )
             case _:
-                logging.error(f"Unsupported bus interaction handler: {ARGS().bus_interaction_handler}")
+                logging.error(
+                    f"Unsupported bus interaction handler: {ARGS().bus_interaction_handler}"
+                )
                 self.bus_interaction_encoder = None
-    
+
     def __enter__(self):
         """No-op when entering a resource management context."""
         return self
-    
+
     def __exit__(self, exc_type, exc_value, traceback):
         """Kill the solver when exiting a resource management context."""
         self.constraint_solver.exit()
@@ -70,43 +80,42 @@ class SmtConverter:
             c = with_comment(c, comment)
         self.constraints.append(rewrite(c))
         self.constraint_solver.add_assertion(self.constraints[-1])
-    
+
     def convert_constraints(self, data: Iterable[Any]):
         """Convert raw constraint expressions to `wrap_mod(expr) == 0` and add them."""
-        for id,c in enumerate(data):
-            self.__add_constraint(
-                Equals(wrap_mod(c), Int(0)),
-                f"CONSTRAINT #{id}"
-            )
-    
+        for id, c in enumerate(data):
+            self.__add_constraint(Equals(wrap_mod(c), Int(0)), f"CONSTRAINT #{id}")
+
     def convert_derived(self, data: Iterable[Any]):
         """Convert derived-column definitions into symbolic equalities (stored for later use)."""
         for derived in data:
             match derived:
-                case [str(name), {'Constant': int(value)}]:
-                    self.derived_columns.append((
-                        Symbol(f"{self.name}-{name}", INT),
-                        with_comment(
-                            Int(value),
-                            f"DERIVED COLUMN {name} = {value}"
+                case [str(name), {"Constant": int(value)}]:
+                    self.derived_columns.append(
+                        (
+                            Symbol(f"{self.name}-{name}", INT),
+                            with_comment(
+                                Int(value), f"DERIVED COLUMN {name} = {value}"
+                            ),
                         )
-                    ))
-                case [str(name), {'QuotientOrZero': [a, b] }] | {"variable": str(name), "computation_method": {'QuotientOrZero': [a, b] }}:
+                    )
+                case [str(name), {"QuotientOrZero": [a, b]}] | {
+                    "variable": str(name),
+                    "computation_method": {"QuotientOrZero": [a, b]},
+                }:
                     a = self.convert_manual(a)
                     b = self.convert_manual(b)
-                    self.derived_columns.append((
-                        Symbol(f"{self.name}-{name}", INT),
-                        with_comment(
-                            rewrite(
-                                Ite(
-                                    Equals(b, Int(0)),
-                                    Int(0),
-                                    wrap_mod(Div(a, b))
-                                )
+                    self.derived_columns.append(
+                        (
+                            Symbol(f"{self.name}-{name}", INT),
+                            with_comment(
+                                rewrite(
+                                    Ite(Equals(b, Int(0)), Int(0), wrap_mod(Div(a, b)))
+                                ),
+                                f"DERIVED COLUMN {name} = QuotientOrZero({a}, {b})",
                             ),
-                            f"DERIVED COLUMN {name} = QuotientOrZero({a}, {b})"
                         )
-                    ))
+                    )
                 case _:
                     logging.error(f"Unsupported derived column: {derived}")
 
@@ -116,34 +125,36 @@ class SmtConverter:
         match data:
             # general json structure
             case {
-                'block': _,
-                'machine': {
-                    'constraints': list(cs),
-                    'bus_interactions': list(bis),
-                    'derived_columns': list(dcs),
+                "block": _,
+                "machine": {
+                    "constraints": list(cs),
+                    "bus_interactions": list(bis),
+                    "derived_columns": list(dcs),
                     **rest_machine,
                 },
-                'subs': _,
-                'optimistic_constraints': _,
+                "subs": _,
+                "optimistic_constraints": _,
                 **rest_apc,
             }:
                 assert not rest_machine
                 assert not rest_apc
                 self.convert_constraints(self.convert_manual(c) for c in cs)
-                self.bus_interaction_encoder.add_all(self.convert_manual(bi) for bi in bis)
+                self.bus_interaction_encoder.add_all(
+                    self.convert_manual(bi) for bi in bis
+                )
                 self.convert_derived(dcs)
 
             # expressions
-            case { 'expr': expr, **rest }:
+            case {"expr": expr, **rest}:
                 assert rest == {}
                 return self.convert_manual(expr)
-            case [left, '+', right]:
+            case [left, "+", right]:
                 return Plus(self.convert_manual(left), self.convert_manual(right))
-            case [left, '-', right]:
+            case [left, "-", right]:
                 return Minus(self.convert_manual(left), self.convert_manual(right))
-            case [left, '*', right]:
+            case [left, "*", right]:
                 return Times(self.convert_manual(left), self.convert_manual(right))
-            case ['-', right]:
+            case ["-", right]:
                 return Minus(Int(0), self.convert_manual(right))
             case int(value):
                 return Int(value)
@@ -153,11 +164,11 @@ class SmtConverter:
                 return sym
 
             # bus interactions
-            case {'id': int(id), 'mult': mult, 'args': list(args)}:
+            case {"id": int(id), "mult": mult, "args": list(args)}:
                 return {
-                    'id': id,
-                    'mult': self.convert_manual(mult),
-                    'args': [ self.convert_manual(arg) for arg in args ],
+                    "id": id,
+                    "mult": self.convert_manual(mult),
+                    "args": [self.convert_manual(arg) for arg in args],
                 }
 
             case _:
@@ -178,10 +189,13 @@ class SmtConverter:
         fwa = FormulaWithAxioms(
             constraints=self.constraints,
             bus_interactions=rewrite(bus_interactions),
-            axioms=rewrite(self.bus_interaction_encoder.get_axioms() + list(self.__add_basic_range_axioms())),
+            axioms=rewrite(
+                self.bus_interaction_encoder.get_axioms()
+                + list(self.__add_basic_range_axioms())
+            ),
             derived=self.derived_columns,
             globals=self.bus_interaction_encoder.get_globals(),
         )
         if ARGS().log_smt:
-            logging.info(f'after smt conversion:\n{pprint.pformat(fwa, width=80)}')
+            logging.info(f"after smt conversion:\n{pprint.pformat(fwa, width=80)}")
         return fwa

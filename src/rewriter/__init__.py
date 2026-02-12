@@ -7,13 +7,14 @@ from .rewrites_sympy import rewrite_choice, rewrite_mod_equality
 from ..smt.utils import *
 
 REWRITES = {
-    operators.EQUALS: [ rewrite_z3simplify, rewrite_eqmod ],
-    operators.MOD: [ rewrite_mod ],
+    operators.EQUALS: [rewrite_z3simplify, rewrite_eqmod],
+    operators.MOD: [rewrite_mod],
 }
 REWRITES_SYMPY = {
-    operators.EQUALS: [ rewrite_choice ],
+    operators.EQUALS: [rewrite_choice],
 }
 MAX_REWRITE_COUNT = 5
+
 
 @simple_profile
 def rewrite_one(node_type: int, args: list[FNode], rewrites) -> FNode:
@@ -23,6 +24,7 @@ def rewrite_one(node_type: int, args: list[FNode], rewrites) -> FNode:
         if res is not None:
             return res
     return None
+
 
 @simple_profile
 def rewrite_one_sympy(node: sympy.Expr, rewrites) -> sympy.Expr:
@@ -38,11 +40,15 @@ class RelationRewriter(substituter.Substituter):
     def __init__(self, env=None):
         """Create a PySMT substituter that may rewrite equalities via SymPy."""
         substituter.Substituter.__init__(self, env=env)
-    
-    @substituter.handles(set(operators.ALL_TYPES) - frozenset([operators.EQUALS, operators.MOD]))
+
+    @substituter.handles(
+        set(operators.ALL_TYPES) - frozenset([operators.EQUALS, operators.MOD])
+    )
     def walk_identity(self, formula, args, **kwargs):
         """Rebuild non-equality nodes unchanged, preserving any attached comment."""
-        return keep_comment(substituter.Substituter.super(self, formula, args=args, **kwargs), formula)
+        return keep_comment(
+            substituter.Substituter.super(self, formula, args=args, **kwargs), formula
+        )
 
     @substituter.handles(frozenset([operators.EQUALS, operators.MOD]))
     def walk_identity_or_replace(self, formula, args, **kwargs):
@@ -57,7 +63,11 @@ class RelationRewriter(substituter.Substituter):
         if op in REWRITES_SYMPY:
             try:
                 node = get_env().formula_manager.create_node(op, tuple(args))
-                res = to_smt(rewrite_one_sympy(to_sympy(node), REWRITES_SYMPY[formula.node_type()]))
+                res = to_smt(
+                    rewrite_one_sympy(
+                        to_sympy(node), REWRITES_SYMPY[formula.node_type()]
+                    )
+                )
             except AssertionError:
                 res = formula
             except sympy.SympifyError:
@@ -66,7 +76,10 @@ class RelationRewriter(substituter.Substituter):
                 if ARGS().log_rewrites:
                     logging.info(f"rewrote sympy {formula} --> {res}")
                 return keep_comment(res, formula)
-        return keep_comment(substituter.Substituter.super(self, formula, args=args, **kwargs), formula)
+        return keep_comment(
+            substituter.Substituter.super(self, formula, args=args, **kwargs), formula
+        )
+
 
 @simple_profile
 def rewrite(input: FNode) -> FNode:

@@ -5,10 +5,11 @@ from .utils.basic_block import BasicBlock
 from .smt.conversion import SmtConverter
 from .smt.utils import *
 
+
 def evaluate(input: dict, model: dict[str, int]):
     """Check which parts of the SMT encoding hold under a provided variable assignment."""
 
-    model = { f'input-{m}': v for m, v in model.items() }
+    model = {f"input-{m}": v for m, v in model.items()}
 
     with SmtConverter("input", BasicBlock(input["block"])) as conv:
         smt = conv.to_formula_with_axioms(input)

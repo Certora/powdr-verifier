@@ -7,9 +7,11 @@ from .utils import unpack_modeq
 
 ### This is sympy land! Do not use pysmt here!
 
+
 def normalize(e: Expr) -> Expr:
     """Expand and reduce `e` modulo the configured field modulus."""
     return expand(e, modulus=ARGS().field_type.value)
+
 
 @simple_profile
 def rewrite_choice(node: Expr) -> Expr:
@@ -18,10 +20,9 @@ def rewrite_choice(node: Expr) -> Expr:
         case e, c:
             factors = factor(e)
             if isinstance(factors, Mul) and len(factors.args) > 1:
-                return Or(
-                    *[Eq(Mod(normalize(f), c), 0) for f in factors.args]
-                )
+                return Or(*[Eq(Mod(normalize(f), c), 0) for f in factors.args])
     return None
+
 
 @simple_profile
 def rewrite_mod_equality(node: Expr) -> Expr:
@@ -37,8 +38,8 @@ def rewrite_mod_equality(node: Expr) -> Expr:
                 return Eq(m[s], Mod(m[c], modulus))
             if m := expr.match(s - s2):
                 return Eq(m[s], m[s2])
-            if m := expr.match(s + (ARGS().field_type.value - 1)*s2):
+            if m := expr.match(s + (ARGS().field_type.value - 1) * s2):
                 return Eq(m[s], m[s2])
-            if m := expr.match(c + (ARGS().field_type.value - 1)*s):
+            if m := expr.match(c + (ARGS().field_type.value - 1) * s):
                 return Eq(m[s], m[c])
     return None
