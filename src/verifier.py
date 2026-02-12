@@ -70,7 +70,8 @@ class ModelMapBuilder:
                     for r,v in solution[0].items():
                         target = strip_prefix(r.name)
                         logging.debug(f"simpeq: found {target} = {v}")
-                        assert target in self.nmap
+                        if target not in self.nmap:
+                            continue
                         assert target not in self.omap
                         v = to_smt(v)
                         self.result[self.nmap[target]] = v
@@ -85,10 +86,11 @@ class ModelMapBuilder:
                 op,a,b,c,d,e,f,g = encoder._get_instruction(self.result[spc].constant_value())
 
                 res = find_unique_solution(conv.constraint_solver, Equals(sop, Int(op)))
-                for v,c in res.items():
-                    logging.debug(f"pclookup: found {v} = {c}")
-                    self.result[v] = c
-                    del self.nmap[strip_prefix(v.symbol_name())]
+                if res is not None:
+                    for v,c in res.items():
+                        logging.debug(f"pclookup: found {v} = {c}")
+                        self.result[v] = c
+                        del self.nmap[strip_prefix(v.symbol_name())]
 
 
     def build(self, newconv):
@@ -144,7 +146,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
 
         def completeness():
             forward_builder = ModelMapBuilder(var1 - globals - auxiliaries, var2 - globals - auxiliaries, before_smt, after_smt)
-            forward_builder.build()
+            forward_builder.build(after_conv)
             completeness = ForAll(var2 - globals,
                 And(
                     And(
@@ -165,7 +167,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                 )
             )
             do_check(completeness, "completeness")
-        #completeness()
+        completeness()
 
         
         def soundness():
