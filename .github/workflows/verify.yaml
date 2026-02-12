@@ -28,10 +28,10 @@ jobs:
       uses: actions/cache@v3
       with:
           path: ~/bin/
-          key: bin-${{ hashFiles('.github/**') }}-${{ steps.get-date.outputs.date }}
+          key: bin-${{ steps.get-date.outputs.date }}
           restore-keys: bin-
 
-    - name: install python dependencies
+    - name: install custom binaries
       run: |
         mkdir -p ~/bin/
         python3 verifier/download_z3.py z3-4.15.4 ~/bin/
@@ -58,7 +58,7 @@ jobs:
       with:
         path: ~/bin/
         fail-on-cache-miss: true
-        key: bin-${{ hashFiles('.github/**') }}-${{ needs.binaries.outputs.date }}
+        key: bin-${{ needs.binaries.outputs.date }}
       
     - name: install python dependencies
       run: |
@@ -122,7 +122,7 @@ jobs:
       with:
         path: ~/bin/
         fail-on-cache-miss: true
-        key: bin-${{ hashFiles('.github/**') }}-${{ needs.binaries.outputs.date }}
+        key: bin-${{ needs.binaries.outputs.date }}
     
     - name: install python dependencies
       run: |
