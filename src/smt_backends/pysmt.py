@@ -126,6 +126,13 @@ def Mod(left, right):
     r""".. math:: l % r """
     return get_env().formula_manager.Mod(left, right)
 
+def Equals(left, right):
+    assert left.get_type() == right.get_type()
+    if left.get_type().is_bool_type():
+        return Iff(left, right)
+    else:
+        return pysmt.shortcuts.Equals(left, right)
+
 solvers = [
     {
         'name': 'cvc5ff',
