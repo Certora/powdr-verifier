@@ -170,22 +170,21 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             completeness = ForAll(
                 var2 - globals,
                 And(
-                    And(
-                        *before_smt.constraints,
-                        *before_smt.bus_interactions,
-                        forward_builder.get_map(),
-                        input_relation,
-                        output_relation,
-                    ),
-                    Not(
-                        And(
-                            *after_smt.constraints,
-                            *after_smt.bus_interactions,
-                        )
-                    ),
-                    And(*before_smt.axioms),
-                    And(*after_smt.axioms),
-                ),
+                    forward_builder.get_map(),
+                    *before_smt.constraints,
+                    *before_smt.bus_interactions,
+                    *before_smt.axioms,
+                    Or(
+                        Not(
+                            And(
+                                *after_smt.constraints,
+                                *after_smt.bus_interactions,
+                                *after_smt.axioms,
+                            )
+                        ),
+                        Not(Implies(input_relation, output_relation))
+                    )
+                )
             )
             do_check(completeness, "completeness")
 
@@ -202,23 +201,20 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             soundness = ForAll(
                 var1 - globals,
                 And(
-                    Not(
-                        Implies(
-                            And(
-                                *after_smt.constraints,
-                                *after_smt.bus_interactions,
-                                backward_builder.get_map(),
-                                input_relation,
-                                output_relation,
-                            ),
+                    backward_builder.get_map(),
+                    *after_smt.constraints,
+                    *after_smt.bus_interactions,
+                    *after_smt.axioms,
+                    Or(
+                        Not(
                             And(
                                 *before_smt.constraints,
                                 *before_smt.bus_interactions,
-                            ),
-                        )
-                    ),
-                    And(*before_smt.axioms),
-                    And(*after_smt.axioms),
+                                *before_smt.axioms,
+                            )
+                        ),
+                        Not(Implies(input_relation, output_relation)),
+                    )
                 ),
             )
             do_check(soundness, "soundness")
