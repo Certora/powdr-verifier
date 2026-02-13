@@ -92,19 +92,21 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
         """Encode the full instruction table as equalities over the PC lookup UFs."""
         for id, stmt in enumerate(self.basic_block.statements):
             op, a, b, c, d, e, f, g = stmt
-            yield And(
-                Equals(Function(self.UF_OPCODE, [Int(4 * id)]), Int(op)),
-                Equals(Function(self.UF_A, [Int(4 * id)]), Int(a)),
-                Equals(Function(self.UF_B, [Int(4 * id)]), Int(b)),
-                Equals(Function(self.UF_C, [Int(4 * id)]), Int(c)),
-                Equals(Function(self.UF_D, [Int(4 * id)]), Int(d)),
-                Equals(Function(self.UF_E, [Int(4 * id)]), Int(e)),
-                Equals(Function(self.UF_F, [Int(4 * id)]), Int(f)),
-                Equals(Function(self.UF_G, [Int(4 * id)]), Int(g)),
+            yield with_comment(
+                And(
+                    Equals(Function(self.UF_OPCODE, [Int(4 * id)]), Int(op)),
+                    Equals(Function(self.UF_A, [Int(4 * id)]), Int(a)),
+                    Equals(Function(self.UF_B, [Int(4 * id)]), Int(b)),
+                    Equals(Function(self.UF_C, [Int(4 * id)]), Int(c)),
+                    Equals(Function(self.UF_D, [Int(4 * id)]), Int(d)),
+                    Equals(Function(self.UF_E, [Int(4 * id)]), Int(e)),
+                    Equals(Function(self.UF_F, [Int(4 * id)]), Int(f)),
+                    Equals(Function(self.UF_G, [Int(4 * id)]), Int(g)),
+                ),
+                f"{self.NAME} axiom #{id}"
             )
 
     def get_axioms(self) -> Optional[FNode]:
         """Return the UF-definition axioms for the instruction table (if `encode` was used)."""
-        if not self.needs_axioms:
-            return None
-        return And(*self.__encode_block())
+        if self.needs_axioms:
+            yield from self.__encode_block()

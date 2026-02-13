@@ -245,6 +245,8 @@ class SMTPrettyPrinter(script.SmtPrinter):
     
     @printers.write_annotations
     def _walk_quantifier(self, operator, formula):
+        if hasattr(formula, 'comment'):
+            self.write_indented(f'; {formula.comment}\n')
         assert len(formula.quantifier_vars()) > 0
         self.write_indented(f'({operator}')
         with self.indented():

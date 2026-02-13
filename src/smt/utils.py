@@ -1,6 +1,7 @@
 import functools
 import logging
 from typing import Any, Iterable
+from types import GeneratorType
 
 from ..smt_backends.pysmt import *
 from ..utils.profiling import simple_profile
@@ -37,6 +38,8 @@ def attach_comment(comment: str):
             res = func(*args, **kwargs)
             if res is None:
                 return None
+            if isinstance(res, GeneratorType):
+                return (with_comment(f, comment.format(*args, **kwargs)) for f in res)
             return with_comment(res, comment.format(*args, **kwargs))
 
         return wrapper
