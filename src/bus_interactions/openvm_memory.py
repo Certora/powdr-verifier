@@ -100,6 +100,8 @@ class OpenVMMemoryEncoder(
     interactions and requires their timestamps increase.
     """
 
+    NAME = "memory"
+
     def __init__(self) -> None:
         """Initialize encoder state for memory interactions (analysis computed in `pre_analysis`)."""
         super().__init__()
@@ -159,7 +161,7 @@ class OpenVMMemoryEncoder(
 
         return res
 
-    def encode(
+    def encode_pointwise(
         self,
         mult: FNode,
         address_space: FNode,
@@ -180,8 +182,7 @@ class OpenVMMemoryEncoder(
             f"MEMORY interaction for {address_space} {pointer}",
         )
 
-    @attach_comment("MEMORY axioms")
-    def get_axioms(self) -> Optional[FNode]:
+    def encode_all(self) -> Iterable[FNode]:
         """Return timestamp + array-based permutation axioms for the memory bus."""
         ts = self.ordered_timestamp_check()
         permutation_axioms, inputs, intermediates, outputs, isinputs = (
@@ -213,12 +214,6 @@ class OpenVMMemoryEncoder(
             )
             for id, isinput in enumerate(isinputs)
         ]
-        return And(ts, *permutation_axioms, *assume_bytes)
-
-    def get_inputs(self) -> dict:
-        """Expose array symbols representing the initial bus state."""
-        return {"memory": self.inputs}
-
-    def get_outputs(self) -> dict:
-        """Expose array symbols representing the final bus state."""
-        return {"memory": self.outputs}
+        yield with_comment(ts, f"{self.NAME} timestamp check")
+        yield with_comment(And(*permutation_axioms), f"{self.NAME} permutation axioms")
+        yield with_comment(And(*assume_bytes), f"{self.NAME} assume bytes")

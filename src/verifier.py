@@ -154,10 +154,10 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
         var1 = collect_variables(before_smt)
         var2 = collect_variables(after_smt)
         globals = before_smt.globals | after_smt.globals
-        auxiliaries = (
+        auxiliaries = set.union(*(
             before_conv.bus_interaction_encoder.get_auxiliaries()
             | after_conv.bus_interaction_encoder.get_auxiliaries()
-        )
+        ).values())
 
         def completeness():
             forward_builder = ModelMapBuilder(
@@ -167,24 +167,27 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                 after_smt,
             )
             forward_builder.build(after_conv)
-            completeness = ForAll(
-                var2 - globals,
-                And(
-                    forward_builder.get_map(),
-                    *before_smt.constraints,
-                    *before_smt.bus_interactions,
-                    *before_smt.axioms,
-                    Or(
-                        Not(
-                            And(
-                                *after_smt.constraints,
-                                *after_smt.bus_interactions,
-                                *after_smt.axioms,
-                            )
-                        ),
-                        Not(Implies(input_relation, output_relation))
+            completeness = And(
+                ForAll(
+                    var2 - globals,
+                    And(
+                        *before_smt.constraints,
+                        *before_smt.bus_interactions,
+                        forward_builder.get_map(),
+                        input_relation,
+                        Or(
+                            Not(
+                                And(
+                                    *after_smt.constraints,
+                                    *after_smt.bus_interactions,
+                                )
+                            ),
+                            Not(output_relation)
+                        )
                     )
-                )
+                ),
+                *before_smt.axioms,
+                *after_smt.axioms,
             )
             do_check(completeness, "completeness")
 
@@ -198,24 +201,27 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                 before_smt,
             )
             backward_builder.build(before_conv)
-            soundness = ForAll(
-                var1 - globals,
-                And(
-                    backward_builder.get_map(),
-                    *after_smt.constraints,
-                    *after_smt.bus_interactions,
-                    *after_smt.axioms,
-                    Or(
-                        Not(
-                            And(
-                                *before_smt.constraints,
-                                *before_smt.bus_interactions,
-                                *before_smt.axioms,
-                            )
-                        ),
-                        Not(Implies(input_relation, output_relation)),
-                    )
+            soundness = And(
+                ForAll(
+                    var1 - globals,
+                    And(
+                        *after_smt.constraints,
+                        *after_smt.bus_interactions,
+                        backward_builder.get_map(),
+                        input_relation,
+                        Or(
+                            Not(
+                                And(
+                                    *before_smt.constraints,
+                                    *before_smt.bus_interactions,
+                                )
+                            ),
+                            Not(output_relation),
+                        )
+                    ),
                 ),
+                *after_smt.axioms,
+                *before_smt.axioms,
             )
             do_check(soundness, "soundness")
 

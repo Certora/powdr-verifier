@@ -196,7 +196,7 @@ class SmtConverter:
             constraints=self.constraints,
             bus_interactions=rewrite(bus_interactions),
             axioms=rewrite(
-                self.bus_interaction_encoder.get_axioms()
+                list(self.bus_interaction_encoder.get_axioms())
                 + list(self.__add_basic_range_axioms())
             ),
             derived=self.derived_columns,

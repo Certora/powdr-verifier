@@ -10,6 +10,8 @@ SUPPORTS_COMMENTS = "comment" in FNode.__slots__
 
 def with_comment(f: FNode, comment: str) -> FNode:
     """Set the comment of f to comment."""
+    if f is None:
+        return None
     if SUPPORTS_COMMENTS:
         setattr(f, "comment", comment)
     return f
