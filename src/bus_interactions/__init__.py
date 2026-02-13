@@ -28,6 +28,10 @@ class InteractionEncoder:
         for e in encoders:
             setattr(e, "_cur_state", cur_state)
 
+    def verify_bus_ids(self, bus_ids: dict[str, int]):
+        """Verify that the bus ids are correct."""
+        pass
+
     def add(self, data: Any):
         """Dispatch a single interaction record to the appropriate per-bus encoder."""
         raise NotImplementedError
@@ -114,6 +118,16 @@ class OpenVMBusInteractionEncoder(InteractionEncoder):
             ],
             cur_state,
         )
+
+    def verify_bus_ids(self, bus_ids: dict[str, Any]):
+        assert bus_ids == {
+            str(OpenVMBusInteraction.EXECUTION_BRIDGE): "ExecutionBridge",
+            str(OpenVMBusInteraction.MEMORY): "Memory",
+            str(OpenVMBusInteraction.PC_LOOKUP): "PcLookup",
+            str(OpenVMBusInteraction.VARIABLE_RANGE_CHECKER): {"Other": "VariableRangeChecker"},
+            str(OpenVMBusInteraction.TUPLE_RANGE_CHECKER): {"Other": "TupleRangeChecker"},
+            str(OpenVMBusInteraction.BITWISE_LOOKUP): {"Other": "BitwiseLookup"},
+        }
 
     def add(self, data: Any):
         """Pattern-match a raw bus interaction record and forward it to the right encoder."""
