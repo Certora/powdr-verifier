@@ -67,6 +67,10 @@ class SingleInteractionEncoder:
         """Returns the global symbols that should not be part of any quantifier."""
         return getattr(self, "globals", frozenset())
 
+    def get_interpreters(self) -> dict:
+        """Return interpreters for the UFs used by the encoder."""
+        return getattr(self, "interpreters", {})
+
     def get_inputs(self) -> dict:
         """Return per-bus input symbols (if the encoder exposes them)."""
         s = getattr(self, "inputs", frozenset())

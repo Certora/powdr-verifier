@@ -52,10 +52,12 @@ class InteractionEncoder:
         return frozenset.union(*[encoder.get_globals() for encoder in self.encoders])
 
     def get_interpreters(self) -> dict[FNode, FunctionInterpretation]:
-        """Returns interpreters for all UFs for evaluation."""
-        return merge_dicts(
-            self.encoders, lambda encoder: getattr(encoder, "interpreters", {})
-        )
+        """Return interpreters for all UFs for evaluation. The returned
+        dictionary maps UF symbols to data that is accepted by the
+        `partial_evaluate` function and thus by the `GenericInterpreter`
+        class: either a pair of a concrete evaluator and a symbolic
+        simplifier, or just a concrete evaluator."""
+        return merge_dicts(self.encoders, lambda encoder: encoder.get_interpreters())
 
     def get_inputs(self) -> dict:
         """Return a dict describing per-bus input symbols used by the encoding."""
@@ -66,7 +68,7 @@ class InteractionEncoder:
         return merge_dicts(self.encoders, lambda encoder: encoder.get_outputs())
 
     def get_auxiliaries(self) -> frozenset[FNode]:
-        """Return auxiliary symbols introduced by the encoding."""
+        """Return a dict describing per-mus auxiliary symbols introduced by the encoding."""
         return merge_dicts(self.encoders, lambda encoder: encoder.get_auxiliaries())
 
 
