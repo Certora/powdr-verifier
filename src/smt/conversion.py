@@ -190,13 +190,13 @@ class SmtConverter:
         logging.debug(f"{self.name}: converting")
         self.convert_manual(data)
         logging.debug(f"{self.name}: encoding bus interactions")
-        bus_interactions = self.bus_interaction_encoder.encode_all()
+        bus_interactions = list(without_trues(self.bus_interaction_encoder.encode()))
         logging.debug(f"{self.name}: rewrite and assemble")
         fwa = FormulaWithAxioms(
-            constraints=self.constraints,
+            constraints=without_trues(self.constraints),
             bus_interactions=rewrite(bus_interactions),
             axioms=rewrite(
-                list(self.bus_interaction_encoder.get_axioms())
+                list(without_trues(self.bus_interaction_encoder.get_axioms()))
                 + list(self.__add_basic_range_axioms())
             ),
             derived=self.derived_columns,

@@ -67,13 +67,11 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
             logging.error(f"Unsupported bitwise operation: {op}")
             return None
 
-    def get_axioms(self) -> Optional[FNode]:
+    @attach_comment("{0.NAME} axioms")
+    def get_axioms(self) -> Iterable[FNode]:
         """Return basic axioms restricting `uf_xor` when XOR is used in any interaction."""
-        if not self.needs_xor_axioms:
-            return None
-        x = Symbol("x", INT)
-        return And(
-            ForAll([x], Equals(Function(self.UF_XOR, [x, Int(0)]), x)),
-            ForAll([x], Equals(Function(self.UF_XOR, [Int(0), x]), x)),
-            ForAll([x], Equals(Function(self.UF_XOR, [x, x]), Int(0))),
-        )
+        if self.needs_xor_axioms:
+            x = Symbol("x", INT)
+            yield ForAll([x], Equals(Function(self.UF_XOR, [x, Int(0)]), x))
+            yield ForAll([x], Equals(Function(self.UF_XOR, [Int(0), x]), x))
+            yield ForAll([x], Equals(Function(self.UF_XOR, [x, x]), Int(0)))
