@@ -11,8 +11,9 @@ class OpenVMVariableRangeCheckerEncoder(SingleInteractionEncoder):
     be below `2^bits`, and we generally assume `bits <= 25`.
     """
 
-    @attach_comment("VARIABLE RANGE CHECKER for {2} {3}")
-    def encode(self, mult: Any, x: Any, bits: Any) -> FNode:
+    NAME = "variable range checker"
+
+    def encode_pointwise(self, mult: Any, x: Any, bits: Any) -> FNode:
         """Constrain `x` to be in [0, 2^bits) when the interaction is enabled."""
         curbits = 25
         if bits.is_int_constant() and bits.constant_value() <= 25:

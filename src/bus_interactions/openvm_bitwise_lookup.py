@@ -28,6 +28,7 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
             ),
         ),
     }
+    NAME = "bitwise lookup"
 
     def __init__(self) -> None:
         """Initialize the encoder and mark the `uf_xor` UF as a global symbol."""
@@ -35,8 +36,7 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
         self.needs_xor_axioms = False
         self.globals = frozenset([self.UF_XOR])
 
-    @attach_comment("BITWISE LOOKUP {2} {3} {4} {5}")
-    def encode(self, mult: Any, x: Any, y: Any, z: Any, op: Any) -> FNode:
+    def encode_pointwise(self, mult: Any, x: Any, y: Any, z: Any, op: Any) -> Optional[FNode]:
         """Encode byte-range constraints and XOR relation depending on `op`."""
         if op == Int(0) and z == Int(0):
             return Implies(
@@ -67,7 +67,6 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
             logging.error(f"Unsupported bitwise operation: {op}")
             return None
 
-    @attach_comment("BITWISE LOOKUP XOR AXIOMS")
     def get_axioms(self) -> Optional[FNode]:
         """Return basic axioms restricting `uf_xor` when XOR is used in any interaction."""
         if not self.needs_xor_axioms:

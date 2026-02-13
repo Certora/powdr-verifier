@@ -9,8 +9,9 @@ class OpenVMTupleRangeCheckerEncoder(SingleInteractionEncoder):
     MAX_0 = 1 << 8
     MAX_1 = 8 * (1 << 8)
 
-    @attach_comment("TUPLE RANGE CHECKER {2} {3}")
-    def encode(self, mult: Any, x: Any, y: Any) -> FNode:
+    NAME = "tuple range checker"
+
+    def encode_pointwise(self, mult: Any, x: Any, y: Any) -> FNode:
         """
         Encodes tuple range checker bus interactions. It constrains the values
         of `x` and `y` to be in the range [0, MAX_0] and [0, MAX_1], respectively.

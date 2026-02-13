@@ -22,6 +22,8 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
     UF_F = Symbol("pc_f", FunctionType(INT, [INT]))
     UF_G = Symbol("pc_g", FunctionType(INT, [INT]))
 
+    NAME = "pc lookup"
+
     def __init__(self, basic_block: BasicBlock) -> None:
         """Initialize the lookup UFs and interpreters from the given `basic_block`."""
         super().__init__()
@@ -51,8 +53,7 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
             self.UF_G: lambda pc: Int(self.basic_block.statements[pc // 4][7]),
         }
 
-    @attach_comment("PC LOOKUP for {2}")
-    def encode(
+    def encode_pointwise(
         self,
         mult: Any,
         pc: FNode,
@@ -102,7 +103,6 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
                 Equals(Function(self.UF_G, [Int(4 * id)]), Int(g)),
             )
 
-    @attach_comment("PC LOOKUP definition")
     def get_axioms(self) -> Optional[FNode]:
         """Return the UF-definition axioms for the instruction table (if `encode` was used)."""
         if not self.needs_axioms:
