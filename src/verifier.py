@@ -44,9 +44,7 @@ class ModelMapBuilder:
     def __check(self):
         """Warn if not all `new` variables were mapped; return True iff the map is complete."""
         if self.nmap:
-            logging.warning(
-                "model map is not complete, this can produce false positives"
-            )
+            logging.warning("model map is not complete, this can cause slowdowns")
             logging.debug(f"have: {self.result.keys()}")
             logging.warning(f"missing: {', '.join(self.nmap.keys())}")
             return False
