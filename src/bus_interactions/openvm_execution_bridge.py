@@ -16,6 +16,9 @@ class OpenVMExecutionBridgeEncoder(
 
     def encode_all(self) -> Iterable[FNode]:
         """Return timestamp and permutation axioms over all execution-bridge interactions."""
+        if len(self._interactions) == 0:
+            logging.warning("no execution bridge interactions")
+            return
         yield with_comment(self.ordered_timestamp_check(), "EXECUTION BRIDGE timestamp check")
         yield with_comment(self.ordered_permutation_check(), "EXECUTION BRIDGE permutation check")
 
