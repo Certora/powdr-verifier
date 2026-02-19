@@ -31,6 +31,7 @@ def parse_args():
     parser.add_argument('k', type=int, nargs='*')
     parser.add_argument('--clean', action='store_true')
     parser.add_argument("-v", "--verbose", action="count", default=0)
+    parser.add_argument("--with-patch", type=Path, default=None)
 
     global _ARGS
     _ARGS = parser.parse_args()
@@ -39,13 +40,26 @@ def parse_args():
 
 
 def run_powdr(test):
-    cmd = [
-        f"APC_EXPORT_PATH={DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True) / test}",
-        "APC_EXPORT_LEVEL=3",
-        f"cargo test {test} -- --no-capture --exact",
-    ]
-    logging.warning(f"running {' '.join(cmd)}")
-    subprocess.run(' '.join(cmd), shell=True, cwd=POWDR_DIR, check=True)
+    dir = DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True) / test
+    patch = None
+    if _ARGS.with_patch is not None:
+        patch = _ARGS.with_patch.resolve()
+    try:
+        if patch is not None:
+            logging.info(f"applying {patch}")
+            subprocess.run(["git", "apply", patch], cwd=POWDR_DIR, check=True)
+            dir = dir.with_name(f"{dir.name}-{patch.stem}")
+        cmd = [
+            f"APC_EXPORT_PATH={dir}",
+            "APC_EXPORT_LEVEL=3",
+            f"cargo test {test} -- --no-capture --exact",
+        ]
+        logging.warning(f"running {' '.join(cmd)}")
+        subprocess.run(" ".join(cmd), shell=True, cwd=POWDR_DIR, check=True)
+    finally:
+        if patch is not None:
+            logging.info(f"undoing {patch}")
+            subprocess.run(["git", "apply", "-R", patch], cwd=POWDR_DIR, check=True)
 
 def run_trace(first, *files):
     for f in files:
