@@ -174,6 +174,12 @@ class SmtConverter:
 
             case _:
                 logging.error(f"Unsupported data in conversion: {data}")
+    
+    def convert_eliminations(self, data: Iterable[Any]):
+        """Convert eliminations into SMT terms."""
+        return {
+            self.convert_manual(k): self.convert_manual(v) for k, v in data
+        }
 
     def __add_basic_range_axioms(self) -> Iterable[FNode]:
         """Generate and assert basic field-range axioms for all seen variable symbols."""
