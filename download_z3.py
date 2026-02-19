@@ -71,7 +71,7 @@ def download_release_asset(*releases: dict):
 logging.warning(f'downloading {args.version}...')
 match args.version:
     case 'all':
-        download_and_extract_asset(*get_all_releases())
+        download_release_asset(*get_all_releases())
 
     case 'latest':
         release,_ = get_api_json("https://api.github.com/repos/Z3Prover/z3/releases/latest")
