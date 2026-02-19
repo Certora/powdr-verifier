@@ -75,8 +75,8 @@ def _dump_single_conversion(out: TextIO, data: Any, basic_block: BasicBlock, eva
             _print(out, eval, "->\t{}", b)
         for a in formula.axioms:
             _print(out, eval, "->\t{}", a)
-        for d in formula.derived:
-            _print(out, eval, "->\t{}", d)
+        for k,v in formula.derived.items():
+            _print(out, eval, f"->\t{k} == {v}")
 
 
 def _text_bus_interaction(out: TextIO, bis: list, conv: SmtConverter, eval):

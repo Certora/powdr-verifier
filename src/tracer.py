@@ -33,7 +33,7 @@ def trace(input: dict):
             print(json.dumps(model, indent=4))
 
             eval_model = {f"input-{m}": v for m, v in model.items()}
-            for v, expr in smt.derived:
+            for v, expr in smt.derived.items():
                 evald = partial_evaluate(Equals(v, expr), eval_model, interpreters)
                 if not evald.is_true():
                     logging.warning(

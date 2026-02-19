@@ -49,7 +49,7 @@ class SmtConverter:
         self.basic_block = basic_block
         self.field_symbols = set()
         self.constraints = []
-        self.derived_columns = []
+        self.derived_columns = {}
         self.name = name
         self.constraint_solver = Solver(solver_options={":timeout": 5000})
         type(self.constraint_solver).check_is_valid = _check_is_valid
@@ -91,31 +91,25 @@ class SmtConverter:
         for derived in data:
             match derived:
                 case [str(name), {"Constant": int(value)}]:
-                    self.derived_columns.append(
-                        (
-                            Symbol(f"{self.name}-{name}", INT),
-                            with_comment(
-                                Int(value), f"DERIVED COLUMN {name} = {value}"
-                            ),
-                        )
+                    sym = Symbol(f"{self.name}-{name}", INT)
+                    assert sym not in self.derived_columns
+                    self.derived_columns[sym] = with_comment(
+                        Int(value), f"DERIVED COLUMN {name} = {value}"
                     )
                 case [str(name), {"QuotientOrZero": [a, b]}] | {
                     "variable": str(name),
                     "computation_method": {"QuotientOrZero": [a, b]},
                 }:
+                    sym = Symbol(f"{self.name}-{name}", INT)
+                    assert sym not in self.derived_columns
                     a = self.convert_manual(a)
                     b = self.convert_manual(b)
-                    self.derived_columns.append(
-                        (
-                            Symbol(f"{self.name}-{name}", INT),
-                            with_comment(
-                                rewrite(
-                                    Ite(Equals(b, Int(0)), Int(0), wrap_mod(Div(a, b)))
-                                ),
-                                f"DERIVED COLUMN {name} = QuotientOrZero({a}, {b})",
-                            ),
-                        )
-                    )
+                    self.derived_columns[sym] = with_comment(
+                        rewrite(
+                            Ite(Equals(b, Int(0)), Int(0), wrap_mod(Div(a, b)))
+                        ),
+                        f"DERIVED COLUMN {name} = QuotientOrZero({a}, {b})",
+                    ),
                 case _:
                     logging.error(f"Unsupported derived column: {derived}")
 
