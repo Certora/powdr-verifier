@@ -101,12 +101,14 @@ def run_eval(first, *files):
             model,
         ], check=True)
 
-def run_verify(first, pairs):
+def run_verify(first, eliminations, pairs):
     for a,b in pairs:
         subprocess.run([
             "python3", VERIFIER_DIR / "main.py",
             *_ARGS.verbose_args,
             "--dump-smt",
+            "--log-profile",
+            *(["--eliminations", eliminations] if eliminations else []),
             "--base-dump", first,
             "verify",
             a,
@@ -124,7 +126,12 @@ if __name__ == '__main__':
             run_powdr(args.test)
             exit(0)
 
-    files = sorted((DATA_DIR / args.test).glob("*.json"))
+    files = sorted((DATA_DIR / args.test).glob("apc_candidate_0_[0-9]*.json"))
+    eliminations = DATA_DIR / args.test / "apc_candidate_0_substitutions.json"
+
+    if not eliminations.exists():
+        eliminations = None
+
     if not files:
         logging.warning(f"no files found for {args.test}, did you run powdr?")
 
@@ -151,13 +158,13 @@ if __name__ == '__main__':
             case 'eval-last': run_eval(files[0], files[-1])
             case 'eval-all': run_eval(files[0], *files)
 
-            case 'verify-end2end': run_verify(files[0], [(files[0], files[-1])])
-            case 'verify-stepwise': run_verify(files[0], itertools.pairwise(files))
-            case 'verify-first': run_verify(files[0], [files[:2]])
+            case 'verify-end2end': run_verify(files[0], eliminations, [(files[0], files[-1])])
+            case 'verify-stepwise': run_verify(files[0], eliminations, itertools.pairwise(files))
+            case 'verify-first': run_verify(files[0], eliminations, [files[:2]])
             case 'verify-k':
                 assert all([k in range(len(files)-1) for k in args.k]), f"all k must be in range 0..{len(files)-2}"
-                run_verify(files[0], [(files[k], files[k+1]) for k in args.k])
-            case 'verify-last': run_verify(files[0], [files[-2:]])
+                run_verify(files[0], eliminations, [(files[k], files[k+1]) for k in args.k])
+            case 'verify-last': run_verify(files[0], eliminations, [files[-2:]])
 
             case _:
                 logging.error(f"unknown command: {args.command}")
