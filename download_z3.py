@@ -54,6 +54,7 @@ def download_and_extract_asset(url: str, target: Path):
             if member.endswith('bin/z3'):
                 with open(target, 'wb') as f:
                     f.write(zip.read(member))
+                target.chmod(0o755)
                 break
 
 def download_release_asset(*releases: dict):
