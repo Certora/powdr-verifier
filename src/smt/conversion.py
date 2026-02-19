@@ -126,16 +126,16 @@ class SmtConverter:
                     "derived_columns": list(dcs),
                     **rest_machine,
                 },
-                "bus_map": {
-                    "bus_ids": bus_ids,
-                },
                 "optimistic_constraints": _,
                 "subs": _,
                 **rest_apc,
             }:
                 assert not rest_machine
+                if "bus_map" in rest_apc:
+                    self.bus_interaction_encoder.verify_bus_ids(rest_apc["bus_map"]["bus_ids"])
+                    del rest_apc["bus_map"]
                 assert not rest_apc
-                self.bus_interaction_encoder.verify_bus_ids(bus_ids)
+                
                 logging.debug(f"{self.name}: converting constraints")
                 self.convert_constraints(self.convert_manual(c) for c in cs)
                 logging.debug(f"{self.name}: adding bus interaction")
