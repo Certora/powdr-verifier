@@ -313,15 +313,23 @@ def convert_to_smt_script(f: FNode, logic: Logic) -> script.SmtLibScript:
     smtlib = script.smtlibscript_from_formula(f, None)
     smtlib = script_with_sorted_declarefuns(smtlib)
 
+    smtlib.commands[0].args[0] = "ALL"
+
+    smtlib.commands.insert(0, script.SmtLibCommand(name='set-info', args=[':source', f'generated {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}']))
     # add model production and model retrieval
-    smtlib.commands.insert(1, script.SmtLibCommand(name='set-option', args=[':produce-models', 'true']))
-    smtlib.commands.insert(2, script.SmtLibCommand(name='set-option', args=[':incremental', 'true']))
+    smtlib.commands.insert(2, script.SmtLibCommand(name='set-option', args=[':produce-models', 'true']))
+    smtlib.commands.insert(3, script.SmtLibCommand(name='set-option', args=[':produce-unsat-cores', 'true']))
+    #smtlib.commands.insert(2, script.SmtLibCommand(name='set-option', args=[':incremental', 'true']))
+    # proof logging
+    #smtlib.commands.insert(4, script.SmtLibCommand(name='set-option', args=[':solver.proof.log', 'proof-log.smt2']))
+    #smtlib.commands.insert(5, script.SmtLibCommand(name='set-option', args=[':sat.euf', 'true']))
+    # get model and unsat cores
     smtlib.add_command(script.SmtLibCommand(name='get-model', args=[]))
+    smtlib.add_command(script.SmtLibCommand(name='get-unsat-core', args=[]))
     return smtlib
 
 def print_formula_to_file(f, LOGIC, dump):
     smtlib = convert_to_smt_script(f, LOGIC)
-    smtlib.commands.insert(0, script.SmtLibCommand(name='set-info', args=[':source', f'generated {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}']))
     pretty_print_smtlib(smtlib, dump)
 
 def z3_simplify(f: FNode) -> FNode:
