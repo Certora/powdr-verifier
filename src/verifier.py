@@ -8,6 +8,7 @@ from .smt.encoding import build_input_output_relation, collect_variables
 from .smt.conversion import FormulaWithAxioms, SmtConverter, check_formula
 from .smt.utils import *
 from .utils.basic_block import BasicBlock
+from .utils.io import load_json
 
 BEFORE_PREFIX = "before"
 AFTER_PREFIX = "after"
@@ -29,39 +30,59 @@ class ModelMapBuilder:
         new: frozenset[FNode],
         oldf: FormulaWithAxioms,
         newf: FormulaWithAxioms,
+        derived: dict[str, FNode],
     ):
         """Initialize a heuristic builder for mapping variables between two encodings."""
         self.old = old
         self.new = new
         self.oldf = oldf
         self.newf = newf
+        self.derived = derived
 
+        # maps stripped names to old symbols
         self.omap = {strip_prefix(v.symbol_name()): v for v in old}
+        # maps stripped names to new symbols
         self.nmap = {strip_prefix(v.symbol_name()): v for v in new}
-        self.nderivedmap = {strip_prefix(v[0].symbol_name()): v for v in newf.derived}
+        # maps stripped names to new expressions
+        self.nderivedmap = {strip_prefix(k.symbol_name()): v for k,v in derived.items()}
+        # maps new variables to expressions
         self.result = {}
+        self.todo = set(self.nmap.keys())
+    
+    def __add_result(self, name: str, value: FNode):
+        """Add a result to the result map"""
+        k = self.nmap[name]
+        if name not in self.todo:
+            assert self.result[k] == value
+            return
+        self.result[k] = value
+        self.todo.remove(name)
 
     def __check(self):
         """Warn if not all `new` variables were mapped; return True iff the map is complete."""
-        if self.nmap:
+        if self.todo:
             logging.warning("model map is not complete, this can cause slowdowns")
-            logging.debug(f"have: {self.result.keys()}")
-            logging.warning(f"missing: {', '.join(self.nmap.keys())}")
+            logging.debug("have:")
+            for k,v in self.result.items():
+                logging.debug(f"\t{k} = {v}")
+            logging.debug("missing:")
+            for k in self.todo:
+                logging.debug(f"\t{k}")
             return False
         return True
 
     def __heuristic_same_name(self):
         """Add variables with the same name to the result"""
-        for k in self.omap.keys() & self.nmap.keys():
+        for k in self.todo & self.omap.keys():
             self.result[self.nmap[k]] = self.omap[k]
-            del self.nmap[k]
-            del self.omap[k]
+            self.todo.remove(k)
 
     def __heuristic_derived(self):
         """Add derived variables to the result"""
-        for v in self.nderivedmap.values():
-            logging.debug(f"derived: found {v[0]} = {v[1]}")
-            self.result[v[0]] = v[1]
+        for k in self.todo & self.nderivedmap.keys():
+            v = self.nderivedmap[k]
+            logging.debug(f"derived: found {k} = {v}")
+            self.__add_result(k, v)
         self.nderivedmap = {}
 
     def __heuristic_simple_equality(self):
@@ -78,12 +99,7 @@ class ModelMapBuilder:
                     for r, v in solution[0].items():
                         target = strip_prefix(r.name)
                         logging.debug(f"simpeq: found {target} = {v}")
-                        if target not in self.nmap:
-                            continue
-                        assert target not in self.omap
-                        v = to_smt(v)
-                        self.result[self.nmap[target]] = v
-                        del self.nmap[target]
+                        self.__add_result(target, to_smt(v))
 
     def __heuristic_pclookup(self, conv):
         """Derive variable values from a resolved PC lookup interaction when possible."""
@@ -99,16 +115,15 @@ class ModelMapBuilder:
                 if res is not None:
                     for v, c in res.items():
                         logging.debug(f"pclookup: found {v} = {c}")
-                        self.result[v] = c
-                        del self.nmap[strip_prefix(v.symbol_name())]
+                        self.__add_result(strip_prefix(v.symbol_name()), c)
 
     def build(self, newconv):
         """Run all heuristics in sequence to populate the variable mapping."""
         self.__heuristic_same_name()
         self.__heuristic_derived()
-        self.__heuristic_simple_equality()
+        #self.__heuristic_simple_equality()
         self.__heuristic_pclookup(newconv)
-        self.__heuristic_simple_equality()
+        #self.__heuristic_simple_equality()
         self.__check()
 
     @attach_comment("MODEL MAP")
@@ -140,6 +155,11 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
         before_smt = before_conv.to_formula_with_axioms(before)
         after_smt = after_conv.to_formula_with_axioms(after)
 
+        eliminations = {}
+        if ARGS().eliminations is not None:
+            eliminations = before_conv.convert_eliminations(load_json(ARGS().eliminations, 'eliminations'))
+
+
         # obtain input and output info
         inputs1 = before_conv.bus_interaction_encoder.get_inputs()
         inputs2 = after_conv.bus_interaction_encoder.get_inputs()
@@ -165,6 +185,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                 var2 - globals - auxiliaries,
                 before_smt,
                 after_smt,
+                after_smt.derived,
             )
             forward_builder.build(after_conv)
             completeness = And(
@@ -199,6 +220,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                 var1 - globals - auxiliaries,
                 after_smt,
                 before_smt,
+                eliminations,
             )
             backward_builder.build(before_conv)
             soundness = And(
