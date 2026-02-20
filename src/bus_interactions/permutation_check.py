@@ -137,7 +137,7 @@ class PermutationCheckMixin:
                 newsym = Symbol(
                     f"{input.symbol_name()}-{id + 1}", selects[-1].get_type().elem_type
                 )
-                conjuncts.append(Equals(newsym, Select(selects[-1], key)))
+                conjuncts.append(Equals(newsym, Select(selects[-1], wrap_mod(key))))
                 selects.append(newsym)
                 intermediates.add(newsym)
 
@@ -152,7 +152,7 @@ class PermutationCheckMixin:
             # stepwise store, add to store as we go
             store = newval
             for id, key in enumerate(reversed(keys)):
-                store = Store(selects[1 - id], key, store)
+                store = Store(selects[1 - id], wrap_mod(key), store)
 
             return (
                 selects[-1],
@@ -206,7 +206,7 @@ class PermutationCheckMixin:
                             Equals(newvals[1], Int(0)),
                             # data + timestamps
                             *[
-                                Equals(oldvals[k], data[k])
+                                Equals(oldvals[k], wrap_mod(data[k]))
                                 for k in range(2, len(newvals))
                             ],
                             *[
@@ -233,7 +233,7 @@ class PermutationCheckMixin:
                                 for k in range(2, len(newvals))
                             ],
                             *[
-                                Equals(newvals[k], data[k])
+                                Equals(newvals[k], wrap_mod(data[k]))
                                 for k in range(2, len(newvals))
                             ],
                         ),
