@@ -197,11 +197,10 @@ class SmtConverter:
         bus_interactions = list(without_trues(self.bus_interaction_encoder.encode()))
         logging.debug(f"{self.name}: rewrite and assemble")
         fwa = FormulaWithAxioms(
-            constraints=without_trues(self.constraints),
+            constraints=list(without_trues(self.constraints)) + list(self.__add_basic_range_axioms()),
             bus_interactions=rewrite(bus_interactions),
             axioms=rewrite(
                 list(without_trues(self.bus_interaction_encoder.get_axioms()))
-                + list(self.__add_basic_range_axioms())
             ),
             derived=self.derived_columns,
             globals=self.bus_interaction_encoder.get_globals(),
