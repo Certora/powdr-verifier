@@ -189,25 +189,6 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             )
             forward_builder.build(after_conv)
 
-            completeness_sanity = And(
-                ForAll(
-                    var2 - globals,
-                    And(
-                        *before_smt.constraints,
-                        *before_smt.bus_interactions,
-                        forward_builder.get_map(),
-                        input_relation,
-                    )
-                ),
-                *before_smt.axioms,
-                *after_smt.axioms,
-            )
-            match check_formula(completeness_sanity, "completeness-sanity"):
-                case False,_:
-                    print("completeness-sanity failed")
-                case _:
-                    pass
-
             completeness = And(
                 ForAll(
                     var2 - globals,
@@ -215,7 +196,6 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                         *before_smt.constraints,
                         *before_smt.bus_interactions,
                         forward_builder.get_map(),
-                        input_relation,
                         Or(
                             Not(
                                 And(
@@ -223,6 +203,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                                     *after_smt.bus_interactions,
                                 )
                             ),
+                            Not(input_relation),
                             Not(output_relation)
                         )
                     )
@@ -250,7 +231,6 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                         *after_smt.constraints,
                         *after_smt.bus_interactions,
                         backward_builder.get_map(),
-                        input_relation,
                         Or(
                             Not(
                                 And(
@@ -258,6 +238,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                                     *before_smt.bus_interactions,
                                 )
                             ),
+                            Not(input_relation),
                             Not(output_relation),
                         )
                     ),
