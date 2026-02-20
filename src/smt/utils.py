@@ -200,9 +200,14 @@ class GenericInterpreter(FunctionInterpretation):
         return Function(self.fsym, args)
 
 
-def partial_evaluate(f: FNode, model: dict[str, int], interpreters):
+def partial_evaluate(f: FNode, model: dict[str, Any], interpreters):
     """Partially evaluate a formula by substituting model values and UF interpretations. Run up to three iterations."""
-    substitutions = {Symbol(name, INT): Int(value) for name, value in model.items()}
+    substitutions = {}
+    for name, value in model.items():
+        if isinstance(value, bool):
+            substitutions[Symbol(name, BOOL)] = Bool(value)
+        elif isinstance(value, int):
+            substitutions[Symbol(name, INT)] = Int(value)
     interpretations = {
         sym: GenericInterpreter(sym, f) for sym, f in interpreters.items()
     }
@@ -213,6 +218,10 @@ def partial_evaluate(f: FNode, model: dict[str, int], interpreters):
         last = f
         f = f.substitute(substitutions, interpretations).simplify()
         cnt -= 1
+    
+    if f.is_int_constant():
+        f = Int(f.constant_value() % ARGS().field_type.value)
+
     return f
 
 
