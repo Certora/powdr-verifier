@@ -68,6 +68,8 @@ class PermutationCheckMixin:
         datawidth: int,
         interactions: list[tuple[FNode, list[FNode], list[FNode]]],
     ) -> (list[FNode], list[FNode], list[FNode], list[FNode]):
+        if len(interactions) == 0:
+            return [], [], [], [], []
         """
         Encodes a permutation check for the given list of interactions using an
         array encoding. This encoding is pretty specific to the memory bus, so we
