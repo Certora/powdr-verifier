@@ -190,11 +190,11 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             forward_builder.build(after_conv)
 
             completeness = And(
+                *before_smt.constraints,
+                *before_smt.bus_interactions,
                 ForAll(
                     var2 - globals,
-                    And(
-                        *before_smt.constraints,
-                        *before_smt.bus_interactions,
+                    Implies(
                         forward_builder.get_map(),
                         Or(
                             Not(
@@ -225,11 +225,11 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             )
             backward_builder.build(before_conv)
             soundness = And(
+                *after_smt.constraints,
+                *after_smt.bus_interactions,
                 ForAll(
                     var1 - globals,
-                    And(
-                        *after_smt.constraints,
-                        *after_smt.bus_interactions,
+                    Implies(
                         backward_builder.get_map(),
                         Or(
                             Not(
