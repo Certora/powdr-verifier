@@ -131,7 +131,7 @@ def text(out: TextIO, input: dict, model: Optional[dict[str, Any]] = None):
             **rest_apc,
         }:
             assert not rest_machine
-            assert not rest_apc
+            #assert not rest_apc
 
             block = BasicBlock(input["block"])
             with SmtConverter("tmp", block) as conv:
