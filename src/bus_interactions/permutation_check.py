@@ -170,6 +170,7 @@ class PermutationCheckMixin:
             Symbol(f"{identifier}-{id}-isinput", BOOL)
             for id in range(len(interactions))
         ]
+        intermediates |= set(isinputs)
         for id, i in enumerate(interactions):
             mult, keys, data = i
             assert len(keys) == keywidth
