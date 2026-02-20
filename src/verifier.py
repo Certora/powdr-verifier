@@ -129,7 +129,7 @@ class ModelMapBuilder:
     @attach_comment("MODEL MAP")
     def get_map(self):
         """Return the computed mapping as a conjunction of equalities."""
-        return And(*[Equals(a, b) for a, b in self.result.items()])
+        return rewrite(And(*[Equals(a, wrap_mod(b)) for a, b in self.result.items()]))
 
 
 def do_check(f: FNode, name: str):
