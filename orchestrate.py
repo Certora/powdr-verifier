@@ -36,7 +36,7 @@ def parse_args():
 
     global _ARGS
     _ARGS = parser.parse_args()
-    _ARGS.additional_args = []
+    _ARGS.additional_args = ["--dump-smt"]
     _ARGS.additional_args += ["-v"] * _ARGS.verbose
     _ARGS.additional_args += ["--log-profile"] if _ARGS.profile else []
     return _ARGS
@@ -64,13 +64,11 @@ def run_powdr(test):
             logging.info(f"undoing {patch}")
             subprocess.run(["git", "apply", "-R", patch], cwd=POWDR_DIR, check=True)
 
-def run_trace(first, *files):
+def run_trace(*files):
     for f in files:
         subprocess.run([
             "python3", VERIFIER_DIR / "main.py",
             *_ARGS.additional_args,
-            "--dump-smt",
-            "--base-dump", first,
             "trace",
             f,
             "--dump-model", f.with_suffix(".model"),
@@ -89,7 +87,7 @@ def run_evaluate(first, *files):
             model,
         ], check=True)
 
-def run_eval(first, *files):
+def run_eval(*files):
     for f in files:
         model = f.with_suffix(".model")
         if not model.exists():
@@ -98,19 +96,16 @@ def run_eval(first, *files):
         subprocess.run([
             "python3", VERIFIER_DIR / "main.py",
             *_ARGS.additional_args,
-            "--base-dump", first,
             "eval",
             f,
             model,
         ], check=True)
 
-def run_verify(first, pairs):
+def run_verify(pairs):
     for a,b in pairs:
         subprocess.run([
             "python3", VERIFIER_DIR / "main.py",
             *_ARGS.additional_args,
-            "--dump-smt",
-            "--base-dump", first,
             "verify",
             a,
             b,
@@ -130,6 +125,8 @@ if __name__ == '__main__':
     files = sorted((DATA_DIR / args.test).glob("apc_candidate_0_[0-9]*.json"))
     eliminations = DATA_DIR / args.test / "apc_candidate_0_substitutions.json"
 
+    if files:
+        args.additional_args += ["--base-dump", files[0]]
     if eliminations.exists():
         args.additional_args += ["--eliminations", eliminations]
 
@@ -138,12 +135,12 @@ if __name__ == '__main__':
 
     try:
         match args.command:
-            case 'trace-first': run_trace(files[0], files[0])
+            case 'trace-first': run_trace(files[0])
             case 'trace-k':
                 assert all([k in range(len(files)) for k in args.k]), f"all k must be in range 0..{len(files)-1}"
-                run_trace(files[0], *[files[k] for k in args.k])
-            case 'trace-last': run_trace(files[0], files[-1])
-            case 'trace-all': run_trace(files[0], *files)
+                run_trace(*[files[k] for k in args.k])
+            case 'trace-last': run_trace(files[-1])
+            case 'trace-all': run_trace(*files)
 
             case 'evaluate-first': run_evaluate(files[0], files[0])
             case 'evaluate-k':
@@ -152,20 +149,20 @@ if __name__ == '__main__':
             case 'evaluate-last': run_evaluate(files[0], files[-1])
             case 'evaluate-all': run_evaluate(files[0], *files)
 
-            case 'eval-first': run_eval(files[0], files[0])
+            case 'eval-first': run_eval(files[0])
             case 'eval-k':
                 assert all([k in range(len(files)) for k in args.k]), f"all k must be in range 0..{len(files)-1}"
-                run_eval(files[0], *[files[k] for k in args.k])
-            case 'eval-last': run_eval(files[0], files[-1])
-            case 'eval-all': run_eval(files[0], *files)
+                run_eval(*[files[k] for k in args.k])
+            case 'eval-last': run_eval(files[-1])
+            case 'eval-all': run_eval(*files)
 
-            case 'verify-end2end': run_verify(files[0], [(files[0], files[-1])])
-            case 'verify-stepwise': run_verify(files[0], itertools.pairwise(files))
-            case 'verify-first': run_verify(files[0], [files[:2]])
+            case 'verify-end2end': run_verify([(files[0], files[-1])])
+            case 'verify-stepwise': run_verify(itertools.pairwise(files))
+            case 'verify-first': run_verify([files[:2]])
             case 'verify-k':
                 assert all([k in range(len(files)-1) for k in args.k]), f"all k must be in range 0..{len(files)-2}"
-                run_verify(files[0], [(files[k], files[k+1]) for k in args.k])
-            case 'verify-last': run_verify(files[0], [files[-2:]])
+                run_verify([(files[k], files[k+1]) for k in args.k])
+            case 'verify-last': run_verify([files[-2:]])
 
             case _:
                 logging.error(f"unknown command: {args.command}")
