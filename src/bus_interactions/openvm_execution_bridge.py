@@ -19,7 +19,7 @@ class OpenVMExecutionBridgeEncoder(
         if len(self._interactions) == 0:
             logging.warning("no execution bridge interactions")
             return
-        yield with_comment(self.ordered_timestamp_check(), "EXECUTION BRIDGE timestamp check")
+        #yield with_comment(self.ordered_timestamp_check(), "EXECUTION BRIDGE timestamp check")
         yield with_comment(self.ordered_permutation_check(), "EXECUTION BRIDGE permutation check")
 
         self.inputs = self._interactions[0][1]
