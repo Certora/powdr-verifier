@@ -91,15 +91,17 @@ def _text_bus_interaction(out: TextIO, bis: list, conv: SmtConverter, eval):
             mc = conv.convert_manual(b["mult"])
             ac = [conv.convert_manual(a) for a in b["args"]]
             _print(out, eval, "\tmult={}, args={}", mc, ac)
-            input = EMPTY_INPUT
-            input["machine"]["bus_interactions"] = [b]
-            _dump_single_conversion(out, input, conv.basic_block, eval)
-            out.write("\n")
+            if ARGS().with_encoding:
+                input = EMPTY_INPUT
+                input["machine"]["bus_interactions"] = [b]
+                _dump_single_conversion(out, input, conv.basic_block, eval)
+                out.write("\n")
 
-        out.write(f"collective encoding for Bus {val} ({val.name}):\n")
-        input = EMPTY_INPUT
-        input["machine"]["bus_interactions"] = bs
-        _dump_single_conversion(out, input, conv.basic_block, eval)
+        if ARGS().with_encoding:
+            out.write(f"collective encoding for Bus {val} ({val.name}):\n")
+            input = EMPTY_INPUT
+            input["machine"]["bus_interactions"] = bs
+            _dump_single_conversion(out, input, conv.basic_block, eval)
         out.write("\n")
 
 
@@ -111,7 +113,7 @@ def _text_constraints(out: TextIO, cs: list, conv: SmtConverter, eval):
         _print(out, eval, "\t{}", converted, ignore=Int(0))
 
 
-def text(out: TextIO, input: dict, model: Optional[dict[str, int]] = None):
+def text(out: TextIO, input: dict, model: Optional[dict[str, Any]] = None):
     """Render an APC dump to a human-readable text format (optionally evaluated under `model`)."""
 
     match input:

@@ -60,6 +60,7 @@ def parse_args(args=None):
     sub_diff.add_argument(
         "--format", type=str, choices=["text", "json"], default="text"
     )
+    sub_diff.add_argument("--with-encoding", action="store_true")
     sub_diff.add_argument("--with-model", type=Path)
     sub_diff.add_argument("--only-simplified", action="store_true")
 
