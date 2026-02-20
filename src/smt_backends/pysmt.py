@@ -273,6 +273,26 @@ class SMTPrettyPrinter(script.SmtPrinter):
         self.write('\n')
         self.write_indented(')')
 
+    @printers.write_annotations
+    def walk_array_value(self, formula):
+        self.write_indented('')
+        assign = formula.array_value_assigned_values_map()
+        for _ in range(len(assign)):
+            self.write("(store ")
+
+        self.write("((as const %s)\n" % formula.get_type().as_smtlib(False))
+        with self.indented():
+            yield formula.array_value_default()
+        self.write("\n")
+        self.write_indented(")")
+
+        for k in sorted(assign, key=str):
+            self.write(" ")
+            yield k
+            self.write(" ")
+            yield assign[k]
+            self.write(")")
+
 def pretty_print_smtlib(smtlib: script.SmtLibScript, file: TextIO):
     printer = SMTPrettyPrinter(file, depth=1)
     for cmd in smtlib.commands:
