@@ -106,16 +106,25 @@ def rewrite_intervals(
     assumptions: Iterable[FNode],
     max_iters: int = 6,
     prune: bool = True,
+    append_derived_ranges: bool = False,
 ) -> FNode | list[FNode]:
     """Interval-based rewrite with separate assumptions and input formulas."""
     reasoner = IntervalReasoner(modulus=ARGS().field_type.value)
     reasoner.assume_all(assumptions, max_iters=max_iters)
-    print(reasoner.env)
     protected = set(reasoner.used_formulas)
     if isinstance(input, list):
         protected |= {f for f in input if reasoner.must_retain_formula(f)}
     elif reasoner.must_retain_formula(input):
         protected.add(input)
     if isinstance(input, list):
-        return [reasoner.simplify(f, prune=prune, freeze=protected) for f in input]
-    return reasoner.simplify(input, prune=prune, freeze=protected)
+        rewritten = [reasoner.simplify(f, prune=prune, freeze=protected) for f in input]
+        if append_derived_ranges:
+            rewritten.extend(reasoner.derived_range_constraints(only_tightened=True))
+        return rewritten
+
+    rewritten = reasoner.simplify(input, prune=prune, freeze=protected)
+    if append_derived_ranges:
+        extras = reasoner.derived_range_constraints(only_tightened=True)
+        if extras:
+            return And(rewritten, *extras)
+    return rewritten

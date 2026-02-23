@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Dict, Iterable, Optional
 
 from pysmt import operators
@@ -56,6 +57,14 @@ class IntInterval:
         ]
         return IntInterval(min(vals), max(vals))
 
+    def scale(self, k: int) -> "IntInterval":
+        if k == 0:
+            return IntInterval.const(0)
+        if self.lo is None or self.hi is None:
+            return IntInterval.top()
+        a, b = self.lo * k, self.hi * k
+        return IntInterval(min(a, b), max(a, b))
+
     def within_0_p(self, p: int) -> bool:
         return self.lo is not None and self.hi is not None and 0 <= self.lo and self.hi < p
 
@@ -93,6 +102,65 @@ def _flatten_and(f: FNode) -> Iterable[FNode]:
         yield f
 
 
+def _affine(e: FNode) -> Optional[tuple[int, Dict[FNode, int]]]:
+    """Parse e as const + sum(coeff_i * sym_i), else return None."""
+
+    def add_maps(a: Dict[FNode, int], b: Dict[FNode, int], k: int = 1) -> Dict[FNode, int]:
+        out = dict(a)
+        for s, c in b.items():
+            out[s] = out.get(s, 0) + k * c
+            if out[s] == 0:
+                del out[s]
+        return out
+
+    if (c := _is_int_const(e)) is not None:
+        return c, {}
+    if e.is_symbol():
+        return 0, {e: 1}
+    if e.is_plus():
+        c0 = 0
+        m: Dict[FNode, int] = {}
+        for a in e.args():
+            sub = _affine(a)
+            if sub is None:
+                return None
+            c, mm = sub
+            c0 += c
+            m = add_maps(m, mm)
+        return c0, m
+    if e.is_minus():
+        a, b = e.args()
+        aa, bb = _affine(a), _affine(b)
+        if aa is None or bb is None:
+            return None
+        ca, ma = aa
+        cb, mb = bb
+        return ca - cb, add_maps(ma, mb, -1)
+    if e.is_times():
+        const_prod = 1
+        nonconst = []
+        for a in e.args():
+            if (c := _is_int_const(a)) is not None:
+                const_prod *= c
+            else:
+                nonconst.append(a)
+        if len(nonconst) == 0:
+            return const_prod, {}
+        if len(nonconst) != 1:
+            return None
+        sub = _affine(nonconst[0])
+        if sub is None:
+            return None
+        c, m = sub
+        return c * const_prod, {s: coeff * const_prod for s, coeff in m.items()}
+    return None
+
+
+def _ceil_div(a: int, b: int) -> int:
+    assert b > 0
+    return -((-a) // b)
+
+
 class IntervalReasoner:
     """Interval propagation over pySMT Int formulas under finite-field modulus p."""
 
@@ -100,6 +168,7 @@ class IntervalReasoner:
         self.p = int(ARGS().field_type.value if modulus is None else modulus)
         self.env: Dict[FNode, IntInterval] = {}
         self.used_formulas: set[FNode] = set()
+        self.tightened_symbols: set[FNode] = set()
         self._cache: Dict[FNode, IntInterval] = {}
 
     def _default(self, sym: FNode) -> IntInterval:
@@ -119,6 +188,7 @@ class IntervalReasoner:
         if merged == old:
             return False
         self.env[sym] = merged
+        self.tightened_symbols.add(sym)
         self._cache.clear()
         return True
 
@@ -247,7 +317,48 @@ class IntervalReasoner:
         if (x := _is_mod_p(b, self.p)) is not None and (c := _is_int_const(a)) is not None:
             if self._eval_int(x).within_0_p(self.p) and x.is_symbol():
                 return self._set_interval(x, IntInterval.const(c))
-        return False
+
+        # Generic affine refinement: lhs == rhs with linear arithmetic over symbols.
+        # This enables fixed-point reasoning such as x + 2y + 3z + 4w = 0 with x,y,z,w in [0,1].
+        aff_a = _affine(a)
+        aff_b = _affine(b)
+        if aff_a is None or aff_b is None:
+            return False
+        ca, ma = aff_a
+        cb, mb = aff_b
+
+        const = ca - cb
+        terms = dict(ma)
+        for s, c in mb.items():
+            terms[s] = terms.get(s, 0) - c
+            if terms[s] == 0:
+                del terms[s]
+        if not terms:
+            return False
+
+        changed = False
+        for sym, coeff in terms.items():
+            # coeff*sym + (const + sum_{t!=sym} coeff_t*t) = 0
+            other = IntInterval.const(const)
+            for t, c in terms.items():
+                if t is sym:
+                    continue
+                other = other.add(self._eval_int(t).scale(c))
+
+            if other.lo is None or other.hi is None:
+                continue
+
+            # coeff*sym in [-other.hi, -other.lo]
+            lo_num = -other.hi
+            hi_num = -other.lo
+            if coeff < 0:
+                coeff = -coeff
+                lo_num, hi_num = -hi_num, -lo_num
+
+            lo = _ceil_div(lo_num, coeff)
+            hi = hi_num // coeff  # floor div for positive coeff
+            changed |= self._set_interval(sym, IntInterval(lo, hi))
+        return changed
 
     def _refine_from_or_equalities(self, f: FNode) -> bool:
         if not f.is_or():
@@ -281,10 +392,15 @@ class IntervalReasoner:
         for _ in range(max_iters):
             changed = False
             for f in work:
+                # Fixed-point coupling: first normalize with non-pruning rewrites
+                # (especially Mod-elimination when argument range is known), then
+                # apply refinement on the normalized atoms.
+                normalized = self.simplify(f, prune=False)
                 local = False
-                local |= self._refine_from_ineq(f)
-                local |= self._refine_from_eq(f)
-                local |= self._refine_from_or_equalities(f)
+                for atom in _flatten_and(normalized):
+                    local |= self._refine_from_ineq(atom)
+                    local |= self._refine_from_eq(atom)
+                    local |= self._refine_from_or_equalities(atom)
                 if local:
                     self.used_formulas.add(f)
                 changed |= local
@@ -326,6 +442,33 @@ class IntervalReasoner:
                 return True
 
         return False
+
+    def derived_range_constraints(self, *, only_tightened: bool = True) -> list[FNode]:
+        """Materialize inferred intervals as explicit constraints.
+
+        If `only_tightened` is True, emit constraints only for symbols whose
+        range was tightened during propagation.
+        """
+        symbols = self.tightened_symbols if only_tightened else set(self.env.keys())
+        out: list[FNode] = []
+        for sym in sorted(symbols, key=str):
+            iv = self.get_interval(sym)
+            if iv.is_bottom():
+                # Keep contradiction explicit.
+                out.append(Bool(False))
+                continue
+            if iv.lo is not None and iv.hi is not None and iv.lo == iv.hi:
+                out.append(Equals(sym, Int(iv.lo)))
+                continue
+            parts = []
+            if iv.lo is not None:
+                parts.append(Int(iv.lo) <= sym)
+            if iv.hi is not None:
+                parts.append(sym <= Int(iv.hi))
+            if not parts:
+                continue
+            out.append(parts[0] if len(parts) == 1 else And(*parts))
+        return out
 
     def simplify(self, f: FNode, *, prune: bool = True, freeze: Optional[set[FNode]] = None) -> FNode:
         if freeze and f in freeze:
