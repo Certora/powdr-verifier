@@ -130,6 +130,10 @@ class ModelMapBuilder:
     def get_map(self):
         """Return the computed mapping as a conjunction of equalities."""
         return rewrite(And(*[Equals(a, wrap_mod(b)) for a, b in self.result.items()]))
+    
+    def get_skolemized_variables(self) -> frozenset:
+        """Return the computed mapping as a conjunction of equalities."""
+        return frozenset(self.result.keys())
 
 
 def do_check(f: FNode, name: str):
@@ -193,7 +197,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                 *before_smt.constraints,
                 *before_smt.bus_interactions,
                 ForAll(
-                    var2 - globals,
+                    var2 - globals - forward_builder.get_skolemized_variables(),
                     Implies(
                         forward_builder.get_map(),
                         Or(
@@ -228,7 +232,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                 *after_smt.constraints,
                 *after_smt.bus_interactions,
                 ForAll(
-                    var1 - globals,
+                    var1 - globals - backward_builder.get_skolemized_variables(),
                     Implies(
                         backward_builder.get_map(),
                         Or(
