@@ -5,7 +5,7 @@ from typing import Any, Iterable
 
 
 from .. import bus_interactions
-from ..rewriter import rewrite
+from ..rewriter import rewrite, rewrite_intervals
 from ..utils.basic_block import BasicBlock
 from ..utils.args import ARGS, BusInteractionHandlers
 from ..utils.profiling import simple_profile
@@ -205,6 +205,18 @@ class SmtConverter:
             derived=self.derived_columns,
             globals=self.bus_interaction_encoder.get_globals(),
         )
+        if ARGS().with_intervals:
+            assumptions = [*fwa.constraints, *fwa.bus_interactions, *fwa.axioms]
+            print("before:")
+            for c in fwa.constraints:
+                print(f"  {c}")
+            fwa = fwa._replace(
+                constraints=rewrite_intervals(fwa.constraints, assumptions=assumptions),
+                bus_interactions=rewrite_intervals(fwa.bus_interactions, assumptions=assumptions),
+            )
+            print("after:")
+            for c in fwa.constraints:
+                print(f"  {c}")
         if ARGS().log_smt:
             logging.info(f"after smt conversion:\n{pprint.pformat(fwa, width=80)}")
         logging.debug(f"{self.name}: done converting")

@@ -1,8 +1,10 @@
 import sympy
+from typing import Iterable
 
 from .conversion import to_sympy, to_smt
 from .rewrites import rewrite_eqmod, rewrite_mod, rewrite_simplify, rewrite_z3simplify
 from .rewrites_sympy import rewrite_choice, rewrite_mod_equality
+from .interval_reasoner import IntervalReasoner
 
 from ..smt.utils import *
 
@@ -95,3 +97,25 @@ def rewrite(input: FNode) -> FNode:
             break
         last = next
     return last
+
+
+@simple_profile
+def rewrite_intervals(
+    input: FNode | list[FNode],
+    *,
+    assumptions: Iterable[FNode],
+    max_iters: int = 6,
+    prune: bool = True,
+) -> FNode | list[FNode]:
+    """Interval-based rewrite with separate assumptions and input formulas."""
+    reasoner = IntervalReasoner(modulus=ARGS().field_type.value)
+    reasoner.assume_all(assumptions, max_iters=max_iters)
+    print(reasoner.env)
+    protected = set(reasoner.used_formulas)
+    if isinstance(input, list):
+        protected |= {f for f in input if reasoner.must_retain_formula(f)}
+    elif reasoner.must_retain_formula(input):
+        protected.add(input)
+    if isinstance(input, list):
+        return [reasoner.simplify(f, prune=prune, freeze=protected) for f in input]
+    return reasoner.simplify(input, prune=prune, freeze=protected)
