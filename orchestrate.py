@@ -3,6 +3,7 @@ import itertools
 import logging
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 DATA_DIR = Path.cwd() / "data"
@@ -15,6 +16,7 @@ assert POWDR_DIR.exists()
 assert VERIFIER_DIR.exists()
 
 _ARGS = None
+PYTHON = sys.executable
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -67,7 +69,7 @@ def run_powdr(test):
 def run_trace(*files):
     for f in files:
         subprocess.run([
-            "python3", VERIFIER_DIR / "main.py",
+            PYTHON, VERIFIER_DIR / "main.py",
             *_ARGS.additional_args,
             "trace",
             f,
@@ -81,7 +83,7 @@ def run_evaluate(first, *files):
             logging.warning(f"can not eval {f} because there is no model")
             continue
         subprocess.run([
-            "python3", VERIFIER_DIR / "evaluate.py",
+            PYTHON, VERIFIER_DIR / "evaluate.py",
             "--base-dump", first,
             f,
             model,
@@ -94,7 +96,7 @@ def run_eval(*files):
             logging.warning(f"can not eval {f} because there is no model")
             continue
         subprocess.run([
-            "python3", VERIFIER_DIR / "main.py",
+            PYTHON, VERIFIER_DIR / "main.py",
             *_ARGS.additional_args,
             "eval",
             f,
@@ -104,7 +106,7 @@ def run_eval(*files):
 def run_verify(pairs):
     for a,b in pairs:
         subprocess.run([
-            "python3", VERIFIER_DIR / "main.py",
+            PYTHON, VERIFIER_DIR / "main.py",
             *_ARGS.additional_args,
             "verify",
             a,
