@@ -196,7 +196,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             completeness = And(
                 *before_smt.constraints,
                 ForAll(
-                    var2 - globals - forward_builder.get_skolemized_variables(),
+                    var2 - globals,
                     Implies(
                         forward_builder.get_map(),
                         Or(
@@ -229,7 +229,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             soundness = And(
                 *after_smt.constraints,
                 ForAll(
-                    var1 - globals - backward_builder.get_skolemized_variables(),
+                    var1 - globals,
                     Implies(
                         backward_builder.get_map(),
                         Or(
