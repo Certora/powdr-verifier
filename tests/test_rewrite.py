@@ -1,10 +1,7 @@
 from src.rewriter import rewrite
 from src.smt.utils import *
-from src.utils.args import parse_args
 
 def test_rewrite():
-    parse_args()
-
     a = Symbol("a", INT)
     b = Symbol("b", INT)
     c = Symbol("c", INT)
@@ -26,8 +23,6 @@ def test_rewrite():
     )
 
 def test_solve_eqs():
-    parse_args([])
-
     a = Symbol("a", INT)
     b = Symbol("b", INT)
 
