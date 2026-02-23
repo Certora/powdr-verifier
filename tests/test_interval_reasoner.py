@@ -1,5 +1,5 @@
 from src.rewriter import rewrite_intervals
-from src.rewriter.interval_reasoner import IntervalReasoner
+from src.rewriter.interval_reasoner import IntInterval, IntervalReasoner
 from src.smt.utils import *
 
 
@@ -83,4 +83,70 @@ def test_field_bounds_0_and_p_are_not_eliminated():
 
     assert out[0] == lower
     assert out[1] == upper
+
+
+def test_rewrite_intervals_can_append_derived_ranges():
+    x = Symbol("x", INT)
+    assumptions = [LE(Int(0), x), LE(x, Int(10))]
+    out = rewrite_intervals(
+        [Equals(Int(1), Int(1))],
+        assumptions=assumptions,
+        prune=True,
+        append_derived_ranges=True,
+    )
+
+    # Original (simplified) formula is preserved, plus inferred range constraints.
+    assert len(out) >= 2
+    assert out[0].is_true()
+    expected_range = And(LE(Int(0), x), LE(x, Int(10)))
+    assert any(c == expected_range for c in out[1:])
+
+
+def test_fixed_point_opcode_flags_sum_forces_all_zero():
+    sub = Symbol("sub", INT)
+    xor = Symbol("xor", INT)
+    orf = Symbol("orf", INT)
+    andf = Symbol("andf", INT)
+
+    assumptions = [
+        Or(Equals(sub, Int(0)), Equals(sub, Int(1))),
+        Or(Equals(xor, Int(0)), Equals(xor, Int(1))),
+        Or(Equals(orf, Int(0)), Equals(orf, Int(1))),
+        Or(Equals(andf, Int(0)), Equals(andf, Int(1))),
+        Equals(sub + Int(2) * xor + Int(3) * orf + Int(4) * andf, Int(0)),
+    ]
+
+    r = IntervalReasoner()
+    r.assume_all(assumptions)
+
+    assert r.get_interval(sub) == IntInterval.const(0)
+    assert r.get_interval(xor) == IntInterval.const(0)
+    assert r.get_interval(orf) == IntInterval.const(0)
+    assert r.get_interval(andf) == IntInterval.const(0)
+
+
+def test_fixed_point_requires_mod_elimination_before_affine_sum():
+    p = int(ARGS().field_type.value)
+    sub = Symbol("sub2", INT)
+    xor = Symbol("xor2", INT)
+    orf = Symbol("orf2", INT)
+    andf = Symbol("andf2", INT)
+
+    # First, derive each flag in [0,1]. Only then the mod-equation can be
+    # normalized to a plain affine equality (sum in [0,10] < p).
+    assumptions = [
+        Or(Equals(sub, Int(0)), Equals(sub, Int(1))),
+        Or(Equals(xor, Int(0)), Equals(xor, Int(1))),
+        Or(Equals(orf, Int(0)), Equals(orf, Int(1))),
+        Or(Equals(andf, Int(0)), Equals(andf, Int(1))),
+        Equals(Mod(sub + Int(2) * xor + Int(3) * orf + Int(4) * andf, Int(p)), Int(0)),
+    ]
+
+    r = IntervalReasoner(modulus=p)
+    r.assume_all(assumptions)
+
+    assert r.get_interval(sub) == IntInterval.const(0)
+    assert r.get_interval(xor) == IntInterval.const(0)
+    assert r.get_interval(orf) == IntInterval.const(0)
+    assert r.get_interval(andf) == IntInterval.const(0)
 
