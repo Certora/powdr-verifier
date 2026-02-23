@@ -9,12 +9,6 @@ from .field_types import FieldTypes
 __ARGS: Optional[argparse.Namespace] = None
 
 
-def ARGS() -> argparse.Namespace:
-    """Retrieve the command line arguments."""
-    assert __ARGS is not None
-    return __ARGS
-
-
 def parse_args(args=None):
     """Parse the command line arguments."""
     parser = argparse.ArgumentParser()
@@ -72,6 +66,16 @@ def parse_args(args=None):
     sub_verify.add_argument("input_after", type=Path)
 
     global __ARGS
-    __ARGS = parser.parse_args(args)
+    if args is None:
+        __ARGS, _ = parser.parse_known_args([])
+    else:
+        __ARGS = parser.parse_args(args)
     if ARGS().verbose > 0:
         logging.root.setLevel(logging.root.level - 10 * ARGS().verbose)
+
+
+def ARGS() -> argparse.Namespace:
+    """Retrieve the command line arguments."""
+    if __ARGS is None:
+        parse_args()
+    return __ARGS

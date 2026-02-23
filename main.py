@@ -1,5 +1,6 @@
 from io import StringIO
 import logging
+import sys
 
 from src.utils.basic_block import BasicBlock
 from src.evaluator import evaluate
@@ -14,7 +15,7 @@ from src import converter
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, force=True, format='%(levelname)s:%(relativeCreated)dms %(message)s')
-    parse_args()
+    parse_args(sys.argv[1:])
 
     try:
         match ARGS().command:
