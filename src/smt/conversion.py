@@ -1,4 +1,5 @@
 import collections
+import itertools
 import logging
 import pprint
 from typing import Any, Iterable
@@ -13,7 +14,7 @@ from .utils import *
 
 FormulaWithAxioms = collections.namedtuple(
     "FormulaWithAxioms",
-    ["constraints", "bus_interactions", "axioms", "derived", "globals"],
+    ["constraints", "axioms", "derived", "globals"],
 )
 
 
@@ -194,11 +195,13 @@ class SmtConverter:
         logging.debug(f"{self.name}: converting")
         self.convert_manual(data)
         logging.debug(f"{self.name}: encoding bus interactions")
-        bus_interactions = list(without_trues(self.bus_interaction_encoder.encode()))
         logging.debug(f"{self.name}: rewrite and assemble")
         fwa = FormulaWithAxioms(
-            constraints=list(without_trues(self.constraints)) + list(self.__add_basic_range_axioms()),
-            bus_interactions=rewrite(bus_interactions),
+            constraints=list(itertools.chain(
+                    without_trues(self.constraints),
+                    self.__add_basic_range_axioms(),
+                    without_trues(self.bus_interaction_encoder.encode())
+                )),
             axioms=rewrite(
                 list(without_trues(self.bus_interaction_encoder.get_axioms()))
             ),

@@ -71,8 +71,6 @@ def _dump_single_conversion(out: TextIO, data: Any, basic_block: BasicBlock, eva
         formula = conv.to_formula_with_axioms(data)
         for c in formula.constraints:
             _print(out, eval, "->\t{}", c)
-        for b in formula.bus_interactions:
-            _print(out, eval, "->\t{}", b)
         for a in formula.axioms:
             _print(out, eval, "->\t{}", a)
         for k,v in formula.derived.items():

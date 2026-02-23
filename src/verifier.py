@@ -195,7 +195,6 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
 
             completeness = And(
                 *before_smt.constraints,
-                *before_smt.bus_interactions,
                 ForAll(
                     var2 - globals - forward_builder.get_skolemized_variables(),
                     Implies(
@@ -204,7 +203,6 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                             Not(
                                 And(
                                     *after_smt.constraints,
-                                    *after_smt.bus_interactions,
                                 )
                             ),
                             Not(input_relation),
@@ -230,7 +228,6 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             backward_builder.build(before_conv)
             soundness = And(
                 *after_smt.constraints,
-                *after_smt.bus_interactions,
                 ForAll(
                     var1 - globals - backward_builder.get_skolemized_variables(),
                     Implies(
@@ -239,7 +236,6 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                             Not(
                                 And(
                                     *before_smt.constraints,
-                                    *before_smt.bus_interactions,
                                 )
                             ),
                             Not(input_relation),
@@ -261,9 +257,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                     Implies(
                         And(
                             *before_smt.constraints,
-                            *before_smt.bus_interactions,
                             *after_smt.constraints,
-                            *after_smt.bus_interactions,
                             input_relation,
                         ),
                         And(common_intermediates, output_relation),
