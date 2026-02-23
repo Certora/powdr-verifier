@@ -29,8 +29,6 @@ def evaluate(input: dict, model: dict[str, int]):
         logging.debug(f"evaluate on\n{json.dumps(model, indent=4)}")
         if eval_list(smt.constraints):
             print("constraints are satisfied")
-        if eval_list(smt.bus_interactions):
-            print("bus interactions are satisfied")
         if eval_list(smt.axioms):
             print("axioms are satisfied")
         if eval_list([Equals(v, expr) for v, expr in smt.derived.items()]):
