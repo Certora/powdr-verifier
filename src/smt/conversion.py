@@ -209,17 +209,10 @@ class SmtConverter:
             globals=self.bus_interaction_encoder.get_globals(),
         )
         if ARGS().with_intervals:
-            assumptions = [*fwa.constraints, *fwa.bus_interactions, *fwa.axioms]
-            print("before:")
-            for c in fwa.constraints:
-                print(f"  {c}")
+            assumptions = [*fwa.constraints, *fwa.axioms]
             fwa = fwa._replace(
-                constraints=rewrite_intervals(fwa.constraints, assumptions=assumptions),
-                bus_interactions=rewrite_intervals(fwa.bus_interactions, assumptions=assumptions),
+                constraints=rewrite_intervals(fwa.constraints, assumptions=assumptions, append_derived_ranges=True),
             )
-            print("after:")
-            for c in fwa.constraints:
-                print(f"  {c}")
         if ARGS().log_smt:
             logging.info(f"after smt conversion:\n{pprint.pformat(fwa, width=80)}")
         logging.debug(f"{self.name}: done converting")
