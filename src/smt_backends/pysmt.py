@@ -126,6 +126,7 @@ from pysmt.logics import Logic
 from pysmt.shortcuts import *
 from pysmt.smtlib import script, printers
 from pysmt.substituter import FunctionInterpretation
+from pysmt.utils import quote
 
 from ..utils.args import ARGS
 
@@ -193,10 +194,11 @@ class SMTPrettyPrinter(script.SmtPrinter):
     COLLAPSIBLE = operators.CONSTANTS | frozenset([operators.SYMBOL])
     INDENT = '    '
 
-    def __init__(self, env=None, depth=0):
+    def __init__(self, env=None, depth=0, in_script=False):
         script.SmtPrinter.__init__(self, env)
         self.depth = depth
         self.is_collapsed = False
+        self.in_script = in_script
 
         self.functions[operators.SYMBOL] = self.wrap_simple_indent(self.walk_symbol)
         self.functions[operators.INT_CONSTANT] = self.wrap_simple_indent(self.walk_int_constant)
@@ -240,6 +242,19 @@ class SMTPrettyPrinter(script.SmtPrinter):
         self.indent()
         self.write(*args, **kwargs)
     
+    def printer(self, f):
+        if self.in_script:
+            if self.should_collapse(f):
+                super().printer(f)
+            else:
+                self.write('\n')
+                with self.indented():
+                    super().printer(f)
+                self.write('\n')
+        else:
+            super().printer(f)
+
+
     @printers.write_annotations
     def walk_nary(self, formula, operator):
         if hasattr(formula, 'comment'):
@@ -312,20 +327,14 @@ class SMTPrettyPrinter(script.SmtPrinter):
             self.write(")")
 
 def pretty_print_smtlib(smtlib: script.SmtLibScript, file: TextIO):
-    printer = SMTPrettyPrinter(file, depth=1)
+    printer = SMTPrettyPrinter(file, in_script=True)
     for cmd in smtlib.commands:
-        match cmd:
-            case script.SmtLibCommand(name='assert'):
-                file.write(f'({cmd.name}\n')
-                printer.printer(cmd.args[0])
-                file.write('\n)\n')
-            case _:
-                cmd.serialize(file, daggify=False)
-                file.write('\n')
+        cmd.serialize(file, printer=printer, daggify=False)
+        file.write('\n')
 
 def pretty_print_formula(f: FNode) -> str:
     with StringIO() as s:
-        printer = SMTPrettyPrinter(s, depth=1)
+        printer = SMTPrettyPrinter(s)
         printer.printer(f)
         return s.getvalue()
 
