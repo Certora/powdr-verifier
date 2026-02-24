@@ -161,6 +161,17 @@ def _ceil_div(a: int, b: int) -> int:
     return -((-a) // b)
 
 
+def _unique_multiple_in_interval(iv: IntInterval, p: int) -> Optional[int]:
+    """Return the unique multiple of p in iv, or None if not unique/unknown."""
+    if iv.lo is None or iv.hi is None:
+        return None
+    k_lo = _ceil_div(iv.lo, p)
+    k_hi = iv.hi // p
+    if k_lo != k_hi:
+        return None
+    return k_lo * p
+
+
 class IntervalReasoner:
     """Interval propagation over pySMT Int formulas under finite-field modulus p."""
 
@@ -545,12 +556,20 @@ class IntervalReasoner:
             if n.is_equals():
                 a, b = n.args()
                 if (x := _is_mod_p(a, self.p)) is not None and _is_int_const(b) == 0:
-                    if self._eval_int(x).within_open_pm_p(self.p):
+                    x_iv = self._eval_int(x)
+                    if x_iv.within_open_pm_p(self.p):
                         memo[n] = Equals(x, Int(0))
                         return memo[n]
+                    if (uniq := _unique_multiple_in_interval(x_iv, self.p)) is not None:
+                        memo[n] = Equals(x, Int(uniq))
+                        return memo[n]
                 if (x := _is_mod_p(b, self.p)) is not None and _is_int_const(a) == 0:
-                    if self._eval_int(x).within_open_pm_p(self.p):
+                    x_iv = self._eval_int(x)
+                    if x_iv.within_open_pm_p(self.p):
                         memo[n] = Equals(x, Int(0))
+                        return memo[n]
+                    if (uniq := _unique_multiple_in_interval(x_iv, self.p)) is not None:
+                        memo[n] = Equals(x, Int(uniq))
                         return memo[n]
                 memo[n] = Equals(go(a), go(b))
                 return memo[n]
