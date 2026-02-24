@@ -31,6 +31,7 @@ def parse_args(args=None):
     parser.add_argument("--log-smt", action="store_true")
     parser.add_argument("--log-memory-analysis", action="store_true")
     parser.add_argument("--log-profile", action="store_true")
+    parser.add_argument("--log-intervals", action="store_true")
     parser.add_argument("--skip-memory-analysis", action="store_true")
     parser.add_argument("--dump-smt", action="store_true")
     parser.add_argument("--with-intervals", action="store_true", default=True)

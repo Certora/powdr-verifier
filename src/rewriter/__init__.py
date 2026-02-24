@@ -112,19 +112,15 @@ def rewrite_intervals(
     reasoner = IntervalReasoner(modulus=ARGS().field_type.value)
     reasoner.assume_all(assumptions, max_iters=max_iters)
     protected = set(reasoner.used_formulas)
-    if isinstance(input, list):
-        protected |= {f for f in input if reasoner.must_retain_formula(f)}
-    elif reasoner.must_retain_formula(input):
-        protected.add(input)
-    if isinstance(input, list):
-        rewritten = [reasoner.simplify(f, prune=prune, freeze=protected) for f in input]
-        if append_derived_ranges:
-            rewritten.extend(reasoner.derived_range_constraints(only_tightened=True))
-        return rewritten
-
-    rewritten = reasoner.simplify(input, prune=prune, freeze=protected)
+    protected |= {f for f in input if reasoner.must_retain_formula(f)}
+    rewritten = [reasoner.simplify(f, prune=prune, freeze=protected) for f in input]
     if append_derived_ranges:
-        extras = reasoner.derived_range_constraints(only_tightened=True)
-        if extras:
-            return And(rewritten, *extras)
+        rewritten.extend(reasoner.derived_range_constraints(only_tightened=True))
+
+    if ARGS().log_intervals:
+        logging.info("interval reasoning results:")
+        for k,v in reasoner.env.items():
+            if v.lo == 0 and v.hi == ARGS().field_type.value - 1: continue
+            logging.info(f"  {k} = {v}")
+    
     return rewritten
