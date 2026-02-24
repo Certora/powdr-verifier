@@ -2,7 +2,6 @@ from itertools import batched, pairwise
 import itertools
 
 from ..rewriter import rewrite
-
 from ..smt.utils import *
 
 
@@ -12,19 +11,12 @@ class TimestampCheckMixin:
     @simple_profile
     def ordered_timestamp_check(self) -> FNode:
         """Constrain timestamps of consecutive interaction pairs to be strictly increasing."""
-        # sanity check: interactions with mult = 0 should not exist
-        for i in self._interactions:
-            self.solver().check_is_sat(Not(Equals(i.mult, Int(0))), assert_true=True)
-
         res = []
         for batch in batched(self._interactions, 2):
             if len(batch) != 2:
                 continue
             a, b = batch
             # for now we assume that zeroness of a.mult and b.mult are equivalent
-            self.solver().check_is_valid(
-                Iff(Equals(a.mult, Int(0)), Equals(b.mult, Int(0))), assert_true=True
-            )
             res.append(
                 Implies(
                     Not(Equals(wrap_mod(a.mult), Int(0))), LT(a.args[-1], b.args[-1])

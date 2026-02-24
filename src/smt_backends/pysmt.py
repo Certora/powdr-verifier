@@ -1,5 +1,6 @@
 import contextlib
 from datetime import datetime
+import functools
 from io import StringIO
 import logging
 from pathlib import Path
@@ -26,6 +27,14 @@ operators.__OP_STR__[operators.MOD] = 'MOD'
 from pysmt import logics
 
 # make pysmt support QF_UFNIA and UFNIA
+logics.ALL = logics.Logic(name="ALL",
+                description="Everything.",
+                arrays=True,
+                arrays_const=True,
+                integer_arithmetic=True,
+                real_arithmetic=True,
+                linear=True,
+                uninterpreted=True)
 logics.AUFNIA = logics.Logic(name="AUFNIA",
                 description=\
 """Closed formulas with free function and predicate symbols over a
@@ -52,9 +61,10 @@ QF_UFNIA = logics.QF_UFNIA
 AUFNIA = logics.AUFNIA
 QF_AUFNIA = logics.QF_AUFNIA
 
-logics.PYSMT_LOGICS = logics.PYSMT_LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA])
-logics.SMTLIB2_LOGICS = logics.SMTLIB2_LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA])
-Z3Solver.LOGICS = Z3Solver.LOGICS | frozenset([logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA])
+logics.PYSMT_LOGICS = logics.PYSMT_LOGICS | frozenset([logics.ALL, logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA])
+logics.SMTLIB2_LOGICS = logics.SMTLIB2_LOGICS | frozenset([logics.ALL, logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA])
+logics.LOGICS = logics.LOGICS | frozenset([logics.ALL, logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA])
+Z3Solver.LOGICS = Z3Solver.LOGICS | frozenset([logics.ALL, logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA])
 
 # then patch all the formula manager and all the walkers
 from pysmt.formula import FormulaManager
@@ -99,6 +109,13 @@ pysmt.smtlib.printers.SmtDagPrinter.walk_mod = lambda self, formula, args: self.
 from pysmt.fnode import FNode
 
 FNode.is_mod = lambda self: self.node_type() == operators.MOD
+
+from pysmt.smtlib.parser import SmtLibParser as OriginalSmtLibParser
+
+class SmtLibParser(OriginalSmtLibParser):
+    def __init__(self, *args, **kwargs):
+        OriginalSmtLibParser.__init__(self, *args, **kwargs)
+        self.interpreted["mod"] = self._operator_adapter(self.env.formula_manager.Mod)
 
 # now go on with the rest
 
