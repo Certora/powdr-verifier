@@ -101,7 +101,7 @@ def rewrite(input: FNode) -> FNode:
 
 @simple_profile
 def rewrite_intervals(
-    input: FNode | list[FNode],
+    input: list[FNode],
     *,
     assumptions: Iterable[FNode],
     max_iters: int = 6,

@@ -18,28 +18,13 @@ FormulaWithAxioms = collections.namedtuple(
 )
 
 
-def _check_is_valid(self: Solver, f: FNode, assert_true=False) -> bool:
+def _check_is_valid(self: Solver, f: FNode) -> bool:
     try:
         logging.debug(f"checking whether {f} is valid")
-        res = self.is_valid(f)
+        return self.is_valid(f)
     except:
         logging.warning(f"failed to check whether {f} is valid")
-        res = False
-    if assert_true:
-        assert res
-    return res
-
-
-def _check_is_sat(self: Solver, f: FNode, assert_true=False) -> bool:
-    try:
-        logging.debug(f"checking whether {f} is sat")
-        res = self.is_sat(f)
-    except:
-        logging.warning(f"failed to check whether {f} is sat")
-        res = False
-    if assert_true:
-        assert res
-    return res
+        return False
 
 
 class SmtConverter:
@@ -52,9 +37,8 @@ class SmtConverter:
         self.constraints = []
         self.derived_columns = {}
         self.name = name
-        self.constraint_solver = Solver(solver_options={":timeout": 5000})
+        self.constraint_solver = Solver(solver_options={":timeout": 2000})
         type(self.constraint_solver).check_is_valid = _check_is_valid
-        type(self.constraint_solver).check_is_sat = _check_is_sat
 
         match ARGS().bus_interaction_handler:
             case BusInteractionHandlers.OPENVM:
@@ -194,17 +178,14 @@ class SmtConverter:
         """Convert input data and return constraints, interactions, axioms, derived columns, and globals."""
         logging.debug(f"{self.name}: converting")
         self.convert_manual(data)
-        logging.debug(f"{self.name}: encoding bus interactions")
-        logging.debug(f"{self.name}: rewrite and assemble")
+        logging.debug(f"{self.name}: assemble")
         fwa = FormulaWithAxioms(
             constraints=list(itertools.chain(
                     without_trues(self.constraints),
                     self.__add_basic_range_axioms(),
                     without_trues(self.bus_interaction_encoder.encode())
                 )),
-            axioms=rewrite(
-                list(without_trues(self.bus_interaction_encoder.get_axioms()))
-            ),
+            axioms=list(without_trues(self.bus_interaction_encoder.get_axioms())),
             derived=self.derived_columns,
             globals=self.bus_interaction_encoder.get_globals(),
         )
