@@ -150,3 +150,48 @@ def test_fixed_point_requires_mod_elimination_before_affine_sum():
     assert r.get_interval(orf) == IntInterval.const(0)
     assert r.get_interval(andf) == IntInterval.const(0)
 
+
+def test_mod_zero_rewrites_to_unique_nonzero_multiple():
+    p = int(ARGS().field_type.value)
+    x = Symbol("x_unique_mult", INT)
+    assumptions = [LE(Int(p - 2), x), LE(x, Int(p + 3))]
+
+    f = Equals(Mod(x, Int(p)), Int(0))
+    out = rewrite_intervals([f], assumptions=assumptions, prune=False)[0]
+
+    assert out == Equals(x, Int(p))
+
+
+def test_constraints_5_and_6_style_mods_are_removed():
+    p = int(ARGS().field_type.value)
+    f0 = Symbol("f0", INT)
+    f1 = Symbol("f1", INT)
+    f2 = Symbol("f2", INT)
+    f3 = Symbol("f3", INT)
+    flag_sum = f0 + f1 + f2 + f3
+
+    assumptions = [
+        Or(Equals(f0, Int(0)), Equals(f0, Int(1)), Equals(f0, Int(2))),
+        Or(Equals(f1, Int(0)), Equals(f1, Int(1)), Equals(f1, Int(2))),
+        Or(Equals(f2, Int(0)), Equals(f2, Int(1)), Equals(f2, Int(2))),
+        Or(Equals(f3, Int(0)), Equals(f3, Int(1)), Equals(f3, Int(2))),
+    ]
+
+    constraint_5_like = Or(
+        Equals(flag_sum, Int(0)),
+        Equals(Mod(Int(p - 2) + flag_sum, Int(p)), Int(0)),
+        Equals(Mod(Int(p - 1) + flag_sum, Int(p)), Int(0)),
+    )
+    constraint_6_like = Or(
+        Equals(Mod(Int(p - 2) + flag_sum, Int(p)), Int(0)),
+        Equals(Mod(Int(p - 1) + flag_sum, Int(p)), Int(0)),
+    )
+
+    out = rewrite_intervals(
+        [constraint_5_like, constraint_6_like],
+        assumptions=assumptions,
+        prune=False,
+    )
+
+    assert all(not _has_mod(f) for f in out)
+
