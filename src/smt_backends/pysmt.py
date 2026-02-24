@@ -116,6 +116,7 @@ class SmtLibParser(OriginalSmtLibParser):
     def __init__(self, *args, **kwargs):
         OriginalSmtLibParser.__init__(self, *args, **kwargs)
         self.interpreted["mod"] = self._operator_adapter(self.env.formula_manager.Mod)
+        self.interpreted["mod_total"] = self._operator_adapter(self.env.formula_manager.Mod)
 
 # now go on with the rest
 
