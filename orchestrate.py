@@ -34,13 +34,10 @@ def parse_args():
     parser.add_argument('--clean', action='store_true')
     parser.add_argument("-v", "--verbose", action="count", default=0)
     parser.add_argument("--with-patch", type=Path, default=None)
-    parser.add_argument("--profile", action="store_true")
 
     global _ARGS
-    _ARGS = parser.parse_args()
-    _ARGS.additional_args = ["--dump-smt"]
-    _ARGS.additional_args += ["-v"] * _ARGS.verbose
-    _ARGS.additional_args += ["--log-profile"] if _ARGS.profile else []
+    _ARGS, leftover = parser.parse_known_args()
+    _ARGS.additional_args = ["--dump-smt"] + leftover + ["-v"] * _ARGS.verbose
     return _ARGS
 
 
