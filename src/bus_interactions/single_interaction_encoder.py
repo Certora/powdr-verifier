@@ -39,9 +39,9 @@ class SingleInteractionEncoder:
     @simple_profile
     def add(self, mult: FNode, *args: Any) -> FNode:
         """Add a single interaction (skipping it if `mult` is provably zero)."""
-        if self.solver().check_is_valid(Equals(mult, Int(0))):
-            logging.debug("dropping interaction with mult = 0")
-            return
+        #if self.solver().check_is_valid(Equals(mult, Int(0))):
+        #    logging.debug("dropping interaction with mult = 0")
+        #    return
         self._interactions.append(BusInteraction(mult, args))
     
     def encode_all(self) -> Iterable[FNode]:
