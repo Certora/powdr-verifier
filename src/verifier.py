@@ -129,7 +129,8 @@ class ModelMapBuilder:
     @attach_comment("MODEL MAP")
     def get_map(self):
         """Return the computed mapping as a conjunction of equalities."""
-        return rewrite(And(*[Equals(a, wrap_mod(b)) for a, b in self.result.items()]))
+        s = sorted(self.result.items(), key=lambda x: x[0].symbol_name())
+        return rewrite(And(*[Equals(a, wrap_mod(b)) for a, b in s]))
     
     def get_skolemized_variables(self) -> frozenset:
         """Return the computed mapping as a conjunction of equalities."""
