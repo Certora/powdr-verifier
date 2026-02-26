@@ -150,6 +150,51 @@ def do_check(f: FNode, name: str):
             print(json.dumps(model, indent=4))
 
 
+def encoding(before, after, qvars, builder, input_relation, output_relation):
+    if ARGS().elim_with_skolem:
+        res = And(
+            *before.constraints,
+            ForAll(
+                qvars - builder.result.keys(),
+                Or(
+                    Not(And(*after.constraints)),
+                    Not(input_relation),
+                    Not(output_relation)
+                ).substitute(builder.result)
+            ),
+            *before.axioms,
+            *after.axioms,
+        )
+    else:
+        res = And(
+            *before.constraints,
+            ForAll(
+                qvars,
+                Implies(
+                    builder.get_map(),
+                    Or(
+                        Not(And(*after.constraints)),
+                        Not(input_relation),
+                        Not(output_relation)
+                    )
+                ),
+            ),
+            *before.axioms,
+            *after.axioms,
+        )
+    if ARGS().elim_with_model:
+        model = load_json(ARGS().elim_with_model, "model")
+        subs = {}
+        for name, value in model.items():
+            if isinstance(value, bool):
+                subs[Symbol(name, BOOL)] = Bool(value)
+            elif isinstance(value, int):
+                subs[Symbol(name, INT)] = Int(value)
+        res = res.substitute(subs)
+    if ARGS().unroll_mod:
+        res = mod_unroller.unroll_mod(res)
+    return res
+
 def verify(before: FNode, after: FNode, block: BasicBlock):
     """Verify our versions of equivalence."""
 
@@ -184,6 +229,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             | after_conv.bus_interaction_encoder.get_auxiliaries()
         ).values())
 
+
         def completeness():
             forward_builder = ModelMapBuilder(
                 var1 - globals - auxiliaries,
@@ -193,27 +239,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                 after_smt.derived,
             )
             forward_builder.build(after_conv)
-
-            completeness = And(
-                *before_smt.constraints,
-                ForAll(
-                    var2 - globals,
-                    Implies(
-                        forward_builder.get_map(),
-                        Or(
-                            Not(
-                                And(
-                                    *after_smt.constraints,
-                                )
-                            ),
-                            Not(input_relation),
-                            Not(output_relation)
-                        )
-                    )
-                ),
-                *before_smt.axioms,
-                *after_smt.axioms,
-            )
+            completeness = encoding(before_smt, after_smt, var2 - globals, forward_builder, input_relation, output_relation)
             do_check(completeness, "completeness")
 
         completeness()
@@ -227,26 +253,7 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
                 eliminations,
             )
             backward_builder.build(before_conv)
-            soundness = And(
-                *after_smt.constraints,
-                ForAll(
-                    var1 - globals,
-                    Implies(
-                        backward_builder.get_map(),
-                        Or(
-                            Not(
-                                And(
-                                    *before_smt.constraints,
-                                )
-                            ),
-                            Not(input_relation),
-                            Not(output_relation),
-                        )
-                    ),
-                ),
-                *after_smt.axioms,
-                *before_smt.axioms,
-            )
+            soundness = encoding(after_smt, before_smt, var1 - globals, backward_builder, input_relation, output_relation)
             do_check(soundness, "soundness")
 
         soundness()
