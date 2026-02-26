@@ -86,6 +86,8 @@ class RelationRewriter(substituter.Substituter):
 @simple_profile
 def rewrite(input: FNode) -> FNode:
     """Rewrite a formula (or list of formulas) by repeatedly applying equality rewrites."""
+    if ARGS().skip_rewriting:
+        return input
     if isinstance(input, list):
         return [rewrite(i) for i in input]
     relation_rewriter = RelationRewriter()
@@ -109,6 +111,8 @@ def rewrite_intervals(
     append_derived_ranges: bool = False,
 ) -> FNode | list[FNode]:
     """Interval-based rewrite with separate assumptions and input formulas."""
+    if ARGS().skip_rewriting:
+        return input
     reasoner = IntervalReasoner(modulus=ARGS().field_type.value)
     reasoner.assume_all(assumptions, max_iters=max_iters)
     protected = set(reasoner.used_formulas)
