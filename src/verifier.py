@@ -3,7 +3,7 @@ import sympy
 
 
 from .rewriter.conversion import to_smt, to_sympy
-from .rewriter import rewrite
+from .rewriter import rewrite, mod_unroller
 from .smt.encoding import build_input_output_relation, collect_variables
 from .smt.conversion import FormulaWithAxioms, SmtConverter, check_formula
 from .smt.utils import *
