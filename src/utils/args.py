@@ -34,10 +34,14 @@ def parse_args(args=None):
     parser.add_argument("--log-intervals", action="store_true")
     parser.add_argument("--skip-memory-analysis", action="store_true")
     parser.add_argument("--dump-smt", action="store_true")
-    parser.add_argument("--with-intervals", action="store_true", default=True)
+    parser.add_argument("--with-intervals", action="store_true", default=False)
     parser.add_argument("--base-dump", type=Path, default=None)
     parser.add_argument("--eliminations", type=Path, default=None)
     parser.add_argument("--solver", type=str, default="z3-latest")
+    parser.add_argument("--skip-rewriting", action="store_true")
+    parser.add_argument("--unroll-mod", action="store_true")
+    parser.add_argument("--elim-with-skolem", action="store_true")
+    parser.add_argument("--elim-with-model", type=Path, default=None)
 
     sub = parser.add_subparsers(dest="command")
 
