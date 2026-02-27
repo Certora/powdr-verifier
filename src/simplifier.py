@@ -2,12 +2,7 @@ import logging
 from pathlib import Path
 import sys
 
-from .smt_backends.pysmt import (
-    FNode,
-    SmtLibParser,
-    pretty_print_smtlib,
-    script,
-)
+from .smt_backends.pysmt import SmtLibParser, pretty_print_smtlib
 from .utils.args import ARGS
 
 from .simplify import simplify_cvc5, simplify_intervals, simplify_z3, simplify_rewrite
