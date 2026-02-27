@@ -242,3 +242,206 @@ class PermutationCheckMixin:
 
         conjuncts = [rewrite(c) for c in conjuncts]
         return conjuncts, actual_inputs, intermediates, inputs, isinputs
+
+
+    @simple_profile
+    def busat_permutation_check(
+        self,
+        identifier: str,
+        interactions: list,
+        is_memory: bool = True
+    ) -> FNode:
+        """Encode pairwise matching with pseudo-boolean constraints for a group of interactions."""
+        n = len(interactions)
+        constraints: list[Any] = []
+
+        inputs = []
+        intermediates = []
+        outputs = []
+        isinputs = []
+
+        # Create match variables for ordered pairs i < j
+        local_match_vars: dict[tuple[int, int], Any] = {}
+        self.match_vars: dict[tuple[int, int], Any] = {}
+        for i in range(n):
+            for j in range(i + 1, n):
+                bi, bj = interactions[i], interactions[j]
+                mv = Symbol(f"{identifier}_{i}_{j}", BOOL)
+                local_match_vars[(i, j)] = mv
+                self.match_vars[(i, j)] = mv
+
+                # m_i_j => mul_i + mul_j == 0
+                constraints.append(
+                    with_comment(
+                        Implies(mv, Equals(wrap_mod(Plus(bi.mult, bj.mult)), Int(0))),
+                        f"pairwise match ({i},{j}): {bi.mult} + {bj.mult} == 0"
+                    )
+                )
+
+                # m_i_j => arg_k_i == arg_k_j for all args
+                for arg_i, arg_j in zip(bi.args, bj.args):
+                    constraints.append(
+                        with_comment(
+                            Implies(mv, Equals(wrap_mod(Minus(arg_i, arg_j)), Int(0))),
+                            f"pairwise match ({i},{j}): {arg_i} == {arg_j}"
+                        )
+                    )
+
+        # Self-match variables: interaction i balanced by itself
+        # Also collect involved match vars per interaction for pseudo-boolean constraints
+        involved: dict[int, list[z3.BoolRef]] = {i: [] for i in range(n)}
+        for i in range(n):
+            bi = interactions[i]
+            mv = Symbol(f"{identifier}_{i}_{i}", BOOL)
+            self.match_vars[(i, i)] = mv
+            involved[i].append(mv)
+
+            # Self-match axiom: MEM allows mul in {-1, 0, 1}; BUS requires mul == 0
+            is_mem = n > 0 and is_memory
+            if is_mem:
+                constraints.append(
+                    with_comment(
+                        Implies(mv,
+                            Or(
+                                Equals(wrap_mod(Plus(bi.mult, Int(1))), Int(0)),
+                                Equals(wrap_mod(Plus(bi.mult, Int(0))), Int(0)),
+                                Equals(wrap_mod(Plus(bi.mult, Int(-1))), Int(0)),
+                            )
+                        ),
+                        f"self-match {i}: {bi.mult} == -1, 0, 1"
+                    )
+                )
+            else:
+                constraints.append(
+                    with_comment(
+                        Implies(mv, Equals(wrap_mod(bi.mult), Int(0))),
+                        f"self-match {i}: {bi.mult} == 0"
+                    )
+                )
+
+        for (i, j), mv in local_match_vars.items():
+            involved[i].append(mv)
+            involved[j].append(mv)
+
+        # Per interaction: exactly one match (AtMost 1 + AtLeast 1)
+        for i in range(n):
+            constraints.append(
+                with_comment(
+                    AtMostOne(*involved[i]),
+                    f"at most one match for {i}"
+                )
+            )
+            constraints.append(
+                with_comment(
+                    Or(*involved[i]),
+                    f"at least one match for {i}"
+                )
+            )
+        
+        if is_memory:
+            ts_entry = Symbol(f"{identifier}_TS_ENTRY", INT)
+
+            # Collect self-match vars and field accessors per interaction
+            n = len(interactions)
+            sm_vars: list[FNode] = []
+            muls: list[Any] = []
+            timestamps: list[Any] = []
+            addr_spaces: list[Any] = []
+            pointers: list[Any] = []
+
+            bytes_list: list[list[Any]] = []
+
+            for i in range(n):
+                mem = interactions[i]
+                sm_vars.append(self.match_vars[(i, i)])
+                muls.append(mem.mult)
+                timestamps.append(mem.args[-1])
+                addr_spaces.append(mem.args[0])
+                pointers.append(mem.args[1])
+                bytes_list.append(mem.args[2:-1])
+
+            # Per-interaction: input self-match => ts < TS_ENTRY and bytes in [0, 255]
+            for i in range(n):
+                input_self = And(sm_vars[i], Equals(wrap_mod(Plus(muls[i], Int(1))), Int(0)))
+                constraints.append(
+                    with_comment(
+                        Implies(input_self, LT(timestamps[i], ts_entry)),
+                        f"self-match {i} small ts: {timestamps[i]} < {ts_entry}"
+                    )
+                )
+                for b in bytes_list[i]:
+                    constraints.append(
+                        with_comment(
+                            Implies(input_self, And(GE(b, Int(0)), LE(b, Int(255)))),
+                            f"self-match {i} bytes: {b} in [0, 255]"
+                        )
+                    )
+
+            # Pairwise constraints for distinct inputs and distinct outputs
+            for i in range(n):
+                inputs.append(
+                    And(
+                        sm_vars[i],
+                        Equals(wrap_mod(Plus(muls[i], Int(1))), Int(0))
+                    )
+                )
+                outputs.append(
+                    And(
+                        sm_vars[i],
+                        Equals(wrap_mod(Minus(muls[i], Int(1))), Int(0))
+                    )
+                )
+                for j in range(i + 1, n):
+                    # Distinct inputs
+                    both_input = And(
+                        sm_vars[i],
+                        Equals(wrap_mod(Plus(muls[i], Int(1))), Int(0)),
+                        sm_vars[j],
+                        Equals(wrap_mod(Plus(muls[j], Int(1))), Int(0)),
+                    )
+                    constraints.append(
+                        with_comment(
+                            Implies(both_input, Not(Equals(timestamps[i], timestamps[j]))),
+                            f"inputs {i} and {j} distinct timestamps: {timestamps[i]} != {timestamps[j]}"
+                        )
+                    )
+                    constraints.append(
+                        with_comment(
+                            Implies(
+                                both_input,
+                                Not(And(
+                                    Equals(addr_spaces[i], addr_spaces[j]),
+                                    Equals(pointers[i], pointers[j])
+                                )),
+                            ),
+                            f"inputs {i} and {j} distinct address spaces and pointers: {addr_spaces[i]} != {addr_spaces[j]} or {pointers[i]} != {pointers[j]}"
+                        )
+                    )
+
+                    # Distinct outputs
+                    both_output = And(
+                        sm_vars[i],
+                        Equals(wrap_mod(Minus(muls[i], Int(1))), Int(0)),
+                        sm_vars[j],
+                        Equals(wrap_mod(Minus(muls[j], Int(1))), Int(0)),
+                    )
+                    constraints.append(
+                        with_comment(
+                            Implies(both_output, Not(Equals(timestamps[i], timestamps[j]))),
+                            f"outputs {i} and {j} distinct timestamps: {timestamps[i]} != {timestamps[j]}"
+                        )
+                    )
+                    constraints.append(
+                        with_comment(
+                            Implies(
+                                both_output,
+                                Not(And(
+                                    Equals(addr_spaces[i], addr_spaces[j]),
+                                    Equals(pointers[i], pointers[j])
+                                ))
+                            ),
+                            f"outputs {i} and {j} distinct address spaces and pointers: {addr_spaces[i]} != {addr_spaces[j]} or {pointers[i]} != {pointers[j]}"
+                        )
+                    )
+
+        return constraints, inputs, outputs, intermediates, isinputs

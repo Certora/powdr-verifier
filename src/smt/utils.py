@@ -153,6 +153,8 @@ def check_formula(f: FNode, name: Optional[str] = None, logic: Logic = AUFNIA) -
                     ARGS().input_before.parent
                     / f"verify-{name}-{ARGS().input_before.stem}-{ARGS().input_after.stem}.smt2"
                 )
+            case "aliasing":
+                filename = ARGS().input.parent / f"aliasing-{ARGS().input.stem}.smt2"
             case _:
                 pass
         with open(filename, "w") as dump:

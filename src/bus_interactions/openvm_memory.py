@@ -4,7 +4,7 @@ from typing import Any
 
 from .permutation_check import PermutationCheckMixin, TimestampCheckMixin
 
-from .single_interaction_encoder import SingleInteractionEncoder
+from .single_interaction_encoder import BusInteraction, SingleInteractionEncoder
 
 from ..smt.utils import *
 
@@ -185,17 +185,32 @@ class OpenVMMemoryEncoder(
     def encode_all(self) -> Iterable[FNode]:
         """Return timestamp + array-based permutation axioms for the memory bus."""
         ts = self.ordered_timestamp_check()
-        permutation_axioms, inputs, intermediates, outputs, isinputs = (
-            self.array_permutation_check(
-                f"{self._cur_state.name}-mem",
-                keywidth=2,
-                datawidth=5,
-                interactions=[
-                    (mult, [a, p], [*args, t])
-                    for mult, (a, p, args, t) in self._interactions
-                ],
-            )
-        )
+        match ARGS().memory_encoding:
+            case "array":
+                permutation_axioms, inputs, intermediates, outputs, isinputs = (
+                    self.array_permutation_check(
+                        f"{self._cur_state.name}-mem",
+                        keywidth=2,
+                        datawidth=5,
+                        interactions=[
+                            (mult, [a, p], [*args, t])
+                            for mult, (a, p, args, t) in self._interactions
+                        ],
+                    )
+                )
+            case "busat":
+                permutation_axioms, inputs, intermediates, outputs, isinputs = (
+                    self.busat_permutation_check(
+                        f"{self._cur_state.name}-mem",
+                        interactions=[
+                            BusInteraction(mult, [a, p, *args, t])
+                            for mult, (a, p, args, t) in self._interactions
+                        ],
+                        is_memory=True,
+                    )
+                )
+            case _:
+                raise ValueError(f"Invalid memory encoding: {ARGS().memory_encoding}")
         self.inputs = inputs
         self.auxiliaries = intermediates
         self.outputs = outputs

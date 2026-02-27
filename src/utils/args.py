@@ -33,6 +33,7 @@ def parse_args(args=None):
     parser.add_argument("--log-profile", action="store_true")
     parser.add_argument("--log-intervals", action="store_true")
     parser.add_argument("--skip-memory-analysis", action="store_true")
+    parser.add_argument("--memory-encoding", type=str, choices=["array", "busat"], default="array")
     parser.add_argument("--dump-smt", action="store_true")
     parser.add_argument("--with-intervals", action="store_true", default=False)
     parser.add_argument("--base-dump", type=Path, default=None)
@@ -75,6 +76,9 @@ def parse_args(args=None):
     sub_verify = sub.add_parser("verify")
     sub_verify.add_argument("input_before", type=Path)
     sub_verify.add_argument("input_after", type=Path)
+
+    sub_aliasing = sub.add_parser("aliasing")
+    sub_aliasing.add_argument("input", type=Path)
 
     global __ARGS
     if args is None:
