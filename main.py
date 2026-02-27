@@ -12,6 +12,7 @@ from src.verifier import verify
 from src.diff import diff
 from src.simplifier import simplify
 from src import converter
+from src.encoding_analysis import analyze_aliases
 
 
 if __name__ == '__main__':
@@ -57,6 +58,12 @@ if __name__ == '__main__':
                 assert before_block == BasicBlock(after["block"]), "The basic block has changed"
 
                 verify(before, after, before_block)
+            
+            case 'aliasing':
+                logging.info(f"finding aliasing in {ARGS().input}")
+                input = load_apc_dump(ARGS().input, 'input')
+                analyze_aliases(input)
+
             case _:
                 logging.error(f"unknown command: {ARGS().command}")
                 exit(1)
