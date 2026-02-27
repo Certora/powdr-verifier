@@ -67,6 +67,11 @@ def parse_args(args=None):
     sub_text = sub.add_parser("text")
     sub_text.add_argument("input", type=Path)
 
+    sub_simplify = sub.add_parser("simplify")
+    sub_simplify.add_argument("input", type=Path)
+    sub_simplify.add_argument("tactic", type=str)
+    sub_simplify.add_argument("output", type=Path, nargs="?")
+
     sub_verify = sub.add_parser("verify")
     sub_verify.add_argument("input_before", type=Path)
     sub_verify.add_argument("input_after", type=Path)

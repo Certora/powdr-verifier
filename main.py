@@ -10,6 +10,7 @@ from src.utils.profiling import print_profile
 from src.tracer import trace
 from src.verifier import verify
 from src.diff import diff
+from src.simplifier import simplify
 from src import converter
 
 
@@ -42,6 +43,10 @@ if __name__ == '__main__':
                 s = StringIO()
                 converter.text(s, input)
                 print(s.getvalue())
+
+            case 'simplify':
+                logging.info(f"simplifying {ARGS().input}")
+                simplify(ARGS().input, ARGS().output)
 
             case 'verify':
                 logging.info(f"verify equivalence of {ARGS().input_before} and {ARGS().input_after}")
