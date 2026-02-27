@@ -18,19 +18,60 @@ assert VERIFIER_DIR.exists()
 _ARGS = None
 PYTHON = sys.executable
 
+
+def parse_range(ls, selectors):
+    if not selectors:
+        yield from ls
+
+    def int_or_None(s):
+        return None if s == "" else int(s)
+
+    for selector in selectors:
+        match selector.split(":", maxsplit=1):
+            case [start, stop]:
+                yield from ls[int_or_None(start):int_or_None(stop)]
+            case [index]:
+                yield ls[int(index)]
+            case _:
+                raise ValueError(f"invalid slice: {selector}")
+
+def parse_paired_range(ls, selectors):
+    if not selectors:
+        yield ls[0], ls[-1]
+
+    def start_int(s):
+        return None if s == "" else int(s)
+    def stop_int(s):
+        return None if s == "" else int(s) + 1
+
+    for selector in selectors:
+        match selector.split(":", maxsplit=1):
+            case [start, stop]:
+                yield from itertools.pairwise(ls[start_int(start):stop_int(stop)])
+            case [index]:
+                match index.split("/", maxsplit=1):
+                    case [first, second]:
+                        yield (ls[int(first)], ls[int(second)])
+                    case [id]:
+                        yield (ls[int(id)], ls[int(id)+1])
+                    case _:
+                        raise ValueError(f"invalid slice: {selector}")
+            case _:
+                raise ValueError(f"invalid slice: {selector}")
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('command', choices=[
         'powdr',
-        'trace-first', 'trace-k', 'trace-last','trace-all',
-        'evaluate-first', 'evaluate-k','evaluate-last', 'evaluate-all',
-        'eval-first', 'eval-k', 'eval-last', 'eval-all',
-        'verify-first', 'verify-k', 'verify-last',
-        'verify-end2end', 'verify-stepwise',
+        'trace',
+        'evaluate',
+        'eval',
+        'verify',
     ])
     parser.add_argument('test', type=str)
-    parser.add_argument('k', type=int, nargs='*')
+    parser.add_argument('k', type=str, nargs='*')
     parser.add_argument('--clean', action='store_true')
     parser.add_argument("-v", "--verbose", action="count", default=0)
     parser.add_argument("--with-patch", type=Path, default=None)
@@ -100,7 +141,7 @@ def run_eval(*files):
             model,
         ], check=True)
 
-def run_verify(pairs):
+def run_verify(*pairs):
     for a,b in pairs:
         subprocess.run([
             PYTHON, VERIFIER_DIR / "main.py",
@@ -134,34 +175,14 @@ if __name__ == '__main__':
 
     try:
         match args.command:
-            case 'trace-first': run_trace(files[0])
-            case 'trace-k':
-                assert all([k in range(len(files)) for k in args.k]), f"all k must be in range 0..{len(files)-1}"
-                run_trace(*[files[k] for k in args.k])
-            case 'trace-last': run_trace(files[-1])
-            case 'trace-all': run_trace(*files)
-
-            case 'evaluate-first': run_evaluate(files[0], files[0])
-            case 'evaluate-k':
-                assert all([k in range(len(files)) for k in args.k]), f"all k must be in range 0..{len(files)-1}"
-                run_evaluate(files[0], *[files[k] for k in args.k])
-            case 'evaluate-last': run_evaluate(files[0], files[-1])
-            case 'evaluate-all': run_evaluate(files[0], *files)
-
-            case 'eval-first': run_eval(files[0])
-            case 'eval-k':
-                assert all([k in range(len(files)) for k in args.k]), f"all k must be in range 0..{len(files)-1}"
-                run_eval(*[files[k] for k in args.k])
-            case 'eval-last': run_eval(files[-1])
-            case 'eval-all': run_eval(*files)
-
-            case 'verify-end2end': run_verify([(files[0], files[-1])])
-            case 'verify-stepwise': run_verify(itertools.pairwise(files))
-            case 'verify-first': run_verify([files[:2]])
-            case 'verify-k':
-                assert all([k in range(len(files)-1) for k in args.k]), f"all k must be in range 0..{len(files)-2}"
-                run_verify([(files[k], files[k+1]) for k in args.k])
-            case 'verify-last': run_verify([files[-2:]])
+            case 'trace':
+                run_trace(*parse_range(files, args.k))
+            case 'evaluate':
+                run_evaluate(files[0], *parse_range(files, args.k))
+            case 'eval':
+                run_eval(*parse_range(files, args.k))
+            case 'verify':
+                run_verify(*parse_paired_range(files, args.k))
 
             case _:
                 logging.error(f"unknown command: {args.command}")
