@@ -55,7 +55,6 @@ class PermutationCheckMixin:
     @simple_profile
     def array_permutation_check(
         self,
-        identifier: str,
         keywidth: int,
         datawidth: int,
         interactions: list[tuple[FNode, list[FNode], list[FNode]]],
@@ -98,12 +97,10 @@ class PermutationCheckMixin:
         def def_vars(id: int):
             """Create the per-step array symbols (mult + data arrays) for step `id`."""
             return [
-                Symbol(
-                    f"{identifier}-{id}-hadinput", MultiArrayType(INT, keywidth, BOOL)
-                ),
-                Symbol(f"{identifier}-{id}-mult", MultiArrayType(INT, keywidth, INT)),
+                self._symbol(f"{self.NAME}-{id}-hadinput", MultiArrayType(INT, keywidth, BOOL)),
+                self._symbol(f"{self.NAME}-{id}-mult", MultiArrayType(INT, keywidth, INT)),
             ] + [
-                Symbol(f"{identifier}-{id}-data{k}", MultiArrayType(INT, keywidth, INT))
+                self._symbol(f"{self.NAME}-{id}-data{k}", MultiArrayType(INT, keywidth, INT))
                 for k in range(datawidth)
             ]
 
@@ -159,7 +156,7 @@ class PermutationCheckMixin:
         # accumulates everything needed to describe the permutation check
         conjuncts = [Equals(actual_inputs[0], Array(INT, Array(INT, Bool(False))))]
         isinputs = [
-            Symbol(f"{identifier}-{id}-isinput", BOOL)
+            self._symbol(f"{self.NAME}-{id}-isinput", BOOL)
             for id in range(len(interactions))
         ]
         intermediates |= set(isinputs)
@@ -247,7 +244,6 @@ class PermutationCheckMixin:
     @simple_profile
     def busat_permutation_check(
         self,
-        identifier: str,
         interactions: list,
         is_memory: bool = True
     ) -> FNode:
@@ -266,7 +262,7 @@ class PermutationCheckMixin:
         for i in range(n):
             for j in range(i + 1, n):
                 bi, bj = interactions[i], interactions[j]
-                mv = Symbol(f"{identifier}_{i}_{j}", BOOL)
+                mv = self._symbol(f"{self.NAME}_{i}_{j}", BOOL)
                 local_match_vars[(i, j)] = mv
                 self.match_vars[(i, j)] = mv
 
@@ -292,7 +288,7 @@ class PermutationCheckMixin:
         involved: dict[int, list[z3.BoolRef]] = {i: [] for i in range(n)}
         for i in range(n):
             bi = interactions[i]
-            mv = Symbol(f"{identifier}_{i}_{i}", BOOL)
+            mv = self._symbol(f"{self.NAME}_{i}_{i}", BOOL)
             self.match_vars[(i, i)] = mv
             involved[i].append(mv)
 
@@ -339,7 +335,7 @@ class PermutationCheckMixin:
             )
         
         if is_memory:
-            ts_entry = Symbol(f"{identifier}_TS_ENTRY", INT)
+            ts_entry = self._symbol(f"{self.NAME}_TS_ENTRY", INT)
 
             # Collect self-match vars and field accessors per interaction
             n = len(interactions)

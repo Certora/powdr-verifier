@@ -35,6 +35,9 @@ class SingleInteractionEncoder:
     def solver(self) -> Solver:
         """Return the incremental solver used by the owning converter state (if any)."""
         return self._cur_state.constraint_solver
+    
+    def _symbol(self, name: str, sort) -> FNode:
+        return self._cur_state._symbol(name, sort)
 
     @simple_profile
     def add(self, mult: FNode, *args: Any) -> FNode:
