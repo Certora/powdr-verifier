@@ -101,10 +101,10 @@ Z3Converter.walk_mod = Z3Converter.make_walk_binary(z3.Z3_mk_mod)
 # walkers/identitydag.py
 IdentityDagWalker.walk_mod = lambda self, formula, args, **kwargs: self.mgr.Mod(args[0], args[1])
 
-import pysmt.smtlib.printers
+from pysmt.smtlib import printers, commands, script
 # smtlib/printers.py
-pysmt.smtlib.printers.SmtPrinter.walk_mod = lambda self, formula: self.walk_nary(formula, 'mod')
-pysmt.smtlib.printers.SmtDagPrinter.walk_mod = lambda self, formula, args: self.walk_nary(formula, args, 'mod')
+printers.SmtPrinter.walk_mod = lambda self, formula: self.walk_nary(formula, 'mod')
+printers.SmtDagPrinter.walk_mod = lambda self, formula, args: self.walk_nary(formula, args, 'mod')
 
 from pysmt.fnode import FNode
 
@@ -117,6 +117,22 @@ class SmtLibParser(OriginalSmtLibParser):
         OriginalSmtLibParser.__init__(self, *args, **kwargs)
         self.interpreted["mod"] = self._operator_adapter(self.env.formula_manager.Mod)
         self.interpreted["mod_total"] = self._operator_adapter(self.env.formula_manager.Mod)
+
+class ExtendedSmtLibCommand(script.SmtLibCommand):
+    def serialize(self, outstream=None, printer=None, daggify=True):
+        if self.name == 'echo':
+            outstream.write(f"({self.name} \"{self.args[0]}\")")
+        elif self.name == commands.CHECK_SAT_ASSUMING:
+            outstream.write("(%s" % self.name)
+            for a in self.args:
+                outstream.write(" (")
+                printer.printer(a)
+                outstream.write(")")
+            outstream.write(")")
+        else:
+            super().serialize(outstream, printer, daggify)
+
+script.SmtLibScript.add = lambda self, name, args: self.add_command(ExtendedSmtLibCommand(name, args))
 
 # now go on with the rest
 
