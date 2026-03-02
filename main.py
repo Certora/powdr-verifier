@@ -22,35 +22,33 @@ if __name__ == '__main__':
     try:
         match ARGS().command:
             case 'trace':
-                logging.info(f"running tracer on {ARGS().input}")
+                logging.warning(f"running tracer on {ARGS().input}")
                 input = load_apc_dump(ARGS().input, 'input')
-
                 trace(input)
 
             case 'eval':
-                logging.info(f"evaluating trace from {ARGS().model} on {ARGS().input}")
+                logging.warning(f"evaluating trace from {ARGS().model} on {ARGS().input}")
                 input = load_apc_dump(ARGS().input, 'input')
                 model = load_json(ARGS().model, 'model')
-
                 evaluate(input, model)
 
             case 'diff':
-                logging.info(f"diffing {ARGS().input_before} and {ARGS().input_after}")
+                logging.warning(f"diffing {ARGS().input_before} and {ARGS().input_after}")
                 diff()
 
             case 'text':
-                logging.info(f"converting {ARGS().input} to text")
+                logging.warning(f"converting {ARGS().input} to text")
                 input = load_apc_dump(ARGS().input, 'input')
                 s = StringIO()
                 converter.text(s, input)
                 print(s.getvalue())
 
             case 'simplify':
-                logging.info(f"simplifying {ARGS().input}")
+                logging.warning(f"simplifying {ARGS().input}")
                 simplify(ARGS().input, ARGS().output)
 
             case 'verify':
-                logging.info(f"verify equivalence of {ARGS().input_before} and {ARGS().input_after}")
+                logging.warning(f"verify equivalence of {ARGS().input_before} and {ARGS().input_after}")
                 before = load_apc_dump(ARGS().input_before, 'before')
                 after = load_apc_dump(ARGS().input_after, 'after')
 
@@ -60,7 +58,7 @@ if __name__ == '__main__':
                 verify(before, after, before_block)
             
             case 'aliasing':
-                logging.info(f"finding aliasing in {ARGS().input}")
+                logging.warning(f"finding aliasing in {ARGS().input}")
                 input = load_apc_dump(ARGS().input, 'input')
                 analyze_aliases(input)
 
