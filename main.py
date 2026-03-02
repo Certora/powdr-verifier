@@ -23,8 +23,7 @@ if __name__ == '__main__':
         match ARGS().command:
             case 'trace':
                 logging.warning(f"running tracer on {ARGS().input}")
-                input = load_apc_dump(ARGS().input, 'input')
-                trace(input)
+                trace()
 
             case 'eval':
                 logging.warning(f"evaluating trace from {ARGS().model} on {ARGS().input}")

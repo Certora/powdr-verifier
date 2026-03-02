@@ -1,15 +1,17 @@
-import json
 import logging
+import sys
 
-from .rewriter import rewrite
 from .utils.args import ARGS
 from .utils.basic_block import BasicBlock
+from .utils.io import load_apc_dump
 from .smt.conversion import SmtConverter
 from .smt.utils import *
 
 
-def trace(input: dict):
+def trace():
     """Solve for a satisfying trace of the given dump and print the resulting model (if any)."""
+
+    input = load_apc_dump(ARGS().input, 'input')
 
     with SmtConverter(None, BasicBlock(input["block"])) as conv:
         formula = conv.to_formula_with_axioms(input)
@@ -30,3 +32,4 @@ def trace(input: dict):
     logging.info(f"dumping formula to {filename}")
     with open(filename, "w") as dump:
         pretty_print_smtlib(smtlib, dump)
+    sys.stderr.write(f"{filename}\n")
