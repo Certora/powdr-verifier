@@ -11,39 +11,22 @@ from .smt.utils import *
 def trace(input: dict):
     """Solve for a satisfying trace of the given dump and print the resulting model (if any)."""
 
-    with SmtConverter("input", BasicBlock(input["block"])) as conv:
-        smt = conv.to_formula_with_axioms(input)
-        interpreters = conv.bus_interaction_encoder.get_interpreters()
+    with SmtConverter(None, BasicBlock(input["block"])) as conv:
+        formula = conv.to_formula_with_axioms(input)
 
-    f = And(
-        *smt.constraints,
-        *smt.axioms,
+    smtlib = convert_to_smt_script(
+        And(
+            *formula.constraints,
+            *formula.axioms,
+        ),
+        AUFNIA
     )
-    if ARGS().use_derived and len(smt.derived) > 0:
-        f = And(f, *smt.derived)
 
-    f = rewrite(f)
+    for v, expr in formula.derived.items():
+        smtlib.add("echo", [f"verify derived solution: {v} = {expr}"])
+        smtlib.add("check-sat-assuming", [Equals(v, expr)])
 
-    res, model = check_formula(f)
-
-    match res:
-        case True:
-            model = to_nice_model(model, strip_prefix="input-")
-            print(json.dumps(model, indent=4))
-
-            eval_model = {f"input-{m}": v for m, v in model.items()}
-            for v, expr in smt.derived.items():
-                evald = partial_evaluate(Equals(v, expr), eval_model, interpreters)
-                if not evald.is_true():
-                    logging.warning(
-                        f"derived column is not true:\n\t{v} = {expr}\n->\t{evald}"
-                    )
-
-            if ARGS().dump_model:
-                logging.info(f"dumping model to {ARGS().dump_model}")
-                with open(ARGS().dump_model, "w") as f:
-                    json.dump(model, f, indent=4)
-        case False:
-            logging.info("no trace found, encoding is UNSAT")
-        case None:
-            logging.info("no trace found, solver returned UNKNOWN")
+    filename = ARGS().input.parent / f"trace-{ARGS().input.stem}.smt2"
+    logging.info(f"dumping formula to {filename}")
+    with open(filename, "w") as dump:
+        pretty_print_smtlib(smtlib, dump)

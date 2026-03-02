@@ -42,8 +42,6 @@ def parse_args(args=None):
 
     sub_trace = sub.add_parser("trace")
     sub_trace.add_argument("input", type=Path)
-    sub_trace.add_argument("--use-derived", action="store_true")
-    sub_trace.add_argument("--dump-model", type=Path, default=None)
 
     sub_eval = sub.add_parser("eval")
     sub_eval.add_argument("input", type=Path)
