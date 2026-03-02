@@ -3,7 +3,7 @@ import sys
 
 from .utils.args import ARGS
 from .utils.basic_block import BasicBlock
-from .utils.io import load_apc_dump
+from .utils.io import load_apc_dump, open_file
 from .smt.conversion import SmtConverter
 from .smt.utils import *
 
@@ -25,11 +25,9 @@ def trace():
     )
 
     for v, expr in formula.derived.items():
-        smtlib.add("echo", [f"verify derived solution: {v} = {expr}"])
+        smtlib.add("echo", [f"\"verify derived solution: {v} = {expr}\""])
         smtlib.add("check-sat-assuming", [Equals(v, expr)])
 
-    filename = ARGS().input.parent / f"trace-{ARGS().input.stem}.smt2"
-    logging.info(f"dumping formula to {filename}")
-    with open(filename, "w") as dump:
+    with open_file(ARGS().output, "w") as dump:
+        logging.warning(f"dumping formula to {dump.name}")
         pretty_print_smtlib(smtlib, dump)
-    sys.stderr.write(f"{filename}\n")

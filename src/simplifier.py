@@ -1,21 +1,19 @@
 import logging
-from pathlib import Path
-import sys
 
 from .smt.utils import *
 from .utils.args import ARGS
+from .utils.io import open_file
 
 from .simplify import simplify_cvc5, simplify_intervals, simplify_z3, simplify_rewrite
 
 
-def simplify(
-    input_path: Path,
-    output_path: Path | None,
-):
+def simplify():
     """Read SMT2, run selected simplification passes, and write to output (or overwrite input)."""
-    parser = SmtLibParser()
-    logging.warning(f"loading from {input_path}")
-    smt_script = parser.get_script_fname(str(input_path))
+
+    with open_file(ARGS().input, "r") as f:
+        parser = SmtLibParser()
+        logging.warning(f"loading from {f.name}")
+        smt_script = parser.get_script(f)
 
     for t in ARGS().tactic.split(":"):
         match t:
@@ -34,12 +32,6 @@ def simplify(
             case _:
                 logging.warning(f"ignoring unknown tactic: {t}")
 
-    logging.warning(f"writing back")
-    if output_path is None:
-        output_path = input_path
-
-    if str(output_path) == "-":
-        pretty_print_smtlib(smt_script, sys.stdout)
-    else:
-        with output_path.open("w") as out:
-            pretty_print_smtlib(smt_script, out)
+    with open_file(ARGS().output, "w") as out:
+        logging.warning(f"dumping formula to {out.name}")
+        pretty_print_smtlib(smt_script, out)

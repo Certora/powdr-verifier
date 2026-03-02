@@ -44,7 +44,7 @@ if __name__ == '__main__':
 
             case 'simplify':
                 logging.warning(f"simplifying {ARGS().input}")
-                simplify(ARGS().input, ARGS().output)
+                simplify()
 
             case 'verify':
                 logging.warning(f"verify equivalence of {ARGS().input_before} and {ARGS().input_after}")

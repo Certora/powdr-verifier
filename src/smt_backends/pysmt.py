@@ -1,6 +1,5 @@
 import contextlib
 from datetime import datetime
-import functools
 from io import StringIO
 import logging
 from pathlib import Path
@@ -118,21 +117,22 @@ class SmtLibParser(OriginalSmtLibParser):
         self.interpreted["mod"] = self._operator_adapter(self.env.formula_manager.Mod)
         self.interpreted["mod_total"] = self._operator_adapter(self.env.formula_manager.Mod)
 
-class ExtendedSmtLibCommand(script.SmtLibCommand):
-    def serialize(self, outstream=None, printer=None, daggify=True):
-        if self.name == 'echo':
-            outstream.write(f"({self.name} \"{self.args[0]}\")")
-        elif self.name == commands.CHECK_SAT_ASSUMING:
-            outstream.write("(%s" % self.name)
-            for a in self.args:
-                outstream.write(" (")
-                printer.printer(a)
-                outstream.write(")")
-            outstream.write(")")
-        else:
-            super().serialize(outstream, printer, daggify)
 
-script.SmtLibScript.add = lambda self, name, args: self.add_command(ExtendedSmtLibCommand(name, args))
+def __serialize_command(self, outstream=None, printer=None, daggify=True):
+    if self.name == 'echo':
+        outstream.write(f"({self.name} {self.args[0]})")
+    elif self.name == commands.CHECK_SAT_ASSUMING:
+        outstream.write("(%s" % self.name)
+        for a in self.args:
+            outstream.write(" (")
+            printer.printer(a)
+            outstream.write(")")
+        outstream.write(")")
+    else:
+        self.super_serialize(outstream, printer, daggify)
+
+script.SmtLibCommand.super_serialize = script.SmtLibCommand.serialize
+script.SmtLibCommand.serialize = __serialize_command
 
 # now go on with the rest
 

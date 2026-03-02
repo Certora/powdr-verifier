@@ -81,6 +81,15 @@ def parse_args():
     return _ARGS
 
 
+def __run_main(command, *args):
+    subprocess.run([
+        PYTHON, VERIFIER_DIR / "main.py",
+        *_ARGS.additional_args,
+        command,
+        *args,
+    ], check=True)
+
+
 def run_powdr(test):
     dir = DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True) / test
     patch = None
@@ -105,13 +114,7 @@ def run_powdr(test):
 
 def run_trace(*files):
     for f in files:
-        subprocess.run([
-            PYTHON, VERIFIER_DIR / "main.py",
-            *_ARGS.additional_args,
-            "trace",
-            f,
-            "--dump-model", f.with_suffix(".model"),
-        ], check=True)
+        __run_main("trace", f, f.parent / f"trace-{f.stem}.smt2")
 
 def run_evaluate(first, *files):
     for f in files:
@@ -132,23 +135,11 @@ def run_eval(*files):
         if not model.exists():
             logging.warning(f"can not eval {f} because there is no model")
             continue
-        subprocess.run([
-            PYTHON, VERIFIER_DIR / "main.py",
-            *_ARGS.additional_args,
-            "eval",
-            f,
-            model,
-        ], check=True)
+        __run_main("eval", f, model)
 
 def run_verify(*pairs):
     for a,b in pairs:
-        subprocess.run([
-            PYTHON, VERIFIER_DIR / "main.py",
-            *_ARGS.additional_args,
-            "verify",
-            a,
-            b,
-        ], check=True)
+        __run_main("verify", a, b)
 
 
 if __name__ == '__main__':
