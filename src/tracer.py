@@ -17,7 +17,6 @@ def trace(input: dict):
 
     f = And(
         *smt.constraints,
-        *smt.bus_interactions,
         *smt.axioms,
     )
     if ARGS().use_derived and len(smt.derived) > 0:
