@@ -8,6 +8,8 @@ from .interval_reasoner import IntervalReasoner
 
 from ..smt.utils import *
 
+logger = logging.getLogger(__name__)
+
 REWRITES = {
     operators.EQUALS: [rewrite_z3simplify, rewrite_eqmod],
     operators.MOD: [rewrite_mod],
@@ -59,8 +61,7 @@ class RelationRewriter(substituter.Substituter):
         if op in REWRITES:
             res = rewrite_one(op, args, REWRITES[formula.node_type()])
             if res is not None and res != formula:
-                if ARGS().log_rewrites:
-                    logging.info(f"rewrote {formula} --> {res}")
+                logger.debug(f"rewrote {formula} --> {res}")
                 return keep_comment(res, formula)
         if op in REWRITES_SYMPY:
             try:
@@ -75,8 +76,7 @@ class RelationRewriter(substituter.Substituter):
             except sympy.SympifyError:
                 res = formula
             if res != formula:
-                if ARGS().log_rewrites:
-                    logging.info(f"rewrote sympy {formula} --> {res}")
+                logger.debug(f"rewrote sympy {formula} --> {res}")
                 return keep_comment(res, formula)
         return keep_comment(
             substituter.Substituter.super(self, formula, args=args, **kwargs), formula
@@ -121,10 +121,10 @@ def rewrite_intervals(
     if append_derived_ranges:
         rewritten.extend(reasoner.derived_range_constraints(only_tightened=True))
 
-    if ARGS().log_intervals:
-        logging.info("interval reasoning results:")
-        for k,v in reasoner.env.items():
-            if v.lo == 0 and v.hi == ARGS().field_type.value - 1: continue
-            logging.info(f"  {k} = {v}")
+    
+    logger.debug("interval reasoning results:")
+    for k,v in reasoner.env.items():
+        if v.lo == 0 and v.hi == ARGS().field_type.value - 1: continue
+        logger.debug(f"  {k} = {v}")
     
     return rewritten

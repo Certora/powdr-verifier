@@ -194,7 +194,5 @@ class SmtConverter:
             fwa = fwa._replace(
                 constraints=rewrite_intervals(fwa.constraints, assumptions=assumptions, append_derived_ranges=True),
             )
-        if ARGS().log_smt:
-            logging.info(f"after smt conversion:\n{pprint.pformat(fwa, width=80)}")
         logging.debug(f"{self.name}: done converting")
         return fwa

@@ -73,12 +73,11 @@ def parse_args():
     parser.add_argument('test', type=str)
     parser.add_argument('k', type=str, nargs='*')
     parser.add_argument('--clean', action='store_true')
-    parser.add_argument("-v", "--verbose", action="count", default=0)
     parser.add_argument("--with-patch", type=Path, default=None)
 
     global _ARGS
     _ARGS, leftover = parser.parse_known_args()
-    _ARGS.additional_args = ["--dump-smt"] + leftover + ["-v"] * _ARGS.verbose
+    _ARGS.additional_args = ["--dump-smt"] + leftover
     return _ARGS
 
 

@@ -5,13 +5,14 @@ from typing import Any
 
 from .args import ARGS
 
+logger = logging.getLogger(__name__)
+
 
 def load_json(file: Path, label: str) -> Any:
     """Load a json file and return the data. Use label for logging."""
     with open(file, "r") as f:
         data = json.load(f)
-    if ARGS().log_json:
-        logging.info(f"{label}:\n{json.dumps(data, indent=2)}")
+    logger.debug(f"{label}:\n{json.dumps(data, indent=2)}")
     return data
 
 
@@ -27,7 +28,7 @@ def load_apc_dump(file: Path, label: str) -> Any:
             base_data = load_json(ARGS().base_dump, "base_dump")
             assert "block" in base_data, "no block found in base dump"
             data = base_data | {"machine": data}
-            logging.debug(f"took block from {ARGS().base_dump}")
+            logger.debug(f"took block from {ARGS().base_dump}")
         else:
-            logging.error("no block found and no base dump provided")
+            logger.error("no block found and no base dump provided")
     return data

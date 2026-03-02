@@ -12,7 +12,8 @@ __ARGS: Optional[argparse.Namespace] = None
 def parse_args(args=None):
     """Parse the command line arguments."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("-v", "--verbose", action="count", default=0)
+    parser.add_argument("-v", "--verbose", action="append", nargs="?", default=[])
+    parser.add_argument("-vv", "--very-verbose", action="append", nargs="?", default=[])
     parser.add_argument(
         "--bus-interaction-handler",
         type=BusInteractionHandlers,
@@ -25,13 +26,6 @@ def parse_args(args=None):
         default=FieldTypes.BABYBEAR,
         choices=list(FieldTypes),
     )
-    parser.add_argument("--log-conversion", action="store_true")
-    parser.add_argument("--log-json", action="store_true")
-    parser.add_argument("--log-rewrites", action="store_true")
-    parser.add_argument("--log-smt", action="store_true")
-    parser.add_argument("--log-memory-analysis", action="store_true")
-    parser.add_argument("--log-profile", action="store_true")
-    parser.add_argument("--log-intervals", action="store_true")
     parser.add_argument("--skip-memory-analysis", action="store_true")
     parser.add_argument("--memory-encoding", type=str, choices=["array", "busat"], default="array")
     parser.add_argument("--dump-smt", action="store_true")
@@ -85,8 +79,16 @@ def parse_args(args=None):
         __ARGS, _ = parser.parse_known_args([])
     else:
         __ARGS = parser.parse_args(args)
-    if ARGS().verbose > 0:
-        logging.root.setLevel(logging.root.level - 10 * ARGS().verbose)
+    
+    ARGS().verbose = ARGS().verbose + 2 * ARGS().very_verbose
+    def make_verbose(logger: logging.Logger):
+        logger.setLevel(logger.getEffectiveLevel() - 10)
+    for v in ARGS().verbose:
+        if v is None:
+            make_verbose(logging.root)
+        else:
+            make_verbose(logging.getLogger(f"src.{v}"))
+    
 
 
 def ARGS() -> argparse.Namespace:
