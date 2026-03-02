@@ -127,17 +127,16 @@ class OpenVMMemoryEncoder(
         self.analysis.solve_implied_aliasing(accesses)
         self.analysis.solve_possible_aliasing()
 
-        if ARGS().log_memory_analysis:
-            logging.warning("results of memory analysis")
-            for access, repr in self.analysis.implied_classes.items():
-                if access != repr:
-                    logging.warning(f"\t{repr} == {access}")
-            for access, possible in self.analysis.possible_aliases.items():
-                if possible:
-                    logging.warning(f"\t{access} possibly aliases with")
-                    for p in possible:
-                        if access != p:
-                            logging.warning(f"\t\t{p}")
+        logging.warning("results of memory analysis")
+        for access, repr in self.analysis.implied_classes.items():
+            if access != repr:
+                logging.warning(f"\t{repr} == {access}")
+        for access, possible in self.analysis.possible_aliases.items():
+            if possible:
+                logging.warning(f"\t{access} possibly aliases with")
+                for p in possible:
+                    if access != p:
+                        logging.warning(f"\t\t{p}")
 
     def group_interactions(self):
         """Group interactions by implied alias class and replicate into possible-alias buckets."""

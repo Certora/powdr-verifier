@@ -1,4 +1,5 @@
 import functools
+import logging
 import tabulate
 import time
 
@@ -31,7 +32,7 @@ def simple_profile(func):
 
 def print_profile():
     """Print the profile of the functions"""
-    if not ARGS().log_profile:
+    if logging.getLogger(__name__).getEffectiveLevel() > logging.DEBUG:
         return
     table = [
         [name, PROFILE_COUNT[name], PROFILE_TIME[name] / 1000000000]
