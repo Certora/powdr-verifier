@@ -42,6 +42,7 @@ def parse_args(args=None):
 
     sub_trace = sub.add_parser("trace")
     sub_trace.add_argument("input", type=Path)
+    sub_trace.add_argument("output", type=Path, nargs="?")
 
     sub_eval = sub.add_parser("eval")
     sub_eval.add_argument("input", type=Path)
@@ -87,7 +88,6 @@ def parse_args(args=None):
         else:
             make_verbose(logging.getLogger(f"src.{v}"))
     
-
 
 def ARGS() -> argparse.Namespace:
     """Retrieve the command line arguments."""

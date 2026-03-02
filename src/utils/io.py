@@ -1,11 +1,24 @@
 import logging
 import json
 from pathlib import Path
-from typing import Any
+import sys
+from typing import Any, Optional, TextIO
 
 from .args import ARGS
 
 logger = logging.getLogger(__name__)
+
+
+def open_file(file: Optional[Path], mode: str = "r") -> TextIO:
+    if file is None or str(file) == "-":
+        if mode == "r":
+            return sys.stdin
+        elif mode == "w":
+            return sys.stdout
+        else:
+            raise ValueError(f"invalid mode {mode} for -")
+    else:
+        return open(file, mode)
 
 
 def load_json(file: Path, label: str) -> Any:
