@@ -188,7 +188,6 @@ class OpenVMMemoryEncoder(
             case "array":
                 permutation_axioms, inputs, intermediates, outputs, isinputs = (
                     self.array_permutation_check(
-                        f"{self._cur_state.name}-mem",
                         keywidth=2,
                         datawidth=5,
                         interactions=[
@@ -200,7 +199,6 @@ class OpenVMMemoryEncoder(
             case "busat":
                 permutation_axioms, inputs, intermediates, outputs, isinputs = (
                     self.busat_permutation_check(
-                        f"{self._cur_state.name}-mem",
                         interactions=[
                             BusInteraction(mult, [a, p, *args, t])
                             for mult, (a, p, args, t) in self._interactions

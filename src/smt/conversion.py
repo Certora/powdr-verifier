@@ -30,7 +30,7 @@ def _check_is_valid(self: Solver, f: FNode) -> bool:
 class SmtConverter:
     """Convert JSON-like APC dumps (constraints + bus interactions) into SMT constraints and axioms."""
 
-    def __init__(self, name: str, basic_block: BasicBlock):
+    def __init__(self, name: Optional[str], basic_block: BasicBlock):
         """Create a converter that turns JSON-like dumps into SMT, namespacing symbols by `name`."""
         self.basic_block = basic_block
         self.field_symbols = set()
@@ -50,6 +50,11 @@ class SmtConverter:
                     f"Unsupported bus interaction handler: {ARGS().bus_interaction_handler}"
                 )
                 self.bus_interaction_encoder = None
+    
+    def _symbol(self, name: str, sort) -> FNode:
+        if self.name is not None:
+            return Symbol(f"{self.name}-{name}", sort)
+        return Symbol(name, sort)
 
     def __enter__(self):
         """No-op when entering a resource management context."""
@@ -76,7 +81,7 @@ class SmtConverter:
         for derived in data:
             match derived:
                 case [str(name), {"Constant": int(value)}]:
-                    sym = Symbol(f"{self.name}-{name}", INT)
+                    sym = self._symbol(name, INT)
                     assert sym not in self.derived_columns
                     self.derived_columns[sym] = with_comment(
                         Int(value), f"DERIVED COLUMN {name} = {value}"
@@ -85,7 +90,7 @@ class SmtConverter:
                     "variable": str(name),
                     "computation_method": {"QuotientOrZero": [a, b]},
                 }:
-                    sym = Symbol(f"{self.name}-{name}", INT)
+                    sym = self._symbol(name, INT)
                     assert sym not in self.derived_columns
                     a = self.convert_manual(a)
                     b = self.convert_manual(b)
@@ -145,7 +150,7 @@ class SmtConverter:
             case int(value):
                 return Int(value)
             case str(var):
-                sym = Symbol(f"{self.name}-{var}", INT)
+                sym = self._symbol(var, INT)
                 self.field_symbols.add(sym)
                 return sym
 
