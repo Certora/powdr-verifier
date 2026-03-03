@@ -85,8 +85,8 @@ def __run_main(command, *args, with_additional_args=True):
     cmd = [PYTHON, VERIFIER_DIR / "main.py", command, *args, *_ARGS.additional_args]
     subprocess.run(cmd, check=True)
 
-def __do_simplify(file):
-    return __run_main("simplify", file, "rewrite:intervals:cvc5:rewrite:intervals:rewrite", file.with_suffix(".rewrite.smt2"))
+def __do_simplify(input, output):
+    return __run_main("simplify", input, "rewrite:intervals:cvc5:rewrite:intervals:rewrite", output)
 
 def run_powdr(test):
     dir = DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True) / test
@@ -112,10 +112,10 @@ def run_powdr(test):
 
 def run_trace(*files):
     for f in files:
-        first = f.parent / f"trace-{f.stem}.smt2"
-        __run_main("trace", f, first)
-        __do_simplify(first)
-        __run_main("check", first.with_suffix(".rewrite.smt2"), "--dump-model", first.with_suffix(".model"))
+        smt = f.parent / f"trace-{f.stem}.smt2"
+        __run_main("trace", f, smt)
+        __do_simplify(smt, smt.with_suffix(".rewrite.smt2"))
+        __run_main("check", smt.with_suffix(".rewrite.smt2"), "--dump-model", smt.with_suffix(".model"))
 
 def run_evaluate(first, *files):
     for f in files:
@@ -142,8 +142,8 @@ def run_verify(*pairs):
     for a,b in pairs:
         first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
         __run_main("verify", a, b, first)
-        __do_simplify(first.with_suffix(".completeness.smt2"))
-        __do_simplify(first.with_suffix(".soundness.smt2"))
+        __do_simplify(first.with_suffix(".completeness.smt2"), first.with_suffix(".completeness.rewrite.smt2"))
+        __do_simplify(first.with_suffix(".soundness.smt2"), first.with_suffix(".soundness.rewrite.smt2"))
         __run_main("check", first.with_suffix(".completeness.rewrite.smt2"))
         __run_main("check", first.with_suffix(".soundness.rewrite.smt2"))
 
