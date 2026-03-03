@@ -8,7 +8,7 @@ from .smt.encoding import build_input_output_relation, collect_variables
 from .smt.conversion import FormulaWithAxioms, SmtConverter, check_formula
 from .smt.utils import *
 from .utils.basic_block import BasicBlock
-from .utils.io import load_json
+from .utils.io import load_apc_dump, load_json, open_file
 
 BEFORE_PREFIX = "before"
 AFTER_PREFIX = "after"
@@ -195,8 +195,14 @@ def encoding(before, after, qvars, builder, input_relation, output_relation):
         res = mod_unroller.unroll_mod(res)
     return res
 
-def verify(before: FNode, after: FNode, block: BasicBlock):
+def verify():
     """Verify our versions of equivalence."""
+
+    before = load_apc_dump(ARGS().input_before, 'before')
+    after = load_apc_dump(ARGS().input_after, 'after')
+
+    block = BasicBlock(before["block"])
+    assert block == BasicBlock(after["block"]), "The basic block has changed"
 
     with (
         SmtConverter(BEFORE_PREFIX, block) as before_conv,
@@ -229,51 +235,35 @@ def verify(before: FNode, after: FNode, block: BasicBlock):
             | after_conv.bus_interaction_encoder.get_auxiliaries()
         ).values())
 
+        with open_file(ARGS().output, "w") as dump:
+            if not ARGS().no_completeness:
+                dump.write(";; completeness check\n")
+                forward_builder = ModelMapBuilder(
+                    var1 - globals - auxiliaries,
+                    var2 - globals - auxiliaries,
+                    before_smt,
+                    after_smt,
+                    after_smt.derived,
+                )
+                forward_builder.build(after_conv)
+                completeness = encoding(before_smt, after_smt, var2 - globals, forward_builder, input_relation, output_relation)
 
-        def completeness():
-            forward_builder = ModelMapBuilder(
-                var1 - globals - auxiliaries,
-                var2 - globals - auxiliaries,
-                before_smt,
-                after_smt,
-                after_smt.derived,
-            )
-            forward_builder.build(after_conv)
-            completeness = encoding(before_smt, after_smt, var2 - globals, forward_builder, input_relation, output_relation)
-            do_check(completeness, "completeness")
+                logging.warning(f"dumping completeness check to {dump.name}")
+                smtlib = convert_to_smt_script(completeness)
+                pretty_print_smtlib(smtlib, dump)
 
-        completeness()
+            if not ARGS().no_soundness:
+                dump.write(";; soundness check\n")
+                backward_builder = ModelMapBuilder(
+                    var2 - globals - auxiliaries,
+                    var1 - globals - auxiliaries,
+                    after_smt,
+                    before_smt,
+                    eliminations,
+                )
+                backward_builder.build(before_conv)
+                soundness = encoding(after_smt, before_smt, var1 - globals, backward_builder, input_relation, output_relation)
 
-        def soundness():
-            backward_builder = ModelMapBuilder(
-                var2 - globals - auxiliaries,
-                var1 - globals - auxiliaries,
-                after_smt,
-                before_smt,
-                eliminations,
-            )
-            backward_builder.build(before_conv)
-            soundness = encoding(after_smt, before_smt, var1 - globals, backward_builder, input_relation, output_relation)
-            do_check(soundness, "soundness")
-
-        soundness()
-
-        def determinism():
-            # determinism: if an input has a trace for both programs, the outputs are the same
-            determinism = And(
-                Not(
-                    Implies(
-                        And(
-                            *before_smt.constraints,
-                            *after_smt.constraints,
-                            input_relation,
-                        ),
-                        And(common_intermediates, output_relation),
-                    )
-                ),
-                And(*before_smt.axioms),
-                And(*after_smt.axioms),
-            )
-            do_check(determinism, "determinism")
-
-        # determinism()
+                logging.warning(f"dumping soundness check to {dump.name}")
+                smtlib = convert_to_smt_script(soundness)
+                pretty_print_smtlib(smtlib, dump)
