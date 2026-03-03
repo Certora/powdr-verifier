@@ -1,5 +1,6 @@
 from io import StringIO
 import logging
+from pathlib import Path
 import sys
 
 from src.checker import check
@@ -23,40 +24,40 @@ if __name__ == '__main__':
     try:
         match ARGS().command:
             case 'trace':
-                logging.warning(f"running tracer on {ARGS().input}")
+                logging.warning(f"running tracer on {ARGS().input.relative_to(Path.cwd())}")
                 trace()
 
             case 'eval':
-                logging.warning(f"evaluating trace from {ARGS().model} on {ARGS().input}")
+                logging.warning(f"evaluating trace from {ARGS().model} on {ARGS().input.relative_to(Path.cwd())}")
                 input = load_apc_dump(ARGS().input, 'input')
                 model = load_json(ARGS().model, 'model')
                 evaluate(input, model)
 
             case 'diff':
-                logging.warning(f"diffing {ARGS().input_before} and {ARGS().input_after}")
+                logging.warning(f"diffing {ARGS().input_before.relative_to(Path.cwd())} and {ARGS().input_after.relative_to(Path.cwd())}")
                 diff()
 
             case 'text':
-                logging.warning(f"converting {ARGS().input} to text")
+                logging.warning(f"converting {ARGS().input.relative_to(Path.cwd())} to text")
                 input = load_apc_dump(ARGS().input, 'input')
                 s = StringIO()
                 converter.text(s, input)
                 print(s.getvalue())
 
             case 'simplify':
-                logging.warning(f"simplifying {ARGS().input}")
+                logging.warning(f"simplifying {ARGS().input.relative_to(Path.cwd())}")
                 simplify()
 
             case 'verify':
-                logging.warning(f"verify equivalence of {ARGS().input_before} and {ARGS().input_after}")
+                logging.warning(f"verify equivalence of {ARGS().input_before.relative_to(Path.cwd())} and {ARGS().input_after.relative_to(Path.cwd())}")
                 verify()
             
             case 'check':
-                logging.warning(f"checking smt2 file {ARGS().input}")
+                logging.warning(f"checking smt2 file {ARGS().input.relative_to(Path.cwd())}")
                 check()
             
             case 'aliasing':
-                logging.warning(f"finding aliasing in {ARGS().input}")
+                logging.warning(f"finding aliasing in {ARGS().input.relative_to(Path.cwd())}")
                 analyze_aliases()
 
             case _:
