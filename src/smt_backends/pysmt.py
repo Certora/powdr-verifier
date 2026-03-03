@@ -59,6 +59,7 @@ UFNIA = logics.UFNIA
 QF_UFNIA = logics.QF_UFNIA
 AUFNIA = logics.AUFNIA
 QF_AUFNIA = logics.QF_AUFNIA
+ALL = logics.ALL
 
 logics.PYSMT_LOGICS = logics.PYSMT_LOGICS | frozenset([logics.ALL, logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA])
 logics.SMTLIB2_LOGICS = logics.SMTLIB2_LOGICS | frozenset([logics.ALL, logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA])

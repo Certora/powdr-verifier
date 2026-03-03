@@ -136,42 +136,6 @@ class VarBaseFormulaSelector:
         return self.resolve_deep(frozenset.union(*[f.get_free_variables() for f in fs]))
 
 
-@simple_profile
-def check_formula(f: FNode, name: Optional[str] = None, logic: Logic = AUFNIA) -> bool:
-    """Solve `f` under the selected solver/logic, optionally dumping the SMT-LIB to disk."""
-    if ARGS().dump_smt:
-        match ARGS().command:
-            case "trace":
-                filename = ARGS().input.parent / f"trace-{ARGS().input.stem}.smt2"
-            case "verify":
-                filename = (
-                    ARGS().input_before.parent
-                    / f"verify-{name}-{ARGS().input_before.stem}-{ARGS().input_after.stem}.smt2"
-                )
-            case "aliasing":
-                filename = ARGS().input.parent / f"aliasing-{ARGS().input.stem}.smt2"
-            case _:
-                pass
-        with open(filename, "w") as dump:
-            print_formula_to_file(f, AUFNIA, dump)
-
-    logging.debug(f"checking formula with logic {logic} and solver {ARGS().solver}")
-    with Solver(
-        logic=logic, name=ARGS().solver, solver_options={":timeout": 60000}
-    ) as s:
-        try:
-            s.add_assertion(f)
-            match s.solve():
-                case True:
-                    return True, s.get_model()
-                case False:
-                    return False, None
-                case _:
-                    return None, None
-        except SolverReturnedUnknownResultError:
-            return None, None
-
-
 class GenericInterpreter(FunctionInterpretation):
     """Provides a generic interpreter for an uninterpreted function symbol.
     Supports both evaluation of concrete arguments and symbolic simplification."""
