@@ -8,7 +8,7 @@ def check():
     """Check the smt2 file."""
 
     parser = SmtLibParser()
-    logging.warning(f"loading from {ARGS().input}")
+    logging.info(f"loading from {ARGS().input}")
     smt_script = parser.get_script_fname(str(ARGS().input))
     f = smt_script.get_last_formula()
 
