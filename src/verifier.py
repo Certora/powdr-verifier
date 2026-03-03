@@ -5,7 +5,7 @@ import sympy
 from .rewriter.conversion import to_smt, to_sympy
 from .rewriter import rewrite, mod_unroller
 from .smt.encoding import build_input_output_relation, collect_variables
-from .smt.conversion import FormulaWithAxioms, SmtConverter, check_formula
+from .smt.conversion import FormulaWithAxioms, SmtConverter
 from .smt.utils import *
 from .utils.basic_block import BasicBlock
 from .utils.io import load_apc_dump, load_json, open_file
@@ -135,19 +135,6 @@ class ModelMapBuilder:
     def get_skolemized_variables(self) -> frozenset:
         """Return the computed mapping as a conjunction of equalities."""
         return frozenset(self.result.keys())
-
-
-def do_check(f: FNode, name: str):
-    """Check satisfiability of `f` and print a human-friendly result (and counterexample if any)."""
-    match check_formula(f, name):
-        case False, _:
-            print(f"{name} is proven")
-        case None, _:
-            print(f"could not solve {name}, solver returned UNKNOWN")
-        case True, model:
-            print(f"{name} is violated")
-            model = to_nice_model(model)
-            print(json.dumps(model, indent=4))
 
 
 def encoding(before, after, qvars, builder, input_relation, output_relation):
