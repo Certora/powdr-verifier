@@ -48,13 +48,11 @@ if __name__ == '__main__':
 
             case 'verify':
                 logging.warning(f"verify equivalence of {ARGS().input_before} and {ARGS().input_after}")
-                before = load_apc_dump(ARGS().input_before, 'before')
-                after = load_apc_dump(ARGS().input_after, 'after')
-
-                before_block = BasicBlock(before["block"])
-                assert before_block == BasicBlock(after["block"]), "The basic block has changed"
-
-                verify(before, after, before_block)
+                verify()
+            
+            case 'check':
+                logging.warning(f"checking smt2 file {ARGS().input}")
+                check()
             
             case 'aliasing':
                 logging.warning(f"finding aliasing in {ARGS().input}")
