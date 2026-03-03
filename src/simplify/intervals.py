@@ -603,6 +603,22 @@ class IntervalICPEngine:
         return go(f)
 
 
+class DerivedBoundInserter(substituter.Substituter):
+    def __init__(self, derived_bounds: list[FNode], env=None):
+        """Create a PySMT substituter that may rewrite equalities via SymPy."""
+        substituter.Substituter.__init__(self, env=env)
+        self.derived_bounds = derived_bounds
+
+    @substituter.handles(
+        set(operators.ALL_TYPES) - frozenset([operators.EXISTS, operators.FORALL])
+    )
+    def walk_identity(self, formula, args, **kwargs):
+        return keep_comment(substituter.Substituter.super(self, formula, args=args, **kwargs), formula)
+    
+    @substituter.handles(frozenset([operators.EXISTS, operators.FORALL]))
+    def walk_quantifier(self, formula, args, **kwargs):
+        return formula
+
 def simplify_intervals(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     """Run fixed-point integer interval propagation on all assertions."""
     assertions = [cmd.args[0] for cmd in smt_script if cmd.name == "assert"]
@@ -611,7 +627,8 @@ def simplify_intervals(smt_script: script.SmtLibScript) -> script.SmtLibScript:
 
     engine = IntervalICPEngine()
     engine.assume_all(assertions)
-
+    
+    free_vars = set()
     for cmd in smt_script:
         if cmd.name == "assert":
             if engine.inconsistent:
@@ -621,6 +638,7 @@ def simplify_intervals(smt_script: script.SmtLibScript) -> script.SmtLibScript:
                 continue
             else:
                 cmd.args[0] = engine.simplify(cmd.args[0], prune=True)
+            free_vars.update(cmd.args[0].get_free_variables())
 
     # Preserve information discovered by propagation even when source constraints
     # simplify away under pruning.
@@ -634,6 +652,8 @@ def simplify_intervals(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     if not derived_to_insert:
         return smt_script
 
+    inserter = DerivedBoundInserter(derived_to_insert)
+
     # Keep derived facts in the assertion block, right before satisfiability checks.
     out = script.SmtLibScript()
     inserted = False
@@ -646,6 +666,7 @@ def simplify_intervals(smt_script: script.SmtLibScript) -> script.SmtLibScript:
 
     if not inserted:
         for derived in derived_to_insert:
-            out.add_command(script.SmtLibCommand(name="assert", args=[derived]))
+            if derived.get_free_variables().issubset(free_vars):
+                out.add_command(script.SmtLibCommand(name="assert", args=[derived]))
 
     return out
