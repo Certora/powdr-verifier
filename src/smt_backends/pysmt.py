@@ -115,6 +115,7 @@ printers.SmtDagPrinter.walk_mod = lambda self, formula, args: self.walk_nary(for
 from pysmt.fnode import FNode
 
 FNode.is_mod = lambda self: self.node_type() == operators.MOD
+FNode.__str__ = lambda self: self.serialize()
 
 from pysmt.smtlib.parser import SmtLibParser as OriginalSmtLibParser
 
