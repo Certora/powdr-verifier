@@ -1,4 +1,5 @@
 import functools
+import json
 import logging
 from typing import Any, Iterable
 from types import GeneratorType
@@ -59,16 +60,10 @@ def as_constant(f: FNode) -> Any:
     return str(f)
 
 
-def to_nice_model(model: Any, strip_prefix: Optional[str] = None) -> dict[str, Any]:
+def to_nice_model(model: Any) -> dict[str, Any]:
     """Convert a solver model into a JSON-friendly dict, optionally stripping symbol prefixes."""
-
-    def cleanup(name: str) -> str:
-        if strip_prefix is not None and name.startswith(strip_prefix):
-            name = name[len(strip_prefix) :]
-        return name
-
     return {
-        cleanup(str(k)): as_constant(v)
+        str(k): as_constant(v)
         for k, v in sorted(model, key=lambda x: str(x))
         if not v.is_array_value() and not v.is_array_op()
     }
