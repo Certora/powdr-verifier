@@ -62,7 +62,7 @@ def parse_paired_range(ls, selectors):
 
 def __split_args_for_main(args):
     from src.utils.args import __build_parser
-    _, leftover = __build_parser().parse_known_args()
+    _, leftover = __build_parser(skip_subparsers=True).parse_known_args(args)
     return [a for a in args if a not in leftover], leftover
 
 
@@ -170,7 +170,7 @@ if __name__ == '__main__':
     if files:
         args._main_args += ["--base-dump", files[0]]
     if eliminations.exists():
-        args._sub_args += ["--eliminations", eliminations]
+        args._main_args += ["--eliminations", eliminations]
 
     if not files:
         logging.warning(f"no files found for {args.test}, did you run powdr?")

@@ -9,8 +9,8 @@ from .field_types import FieldTypes
 __ARGS: Optional[argparse.Namespace] = None
 
 
-def __build_parser():
-    """Parse the command line arguments."""
+def __build_parser(skip_subparsers=False):
+    """Build the command line parser."""
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-v", "--verbose", action="append", nargs="?", default=[])
@@ -39,6 +39,9 @@ def __build_parser():
     parser.add_argument("--unroll-mod", action="store_true")
     parser.add_argument("--elim-with-skolem", action="store_true")
     parser.add_argument("--elim-with-model", type=Path, default=None)
+
+    if skip_subparsers:
+        return parser
 
     sub = parser.add_subparsers(dest="command")
 
@@ -85,6 +88,7 @@ def __build_parser():
 
 
 def parse_args(args=None):
+    """Parse the command line arguments."""
     parser = __build_parser()
     global __ARGS
     if args is None:
