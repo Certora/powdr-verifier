@@ -1,7 +1,9 @@
 import subprocess
 import logging
-
+from pathlib import Path
 from .utils import convert_script_to_string
+
+CVC5_BIN = Path("~/stuff/cvc5/build/bin/cvc5").expanduser()
 
 def _extract_script(output: str) -> str | None:
     start_tag = ";; post-asserts start"
@@ -17,6 +19,9 @@ def _extract_script(output: str) -> str | None:
 @convert_script_to_string
 def simplify_cvc5(smt: str) -> str:
     """Roundtrip through external solver preprocessing."""
+
+    if not CVC5_BIN.exists():
+        return None
 
     proc = subprocess.run(
         #["cvc5", "--dag-thresh", "0", "--preprocess-only", "-o", "post-asserts", "--no-interactive"],
