@@ -57,8 +57,7 @@ if __name__ == '__main__':
             
             case 'aliasing':
                 logging.warning(f"finding aliasing in {ARGS().input}")
-                input = load_apc_dump(ARGS().input, 'input')
-                analyze_aliases(input)
+                analyze_aliases()
 
             case _:
                 logging.error(f"unknown command: {ARGS().command}")
