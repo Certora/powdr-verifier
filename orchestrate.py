@@ -77,18 +77,18 @@ def parse_args():
 
     global _ARGS
     _ARGS, leftover = parser.parse_known_args()
-    _ARGS.additional_args = ["--dump-smt"] + leftover
+    _ARGS.additional_args = leftover
     return _ARGS
 
 
-def __run_main(command, *args):
-    subprocess.run([
-        PYTHON, VERIFIER_DIR / "main.py",
-        *_ARGS.additional_args,
-        command,
-        *args,
-    ], check=True)
+def __run_main(command, *args, with_additional_args=True):
+    cmd = [PYTHON, VERIFIER_DIR / "main.py", command, *args]
+    if with_additional_args:
+        cmd.extend(_ARGS.additional_args)
+    subprocess.run(cmd, check=True)
 
+def __do_simplify(file):
+    return __run_main("simplify", file, "rewrite:intervals:cvc5:rewrite:intervals:rewrite", file.with_suffix(".rewrite.smt2"), with_additional_args=False)
 
 def run_powdr(test):
     dir = DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True) / test
@@ -114,7 +114,9 @@ def run_powdr(test):
 
 def run_trace(*files):
     for f in files:
-        __run_main("trace", f, f.parent / f"trace-{f.stem}.smt2")
+        first = f.parent / f"trace-{f.stem}.smt2"
+        __run_main("trace", f, first)
+        __do_simplify(first)
 
 def run_evaluate(first, *files):
     for f in files:
@@ -139,7 +141,9 @@ def run_eval(*files):
 
 def run_verify(*pairs):
     for a,b in pairs:
-        __run_main("verify", a, b)
+        first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
+        __run_main("verify", a, b, first)
+        __do_simplify(first)
 
 
 if __name__ == '__main__':
