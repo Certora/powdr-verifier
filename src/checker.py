@@ -21,9 +21,9 @@ def check():
             match s.solve():
                 case True:
                     logging.warning("SAT")
-                    model = s.get_model()
+                    model = to_nice_model(s.get_model())
                     if ARGS().print_model:
-                        print(json.dumps(to_nice_model(model), indent=4))
+                        print(json.dumps(model, indent=4))
                     if ARGS().dump_model:
                         logging.info(f"dumping model to {ARGS().dump_model}")
                         with open(ARGS().dump_model, "w") as f:
