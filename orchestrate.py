@@ -82,13 +82,11 @@ def parse_args():
 
 
 def __run_main(command, *args, with_additional_args=True):
-    cmd = [PYTHON, VERIFIER_DIR / "main.py", command, *args]
-    if with_additional_args:
-        cmd.extend(_ARGS.additional_args)
+    cmd = [PYTHON, VERIFIER_DIR / "main.py", command, *args, *_ARGS.additional_args]
     subprocess.run(cmd, check=True)
 
 def __do_simplify(file):
-    return __run_main("simplify", file, "rewrite:intervals:cvc5:rewrite:intervals:rewrite", file.with_suffix(".rewrite.smt2"), with_additional_args=False)
+    return __run_main("simplify", file, "rewrite:intervals:cvc5:rewrite:intervals:rewrite", file.with_suffix(".rewrite.smt2"))
 
 def run_powdr(test):
     dir = DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True) / test
