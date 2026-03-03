@@ -90,7 +90,9 @@ def parse_args(args=None):
     if args is None:
         __ARGS, _ = parser.parse_known_args([])
     else:
-        __ARGS = parser.parse_args(args)
+        __ARGS, extra = parser.parse_known_args(args)
+        if extra:
+            logging.warning(f"unknown arguments: {" ".join(extra)}")
     
     ARGS().verbose = ARGS().verbose + 2 * ARGS().very_verbose
     def make_verbose(logger: logging.Logger):
