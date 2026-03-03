@@ -20,8 +20,7 @@ def trace():
         And(
             *formula.constraints,
             *formula.axioms,
-        ),
-        AUFNIA
+        )
     )
 
     for v, expr in formula.derived.items():
