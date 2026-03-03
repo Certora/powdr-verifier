@@ -372,7 +372,7 @@ def script_with_sorted_declarefuns(smtlib: script.SmtLibScript) -> script.SmtLib
     smtlib.commands = newcmds
     return smtlib
 
-def convert_to_smt_script(f: FNode, logic: Logic) -> script.SmtLibScript:
+def convert_to_smt_script(f: FNode) -> script.SmtLibScript:
     smtlib = script.smtlibscript_from_formula(f, None)
     smtlib = script_with_sorted_declarefuns(smtlib)
 
@@ -391,8 +391,8 @@ def convert_to_smt_script(f: FNode, logic: Logic) -> script.SmtLibScript:
     smtlib.add_command(script.SmtLibCommand(name='get-unsat-core', args=[]))
     return smtlib
 
-def print_formula_to_file(f, LOGIC, dump):
-    smtlib = convert_to_smt_script(f, LOGIC)
+def print_formula_to_file(f, dump):
+    smtlib = convert_to_smt_script(f)
     pretty_print_smtlib(smtlib, dump)
 
 def z3_simplify(f: FNode) -> FNode:
