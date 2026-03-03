@@ -193,12 +193,12 @@ solvers = [
 
 for solver in solvers:
     if not solver['path'].exists():
-        logging.warning(f"did not add solver {solver['name']}: {solver['path']} does not exist")
+        logging.info(f"did not add solver {solver['name']}: {solver['path']} does not exist")
     if 'min-version' in solver:
         res = subprocess.run([solver['path'], '--version'], capture_output=True, text=True)
         version = re.search(solver['min-version'][0], res.stdout).group(1)
         if semver.compare(version, solver['min-version'][1]) < 0:
-            logging.warning(f"did not add solver {solver['name']} because it is too old (version {version} < {solver['min-version'][1]})")
+            logging.info(f"did not add solver {solver['name']} because it is too old (version {version} < {solver['min-version'][1]})")
             continue
     logging.info(f"adding solver {solver['name']} from {solver['path']}")
     get_env().factory.add_generic_solver(solver['name'],
