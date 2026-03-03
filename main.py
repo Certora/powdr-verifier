@@ -2,6 +2,7 @@ from io import StringIO
 import logging
 import sys
 
+from src.checker import check
 from src.utils.basic_block import BasicBlock
 from src.evaluator import evaluate
 from src.utils.args import parse_args, ARGS
