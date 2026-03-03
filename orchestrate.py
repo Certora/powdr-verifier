@@ -115,6 +115,7 @@ def run_trace(*files):
         first = f.parent / f"trace-{f.stem}.smt2"
         __run_main("trace", f, first)
         __do_simplify(first)
+        __run_main("check", first.with_suffix(".rewrite.smt2"), "--dump-model", first.with_suffix(".model"))
 
 def run_evaluate(first, *files):
     for f in files:
