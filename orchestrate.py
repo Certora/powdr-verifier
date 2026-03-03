@@ -60,6 +60,12 @@ def parse_paired_range(ls, selectors):
                 raise ValueError(f"invalid slice: {selector}")
 
 
+def __split_args_for_main(args):
+    from src.utils.args import __build_parser
+    _, leftover = __build_parser().parse_known_args()
+    return [a for a in args if a not in leftover], leftover
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
 
@@ -77,12 +83,12 @@ def parse_args():
 
     global _ARGS
     _ARGS, leftover = parser.parse_known_args()
-    _ARGS.additional_args = leftover
+    _ARGS._main_args, _ARGS._sub_args = __split_args_for_main(leftover)
     return _ARGS
 
 
-def __run_main(command, *args, with_additional_args=True):
-    cmd = [PYTHON, VERIFIER_DIR / "main.py", command, *args, *_ARGS.additional_args]
+def __run_main(command, *args):
+    cmd = [PYTHON, VERIFIER_DIR / "main.py", *_ARGS._main_args, command, *args, *_ARGS._sub_args]
     subprocess.run(cmd, check=True)
 
 def __do_simplify(input, output):
@@ -162,9 +168,9 @@ if __name__ == '__main__':
     eliminations = DATA_DIR / args.test / "apc_candidate_0_substitutions.json"
 
     if files:
-        args.additional_args += ["--base-dump", files[0]]
+        args._main_args += ["--base-dump", files[0]]
     if eliminations.exists():
-        args.additional_args += ["--eliminations", eliminations]
+        args._sub_args += ["--eliminations", eliminations]
 
     if not files:
         logging.warning(f"no files found for {args.test}, did you run powdr?")
