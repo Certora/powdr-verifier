@@ -72,6 +72,7 @@ def parse_args():
     parser.add_argument('command', choices=[
         'powdr',
         'trace',
+        'diff',
         'evaluate',
         'eval',
         'verify',
@@ -123,6 +124,10 @@ def run_trace(*files):
         __do_simplify(smt, smt.with_suffix(".rewrite.smt2"))
         __run_main("check", smt.with_suffix(".rewrite.smt2"), "--dump-model", smt.with_suffix(".model"))
 
+def run_diff(*pairs):
+    for a,b in pairs:
+        __run_main("diff", a, b)
+
 def run_evaluate(first, *files):
     for f in files:
         model = f.parent / f"trace-{f.stem}.model"
@@ -150,8 +155,8 @@ def run_verify(*pairs):
         __run_main("verify", a, b, first)
         __do_simplify(first.with_suffix(".completeness.smt2"), first.with_suffix(".completeness.rewrite.smt2"))
         __do_simplify(first.with_suffix(".soundness.smt2"), first.with_suffix(".soundness.rewrite.smt2"))
-        __run_main("check", first.with_suffix(".completeness.rewrite.smt2"))
-        __run_main("check", first.with_suffix(".soundness.rewrite.smt2"))
+        __run_main("check", first.with_suffix(".completeness.rewrite.smt2"), "--print-model")
+        __run_main("check", first.with_suffix(".soundness.rewrite.smt2"), "--print-model")
 
 
 if __name__ == '__main__':
@@ -179,6 +184,8 @@ if __name__ == '__main__':
         match args.command:
             case 'trace':
                 run_trace(*parse_range(files, args.k))
+            case 'diff':
+                run_diff(*parse_paired_range(files, args.k))
             case 'evaluate':
                 run_evaluate(files[0], *parse_range(files, args.k))
             case 'eval':
