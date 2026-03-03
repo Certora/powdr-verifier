@@ -30,12 +30,10 @@ def check():
                             json.dump(model, f, indent=4)
                     return True, model
                 case False:
-                    if unsat_msg is not None:
-                        logging.warning(unsat_msg)
+                    logging.warning("UNSAT")
                     return False, None
                 case _:
-                    if unknown_msg is not None:
-                        logging.warning(unknown_msg)
+                    logging.warning("UNKNOWN")
                     return None, None
         except SolverReturnedUnknownResultError:
             return None, None

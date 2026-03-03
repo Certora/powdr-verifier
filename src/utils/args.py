@@ -75,8 +75,6 @@ def parse_args(args=None):
     sub_verify.add_argument("input_before", type=Path)
     sub_verify.add_argument("input_after", type=Path)
     sub_verify.add_argument("output", type=Path, nargs="?")
-    sub_verify.add_argument("--no-completeness", action="store_true", default=True)
-    sub_verify.add_argument("--no-soundness", action="store_true", default=False)
 
     sub_check = sub.add_parser("check", parents=[parent])
     sub_check.add_argument("input", type=Path)

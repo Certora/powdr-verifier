@@ -141,7 +141,10 @@ def run_verify(*pairs):
     for a,b in pairs:
         first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
         __run_main("verify", a, b, first)
-        __do_simplify(first)
+        __do_simplify(first.with_suffix(".completeness.smt2"))
+        __do_simplify(first.with_suffix(".soundness.smt2"))
+        __run_main("check", first.with_suffix(".completeness.rewrite.smt2"))
+        __run_main("check", first.with_suffix(".soundness.rewrite.smt2"))
 
 
 if __name__ == '__main__':

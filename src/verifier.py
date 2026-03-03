@@ -222,35 +222,34 @@ def verify():
             | after_conv.bus_interaction_encoder.get_auxiliaries()
         ).values())
 
-        with open_file(ARGS().output, "w") as dump:
-            if not ARGS().no_completeness:
-                dump.write(";; completeness check\n")
-                forward_builder = ModelMapBuilder(
-                    var1 - globals - auxiliaries,
-                    var2 - globals - auxiliaries,
-                    before_smt,
-                    after_smt,
-                    after_smt.derived,
-                )
-                forward_builder.build(after_conv)
-                completeness = encoding(before_smt, after_smt, var2 - globals, forward_builder, input_relation, output_relation)
+        with open_file(ARGS().output, "w", ".completeness.smt2") as dump:
+            dump.write(";; completeness check\n")
+            forward_builder = ModelMapBuilder(
+                var1 - globals - auxiliaries,
+                var2 - globals - auxiliaries,
+                before_smt,
+                after_smt,
+                after_smt.derived,
+            )
+            forward_builder.build(after_conv)
+            completeness = encoding(before_smt, after_smt, var2 - globals, forward_builder, input_relation, output_relation)
 
-                logging.warning(f"dumping completeness check to {dump.name}")
-                smtlib = convert_to_smt_script(completeness)
-                pretty_print_smtlib(smtlib, dump)
+            logging.warning(f"dumping completeness check to {dump.name}")
+            smtlib = convert_to_smt_script(completeness)
+            pretty_print_smtlib(smtlib, dump)
 
-            if not ARGS().no_soundness:
-                dump.write(";; soundness check\n")
-                backward_builder = ModelMapBuilder(
-                    var2 - globals - auxiliaries,
-                    var1 - globals - auxiliaries,
-                    after_smt,
-                    before_smt,
-                    eliminations,
-                )
-                backward_builder.build(before_conv)
-                soundness = encoding(after_smt, before_smt, var1 - globals, backward_builder, input_relation, output_relation)
+        with open_file(ARGS().output, "w", ".soundness.smt2") as dump:
+            dump.write(";; soundness check\n")
+            backward_builder = ModelMapBuilder(
+                var2 - globals - auxiliaries,
+                var1 - globals - auxiliaries,
+                after_smt,
+                before_smt,
+                eliminations,
+            )
+            backward_builder.build(before_conv)
+            soundness = encoding(after_smt, before_smt, var1 - globals, backward_builder, input_relation, output_relation)
 
-                logging.warning(f"dumping soundness check to {dump.name}")
-                smtlib = convert_to_smt_script(soundness)
-                pretty_print_smtlib(smtlib, dump)
+            logging.warning(f"dumping soundness check to {dump.name}")
+            smtlib = convert_to_smt_script(soundness)
+            pretty_print_smtlib(smtlib, dump)
