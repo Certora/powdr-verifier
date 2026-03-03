@@ -132,7 +132,7 @@ def text(out: TextIO, input: dict, model: Optional[dict[str, Any]] = None):
             #assert not rest_apc
 
             block = BasicBlock(input["block"])
-            with SmtConverter("tmp", block) as conv:
+            with SmtConverter(None, block) as conv:
                 eval = None
                 if model is not None:
                     eval = lambda f: partial_evaluate(

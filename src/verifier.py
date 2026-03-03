@@ -234,7 +234,7 @@ def verify():
             forward_builder.build(after_conv)
             completeness = encoding(before_smt, after_smt, var2 - globals, forward_builder, input_relation, output_relation)
 
-            logging.warning(f"dumping completeness check to {dump.name}")
+            logging.info(f"dumping completeness check to {dump.name}")
             smtlib = convert_to_smt_script(completeness)
             pretty_print_smtlib(smtlib, dump)
 
@@ -250,6 +250,6 @@ def verify():
             backward_builder.build(before_conv)
             soundness = encoding(after_smt, before_smt, var1 - globals, backward_builder, input_relation, output_relation)
 
-            logging.warning(f"dumping soundness check to {dump.name}")
+            logging.info(f"dumping soundness check to {dump.name}")
             smtlib = convert_to_smt_script(soundness)
             pretty_print_smtlib(smtlib, dump)
