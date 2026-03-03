@@ -119,7 +119,7 @@ def run_trace(*files):
 
 def run_evaluate(first, *files):
     for f in files:
-        model = f.with_suffix(".model")
+        model = f.parent / f"trace-{f.stem}.model"
         if not model.exists():
             logging.warning(f"can not eval {f} because there is no model")
             continue
@@ -132,7 +132,7 @@ def run_evaluate(first, *files):
 
 def run_eval(*files):
     for f in files:
-        model = f.with_suffix(".model")
+        model = f.parent / f"trace-{f.stem}.model"
         if not model.exists():
             logging.warning(f"can not eval {f} because there is no model")
             continue
