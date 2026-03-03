@@ -97,7 +97,13 @@ Simplifier.walk_mod = simplify_mod
 # type_checker.py
 SimpleTypeChecker.walk_mod = SimpleTypeChecker.walk_realint_to_realint
 # solvers/z3.py
+def __z3converter_init(self, env, z3_ctx):
+    self.__old__init__(env, z3_ctx)
+    self._back_fun[z3.Z3_OP_MOD] = lambda args, expr: self.mgr.Mod(args[0], args[1])
+Z3Converter.__old__init__ = Z3Converter.__init__
+Z3Converter.__init__ = __z3converter_init
 Z3Converter.walk_mod = Z3Converter.make_walk_binary(z3.Z3_mk_mod)
+
 # walkers/identitydag.py
 IdentityDagWalker.walk_mod = lambda self, formula, args, **kwargs: self.mgr.Mod(args[0], args[1])
 
