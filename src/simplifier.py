@@ -12,26 +12,26 @@ def simplify():
 
     with open_file(ARGS().input, "r") as f:
         parser = SmtLibParser()
-        logging.warning(f"loading from {f.name}")
+        logging.info(f"loading from {f.name}")
         smt_script = parser.get_script(f)
 
     for t in ARGS().tactic.split(":"):
         match t:
             case "rewrite":
-                logging.warning(f"rewrite")
+                logging.info(f"rewrite")
                 smt_script = simplify_rewrite(smt_script)
             case "intervals":
-                logging.warning(f"intervals")
+                logging.info(f"intervals")
                 smt_script = simplify_intervals(smt_script)
             case "cvc5":
-                logging.warning(f"cvc5")
+                logging.info(f"cvc5")
                 smt_script = simplify_cvc5(smt_script)
             case "z3":
-                logging.warning(f"z3")
+                logging.info(f"z3")
                 smt_script = simplify_z3(smt_script)
             case _:
-                logging.warning(f"ignoring unknown tactic: {t}")
+                logging.info(f"ignoring unknown tactic: {t}")
 
     with open_file(ARGS().output, "w") as out:
-        logging.warning(f"dumping formula to {out.name}")
+        logging.info(f"dumping formula to {out.name}")
         pretty_print_smtlib(smt_script, out)

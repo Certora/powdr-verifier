@@ -28,5 +28,5 @@ def trace():
         smtlib.add("check-sat-assuming", [Equals(v, expr)])
 
     with open_file(ARGS().output, "w") as dump:
-        logging.warning(f"dumping formula to {dump.name}")
+        logging.info(f"dumping formula to {dump.name}")
         pretty_print_smtlib(smtlib, dump)
