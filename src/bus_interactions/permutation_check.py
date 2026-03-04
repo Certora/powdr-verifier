@@ -283,10 +283,17 @@ class PermutationCheckMixin:
                 local_match_vars[(i, j)] = mv
                 self.match_vars[(i, j)] = mv
 
-                # m_i_j => mul_i + mul_j == 0
+                # m_i_j => (mul_i + mul_j == 0 && mul_i != 0 && mul_j != 0)
                 constraints.append(
                     with_comment(
-                        Implies(mv, Equals(wrap_mod(Plus(bi.mult, bj.mult)), Int(0))),
+                        Implies(
+                            mv,
+                            And(
+                                Equals(wrap_mod(Plus(bi.mult, bj.mult)), Int(0)),
+                                Not(Equals(wrap_mod(bi.mult), Int(0))),
+                                Not(Equals(wrap_mod(bj.mult), Int(0))),
+                            )
+                        ),
                         f"pairwise match ({i},{j}): {bi.mult} + {bj.mult} == 0"
                     )
                 )
