@@ -36,4 +36,5 @@ def check():
                     logging.warning("UNKNOWN")
                     return None, None
         except SolverReturnedUnknownResultError:
+            logging.warning("UNKNOWN")
             return None, None
