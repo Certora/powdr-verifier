@@ -221,7 +221,7 @@ evaluated: {pp_bus_interaction(evald)}
                         'args': [pc, op, a, b, c, d, e, f, g]
                     }:
                     # verify the lookups into the basic block
-                    rop,ra,rb,rc,rd,re,rf,rg = self.basic_block['statements'][pc // 4]
+                    rop,ra,rb,rc,rd,re,rf,rg = self.basic_block['instructions'][pc // 4]
                     assert pc % 4 == 0, f"pc {pc} is not a multiple of 4"
                     assert mult == 1, err("mult != 1")
                     assert rop == op, err(f"opcode != {rop}")
