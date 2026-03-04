@@ -37,10 +37,10 @@ def diff():
                 f".formatted_{ARGS().input_after.name}.txt"
             )
             with open(before_formatted, "w") as f:
-                converter.text(f, before, model)
+                converter.convert_to_text(f, before, model)
                 f.flush()
             with open(after_formatted, "w") as f:
-                converter.text(f, after, model)
+                converter.convert_to_text(f, after, model)
                 f.flush()
 
         case _:
