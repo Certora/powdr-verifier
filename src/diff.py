@@ -26,10 +26,16 @@ def diff():
                 json.dump(after, f, indent=4)
 
         case "text":
+            before_model = None
+            after_model = None
             if ARGS().with_model:
-                model = load_json(ARGS().with_model, "model")
-            else:
-                model = None
+                before_model = load_json(ARGS().with_model, "model")
+                after_model = before_model
+            elif ARGS().with_before_model:
+                before_model = load_json(ARGS().with_before_model, "model")
+            elif ARGS().with_after_model:
+                after_model = load_json(ARGS().with_after_model, "model")
+
             before_formatted = ARGS().input_before.with_name(
                 f".formatted_{ARGS().input_before.name}.txt"
             )
@@ -37,10 +43,10 @@ def diff():
                 f".formatted_{ARGS().input_after.name}.txt"
             )
             with open(before_formatted, "w") as f:
-                converter.convert_to_text(f, before, model)
+                converter.convert_to_text(f, before, before_model)
                 f.flush()
             with open(after_formatted, "w") as f:
-                converter.convert_to_text(f, after, model)
+                converter.convert_to_text(f, after, after_model)
                 f.flush()
 
         case _:
