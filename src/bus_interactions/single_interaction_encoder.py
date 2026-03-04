@@ -23,6 +23,7 @@ class SingleInteractionEncoder:
 
     _interactions: list[BusInteraction]
     NAME: str
+    TIMESTAMPED: bool = False
 
     def __init__(self):
         """Initialize an empty interaction buffer for this bus."""

@@ -53,6 +53,12 @@ def __build_parser(skip_subparsers=False):
     sub_eval.add_argument("input", type=Path)
     sub_eval.add_argument("model", type=Path)
 
+    sub_visualize = sub.add_parser("visualize")
+    sub_visualize.add_argument("input", type=Path)
+    sub_visualize.add_argument("model", type=Path)
+    sub_visualize.add_argument("bus", type=str, nargs="*")
+    sub_visualize.add_argument("--var-prefix", type=str, default=None)
+
     sub_diff = sub.add_parser("diff")
     sub_diff.add_argument("input_before", type=Path)
     sub_diff.add_argument("input_after", type=Path)

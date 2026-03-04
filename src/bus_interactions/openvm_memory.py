@@ -101,6 +101,7 @@ class OpenVMMemoryEncoder(
     """
 
     NAME = "memory"
+    TIMESTAMPED = True
 
     def __init__(self) -> None:
         """Initialize encoder state for memory interactions (analysis computed in `pre_analysis`)."""

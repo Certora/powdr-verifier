@@ -6,3 +6,4 @@ semver
 setuptools
 sympy
 tabulate
+termcolor
