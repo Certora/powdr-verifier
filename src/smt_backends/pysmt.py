@@ -249,6 +249,12 @@ class SMTPrettyPrinter(script.SmtPrinter):
         self.is_collapsed = True
         yield
         self.is_collapsed = before
+    
+    def write_if_collapsed(self, ifs, elses):
+        if self.is_collapsed:
+            self.write(ifs)
+        else:
+            self.write(elses)
 
     @contextlib.contextmanager
     def indented(self):
@@ -329,16 +335,20 @@ class SMTPrettyPrinter(script.SmtPrinter):
 
     @printers.write_annotations
     def walk_array_value(self, formula):
-        self.write_indented('')
+        if not self.is_collapsed:
+            self.write_indented('')
         assign = formula.array_value_assigned_values_map()
         for _ in range(len(assign)):
             self.write("(store ")
 
-        self.write("((as const %s)\n" % formula.get_type().as_smtlib(False))
+        self.write("((as const %s)" % formula.get_type().as_smtlib(False))
+        self.write_if_collapsed(" ", "\n")
         with self.indented():
             yield formula.array_value_default()
-        self.write("\n")
-        self.write_indented(")")
+            self.write_if_collapsed(" ", "\n")
+        if not self.is_collapsed:
+            self.indent()
+        self.write(")")
 
         for k in sorted(assign, key=str):
             self.write(" ")
