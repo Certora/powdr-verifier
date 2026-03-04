@@ -113,11 +113,8 @@ def _text_constraints(out: TextIO, cs: list, conv: SmtConverter, eval):
         _print(out, eval, "\t{}", converted, ignore=Int(0))
 
 
-def convert_to_text(out: TextIO, model: Optional[dict[str, Any]] = None):
+def convert_to_text(out: TextIO, input: dict, model: Optional[dict[str, Any]] = None):
     """Render an APC dump to a human-readable text format (optionally evaluated under `model`)."""
-
-    input = load_apc_dump(ARGS().input, 'input')
-    out = StringIO()
 
     match input:
         # general json structure
@@ -155,5 +152,10 @@ def convert_to_text(out: TextIO, model: Optional[dict[str, Any]] = None):
 
         case _:
             logging.error("unsupported input for text conversion")
- 
+
+
+def convert_and_print():
+    input = load_apc_dump(ARGS().input, 'input')
+    out = StringIO()
+    convert_to_text(None, out, input)
     print(out.getvalue())

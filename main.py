@@ -11,7 +11,7 @@ from src.tracer import trace
 from src.verifier import verify
 from src.diff import diff
 from src.simplifier import simplify
-from src.converter import convert_to_text
+from src.converter import convert_and_print
 from src.encoding_analysis import analyze_aliases
 
 
@@ -34,7 +34,7 @@ if __name__ == '__main__':
                 diff()
 
             case 'text':
-                convert_to_text()
+                convert_and_print()
 
             case 'simplify':
                 simplify()
