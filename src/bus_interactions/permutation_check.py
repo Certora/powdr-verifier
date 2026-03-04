@@ -230,6 +230,21 @@ class PermutationCheckMixin:
                     "send: mult == 1",
                 )
             )
+            # encode the zero case: everything is unchanged
+            conjuncts.append(
+                with_comment(
+                    Implies(  # send: data[0] == 1
+                        Equals(wrap_mod(data[1]), Int(0)),
+                        And(
+                            *[
+                                Equals(newvals[k], oldvals[k])
+                                for k in range(1, len(newvals))
+                            ]
+                        ),
+                    ),
+                    "send: mult == 1",
+                )
+            )
 
             news = def_vars(id + 1)
             intermediates |= set(news)
