@@ -178,7 +178,11 @@ class PermutationCheckMixin:
                 with_comment(
                     Implies(
                         Not(Equals(data[1], Int(0))),
-                        And(newvals[0], Implies(Not(oldvals[0]), isinputs[id])),
+                        And(
+                            newvals[0],
+                            Implies(Not(oldvals[0]), isinputs[id]),
+                            Implies(oldvals[0], Not(isinputs[id])),
+                        ),
                     ),
                     "encode hadinput and isinput",
                 )
