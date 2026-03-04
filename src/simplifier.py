@@ -4,7 +4,7 @@ from .smt.utils import *
 from .utils.args import ARGS
 from .utils.io import open_file
 
-from .simplify import simplify_cvc5, simplify_intervals, simplify_z3, simplify_rewrite
+from .simplify import simplify_cvc5, simplify_intervals, simplify_z3, simplify_rewrite, simplify_model
 
 
 def simplify():
@@ -29,6 +29,9 @@ def simplify():
             case "z3":
                 logging.info(f"z3")
                 smt_script = simplify_z3(smt_script)
+            case "model":
+                logging.info(f"model")
+                smt_script = simplify_model(smt_script)
             case _:
                 logging.info(f"ignoring unknown tactic: {t}")
 

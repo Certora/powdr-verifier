@@ -125,7 +125,6 @@ class SmtLibParser(OriginalSmtLibParser):
         self.interpreted["mod"] = self._operator_adapter(self.env.formula_manager.Mod)
         self.interpreted["mod_total"] = self._operator_adapter(self.env.formula_manager.Mod)
 
-
 def __serialize_command(self, outstream=None, printer=None, daggify=True):
     if self.name == 'echo':
         outstream.write(f"({self.name} {self.args[0]})")
@@ -144,14 +143,12 @@ script.SmtLibCommand.serialize = __serialize_command
 
 # now go on with the rest
 
-from pysmt import substituter
 from pysmt.exceptions import SolverReturnedUnknownResultError
 from pysmt.logics import Logic
 from pysmt.shortcuts import *
 from pysmt.smtlib import script, printers
-from pysmt.substituter import FunctionInterpretation
+from pysmt.substituter import FunctionInterpretation, MGSubstituter, handles
 from pysmt.utils import quote
-
 from ..utils.args import ARGS
 
 class SimpleSizeOracle(DagWalker):
