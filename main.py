@@ -17,8 +17,6 @@ from src.encoding_analysis import analyze_aliases
 
 if __name__ == '__main__':
 
-    print(" ".join(sys.argv))
-
     logging.basicConfig(level=logging.WARNING, force=True, format='%(levelname)s:%(relativeCreated)dms %(message)s')
     parse_args(sys.argv[1:])
 
