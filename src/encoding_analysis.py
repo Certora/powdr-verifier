@@ -8,7 +8,7 @@ from .utils.basic_block import BasicBlock
 from .utils.io import load_apc_dump
 
 
-def analyze_aliases(input: dict):
+def analyze_aliases():
     """Analyze the aliases in the input."""
 
     ARGS().memory_encoding = "busat"
