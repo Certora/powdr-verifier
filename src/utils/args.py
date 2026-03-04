@@ -61,6 +61,8 @@ def __build_parser(skip_subparsers=False):
     )
     sub_diff.add_argument("--with-encoding", action="store_true")
     sub_diff.add_argument("--with-model", type=Path)
+    sub_diff.add_argument("--with-before-model", type=Path)
+    sub_diff.add_argument("--with-after-model", type=Path)
     sub_diff.add_argument("--only-simplified", action="store_true")
 
     sub_text = sub.add_parser("text")
