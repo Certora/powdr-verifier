@@ -13,6 +13,7 @@ from src.diff import diff
 from src.simplifier import simplify
 from src.converter import convert_and_print
 from src.encoding_analysis import analyze_aliases
+from src.visualizer import visualize
 
 
 if __name__ == '__main__':
@@ -29,6 +30,9 @@ if __name__ == '__main__':
                 input = load_apc_dump(ARGS().input, 'input')
                 model = load_json(ARGS().model, 'model')
                 evaluate(input, model)
+
+            case 'visualize':
+                visualize()
 
             case 'diff':
                 diff()

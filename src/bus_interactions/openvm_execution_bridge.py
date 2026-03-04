@@ -13,6 +13,7 @@ class OpenVMExecutionBridgeEncoder(
     """
 
     NAME = "execution bridge"
+    TIMESTAMPED = True
 
     def encode_all(self) -> Iterable[FNode]:
         """Return timestamp and permutation axioms over all execution-bridge interactions."""
