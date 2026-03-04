@@ -242,7 +242,7 @@ class PermutationCheckMixin:
                             ]
                         ),
                     ),
-                    "send: mult == 1",
+                    "ignore: mult == 0",
                 )
             )
 
