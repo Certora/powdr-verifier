@@ -28,7 +28,7 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
         """Initialize the lookup UFs and interpreters from the given `basic_block`."""
         super().__init__()
         self.basic_block = basic_block
-        self.stmt_count = len(self.basic_block.statements)
+        self.stmt_count = len(self.basic_block.instructions)
         self.needs_axioms = False
         self.globals = frozenset(
             [
@@ -43,14 +43,14 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
             ]
         )
         self.interpreters = {
-            self.UF_OPCODE: lambda pc: Int(self.basic_block.statements[pc // 4][0]),
-            self.UF_A: lambda pc: Int(self.basic_block.statements[pc // 4][1]),
-            self.UF_B: lambda pc: Int(self.basic_block.statements[pc // 4][2]),
-            self.UF_C: lambda pc: Int(self.basic_block.statements[pc // 4][3]),
-            self.UF_D: lambda pc: Int(self.basic_block.statements[pc // 4][4]),
-            self.UF_E: lambda pc: Int(self.basic_block.statements[pc // 4][5]),
-            self.UF_F: lambda pc: Int(self.basic_block.statements[pc // 4][6]),
-            self.UF_G: lambda pc: Int(self.basic_block.statements[pc // 4][7]),
+            self.UF_OPCODE: lambda pc: Int(self.basic_block.instructions[pc // 4][0]),
+            self.UF_A: lambda pc: Int(self.basic_block.instructions[pc // 4][1]),
+            self.UF_B: lambda pc: Int(self.basic_block.instructions[pc // 4][2]),
+            self.UF_C: lambda pc: Int(self.basic_block.instructions[pc // 4][3]),
+            self.UF_D: lambda pc: Int(self.basic_block.instructions[pc // 4][4]),
+            self.UF_E: lambda pc: Int(self.basic_block.instructions[pc // 4][5]),
+            self.UF_F: lambda pc: Int(self.basic_block.instructions[pc // 4][6]),
+            self.UF_G: lambda pc: Int(self.basic_block.instructions[pc // 4][7]),
         }
 
     def encode_pointwise(
@@ -86,11 +86,11 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
 
     def _get_instruction(self, pc: int):
         """Return the concrete instruction tuple for `pc` (expects `pc` is 4-byte aligned)."""
-        return self.basic_block.statements[pc // 4]
+        return self.basic_block.instructions[pc // 4]
 
     def __encode_block(self) -> Iterable[FNode]:
         """Encode the full instruction table as equalities over the PC lookup UFs."""
-        for id, stmt in enumerate(self.basic_block.statements):
+        for id, stmt in enumerate(self.basic_block.instructions):
             op, a, b, c, d, e, f, g = stmt
             yield with_comment(
                 And(
