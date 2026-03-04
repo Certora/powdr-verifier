@@ -253,7 +253,9 @@ class PermutationCheckMixin:
             inputs = news
 
         conjuncts = [rewrite(c) for c in conjuncts]
-        return conjuncts, actual_inputs, intermediates, inputs, isinputs
+        outputs = actual_inputs[1:] # remove hadinput variables
+        inputs = inputs[1:] # remove hadinput variables
+        return conjuncts, outputs, intermediates, inputs, isinputs
 
 
     @simple_profile
