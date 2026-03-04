@@ -93,6 +93,7 @@ def __run_main(command, *args):
     subprocess.run(cmd, check=True)
 
 def __do_simplify(input, output):
+    logging.info(f"simplifying {input.relative_to(Path.cwd())}")
     return __run_main("simplify", input, "rewrite:intervals:cvc5:rewrite:intervals:rewrite", output)
 
 def run_powdr(test):
@@ -119,6 +120,7 @@ def run_powdr(test):
 
 def run_trace(*files):
     for f in files:
+        logging.warning(f"running tracer on {f.relative_to(Path.cwd())}")
         smt = f.parent / f"trace-{f.stem}.smt2"
         __run_main("trace", f, smt)
         __do_simplify(smt, smt.with_suffix(".rewrite.smt2"))
@@ -126,6 +128,7 @@ def run_trace(*files):
 
 def run_diff(*pairs):
     for a,b in pairs:
+        logging.warning(f"diffing {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
         __run_main("diff", a, b)
 
 def run_evaluate(first, *files):
@@ -147,10 +150,12 @@ def run_eval(*files):
         if not model.exists():
             logging.warning(f"can not eval {f} because there is no model")
             continue
+        logging.warning(f"evaluating trace from {model.relative_to(Path.cwd())} on {f.relative_to(Path.cwd())}")
         __run_main("eval", f, model)
 
 def run_verify(*pairs):
     for a,b in pairs:
+        logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
         first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
         __run_main("verify", a, b, first)
         __do_simplify(first.with_suffix(".completeness.smt2"), first.with_suffix(".completeness.rewrite.smt2"))

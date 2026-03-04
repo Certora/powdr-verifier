@@ -1,3 +1,4 @@
+from io import StringIO
 import logging
 from typing import Any, Optional, TextIO
 
@@ -5,6 +6,7 @@ from .bus_interactions import OpenVMBusInteraction
 
 from .utils.args import ARGS
 from .utils.basic_block import BasicBlock
+from .utils.io import load_apc_dump
 from .smt.conversion import SmtConverter
 from .smt.utils import partial_evaluate, TRUE, Int
 
@@ -111,8 +113,11 @@ def _text_constraints(out: TextIO, cs: list, conv: SmtConverter, eval):
         _print(out, eval, "\t{}", converted, ignore=Int(0))
 
 
-def text(out: TextIO, input: dict, model: Optional[dict[str, Any]] = None):
+def convert_to_text(out: TextIO, model: Optional[dict[str, Any]] = None):
     """Render an APC dump to a human-readable text format (optionally evaluated under `model`)."""
+
+    input = load_apc_dump(ARGS().input, 'input')
+    out = StringIO()
 
     match input:
         # general json structure
@@ -150,3 +155,5 @@ def text(out: TextIO, input: dict, model: Optional[dict[str, Any]] = None):
 
         case _:
             logging.error("unsupported input for text conversion")
+ 
+    print(out.getvalue())
