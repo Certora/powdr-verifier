@@ -15,11 +15,11 @@ def analyze_aliases():
 
     input = load_apc_dump(ARGS().input, 'input')
 
-    with SmtConverter("input", BasicBlock(input["block"])) as conv:
+    with SmtConverter(None, BasicBlock(input["block"])) as conv:
         smt = conv.to_formula_with_axioms(input)
         n = len(conv.bus_interaction_encoder.memory._interactions)
         mem_vars = [
-            conv._symbol(f"mem_{i}_{j}", BOOL) for i in range(n) for j in range(i, n)
+            conv._symbol(f"memory_{i}_{j}", BOOL) for i in range(n) for j in range(i, n)
         ]
 
     f = And(
@@ -33,15 +33,18 @@ def analyze_aliases():
 
         res = s.solve()
         while res:
-            print("Found model, blocking for a different aliasing.")
-            nice_model = to_nice_model(s.get_model())
-            nice_model = { k: v for k, v in nice_model.items() if k.startswith("mem_") }
-            print(json.dumps(nice_model, indent=4))
+            model = s.get_model()
+            nice_model = to_nice_model(model)
+            logging.debug(json.dumps(nice_model, indent=4))
+
+            trues = [ str(v) for v in mem_vars if model[v].is_true() ]
+            logging.warning(f"Found model: {", ".join(sorted(trues))}")
 
             blocker = Or(
                 v if model[v].is_false() else Not(v)
                 for v in mem_vars
             )
+            logging.info(f"adding blocker: {blocker}")
             s.add_assertion(blocker)
 
             res = s.solve()

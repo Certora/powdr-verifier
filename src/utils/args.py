@@ -105,7 +105,7 @@ def parse_args(args=None):
     def make_verbose(logger: logging.Logger):
         logger.setLevel(logger.getEffectiveLevel() - 10)
     for v in ARGS().verbose:
-        if v is None:
+        if v is None or v == "":
             make_verbose(logging.root)
         else:
             make_verbose(logging.getLogger(f"src.{v}"))
