@@ -310,7 +310,7 @@ class SMTPrettyPrinter(script.SmtPrinter):
         assert len(formula.quantifier_vars()) > 0
         self.write_indented(f'({operator}')
         with self.indented():
-            if len(formula.quantifier_vars()) < 5:
+            if len(str(formula.quantifier_vars())) < 50:
                 self.write(' (')
                 with self.collapsed():
                     for s in formula.quantifier_vars():
