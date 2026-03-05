@@ -92,9 +92,9 @@ def __run_main(command, *args):
     cmd = [PYTHON, VERIFIER_DIR / "main.py", *_ARGS._main_args, command, *args, *_ARGS._sub_args]
     subprocess.run(cmd, check=True)
 
-def __do_simplify(input, output):
+def __do_simplify(input, output, tactic="rewrite:intervals:cvc5:rewrite:intervals:rewrite"):
     logging.info(f"simplifying {input.relative_to(Path.cwd())}")
-    return __run_main("simplify", input, "rewrite:intervals:cvc5:rewrite:intervals:rewrite", output)
+    return __run_main("simplify", input, tactic, output)
 
 def run_powdr(test):
     dir = DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True) / test
