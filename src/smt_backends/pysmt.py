@@ -146,10 +146,21 @@ script.SmtLibCommand.serialize = __serialize_command
 from pysmt.exceptions import SolverReturnedUnknownResultError
 from pysmt.logics import Logic
 from pysmt.shortcuts import *
-from pysmt.smtlib import script, printers
+from pysmt.smtlib import script, printers, solver
 from pysmt.substituter import FunctionInterpretation, MGSubstituter, handles
 from pysmt.utils import quote
 from ..utils.args import ARGS
+
+def __ensure_leading_colon(name: str) -> str:
+    return f":{name.removeprefix(':')}"
+
+pysmt.smtlib.solver.SmtLibSolver.declare_fun = lambda self, symbol: self._declare_variable(symbol)
+pysmt.smtlib.solver.SmtLibSolver.assert_ = lambda self, formula: self.add_assertion(formula)
+pysmt.smtlib.solver.SmtLibSolver.set_info = lambda self, name, value: \
+    self._send_silent_command(script.SmtLibCommand(name=commands.SET_INFO, args=[__ensure_leading_colon(name), value]))
+pysmt.smtlib.solver.SmtLibSolver.set_option = lambda self, name, value: \
+    self._send_silent_command(script.SmtLibCommand(name=commands.SET_OPTION, args=[__ensure_leading_colon(name), value]))
+pysmt.smtlib.solver.SmtLibSolver.check_sat = lambda self: self.solve()
 
 class SimpleSizeOracle(DagWalker):
     """Simple version of SizeOracle that does not throw a warning."""

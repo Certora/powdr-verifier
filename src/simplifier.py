@@ -31,7 +31,6 @@ def simplify():
             case "isqf":
                 if not check_isqf(smt_script):
                     logging.error("formula is not quantifier-free")
-                    break
             case _:
                 logging.info(f"ignoring unknown tactic: {t}")
 
