@@ -44,3 +44,11 @@ def simplify_rewrite(smt_script: script.SmtLibScript) -> script.SmtLibScript:
         if cmd.name == "assert":
             cmd.args[0] = rewrite(cmd.args[0])
     return smt_script
+
+def check_isqf(smt_script: script.SmtLibScript) -> bool:
+    oracle = get_env().qfo
+    for cmd in smt_script:
+        if cmd.name == "assert":
+            if not oracle.is_qf(cmd.args[0]):
+                return False
+    return True
