@@ -4,7 +4,7 @@ from .smt.utils import *
 from .utils.args import ARGS
 from .utils.io import open_file
 
-from .simplify import simplify_cvc5, simplify_intervals, simplify_z3, simplify_rewrite, simplify_model
+from .simplify import check_isqf, simplify_cvc5, simplify_intervals, simplify_z3, simplify_rewrite, simplify_model
 
 
 def simplify():
@@ -16,22 +16,22 @@ def simplify():
         smt_script = parser.get_script(f)
 
     for t in ARGS().tactic.split(":"):
+        logging.info(t)
         match t:
             case "rewrite":
-                logging.info(f"rewrite")
                 smt_script = simplify_rewrite(smt_script)
             case "intervals":
-                logging.info(f"intervals")
                 smt_script = simplify_intervals(smt_script)
             case "cvc5":
-                logging.info(f"cvc5")
                 smt_script = simplify_cvc5(smt_script)
             case "z3":
-                logging.info(f"z3")
                 smt_script = simplify_z3(smt_script)
             case "model":
-                logging.info(f"model")
                 smt_script = simplify_model(smt_script)
+            case "isqf":
+                if not check_isqf(smt_script):
+                    logging.error("formula is not quantifier-free")
+                    break
             case _:
                 logging.info(f"ignoring unknown tactic: {t}")
 
