@@ -176,17 +176,27 @@ class PermutationCheckMixin:
             # encode hadinput
             conjuncts.append(
                 with_comment(
-                    Implies(
-                        Not(Equals(data[1], Int(0))),
-                        And(
-                            newvals[0],
-                            Implies(Not(oldvals[0]), isinputs[id]),
-                            Implies(oldvals[0], Not(isinputs[id])),
+                    And(
+                        Implies(
+                            Not(Equals(data[1], Int(0))),
+                            And(
+                                newvals[0],
+                                Implies(Not(oldvals[0]), isinputs[id]),
+                                Implies(oldvals[0], Not(isinputs[id])),
+                            ),
+                        ),
+                        Implies(
+                            Equals(data[1], Int(0)),
+                            And(
+                                Equals(newvals[0], oldvals[0]),
+                                Not(isinputs[id]),
+                            ),
                         ),
                     ),
                     "encode hadinput and isinput",
                 )
             )
+
             # encode the receive case
             assert oldvals[1].is_symbol()
             conjuncts.append(
