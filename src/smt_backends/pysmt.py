@@ -334,7 +334,7 @@ class SMTPrettyPrinter(script.SmtPrinter):
             if len(str(formula.quantifier_vars())) < 50:
                 self.write(' (')
                 with self.collapsed():
-                    for s in formula.quantifier_vars():
+                    for s in sorted(formula.quantifier_vars(), key=str):
                         self.write('(')
                         yield s
                         self.write(f' {s.symbol_type().as_smtlib(False)}) ')
@@ -343,7 +343,7 @@ class SMTPrettyPrinter(script.SmtPrinter):
                 self.write('\n')
                 self.write_indented('(\n')
                 with self.indented():
-                    for s in formula.quantifier_vars():
+                    for s in sorted(formula.quantifier_vars(), key=str):
                         self.write_indented('(')
                         with self.collapsed():
                             yield s
