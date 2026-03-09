@@ -8,12 +8,22 @@ import semver
 import subprocess
 from typing import TextIO, Optional
 
+from pysmt import operators
+from pysmt import substituter
+
+@substituter.handles(set(operators.ALL_TYPES) - operators.QUANTIFIERS - {operators.FUNCTION})
+def __new_compute_node_result(self, formula, *args, **kwargs):
+    self.__original_compute_node_result(formula, *args, **kwargs)
+    if hasattr(formula, "comment"):
+        if memoized := self.memoization.get(self._get_key(formula, **kwargs), None):
+             setattr(memoized, "comment", formula.comment)
+substituter.MGSubstituter.__original_compute_node_result = substituter.MGSubstituter._compute_node_result
+substituter.MGSubstituter._compute_node_result = __new_compute_node_result
 
 # make pysmt support Mod
 # be careful with the order of the imports
 
 # first patch pysmt.operators
-from pysmt import operators
 from pysmt import walkers
 from pysmt.solvers.z3 import Z3Converter, Z3Solver, z3
 
@@ -295,7 +305,7 @@ class SMTPrettyPrinter(script.SmtPrinter):
 
     @printers.write_annotations
     def walk_nary(self, formula, operator):
-        if hasattr(formula, 'comment'):
+        if hasattr(formula, 'comment') and not self.is_collapsed:
             self.write_indented(f'; {formula.comment}\n')
         if self.should_collapse(formula):
             if not self.is_collapsed:
