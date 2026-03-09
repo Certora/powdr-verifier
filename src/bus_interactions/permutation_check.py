@@ -132,10 +132,6 @@ class PermutationCheckMixin:
 
             # fresh variable for the new value
             newval = Symbol(f"{input.symbol_name()}-new", newsym.get_type())
-            # ensure selected and new value are in range
-            if newsym.get_type().is_int_type():
-                conjuncts.append(field_symbol(selects[-1]))
-                conjuncts.append(field_symbol(newval))
             intermediates.add(newval)
 
             # stepwise store, add to store as we go
@@ -170,6 +166,12 @@ class PermutationCheckMixin:
             # generate skeletons for array updates
             updates = [update_multidim_array(input, keys) for input in inputs]
             oldvals, newvals, stores, conj = zip(*updates)
+
+            bounds = []
+            for oldval, newval in zip(oldvals, newvals):
+                if oldval.get_type().is_int_type():
+                    bounds.append(field_symbol(oldval))
+                    bounds.append(field_symbol(newval))
 
             conjuncts.extend(itertools.chain(*conj))
 
@@ -216,6 +218,8 @@ class PermutationCheckMixin:
                                 Equals(newvals[k], Int(0))
                                 for k in range(2, len(newvals))
                             ],
+                            # ensure intermediate values are in range
+                            *bounds,
                         ),
                     ),
                     "receive: mult == -1",
@@ -239,12 +243,16 @@ class PermutationCheckMixin:
                                 Equals(newvals[k], wrap_mod(data[k]))
                                 for k in range(2, len(newvals))
                             ],
+                            # ensure intermediate values are in range
+                            *bounds,
                         ),
                     ),
                     "send: mult == 1",
                 )
             )
             # encode the zero case: everything is unchanged
+            # do not bound intermediate values: this entire sequence may be disabled,
+            # and then these bounds only lead to false positives
             conjuncts.append(
                 with_comment(
                     Implies(  # send: data[0] == 1
