@@ -143,31 +143,35 @@ def encoding(before, after, qvars, builder, input_relation, output_relation):
             *before.constraints,
             ForAll(
                 qvars - builder.result.keys(),
-                Or(
-                    Not(And(*after.constraints)),
-                    Not(input_relation),
-                    Not(output_relation)
-                ).substitute(builder.result)
+                And(
+                    Or(
+                        Not(And(*after.constraints)),
+                        Not(input_relation),
+                        Not(output_relation)
+                    ).substitute(builder.result),
+                    *after.axioms,
+                )
             ),
             *before.axioms,
-            *after.axioms,
         )
     else:
         res = And(
             *before.constraints,
             ForAll(
                 qvars,
-                Implies(
-                    builder.get_map(),
-                    Or(
-                        Not(And(*after.constraints)),
-                        Not(input_relation),
-                        Not(output_relation)
-                    )
-                ),
+                And(
+                    Implies(
+                        builder.get_map(),
+                        Or(
+                            Not(And(*after.constraints)),
+                            Not(input_relation),
+                            Not(output_relation)
+                        )
+                    ),
+                    *after.axioms,
+                )
             ),
             *before.axioms,
-            *after.axioms,
         )
     if ARGS().elim_with_model:
         model = load_json(ARGS().elim_with_model, "model")
