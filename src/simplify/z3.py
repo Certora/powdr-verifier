@@ -12,7 +12,7 @@ def simplify_z3(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     for cmd in smt_script:
         s = cmd.serialize_to_string(daggify=False)
         match cmd.name:
-            case "assert" | "declare-fun":
+            case "assert" | "declare-fun" | "define-fun":
                 before = False
                 main.append(s)
             case _:
