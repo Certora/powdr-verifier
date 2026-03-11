@@ -3,8 +3,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from .bus_interaction_handlers import BusInteractionHandlers
-from .field_types import FieldTypes
+from .enums import BusInteractionHandlers, FieldTypes, XOrEncoding
 
 __ARGS: Optional[argparse.Namespace] = None
 
@@ -26,6 +25,12 @@ def __build_parser(skip_subparsers=False):
         type=FieldTypes,
         default=FieldTypes.BABYBEAR,
         choices=list(FieldTypes),
+    )
+    parser.add_argument(
+        "--xor",
+        type=XOrEncoding,
+        default=XOrEncoding.DEFAULT,
+        choices=list(XOrEncoding),
     )
     parser.add_argument("--skip-memory-analysis", action="store_true")
     parser.add_argument("--memory-encoding", type=str, choices=["array", "busat"], default="array")
