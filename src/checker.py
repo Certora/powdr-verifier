@@ -1,9 +1,8 @@
 from .smt.utils import *
 from .utils.args import ARGS
-from .utils.io import load_apc_dump
+from .utils.profiling import simple_profile
 
-
-
+@simple_profile
 def check():
     """Check the smt2 file."""
 
