@@ -1,0 +1,228 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Iterable, Optional
+
+
+INF = None  # unbounded side marker
+
+
+@dataclass(frozen=True)
+class IntInterval:
+    lo: Optional[int]
+    hi: Optional[int]
+
+    @staticmethod
+    def top() -> "IntInterval":
+        return IntInterval(INF, INF)
+
+    @staticmethod
+    def const(v: int) -> "IntInterval":
+        return IntInterval(v, v)
+
+    def is_bottom(self) -> bool:
+        return self.lo is not None and self.hi is not None and self.lo > self.hi
+
+    def intersects(self, other: "IntInterval") -> bool:
+        return not self.intersect(other).is_bottom()
+
+    def intersect(self, other: "IntInterval") -> "IntInterval":
+        lo = other.lo if self.lo is None else (self.lo if other.lo is None else max(self.lo, other.lo))
+        hi = other.hi if self.hi is None else (self.hi if other.hi is None else min(self.hi, other.hi))
+        return IntInterval(lo, hi)
+
+    def add(self, other: "IntInterval") -> "IntInterval":
+        lo = None if self.lo is None or other.lo is None else self.lo + other.lo
+        hi = None if self.hi is None or other.hi is None else self.hi + other.hi
+        return IntInterval(lo, hi)
+
+    def neg(self) -> "IntInterval":
+        lo = None if self.hi is None else -self.hi
+        hi = None if self.lo is None else -self.lo
+        return IntInterval(lo, hi)
+
+    def sub(self, other: "IntInterval") -> "IntInterval":
+        return self.add(other.neg())
+
+    def mul(self, other: "IntInterval") -> "IntInterval":
+        if self.lo is None or self.hi is None or other.lo is None or other.hi is None:
+            return IntInterval.top()
+        vals = (
+            self.lo * other.lo,
+            self.lo * other.hi,
+            self.hi * other.lo,
+            self.hi * other.hi,
+        )
+        return IntInterval(min(vals), max(vals))
+
+    def scale(self, k: int) -> "IntInterval":
+        if k == 0:
+            return IntInterval.const(0)
+        lo = None if self.lo is None else self.lo * k
+        hi = None if self.hi is None else self.hi * k
+        if k > 0:
+            return IntInterval(lo, hi)
+        return IntInterval(hi, lo)
+
+    def within_0_p(self, p: int) -> bool:
+        return self.lo is not None and self.hi is not None and 0 <= self.lo and self.hi < p
+
+    def within_open_pm_p(self, p: int) -> bool:
+        return self.lo is not None and self.hi is not None and (-p) < self.lo and self.hi < p
+
+    def contains(self, v: int) -> bool:
+        lo_ok = self.lo is None or self.lo <= v
+        hi_ok = self.hi is None or v <= self.hi
+        return lo_ok and hi_ok
+
+
+def _lo_key(v: Optional[int]) -> float:
+    return float("-inf") if v is None else float(v)
+
+
+def _hi_key(v: Optional[int]) -> float:
+    return float("inf") if v is None else float(v)
+
+
+def _mergeable(a: IntInterval, b: IntInterval) -> bool:
+    if a.is_bottom() or b.is_bottom():
+        return False
+    if a.hi is None or b.lo is None:
+        return True
+    return a.hi >= b.lo
+
+
+def _merge_interval(a: IntInterval, b: IntInterval) -> IntInterval:
+    lo = a.lo if _lo_key(a.lo) <= _lo_key(b.lo) else b.lo
+    if a.hi is None or b.hi is None:
+        hi = None
+    else:
+        hi = max(a.hi, b.hi)
+    return IntInterval(lo, hi)
+
+
+def _normalize_intervals(intervals: Iterable[IntInterval]) -> tuple[IntInterval, ...]:
+    items = [iv for iv in intervals if not iv.is_bottom()]
+    if not items:
+        return ()
+    items.sort(key=lambda iv: (_lo_key(iv.lo), _hi_key(iv.hi)))
+    out: list[IntInterval] = [items[0]]
+    for iv in items[1:]:
+        last = out[-1]
+        if _mergeable(last, iv):
+            out[-1] = _merge_interval(last, iv)
+        else:
+            out.append(iv)
+    return tuple(out)
+
+
+@dataclass(frozen=True)
+class IntDomain:
+    parts: tuple[IntInterval, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "parts", _normalize_intervals(self.parts))
+
+    @staticmethod
+    def bottom() -> "IntDomain":
+        return IntDomain(())
+
+    @staticmethod
+    def top() -> "IntDomain":
+        return IntDomain((IntInterval.top(),))
+
+    @staticmethod
+    def const(v: int) -> "IntDomain":
+        return IntDomain((IntInterval.const(v),))
+
+    @staticmethod
+    def from_interval(iv: IntInterval) -> "IntDomain":
+        return IntDomain((iv,))
+
+    @staticmethod
+    def from_intervals(intervals: Iterable[IntInterval]) -> "IntDomain":
+        return IntDomain(tuple(intervals))
+
+    def is_bottom(self) -> bool:
+        return len(self.parts) == 0
+
+    def is_top(self) -> bool:
+        return len(self.parts) == 1 and self.parts[0] == IntInterval.top()
+
+    def hull(self) -> IntInterval:
+        if self.is_bottom():
+            return IntInterval(1, 0)
+        return IntInterval(self.parts[0].lo, self.parts[-1].hi)
+
+    def intersect(self, other: "IntDomain") -> "IntDomain":
+        if self.is_bottom() or other.is_bottom():
+            return IntDomain.bottom()
+        i = 0
+        j = 0
+        out: list[IntInterval] = []
+        a = self.parts
+        b = other.parts
+        while i < len(a) and j < len(b):
+            inter = a[i].intersect(b[j])
+            if not inter.is_bottom():
+                out.append(inter)
+            if _hi_key(a[i].hi) <= _hi_key(b[j].hi):
+                i += 1
+            else:
+                j += 1
+        return IntDomain.from_intervals(out)
+
+    def union(self, other: "IntDomain") -> "IntDomain":
+        if self.is_bottom():
+            return other
+        if other.is_bottom():
+            return self
+        return IntDomain.from_intervals(self.parts + other.parts)
+
+    def add(self, other: "IntDomain") -> "IntDomain":
+        if self.is_bottom() or other.is_bottom():
+            return IntDomain.bottom()
+        out: list[IntInterval] = []
+        for a in self.parts:
+            for b in other.parts:
+                out.append(a.add(b))
+        return IntDomain.from_intervals(out)
+
+    def neg(self) -> "IntDomain":
+        if self.is_bottom():
+            return IntDomain.bottom()
+        return IntDomain.from_intervals(iv.neg() for iv in self.parts)
+
+    def sub(self, other: "IntDomain") -> "IntDomain":
+        return self.add(other.neg())
+
+    def mul(self, other: "IntDomain") -> "IntDomain":
+        if self.is_bottom() or other.is_bottom():
+            return IntDomain.bottom()
+        out: list[IntInterval] = []
+        for a in self.parts:
+            for b in other.parts:
+                out.append(a.mul(b))
+        return IntDomain.from_intervals(out)
+
+    def scale(self, k: int) -> "IntDomain":
+        if self.is_bottom():
+            return IntDomain.bottom()
+        return IntDomain.from_intervals(iv.scale(k) for iv in self.parts)
+
+    def within_0_p(self, p: int) -> bool:
+        return not self.is_bottom() and all(iv.within_0_p(p) for iv in self.parts)
+
+    def within_open_pm_p(self, p: int) -> bool:
+        return not self.is_bottom() and all(iv.within_open_pm_p(p) for iv in self.parts)
+
+    def contains(self, v: int) -> bool:
+        return any(iv.contains(v) for iv in self.parts)
+
+    def singleton_value(self) -> Optional[int]:
+        if len(self.parts) != 1:
+            return None
+        iv = self.parts[0]
+        if iv.lo is None or iv.hi is None or iv.lo != iv.hi:
+            return None
+        return iv.lo
