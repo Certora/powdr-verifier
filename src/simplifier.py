@@ -17,6 +17,7 @@ def simplify():
 
     for t in ARGS().tactic.split(":"):
         logging.info(t)
+        t,*args = t.split("-", 1)
         match t:
             case "rewrite":
                 smt_script = simplify_rewrite(smt_script)
@@ -25,7 +26,7 @@ def simplify():
             case "cvc5":
                 smt_script = simplify_cvc5(smt_script)
             case "z3":
-                smt_script = simplify_z3(smt_script)
+                smt_script = simplify_z3(smt_script, args)
             case "model":
                 smt_script = simplify_model(smt_script)
             case "isqf":
