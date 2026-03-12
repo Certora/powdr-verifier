@@ -1,6 +1,7 @@
 from src.simplify import simplify_intervals
 from src.simplify.intervals import Interval, IntervalReasoner
 from src.smt.utils import *
+from textwrap import dedent
 
 
 def test_fixed_point_backprop_on_affine_equality():
@@ -53,11 +54,16 @@ def test_simplify_intervals_marks_obvious_inconsistency():
     parser = SmtLibParser()
     script = parser.get_script(
         StringIO(
-            "(set-logic ALL)\n"
-            "(declare-fun x () Int)\n"
-            "(assert (<= x 1))\n"
-            "(assert (<= 3 x))\n"
-            "(check-sat)\n"
+            dedent(
+                """
+                (set-logic ALL)
+                (declare-fun x () Int)
+                (assert (<= x 1))
+                (assert (<= 3 x))
+                (check-sat)
+                """
+            ).strip()
+            + "\n"
         )
     )
 
@@ -72,12 +78,17 @@ def test_simplify_intervals_retains_only_strengthening_bounds():
     parser = SmtLibParser()
     script = parser.get_script(
         StringIO(
-            "(set-logic ALL)\n"
-            "(declare-fun x () Int)\n"
-            "(assert (<= 0 x))\n"
-            "(assert (<= x 10))\n"
-            "(assert (= (mod x 17) (mod x 17)))\n"
-            "(check-sat)\n"
+            dedent(
+                """
+                (set-logic ALL)
+                (declare-fun x () Int)
+                (assert (<= 0 x))
+                (assert (<= x 10))
+                (assert (= (mod x 17) (mod x 17)))
+                (check-sat)
+                """
+            ).strip()
+            + "\n"
         )
     )
 
@@ -119,19 +130,24 @@ def test_simplify_intervals_emits_derived_equalities():
     parser = SmtLibParser()
     script = parser.get_script(
         StringIO(
-            "(set-logic ALL)\n"
-            "(declare-fun a () Int)\n"
-            "(declare-fun b () Int)\n"
-            "(declare-fun c () Int)\n"
-            f"(assert (= (mod (- 1 (+ a (* 256 b) (* 65536 c))) {p}) 0))\n"
-            "(assert (<= 0 a))\n"
-            "(assert (<= 0 b))\n"
-            "(assert (<= 0 c))\n"
-            "(assert (< a 256))\n"
-            "(assert (< b 256))\n"
-            f"(assert (< c {p}))\n"
-            f"(assert (= (mod (* c (- 255 c)) {p}) 0))\n"
-            "(check-sat)\n"
+            dedent(
+                f"""
+                (set-logic ALL)
+                (declare-fun a () Int)
+                (declare-fun b () Int)
+                (declare-fun c () Int)
+                (assert (= (mod (- 1 (+ a (* 256 b) (* 65536 c))) {p}) 0))
+                (assert (<= 0 a))
+                (assert (<= 0 b))
+                (assert (<= 0 c))
+                (assert (< a 256))
+                (assert (< b 256))
+                (assert (< c {p}))
+                (assert (= (mod (* c (- 255 c)) {p}) 0))
+                (check-sat)
+                """
+            ).strip()
+            + "\n"
         )
     )
 
