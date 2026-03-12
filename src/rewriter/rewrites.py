@@ -7,9 +7,9 @@ from ..smt.utils import *
 def is_mul_by_minus_one(node: FNode) -> Optional[FNode]:
     if node.is_times() and len(node.args()) == 2:
         a, b = node.args()
-        if a.is_int_constant(-1):
+        if a.is_int_constant(-1) or a.is_int_constant(ARGS().field_type.value - 1):
             return b
-        if b.is_int_constant(-1):
+        if b.is_int_constant(-1) or b.is_int_constant(ARGS().field_type.value - 1):
             return a
     return None
 
@@ -30,20 +30,35 @@ def rewrite_simplify(node_type: int, args: list[FNode]) -> FNode:
     return None
 
 
+class IntConstantReducer(substituter.Substituter):
+    def __init__(self, modulus, env=None):
+        """Create a PySMT substituter that may rewrite equalities via SymPy."""
+        substituter.Substituter.__init__(self, env=env)
+        self.modulus = modulus
+
+    def walk_int_constant(self, formula, args, **kwargs):
+        v = formula.constant_value()
+        if v <= -self.modulus or v >= self.modulus:
+            return Int(v % self.modulus)
+        return formula
+    
+    def walk_mod(self, formula, args, **kwargs):
+        if args[1].is_int_constant(self.modulus):
+            return Mod(args[0], Int(self.modulus))
+        return formula
+
+
 @simple_profile
 def rewrite_mod(node_type: int, args: list[FNode]) -> FNode:
     assert node_type == operators.MOD
     expr, modulus = args
-    if expr.is_int_constant():
-        return Int(expr.constant_value() % modulus.constant_value())
-    if (
-        not modulus.is_int_constant()
-        or modulus.constant_value() != ARGS().field_type.value
-    ):
+    if not modulus.is_int_constant():
         return None
-    if expr.is_symbol():
+    expr = IntConstantReducer(modulus.constant_value()).substitute(expr)
+
+    if modulus.is_int_constant(ARGS().field_type.value) and expr.is_symbol():
         return expr
-    return None
+    return Mod(expr, modulus)
 
 
 @simple_profile
