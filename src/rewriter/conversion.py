@@ -29,6 +29,8 @@ def to_sympy(expr: FNode) -> sympy.Expr:
             return sympy.Lt(to_sympy(expr.args()[0]), to_sympy(expr.args()[1]))
         elif expr.is_le():
             return sympy.Le(to_sympy(expr.args()[0]), to_sympy(expr.args()[1]))
+        else:
+            assert False, f"Unknown boolean expression type: {expr}"
     elif expr.get_type().is_int_type():
         if expr.is_mod():
             return sympy.Mod(to_sympy(expr.args()[0]), to_sympy(expr.args()[1]))
@@ -41,6 +43,8 @@ def to_sympy(expr: FNode) -> sympy.Expr:
             return sympy.Add(to_sympy(first), *[-to_sympy(arg) for arg in tail])
         elif expr.is_times():
             return sympy.Mul(*[to_sympy(arg) for arg in expr.args()])
+        else:
+            assert False, f"Unknown int expression type: {expr}"
     elif expr.is_function_application():
         return sympy.Function(expr.function_name().symbol_name())(
             *[to_sympy(arg) for arg in expr.args()]
