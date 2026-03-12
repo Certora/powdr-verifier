@@ -1,4 +1,4 @@
-from src.simplify.intervals import IntInterval, IntervalReasoner
+from src.simplify import simplify_intervals
 from src.smt.utils import *
 
 
@@ -8,117 +8,115 @@ def _has_mod(f: FNode) -> bool:
     return any(_has_mod(a) for a in f.args())
 
 
-def _simplify_with_intervals(
-    input_formulas: list[FNode],
-    *,
-    assumptions: list[FNode],
-    prune: bool = True,
-    append_derived_ranges: bool = False,
-) -> list[FNode]:
-    reasoner = IntervalReasoner(modulus=ARGS().field_type.value)
-    reasoner.assume_all(assumptions)
-    protected = set(reasoner.used_formulas)
-    protected |= {f for f in input_formulas if reasoner.must_retain_formula(f)}
-    rewritten = [
-        reasoner.simplify(f, prune=prune, freeze=protected, inject_quantifier_bounds=True)
-        for f in input_formulas
-    ]
-    if append_derived_ranges:
-        rewritten.extend(reasoner.derived_range_constraints(only_tightened=True))
-    return rewritten
+def _asserts_from_script(smt: str) -> list[FNode]:
+    parser = SmtLibParser()
+    smt_script = parser.get_script(StringIO(smt))
+    simplified = simplify_intervals(smt_script)
+    return [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
 
 
 def test_recognize_inequalities_and_or_equalities():
-    x = Symbol("x", INT)
-    assumptions = [
-        LE(Int(0), x),
-        LT(x, Int(10)),
-        Or(Equals(x, Int(2)), Equals(x, Int(3)), Equals(x, Int(4))),
-    ]
-    r = IntervalReasoner()
-    r.assume_all(assumptions)
-    iv = r.get_interval(x)
-    assert iv.lo == 2
-    assert iv.hi == 4
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(declare-fun x () Int)\n"
+        "(assert (<= 0 x))\n"
+        "(assert (< x 10))\n"
+        "(assert (or (= x 2) (= x 3) (= x 4)))\n"
+        "(assert (= x 9))\n"
+        "(check-sat)\n"
+    )
+
+    # The disjunctive bounds force x into {2,3,4}, so x=9 is contradictory.
+    assert asserts[3].is_false()
 
 
 def test_mod_no_overflow_only_for_canonical_range():
     p = int(ARGS().field_type.value)
-    a = Symbol("a", INT)
-    b = Symbol("b", INT)
-    assumptions = [LE(Int(0), a), LE(a, Int(100)), LE(Int(0), b), LE(b, Int(100))]
 
-    # safe: a is canonical
-    out = _simplify_with_intervals([Mod(a, Int(p))], assumptions=assumptions)[0]
-    assert not _has_mod(out)
+    safe_asserts = _asserts_from_script(
+        f"(set-logic ALL)\n"
+        "(declare-fun a () Int)\n"
+        "(declare-fun b () Int)\n"
+        "(assert (<= 0 a))\n"
+        "(assert (<= a 100))\n"
+        "(assert (<= 0 b))\n"
+        "(assert (<= b 100))\n"
+        f"(assert (mod a {p}))\n"
+        "(check-sat)\n"
+    )
+    target_safe = safe_asserts[4]
+    assert not _has_mod(target_safe)
 
-    # unsafe: a-b can be negative, keep mod
-    out2 = _simplify_with_intervals([Mod(a - b, Int(p))], assumptions=assumptions)[0]
-    assert _has_mod(out2)
+    unsafe_asserts = _asserts_from_script(
+        f"(set-logic ALL)\n"
+        "(declare-fun a () Int)\n"
+        "(declare-fun b () Int)\n"
+        "(assert (<= 0 a))\n"
+        "(assert (<= a 100))\n"
+        "(assert (<= 0 b))\n"
+        "(assert (<= b 100))\n"
+        f"(assert (mod (- a b) {p}))\n"
+        "(check-sat)\n"
+    )
+    target_unsafe = unsafe_asserts[4]
+    assert _has_mod(target_unsafe)
 
 
 def test_used_constraints_are_retained_under_pruning():
     x = Symbol("x", INT)
-    assumptions = [Equals(x, Int(0))]
-    out = _simplify_with_intervals(
-        [Equals(x, Int(0))],
-        assumptions=assumptions,
-        prune=True,
-    )[0]
-    # Without retention this would simplify to True under pruning.
-    assert out == Equals(x, Int(0))
+    f = Equals(x, Int(0))
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(declare-fun x () Int)\n"
+        "(assert (= x 0))\n"
+        "(check-sat)\n"
+    )
+    assert asserts[0] == f
 
 
 def test_bound_deriving_formula_is_not_eliminated():
     x = Symbol("x", INT)
     bound = LE(x, Int(10))
-    # Non-critical tautology that can be dropped under pruning.
-    redundant = Equals(Int(1), Int(1))
-
-    out = _simplify_with_intervals(
-        [bound, redundant],
-        assumptions=[bound, redundant],
-        prune=True,
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(declare-fun x () Int)\n"
+        "(assert (<= x 10))\n"
+        "(assert (= 1 1))\n"
+        "(check-sat)\n"
     )
-
-    # `bound` was used to derive x <= 10, so it must be kept verbatim.
-    assert out[0] == bound
-    # `redundant` was not needed and is not a field-bound guard; pruning may collapse it.
-    assert out[1].is_true()
+    assert asserts[0] == bound
+    assert asserts[1].is_true()
 
 
 def test_field_bounds_0_and_p_are_not_eliminated():
     p = int(ARGS().field_type.value)
     x = Symbol("x", INT)
-
     lower = LE(Int(0), x)
     upper = LT(x, Int(p))
-
-    out = _simplify_with_intervals(
-        [lower, upper],
-        assumptions=[lower, upper],
-        prune=True,
+    asserts = _asserts_from_script(
+        f"(set-logic ALL)\n"
+        "(declare-fun x () Int)\n"
+        "(assert (<= 0 x))\n"
+        f"(assert (< x {p}))\n"
+        "(check-sat)\n"
     )
+    assert asserts[0] == lower
+    assert asserts[1] == upper
 
-    assert out[0] == lower
-    assert out[1] == upper
 
-
-def test_simplify_with_intervals_can_append_derived_ranges():
+def test_simplify_intervals_can_append_derived_ranges():
     x = Symbol("x", INT)
-    assumptions = [LE(Int(0), x), LE(x, Int(10))]
-    out = _simplify_with_intervals(
-        [Equals(Int(1), Int(1))],
-        assumptions=assumptions,
-        prune=True,
-        append_derived_ranges=True,
-    )
-
-    # Original (simplified) formula is preserved, plus inferred range constraints.
-    assert len(out) >= 2
-    assert out[0].is_true()
     expected_range = And(LE(Int(0), x), LE(x, Int(10)))
-    assert any(c == expected_range for c in out[1:])
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(declare-fun x () Int)\n"
+        "(assert (<= 0 x))\n"
+        "(assert (<= x 10))\n"
+        "(assert (= 1 1))\n"
+        "(check-sat)\n"
+    )
+    assert asserts[2].is_true()
+    assert any(c == expected_range for c in asserts)
 
 
 def test_fixed_point_opcode_flags_sum_forces_all_zero():
@@ -126,22 +124,23 @@ def test_fixed_point_opcode_flags_sum_forces_all_zero():
     xor = Symbol("xor", INT)
     orf = Symbol("orf", INT)
     andf = Symbol("andf", INT)
-
-    assumptions = [
-        Or(Equals(sub, Int(0)), Equals(sub, Int(1))),
-        Or(Equals(xor, Int(0)), Equals(xor, Int(1))),
-        Or(Equals(orf, Int(0)), Equals(orf, Int(1))),
-        Or(Equals(andf, Int(0)), Equals(andf, Int(1))),
-        Equals(sub + Int(2) * xor + Int(3) * orf + Int(4) * andf, Int(0)),
-    ]
-
-    r = IntervalReasoner()
-    r.assume_all(assumptions)
-
-    assert r.get_interval(sub) == IntInterval.const(0)
-    assert r.get_interval(xor) == IntInterval.const(0)
-    assert r.get_interval(orf) == IntInterval.const(0)
-    assert r.get_interval(andf) == IntInterval.const(0)
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(declare-fun sub () Int)\n"
+        "(declare-fun xor () Int)\n"
+        "(declare-fun orf () Int)\n"
+        "(declare-fun andf () Int)\n"
+        "(assert (or (= sub 0) (= sub 1)))\n"
+        "(assert (or (= xor 0) (= xor 1)))\n"
+        "(assert (or (= orf 0) (= orf 1)))\n"
+        "(assert (or (= andf 0) (= andf 1)))\n"
+        "(assert (= (+ sub (* 2 xor) (* 3 orf) (* 4 andf)) 0))\n"
+        "(check-sat)\n"
+    )
+    assert any(a == Equals(sub, Int(0)) for a in asserts)
+    assert any(a == Equals(xor, Int(0)) for a in asserts)
+    assert any(a == Equals(orf, Int(0)) for a in asserts)
+    assert any(a == Equals(andf, Int(0)) for a in asserts)
 
 
 def test_fixed_point_requires_mod_elimination_before_affine_sum():
@@ -150,97 +149,80 @@ def test_fixed_point_requires_mod_elimination_before_affine_sum():
     xor = Symbol("xor2", INT)
     orf = Symbol("orf2", INT)
     andf = Symbol("andf2", INT)
-
-    # First, derive each flag in [0,1]. Only then the mod-equation can be
-    # normalized to a plain affine equality (sum in [0,10] < p).
-    assumptions = [
-        Or(Equals(sub, Int(0)), Equals(sub, Int(1))),
-        Or(Equals(xor, Int(0)), Equals(xor, Int(1))),
-        Or(Equals(orf, Int(0)), Equals(orf, Int(1))),
-        Or(Equals(andf, Int(0)), Equals(andf, Int(1))),
-        Equals(Mod(sub + Int(2) * xor + Int(3) * orf + Int(4) * andf, Int(p)), Int(0)),
-    ]
-
-    r = IntervalReasoner(modulus=p)
-    r.assume_all(assumptions)
-
-    assert r.get_interval(sub) == IntInterval.const(0)
-    assert r.get_interval(xor) == IntInterval.const(0)
-    assert r.get_interval(orf) == IntInterval.const(0)
-    assert r.get_interval(andf) == IntInterval.const(0)
+    asserts = _asserts_from_script(
+        f"(set-logic ALL)\n"
+        "(declare-fun sub2 () Int)\n"
+        "(declare-fun xor2 () Int)\n"
+        "(declare-fun orf2 () Int)\n"
+        "(declare-fun andf2 () Int)\n"
+        "(assert (or (= sub2 0) (= sub2 1)))\n"
+        "(assert (or (= xor2 0) (= xor2 1)))\n"
+        "(assert (or (= orf2 0) (= orf2 1)))\n"
+        "(assert (or (= andf2 0) (= andf2 1)))\n"
+        f"(assert (= (mod (+ sub2 (* 2 xor2) (* 3 orf2) (* 4 andf2)) {p}) 0))\n"
+        "(check-sat)\n"
+    )
+    assert any(a == Equals(sub, Int(0)) for a in asserts)
+    assert any(a == Equals(xor, Int(0)) for a in asserts)
+    assert any(a == Equals(orf, Int(0)) for a in asserts)
+    assert any(a == Equals(andf, Int(0)) for a in asserts)
 
 
 def test_mod_zero_rewrites_to_unique_nonzero_multiple():
     p = int(ARGS().field_type.value)
     x = Symbol("x_unique_mult", INT)
-    assumptions = [LE(Int(p - 2), x), LE(x, Int(p + 3))]
-
-    f = Equals(Mod(x, Int(p)), Int(0))
-    out = _simplify_with_intervals([f], assumptions=assumptions, prune=False)[0]
-
-    assert out == Equals(x, Int(p))
+    asserts = _asserts_from_script(
+        f"(set-logic ALL)\n"
+        "(declare-fun x_unique_mult () Int)\n"
+        f"(assert (<= {p - 2} x_unique_mult))\n"
+        f"(assert (<= x_unique_mult {p + 3}))\n"
+        f"(assert (= (mod x_unique_mult {p}) 0))\n"
+        "(check-sat)\n"
+    )
+    assert any(a == Equals(x, Int(p)) for a in asserts)
 
 
 def test_constraints_5_and_6_style_mods_are_removed():
     p = int(ARGS().field_type.value)
-    f0 = Symbol("f0", INT)
-    f1 = Symbol("f1", INT)
-    f2 = Symbol("f2", INT)
-    f3 = Symbol("f3", INT)
-    flag_sum = f0 + f1 + f2 + f3
-
-    assumptions = [
-        Or(Equals(f0, Int(0)), Equals(f0, Int(1)), Equals(f0, Int(2))),
-        Or(Equals(f1, Int(0)), Equals(f1, Int(1)), Equals(f1, Int(2))),
-        Or(Equals(f2, Int(0)), Equals(f2, Int(1)), Equals(f2, Int(2))),
-        Or(Equals(f3, Int(0)), Equals(f3, Int(1)), Equals(f3, Int(2))),
-    ]
-
-    constraint_5_like = Or(
-        Equals(flag_sum, Int(0)),
-        Equals(Mod(Int(p - 2) + flag_sum, Int(p)), Int(0)),
-        Equals(Mod(Int(p - 1) + flag_sum, Int(p)), Int(0)),
+    asserts = _asserts_from_script(
+        f"(set-logic ALL)\n"
+        "(declare-fun f0 () Int)\n"
+        "(declare-fun f1 () Int)\n"
+        "(declare-fun f2 () Int)\n"
+        "(declare-fun f3 () Int)\n"
+        "(assert (or (= f0 0) (= f0 1) (= f0 2)))\n"
+        "(assert (or (= f1 0) (= f1 1) (= f1 2)))\n"
+        "(assert (or (= f2 0) (= f2 1) (= f2 2)))\n"
+        "(assert (or (= f3 0) (= f3 1) (= f3 2)))\n"
+        f"(assert (or (= (+ f0 f1 f2 f3) 0) (= (mod (+ {p - 2} (+ f0 f1 f2 f3)) {p}) 0) (= (mod (+ {p - 1} (+ f0 f1 f2 f3)) {p}) 0)))\n"
+        f"(assert (or (= (mod (+ {p - 2} (+ f0 f1 f2 f3)) {p}) 0) (= (mod (+ {p - 1} (+ f0 f1 f2 f3)) {p}) 0)))\n"
+        "(check-sat)\n"
     )
-    constraint_6_like = Or(
-        Equals(Mod(Int(p - 2) + flag_sum, Int(p)), Int(0)),
-        Equals(Mod(Int(p - 1) + flag_sum, Int(p)), Int(0)),
-    )
-
-    out = _simplify_with_intervals(
-        [constraint_5_like, constraint_6_like],
-        assumptions=assumptions,
-        prune=False,
-    )
-
-    assert all(not _has_mod(f) for f in out)
+    assert all(not _has_mod(f) for f in asserts)
 
 
 def test_derived_multi_interval_constraint_is_disjunction():
     x = Symbol("x_disj_domain", INT)
-    assumptions = [Or(Equals(x, Int(0)), Equals(x, Int(1)))]
-
-    out = _simplify_with_intervals(
-        [Bool(True)],
-        assumptions=assumptions,
-        prune=False,
-        append_derived_ranges=True,
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(declare-fun x_disj_domain () Int)\n"
+        "(assert (or (= x_disj_domain 0) (= x_disj_domain 1)))\n"
+        "(assert true)\n"
+        "(check-sat)\n"
     )
-
     expected = Or(Equals(x, Int(0)), Equals(x, Int(1)))
-    assert any(c == expected for c in out[1:])
+    assert any(c == expected for c in asserts)
 
 
 def test_exists_quantifier_injects_bounds_with_conjunction():
     x = Symbol("x_exists_inject", INT)
     body = Or(Equals(x, Int(0)), Equals(x, Int(1)))
-    formula = Exists([x], body)
-
-    out = _simplify_with_intervals(
-        [formula],
-        assumptions=[],
-        prune=False,
-    )[0]
-
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(assert (exists ((x_exists_inject Int)) (or (= x_exists_inject 0) (= x_exists_inject 1))))\n"
+        "(check-sat)\n"
+    )
+    out = asserts[0]
     assert out.is_exists()
     injected = out.arg(0)
     assert injected.is_and()
@@ -251,14 +233,12 @@ def test_exists_quantifier_injects_bounds_with_conjunction():
 def test_forall_quantifier_injects_bounds_with_implication_guard():
     x = Symbol("x_forall_inject", INT)
     body = Or(Equals(x, Int(0)), Equals(x, Int(1)))
-    formula = ForAll([x], body)
-
-    out = _simplify_with_intervals(
-        [formula],
-        assumptions=[],
-        prune=False,
-    )[0]
-
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(assert (forall ((x_forall_inject Int)) (or (= x_forall_inject 0) (= x_forall_inject 1))))\n"
+        "(check-sat)\n"
+    )
+    out = asserts[0]
     assert out.is_forall()
     injected = out.arg(0)
     assert injected.is_implies()
@@ -267,17 +247,274 @@ def test_forall_quantifier_injects_bounds_with_implication_guard():
 
 
 def test_quantifier_injection_only_uses_variables_present_in_body():
-    x = Symbol("x_quant_scope", INT)
     y = Symbol("y_quant_scope", INT)
-    formula = ForAll([x], Equals(x, x))
-    assumptions = [Equals(y, Int(7))]
-
-    out = _simplify_with_intervals(
-        [formula],
-        assumptions=assumptions,
-        prune=False,
-    )[0]
-
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(declare-fun y_quant_scope () Int)\n"
+        "(assert (= y_quant_scope 7))\n"
+        "(assert (forall ((x_quant_scope Int)) (= x_quant_scope x_quant_scope)))\n"
+        "(check-sat)\n"
+    )
+    out = asserts[1]
     # y is not present in quantifier body, so no bound for y may be injected there.
     assert y not in out.get_free_variables()
+from src.simplify import simplify_intervals
+from src.smt.utils import *
 
+
+def _has_mod(f: FNode) -> bool:
+    if f.is_mod():
+        return True
+    return any(_has_mod(a) for a in f.args())
+
+
+def _asserts_from_script(smt: str) -> list[FNode]:
+    parser = SmtLibParser()
+    smt_script = parser.get_script(StringIO(smt))
+    simplified = simplify_intervals(smt_script)
+    return [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
+
+
+def test_recognize_inequalities_and_or_equalities():
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(declare-fun x () Int)\n"
+        "(assert (<= 0 x))\n"
+        "(assert (< x 10))\n"
+        "(assert (or (= x 2) (= x 3) (= x 4)))\n"
+        "(assert (= x 9))\n"
+        "(check-sat)\n"
+    )
+
+    # The disjunctive bounds force x into {2,3,4}, so x=9 is contradictory.
+    assert asserts[3].is_false()
+
+
+def test_mod_no_overflow_only_for_canonical_range():
+    p = int(ARGS().field_type.value)
+
+    safe_asserts = _asserts_from_script(
+        f"(set-logic ALL)\n"
+        "(declare-fun a () Int)\n"
+        "(declare-fun b () Int)\n"
+        "(assert (<= 0 a))\n"
+        "(assert (<= a 100))\n"
+        "(assert (<= 0 b))\n"
+        "(assert (<= b 100))\n"
+        f"(assert (mod a {p}))\n"
+        "(check-sat)\n"
+    )
+    target_safe = safe_asserts[4]
+    assert not _has_mod(target_safe)
+
+    unsafe_asserts = _asserts_from_script(
+        f"(set-logic ALL)\n"
+        "(declare-fun a () Int)\n"
+        "(declare-fun b () Int)\n"
+        "(assert (<= 0 a))\n"
+        "(assert (<= a 100))\n"
+        "(assert (<= 0 b))\n"
+        "(assert (<= b 100))\n"
+        f"(assert (mod (- a b) {p}))\n"
+        "(check-sat)\n"
+    )
+    target_unsafe = unsafe_asserts[4]
+    assert _has_mod(target_unsafe)
+
+
+def test_used_constraints_are_retained_under_pruning():
+    x = Symbol("x", INT)
+    f = Equals(x, Int(0))
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(declare-fun x () Int)\n"
+        "(assert (= x 0))\n"
+        "(check-sat)\n"
+    )
+    assert asserts[0] == f
+
+
+def test_bound_deriving_formula_is_not_eliminated():
+    x = Symbol("x", INT)
+    bound = LE(x, Int(10))
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(declare-fun x () Int)\n"
+        "(assert (<= x 10))\n"
+        "(assert (= 1 1))\n"
+        "(check-sat)\n"
+    )
+    assert asserts[0] == bound
+    assert asserts[1].is_true()
+
+
+def test_field_bounds_0_and_p_are_not_eliminated():
+    p = int(ARGS().field_type.value)
+    x = Symbol("x", INT)
+    lower = LE(Int(0), x)
+    upper = LT(x, Int(p))
+    asserts = _asserts_from_script(
+        f"(set-logic ALL)\n"
+        "(declare-fun x () Int)\n"
+        "(assert (<= 0 x))\n"
+        f"(assert (< x {p}))\n"
+        "(check-sat)\n"
+    )
+    assert asserts[0] == lower
+    assert asserts[1] == upper
+
+
+def test_simplify_intervals_can_append_derived_ranges():
+    x = Symbol("x", INT)
+    expected_range = And(LE(Int(0), x), LE(x, Int(10)))
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(declare-fun x () Int)\n"
+        "(assert (<= 0 x))\n"
+        "(assert (<= x 10))\n"
+        "(assert (= 1 1))\n"
+        "(check-sat)\n"
+    )
+    assert asserts[2].is_true()
+    assert any(c == expected_range for c in asserts)
+
+
+def test_fixed_point_opcode_flags_sum_forces_all_zero():
+    sub = Symbol("sub", INT)
+    xor = Symbol("xor", INT)
+    orf = Symbol("orf", INT)
+    andf = Symbol("andf", INT)
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(declare-fun sub () Int)\n"
+        "(declare-fun xor () Int)\n"
+        "(declare-fun orf () Int)\n"
+        "(declare-fun andf () Int)\n"
+        "(assert (or (= sub 0) (= sub 1)))\n"
+        "(assert (or (= xor 0) (= xor 1)))\n"
+        "(assert (or (= orf 0) (= orf 1)))\n"
+        "(assert (or (= andf 0) (= andf 1)))\n"
+        "(assert (= (+ sub (* 2 xor) (* 3 orf) (* 4 andf)) 0))\n"
+        "(check-sat)\n"
+    )
+    assert any(a == Equals(sub, Int(0)) for a in asserts)
+    assert any(a == Equals(xor, Int(0)) for a in asserts)
+    assert any(a == Equals(orf, Int(0)) for a in asserts)
+    assert any(a == Equals(andf, Int(0)) for a in asserts)
+
+
+def test_fixed_point_requires_mod_elimination_before_affine_sum():
+    p = int(ARGS().field_type.value)
+    sub = Symbol("sub2", INT)
+    xor = Symbol("xor2", INT)
+    orf = Symbol("orf2", INT)
+    andf = Symbol("andf2", INT)
+    asserts = _asserts_from_script(
+        f"(set-logic ALL)\n"
+        "(declare-fun sub2 () Int)\n"
+        "(declare-fun xor2 () Int)\n"
+        "(declare-fun orf2 () Int)\n"
+        "(declare-fun andf2 () Int)\n"
+        "(assert (or (= sub2 0) (= sub2 1)))\n"
+        "(assert (or (= xor2 0) (= xor2 1)))\n"
+        "(assert (or (= orf2 0) (= orf2 1)))\n"
+        "(assert (or (= andf2 0) (= andf2 1)))\n"
+        f"(assert (= (mod (+ sub2 (* 2 xor2) (* 3 orf2) (* 4 andf2)) {p}) 0))\n"
+        "(check-sat)\n"
+    )
+    assert any(a == Equals(sub, Int(0)) for a in asserts)
+    assert any(a == Equals(xor, Int(0)) for a in asserts)
+    assert any(a == Equals(orf, Int(0)) for a in asserts)
+    assert any(a == Equals(andf, Int(0)) for a in asserts)
+
+
+def test_mod_zero_rewrites_to_unique_nonzero_multiple():
+    p = int(ARGS().field_type.value)
+    x = Symbol("x_unique_mult", INT)
+    asserts = _asserts_from_script(
+        f"(set-logic ALL)\n"
+        "(declare-fun x_unique_mult () Int)\n"
+        f"(assert (<= {p - 2} x_unique_mult))\n"
+        f"(assert (<= x_unique_mult {p + 3}))\n"
+        f"(assert (= (mod x_unique_mult {p}) 0))\n"
+        "(check-sat)\n"
+    )
+    assert any(a == Equals(x, Int(p)) for a in asserts)
+
+
+def test_constraints_5_and_6_style_mods_are_removed():
+    p = int(ARGS().field_type.value)
+    asserts = _asserts_from_script(
+        f"(set-logic ALL)\n"
+        "(declare-fun f0 () Int)\n"
+        "(declare-fun f1 () Int)\n"
+        "(declare-fun f2 () Int)\n"
+        "(declare-fun f3 () Int)\n"
+        "(assert (or (= f0 0) (= f0 1) (= f0 2)))\n"
+        "(assert (or (= f1 0) (= f1 1) (= f1 2)))\n"
+        "(assert (or (= f2 0) (= f2 1) (= f2 2)))\n"
+        "(assert (or (= f3 0) (= f3 1) (= f3 2)))\n"
+        f"(assert (or (= (+ f0 f1 f2 f3) 0) (= (mod (+ {p - 2} (+ f0 f1 f2 f3)) {p}) 0) (= (mod (+ {p - 1} (+ f0 f1 f2 f3)) {p}) 0)))\n"
+        f"(assert (or (= (mod (+ {p - 2} (+ f0 f1 f2 f3)) {p}) 0) (= (mod (+ {p - 1} (+ f0 f1 f2 f3)) {p}) 0)))\n"
+        "(check-sat)\n"
+    )
+    assert all(not _has_mod(f) for f in asserts)
+
+
+def test_derived_multi_interval_constraint_is_disjunction():
+    x = Symbol("x_disj_domain", INT)
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(declare-fun x_disj_domain () Int)\n"
+        "(assert (or (= x_disj_domain 0) (= x_disj_domain 1)))\n"
+        "(assert true)\n"
+        "(check-sat)\n"
+    )
+    expected = Or(Equals(x, Int(0)), Equals(x, Int(1)))
+    assert any(c == expected for c in asserts)
+
+
+def test_exists_quantifier_injects_bounds_with_conjunction():
+    x = Symbol("x_exists_inject", INT)
+    body = Or(Equals(x, Int(0)), Equals(x, Int(1)))
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(assert (exists ((x_exists_inject Int)) (or (= x_exists_inject 0) (= x_exists_inject 1))))\n"
+        "(check-sat)\n"
+    )
+    out = asserts[0]
+    assert out.is_exists()
+    injected = out.arg(0)
+    assert injected.is_and()
+    assert body in injected.args()
+    assert Or(Equals(x, Int(0)), Equals(x, Int(1))) in injected.args()
+
+
+def test_forall_quantifier_injects_bounds_with_implication_guard():
+    x = Symbol("x_forall_inject", INT)
+    body = Or(Equals(x, Int(0)), Equals(x, Int(1)))
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(assert (forall ((x_forall_inject Int)) (or (= x_forall_inject 0) (= x_forall_inject 1))))\n"
+        "(check-sat)\n"
+    )
+    out = asserts[0]
+    assert out.is_forall()
+    injected = out.arg(0)
+    assert injected.is_implies()
+    assert injected.arg(0) == Or(Equals(x, Int(0)), Equals(x, Int(1)))
+    assert injected.arg(1) == body
+
+
+def test_quantifier_injection_only_uses_variables_present_in_body():
+    y = Symbol("y_quant_scope", INT)
+    asserts = _asserts_from_script(
+        "(set-logic ALL)\n"
+        "(declare-fun y_quant_scope () Int)\n"
+        "(assert (= y_quant_scope 7))\n"
+        "(assert (forall ((x_quant_scope Int)) (= x_quant_scope x_quant_scope)))\n"
+        "(check-sat)\n"
+    )
+    out = asserts[1]
+    # y is not present in quantifier body, so no bound for y may be injected there.
+    assert y not in out.get_free_variables()
