@@ -3,7 +3,7 @@ import sympy
 
 
 from .rewriter.conversion import to_smt, to_sympy
-from .rewriter import rewrite, mod_unroller
+from .rewriter import rewrite
 from .smt.encoding import build_input_output_relation, collect_variables
 from .smt.conversion import FormulaWithAxioms, SmtConverter
 from .smt.utils import *
@@ -130,7 +130,7 @@ class ModelMapBuilder:
     def get_map(self):
         """Return the computed mapping as a conjunction of equalities."""
         s = sorted(self.result.items(), key=lambda x: x[0].symbol_name())
-        return rewrite(And(*[Equals(a, wrap_mod(b)) for a, b in s]))
+        return And(*[Equals(a, wrap_mod(b)) for a, b in s])
     
     def get_skolemized_variables(self) -> frozenset:
         """Return the computed mapping as a conjunction of equalities."""
@@ -182,8 +182,6 @@ def encoding(before, after, qvars, builder, input_relation, output_relation):
             elif isinstance(value, int):
                 subs[Symbol(name, INT)] = Int(value)
         res = res.substitute(subs)
-    if ARGS().unroll_mod:
-        res = mod_unroller.unroll_mod(res)
     return res
 
 def verify():

@@ -6,7 +6,6 @@ from typing import Any, Iterable
 
 
 from .. import bus_interactions
-from ..rewriter import rewrite, rewrite_intervals
 from ..utils.basic_block import BasicBlock
 from ..utils.args import ARGS, BusInteractionHandlers
 from ..utils.profiling import simple_profile
@@ -65,10 +64,10 @@ class SmtConverter:
         self.constraint_solver.exit()
 
     def __add_constraint(self, c: FNode, comment: Optional[str] = None):
-        """Rewrite and store a constraint. Assert it to the utility solver"""
+        """Store a constraint. Assert it to the utility solver"""
         if comment is not None:
             c = with_comment(c, comment)
-        self.constraints.append(rewrite(c))
+        self.constraints.append(c)
         self.constraint_solver.add_assertion(self.constraints[-1])
 
     def convert_constraints(self, data: Iterable[Any]):
@@ -95,9 +94,7 @@ class SmtConverter:
                     a = self.convert_manual(a)
                     b = self.convert_manual(b)
                     self.derived_columns[sym] = with_comment(
-                        rewrite(
-                            Ite(Equals(b, Int(0)), Int(0), wrap_mod(Div(a, b)))
-                        ),
+                        Ite(Equals(b, Int(0)), Int(0), wrap_mod(Div(a, b))),
                         f"DERIVED COLUMN {name} = QuotientOrZero({a}, {b})",
                     ),
                 case _:
@@ -194,10 +191,5 @@ class SmtConverter:
             derived=self.derived_columns,
             globals=self.bus_interaction_encoder.get_globals(),
         )
-        if ARGS().with_intervals:
-            assumptions = [*fwa.constraints, *fwa.axioms]
-            fwa = fwa._replace(
-                constraints=rewrite_intervals(fwa.constraints, assumptions=assumptions, append_derived_ranges=True),
-            )
         logging.debug(f"{self.name}: done converting")
         return fwa

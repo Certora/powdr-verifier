@@ -1,7 +1,6 @@
 from itertools import batched, pairwise
 import itertools
 
-from ..rewriter import rewrite
 from ..smt.utils import *
 
 
@@ -274,7 +273,7 @@ class PermutationCheckMixin:
                 conjuncts.append(Equals(news[k], s))
             inputs = news
 
-        conjuncts = [rewrite(c) for c in conjuncts]
+        conjuncts = [c for c in conjuncts]
         outputs = actual_inputs[1:] # remove hadinput variables
         inputs = inputs[1:] # remove hadinput variables
         return conjuncts, outputs, intermediates, inputs, isinputs
