@@ -258,7 +258,7 @@ def test_exists_quantifier_injects_bounds_with_conjunction():
     assert Or(Equals(x, Int(0)), Equals(x, Int(1))) in injected.args()
 
 
-def test_forall_quantifier_injects_bounds_with_implication_guard():
+def test_forall_quantifier_injects_body_bounds_with_conjunction():
     x = Symbol("x_forall_inject", INT)
     body = Or(Equals(x, Int(0)), Equals(x, Int(1)))
     asserts = _asserts_from_script(
@@ -272,9 +272,54 @@ def test_forall_quantifier_injects_bounds_with_implication_guard():
     out = asserts[0]
     assert out.is_forall()
     injected = out.arg(0)
+    assert not injected.is_implies()
+    assert injected == body or (injected.is_and() and body in injected.args())
+
+
+def test_forall_quantifier_ignores_shadowed_outer_bounds():
+    x = Symbol("x_forall_outer_guard", INT)
+    body = Or(Equals(x, Int(0)), Equals(x, Int(1)))
+    asserts = _asserts_from_script(
+        """
+        (set-logic ALL)
+        (declare-fun x_forall_outer_guard () Int)
+        (assert (<= 0 x_forall_outer_guard))
+        (assert (forall ((x_forall_outer_guard Int))
+                       (or (= x_forall_outer_guard 0) (= x_forall_outer_guard 1))))
+        (check-sat)
+        """
+    )
+    print(asserts)
+    out = asserts[1]
+    assert out.is_forall()
+    injected = out.arg(0)
+    assert not injected.is_implies()
+    assert injected == body or (injected.is_and() and body in injected.args())
+    assert False
+
+
+def test_forall_quantifier_uses_implication_for_nonshadowed_outer_bounds():
+    x = Symbol("x_forall_nonshadowed_bound", INT)
+    y = Symbol("y_forall_nonshadowed_bound", INT)
+    body = Or(Equals(x, Int(0)), Equals(y, Int(1)))
+    asserts = _asserts_from_script(
+        """
+        (set-logic ALL)
+        (declare-fun y_forall_nonshadowed_bound () Int)
+        (assert (<= 0 y_forall_nonshadowed_bound))
+        (assert (forall ((x_forall_nonshadowed_bound Int))
+                       (or (= x_forall_nonshadowed_bound 0)
+                           (= y_forall_nonshadowed_bound 1))))
+        (check-sat)
+        """
+    )
+    out = asserts[1]
+    assert out.is_forall()
+    injected = out.arg(0)
     assert injected.is_implies()
-    assert injected.arg(0) == Or(Equals(x, Int(0)), Equals(x, Int(1)))
-    assert injected.arg(1) == body
+    assert injected.arg(0) == LE(Int(0), y)
+    consequence = injected.arg(1)
+    assert consequence == body or (consequence.is_and() and body in consequence.args())
 
 
 def test_quantifier_injection_only_uses_variables_present_in_body():

@@ -574,24 +574,39 @@ class IntervalReasoner:
             qvars = list(n.quantifier_vars())
             body = n.arg(0)
             body_int_vars = {v for v in body.get_free_variables() if v.get_type().is_int_type()}
-            seed = {v: inherited[v] for v in body_int_vars if v in inherited}
+            shadowed_names = {q.symbol_name() for q in qvars}
+
+            seed = {
+                v: inherited[v]
+                for v in body_int_vars
+                if v in inherited and v.symbol_name() not in shadowed_names
+            }
 
             local = IntervalReasoner(modulus=self.p)
             local.env = dict(seed)
             local.assume_all([body], max_iters=max_iters)
 
             rewritten_body = self._inject_quantifier_bounds(body, local.env, max_iters)
-            bounds: list[FNode] = []
-            for sym in sorted(body_int_vars, key=str):
-                c = self._domain_constraint(sym, local.get_domain(sym))
-                if c is not None:
-                    bounds.append(c)
 
-            if bounds:
-                guard = bounds[0] if len(bounds) == 1 else And(*bounds)
-                injected_body = And(guard, rewritten_body) if n.is_exists() else Implies(guard, rewritten_body)
+            outer_bounds: list[FNode] = []
+            local_bounds: list[FNode] = []
+            for sym in sorted(body_int_vars, key=str):
+                if sym in inherited and sym.symbol_name() not in shadowed_names:
+                    c_outer = self._domain_constraint(sym, inherited[sym])
+                    if c_outer is not None:
+                        outer_bounds.append(c_outer)
+                c_local = self._domain_constraint(sym, local.get_domain(sym))
+                if c_local is not None:
+                    local_bounds.append(c_local)
+
+            outer_guard = None if not outer_bounds else (outer_bounds[0] if len(outer_bounds) == 1 else And(*outer_bounds))
+            local_guard = None if not local_bounds else (local_bounds[0] if len(local_bounds) == 1 else And(*local_bounds))
+
+            body_with_local = rewritten_body if local_guard is None else And(local_guard, rewritten_body)
+            if n.is_exists():
+                injected_body = body_with_local
             else:
-                injected_body = rewritten_body
+                injected_body = body_with_local if outer_guard is None else Implies(outer_guard, body_with_local)
 
             return Exists(qvars, injected_body) if n.is_exists() else ForAll(qvars, injected_body)
 
