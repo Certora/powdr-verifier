@@ -1,5 +1,4 @@
-from src.rewriter import rewrite_intervals
-from src.rewriter.interval_reasoner import IntInterval, IntervalReasoner
+from src.simplify.intervals import IntInterval, IntervalReasoner
 from src.smt.utils import *
 
 
@@ -7,6 +6,26 @@ def _has_mod(f: FNode) -> bool:
     if f.is_mod():
         return True
     return any(_has_mod(a) for a in f.args())
+
+
+def _simplify_with_intervals(
+    input_formulas: list[FNode],
+    *,
+    assumptions: list[FNode],
+    prune: bool = True,
+    append_derived_ranges: bool = False,
+) -> list[FNode]:
+    reasoner = IntervalReasoner(modulus=ARGS().field_type.value)
+    reasoner.assume_all(assumptions)
+    protected = set(reasoner.used_formulas)
+    protected |= {f for f in input_formulas if reasoner.must_retain_formula(f)}
+    rewritten = [
+        reasoner.simplify(f, prune=prune, freeze=protected, inject_quantifier_bounds=True)
+        for f in input_formulas
+    ]
+    if append_derived_ranges:
+        rewritten.extend(reasoner.derived_range_constraints(only_tightened=True))
+    return rewritten
 
 
 def test_recognize_inequalities_and_or_equalities():
@@ -30,18 +49,18 @@ def test_mod_no_overflow_only_for_canonical_range():
     assumptions = [LE(Int(0), a), LE(a, Int(100)), LE(Int(0), b), LE(b, Int(100))]
 
     # safe: a is canonical
-    out = rewrite_intervals([Mod(a, Int(p))], assumptions=assumptions)[0]
+    out = _simplify_with_intervals([Mod(a, Int(p))], assumptions=assumptions)[0]
     assert not _has_mod(out)
 
     # unsafe: a-b can be negative, keep mod
-    out2 = rewrite_intervals([Mod(a - b, Int(p))], assumptions=assumptions)[0]
+    out2 = _simplify_with_intervals([Mod(a - b, Int(p))], assumptions=assumptions)[0]
     assert _has_mod(out2)
 
 
 def test_used_constraints_are_retained_under_pruning():
     x = Symbol("x", INT)
     assumptions = [Equals(x, Int(0))]
-    out = rewrite_intervals(
+    out = _simplify_with_intervals(
         [Equals(x, Int(0))],
         assumptions=assumptions,
         prune=True,
@@ -56,7 +75,7 @@ def test_bound_deriving_formula_is_not_eliminated():
     # Non-critical tautology that can be dropped under pruning.
     redundant = Equals(Int(1), Int(1))
 
-    out = rewrite_intervals(
+    out = _simplify_with_intervals(
         [bound, redundant],
         assumptions=[bound, redundant],
         prune=True,
@@ -75,7 +94,7 @@ def test_field_bounds_0_and_p_are_not_eliminated():
     lower = LE(Int(0), x)
     upper = LT(x, Int(p))
 
-    out = rewrite_intervals(
+    out = _simplify_with_intervals(
         [lower, upper],
         assumptions=[lower, upper],
         prune=True,
@@ -85,10 +104,10 @@ def test_field_bounds_0_and_p_are_not_eliminated():
     assert out[1] == upper
 
 
-def test_rewrite_intervals_can_append_derived_ranges():
+def test_simplify_with_intervals_can_append_derived_ranges():
     x = Symbol("x", INT)
     assumptions = [LE(Int(0), x), LE(x, Int(10))]
-    out = rewrite_intervals(
+    out = _simplify_with_intervals(
         [Equals(Int(1), Int(1))],
         assumptions=assumptions,
         prune=True,
@@ -157,7 +176,7 @@ def test_mod_zero_rewrites_to_unique_nonzero_multiple():
     assumptions = [LE(Int(p - 2), x), LE(x, Int(p + 3))]
 
     f = Equals(Mod(x, Int(p)), Int(0))
-    out = rewrite_intervals([f], assumptions=assumptions, prune=False)[0]
+    out = _simplify_with_intervals([f], assumptions=assumptions, prune=False)[0]
 
     assert out == Equals(x, Int(p))
 
@@ -187,11 +206,78 @@ def test_constraints_5_and_6_style_mods_are_removed():
         Equals(Mod(Int(p - 1) + flag_sum, Int(p)), Int(0)),
     )
 
-    out = rewrite_intervals(
+    out = _simplify_with_intervals(
         [constraint_5_like, constraint_6_like],
         assumptions=assumptions,
         prune=False,
     )
 
     assert all(not _has_mod(f) for f in out)
+
+
+def test_derived_multi_interval_constraint_is_disjunction():
+    x = Symbol("x_disj_domain", INT)
+    assumptions = [Or(Equals(x, Int(0)), Equals(x, Int(1)))]
+
+    out = _simplify_with_intervals(
+        [Bool(True)],
+        assumptions=assumptions,
+        prune=False,
+        append_derived_ranges=True,
+    )
+
+    expected = Or(Equals(x, Int(0)), Equals(x, Int(1)))
+    assert any(c == expected for c in out[1:])
+
+
+def test_exists_quantifier_injects_bounds_with_conjunction():
+    x = Symbol("x_exists_inject", INT)
+    body = Or(Equals(x, Int(0)), Equals(x, Int(1)))
+    formula = Exists([x], body)
+
+    out = _simplify_with_intervals(
+        [formula],
+        assumptions=[],
+        prune=False,
+    )[0]
+
+    assert out.is_exists()
+    injected = out.arg(0)
+    assert injected.is_and()
+    assert body in injected.args()
+    assert Or(Equals(x, Int(0)), Equals(x, Int(1))) in injected.args()
+
+
+def test_forall_quantifier_injects_bounds_with_implication_guard():
+    x = Symbol("x_forall_inject", INT)
+    body = Or(Equals(x, Int(0)), Equals(x, Int(1)))
+    formula = ForAll([x], body)
+
+    out = _simplify_with_intervals(
+        [formula],
+        assumptions=[],
+        prune=False,
+    )[0]
+
+    assert out.is_forall()
+    injected = out.arg(0)
+    assert injected.is_implies()
+    assert injected.arg(0) == Or(Equals(x, Int(0)), Equals(x, Int(1)))
+    assert injected.arg(1) == body
+
+
+def test_quantifier_injection_only_uses_variables_present_in_body():
+    x = Symbol("x_quant_scope", INT)
+    y = Symbol("y_quant_scope", INT)
+    formula = ForAll([x], Equals(x, x))
+    assumptions = [Equals(y, Int(7))]
+
+    out = _simplify_with_intervals(
+        [formula],
+        assumptions=assumptions,
+        prune=False,
+    )[0]
+
+    # y is not present in quantifier body, so no bound for y may be injected there.
+    assert y not in out.get_free_variables()
 
