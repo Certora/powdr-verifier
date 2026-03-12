@@ -107,9 +107,12 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
             case XOrEncoding.GROUNDED:
                 for x, y in self.instantiations:
                     term = Function(self.UF_XOR, [x, y])
-                    yield Implies(Equals(x, Int(0)), Equals(term, y))
-                    yield Implies(Equals(y, Int(0)), Equals(term, x))
-                    yield Implies(Equals(x, y), Equals(term, Int(0)))
+                    if x == y:
+                        yield Equals(term, Int(0))
+                    else:
+                        yield Implies(Equals(x, Int(0)), Equals(term, y))
+                        yield Implies(Equals(y, Int(0)), Equals(term, x))
+                        yield Implies(Equals(x, y), Equals(term, Int(0)))
             case XOrEncoding.WRAPPED_AXIOMS | XOrEncoding.WRAPPED_GROUNDED:
                 pass
             case _:
