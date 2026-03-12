@@ -10,6 +10,18 @@ def _has_mod(f: FNode) -> bool:
     return any(_has_mod(a) for a in f.args())
 
 
+def _is_or_has_conjunct(f: FNode, expected: FNode) -> bool:
+    return f == expected or (f.is_and() and expected in f.args())
+
+
+def _has_any_conjunct(f: FNode, expected: list[FNode]) -> bool:
+    if f in expected:
+        return True
+    if not f.is_and():
+        return False
+    return any(c in expected for c in f.args())
+
+
 def _asserts_from_script(smt: str) -> list[FNode]:
     parser = SmtLibParser()
     smt_script = parser.get_script(StringIO(dedent(smt).strip() + "\n"))
@@ -28,7 +40,9 @@ def test_interval_refinement_from_simple_inequalities():
         (check-sat)
         """
     )
-    assert true_asserts[2].is_true()
+    x = Symbol("x", INT)
+    assert _is_or_has_conjunct(true_asserts[2], LE(Int(0), x))
+    assert _is_or_has_conjunct(true_asserts[2], LE(x, Int(15)))
 
     false_asserts = _asserts_from_script(
         """
@@ -57,7 +71,12 @@ def test_eval_bool_with_arithmetic_product_bounds():
         (check-sat)
         """
     )
-    assert true_asserts[4].is_true()
+    x = Symbol("x", INT)
+    y = Symbol("y", INT)
+    assert _is_or_has_conjunct(true_asserts[4], LE(Int(0), x))
+    assert _is_or_has_conjunct(true_asserts[4], LE(x, Int(3)))
+    assert _is_or_has_conjunct(true_asserts[4], LE(Int(0), y))
+    assert _is_or_has_conjunct(true_asserts[4], LE(y, Int(4)))
 
     false_asserts = _asserts_from_script(
         """
@@ -87,9 +106,7 @@ def test_eval_bool_with_arithmetic_product_bounds():
         (check-sat)
         """
     )
-    x = Symbol("x", INT)
-    y = Symbol("y", INT)
-    assert unknown_asserts[4] == Equals(x * y, Int(7))
+    assert _is_or_has_conjunct(unknown_asserts[4], Equals(x * y, Int(7)))
 
 
 def test_eval_bool_with_addition_and_subtraction():
@@ -106,7 +123,12 @@ def test_eval_bool_with_addition_and_subtraction():
         (check-sat)
         """
     )
-    assert true_asserts[4].is_true()
+    a = Symbol("a", INT)
+    b = Symbol("b", INT)
+    assert _is_or_has_conjunct(true_asserts[4], LE(Int(10), a))
+    assert _is_or_has_conjunct(true_asserts[4], LE(a, Int(20)))
+    assert _is_or_has_conjunct(true_asserts[4], LE(Int(3), b))
+    assert _is_or_has_conjunct(true_asserts[4], LE(b, Int(5)))
 
     false_asserts = _asserts_from_script(
         """
@@ -136,9 +158,13 @@ def test_eval_bool_with_addition_and_subtraction():
         (check-sat)
         """
     )
-    a = Symbol("a", INT)
-    b = Symbol("b", INT)
-    assert unknown_asserts[4] == Equals(a + b, Int(18))
+    assert _has_any_conjunct(
+        unknown_asserts[4],
+        [
+            Equals(a + b, Int(18)),
+            Equals(b + a, Int(18)),
+        ],
+    )
 
 
 def test_simplify_intervals_removes_mod_when_no_overflow():

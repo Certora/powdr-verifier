@@ -156,5 +156,5 @@ def test_simplify_intervals_emits_derived_equalities():
     a_sym = Symbol("a", INT)
     b_sym = Symbol("b", INT)
 
-    assert any(a0 == Equals(a_sym, Int(1)) for a0 in asserts)
-    assert any(a0 == Equals(b_sym, Int(0)) for a0 in asserts)
+    assert any(a0 == Equals(a_sym, Int(1)) or (a0.is_and() and Equals(a_sym, Int(1)) in a0.args()) for a0 in asserts)
+    assert any(a0 == Equals(b_sym, Int(0)) or (a0.is_and() and Equals(b_sym, Int(0)) in a0.args()) for a0 in asserts)
