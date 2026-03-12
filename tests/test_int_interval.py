@@ -1,4 +1,4 @@
-from src.rewriter.interval_reasoner import IntInterval
+from src.simplify.intervals import IntInterval
 
 
 def test_top_and_const():
@@ -56,8 +56,8 @@ def test_scale():
     assert IntInterval(2, 5).scale(0) == IntInterval.const(0)
     assert IntInterval(2, 5).scale(3) == IntInterval(6, 15)
     assert IntInterval(2, 5).scale(-2) == IntInterval(-10, -4)
-    assert IntInterval(None, 5).scale(2) == IntInterval.top()
-    assert IntInterval(2, None).scale(-2) == IntInterval.top()
+    assert IntInterval(None, 5).scale(2) == IntInterval(None, 10)
+    assert IntInterval(2, None).scale(-2) == IntInterval(None, -4)
 
 
 def test_within_0_p():

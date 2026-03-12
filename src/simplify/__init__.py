@@ -1,7 +1,6 @@
 from ..utils.io import load_json
 from ..smt.utils import *
 from ..rewriter import rewrite
-from .intervals import IntervalICPEngine
 
 from .cvc5 import simplify_cvc5
 from .intervals import simplify_intervals

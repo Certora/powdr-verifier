@@ -28,4 +28,6 @@ def test_solve_eqs():
 
     eq = Equals(wrap_mod(a + (Int(-1) * b)), Int(0))
 
+    print(eq)
+    print(rewrite(eq))
     assert rewrite(eq) == Equals(a, b)
