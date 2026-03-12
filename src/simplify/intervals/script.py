@@ -8,6 +8,13 @@ def _has_bottom_domain(reasoner: IntervalReasoner) -> bool:
     return any(dom.is_bottom() for dom in reasoner.env.values())
 
 
+def _is_simple_atomic_bound(f: FNode) -> bool:
+    if not (f.is_le() or f.is_lt() or f.is_equals()):
+        return False
+    a, b = f.args()
+    return (a.is_int_constant() and b.is_symbol()) or (b.is_int_constant() and a.is_symbol())
+
+
 def simplify_intervals(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     """Run disjunctive interval propagation on all assertions."""
     assertions = [cmd.args[0] for cmd in smt_script if cmd.name == "assert"]
@@ -18,47 +25,33 @@ def simplify_intervals(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     reasoner.assume_all(assertions)
     inconsistent = _has_bottom_domain(reasoner)
 
-    free_vars = set()
     for cmd in smt_script:
         if cmd.name != "assert":
             continue
+        original = cmd.args[0]
+        retain = reasoner.must_retain_formula(original)
         if inconsistent:
             cmd.args[0] = Bool(False)
-        elif reasoner.must_retain_formula(cmd.args[0]):
-            # Keep source-level strengthening constraints explicit.
-            pass
+        elif retain:
+            # Keep source-level strengthening constraints explicit, but still
+            # run quantifier-bound injection and local rewrites.
+            cmd.args[0] = reasoner.simplify(
+                cmd.args[0],
+                prune=False,
+                inject_quantifier_bounds=True,
+            )
         else:
             cmd.args[0] = reasoner.simplify(
                 cmd.args[0],
                 prune=True,
                 inject_quantifier_bounds=True,
             )
-        free_vars.update(cmd.args[0].get_free_variables())
+        if (
+            not inconsistent
+            and not original.is_forall()
+            and not original.is_exists()
+            and (not retain or not _is_simple_atomic_bound(original))
+        ):
+            cmd.args[0] = reasoner.inject_root_bounds(cmd.args[0], only_tightened=True)
 
-    # Preserve discovered top-level range information even when source constraints simplify away.
-    existing_asserts = {cmd.args[0] for cmd in smt_script if cmd.name == "assert"}
-    derived_to_insert: list[FNode] = []
-    for derived in reasoner.derived_range_constraints(only_tightened=True):
-        if derived not in existing_asserts:
-            derived_to_insert.append(derived)
-            existing_asserts.add(derived)
-
-    if not derived_to_insert:
-        return smt_script
-
-    # Keep derived facts in the assertion block, right before satisfiability checks.
-    out = script.SmtLibScript()
-    inserted = False
-    for cmd in smt_script:
-        if not inserted and cmd.name in {"check-sat", "check-sat-assuming"}:
-            for derived in derived_to_insert:
-                out.add_command(script.SmtLibCommand(name="assert", args=[derived]))
-            inserted = True
-        out.add_command(cmd)
-
-    if not inserted:
-        for derived in derived_to_insert:
-            if derived.get_free_variables().issubset(free_vars):
-                out.add_command(script.SmtLibCommand(name="assert", args=[derived]))
-
-    return out
+    return smt_script

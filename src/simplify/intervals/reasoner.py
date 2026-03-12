@@ -569,6 +569,24 @@ class IntervalReasoner:
                 out.append(c)
         return out
 
+    def inject_root_bounds(self, f: FNode, *, only_tightened: bool = True) -> FNode:
+        """Conjoin inferred global bounds for integer vars appearing in ``f``."""
+        if not f.get_type().is_bool_type():
+            return f
+        tracked = self.tightened_symbols if only_tightened else set(self.env.keys())
+        free_int_vars = {v for v in f.get_free_variables() if v.get_type().is_int_type()}
+        symbols = free_int_vars if free_int_vars else tracked
+        bounds: list[FNode] = []
+        for sym in sorted(symbols, key=str):
+            if sym not in tracked:
+                continue
+            c = self._domain_constraint(sym, self.get_domain(sym))
+            if c is not None:
+                bounds.append(c)
+        if not bounds:
+            return f
+        return And(*(bounds + [f])).simplify()
+
     def _inject_quantifier_bounds(self, n: FNode, inherited: Dict[FNode, IntDomain], max_iters: int) -> FNode:
         if n.is_forall() or n.is_exists():
             qvars = list(n.quantifier_vars())
@@ -611,7 +629,38 @@ class IntervalReasoner:
             return Exists(qvars, injected_body) if n.is_exists() else ForAll(qvars, injected_body)
 
         if n.is_and():
-            return And(*[self._inject_quantifier_bounds(a, inherited, max_iters) for a in n.args()])
+            rewritten_args = [self._inject_quantifier_bounds(a, inherited, max_iters) for a in n.args()]
+
+            # Local conjunction reasoning: if the conjunction itself forces
+            # singleton integer symbols, make these facts explicit.
+            # This is sound regardless of polarity because we only add facts
+            # implied by the conjunction itself (no inherited seeding here).
+            local = IntervalReasoner(modulus=self.p)
+            local.assume_all(rewritten_args, max_iters=max_iters)
+            present = set(rewritten_args)
+            for sym in sorted({v for v in n.get_free_variables() if v.get_type().is_int_type()}, key=str):
+                val = local.get_domain(sym).singleton_value()
+                if val is None:
+                    continue
+                eq = Equals(sym, Int(val))
+                if eq not in present:
+                    rewritten_args.append(eq)
+                    present.add(eq)
+
+            # Substitute singleton integer symbols across siblings so inferred
+            # equalities are immediately exploited by remaining constraints.
+            substitutions = {
+                sym: Int(val)
+                for sym in {v for v in n.get_free_variables() if v.get_type().is_int_type()}
+                if (val := local.get_domain(sym).singleton_value()) is not None
+            }
+            if substitutions:
+                rewritten_args = [a.substitute(substitutions).simplify() for a in rewritten_args]
+
+            # Re-simplify in the local fixed-point environment so newly
+            # inferred singleton equalities prune/eliminate sibling constraints.
+            local.assume_all(rewritten_args, max_iters=max_iters)
+            return local.simplify(And(*rewritten_args), prune=True, inject_quantifier_bounds=False)
         if n.is_or():
             return Or(*[self._inject_quantifier_bounds(a, inherited, max_iters) for a in n.args()])
         if n.is_implies():

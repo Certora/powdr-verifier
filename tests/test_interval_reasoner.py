@@ -10,6 +10,10 @@ def _has_mod(f: FNode) -> bool:
     return any(_has_mod(a) for a in f.args())
 
 
+def _is_or_has_conjunct(f: FNode, expected: FNode) -> bool:
+    return f == expected or (f.is_and() and expected in f.args())
+
+
 def _asserts_from_script(smt: str) -> list[FNode]:
     parser = SmtLibParser()
     smt_script = parser.get_script(StringIO(dedent(smt).strip() + "\n"))
@@ -93,7 +97,7 @@ def test_bound_deriving_formula_is_not_eliminated():
         """
     )
     assert asserts[0] == bound
-    assert asserts[1].is_true()
+    assert _is_or_has_conjunct(asserts[1], bound)
 
 
 def test_field_bounds_0_and_p_are_not_eliminated():
@@ -127,8 +131,8 @@ def test_simplify_intervals_can_append_derived_ranges():
         (check-sat)
         """
     )
-    assert asserts[2].is_true()
-    assert any(c == expected_range for c in asserts)
+    assert _is_or_has_conjunct(asserts[2], expected_range)
+    assert any(_is_or_has_conjunct(c, expected_range) for c in asserts)
 
 
 def test_fixed_point_opcode_flags_sum_forces_all_zero():
@@ -151,10 +155,10 @@ def test_fixed_point_opcode_flags_sum_forces_all_zero():
         (check-sat)
         """
     )
-    assert any(a == Equals(sub, Int(0)) for a in asserts)
-    assert any(a == Equals(xor, Int(0)) for a in asserts)
-    assert any(a == Equals(orf, Int(0)) for a in asserts)
-    assert any(a == Equals(andf, Int(0)) for a in asserts)
+    assert any(_is_or_has_conjunct(a, Equals(sub, Int(0))) for a in asserts)
+    assert any(_is_or_has_conjunct(a, Equals(xor, Int(0))) for a in asserts)
+    assert any(_is_or_has_conjunct(a, Equals(orf, Int(0))) for a in asserts)
+    assert any(_is_or_has_conjunct(a, Equals(andf, Int(0))) for a in asserts)
 
 
 def test_fixed_point_requires_mod_elimination_before_affine_sum():
@@ -178,10 +182,10 @@ def test_fixed_point_requires_mod_elimination_before_affine_sum():
         (check-sat)
         """
     )
-    assert any(a == Equals(sub, Int(0)) for a in asserts)
-    assert any(a == Equals(xor, Int(0)) for a in asserts)
-    assert any(a == Equals(orf, Int(0)) for a in asserts)
-    assert any(a == Equals(andf, Int(0)) for a in asserts)
+    assert any(_is_or_has_conjunct(a, Equals(sub, Int(0))) for a in asserts)
+    assert any(_is_or_has_conjunct(a, Equals(xor, Int(0))) for a in asserts)
+    assert any(_is_or_has_conjunct(a, Equals(orf, Int(0))) for a in asserts)
+    assert any(_is_or_has_conjunct(a, Equals(andf, Int(0))) for a in asserts)
 
 
 def test_mod_zero_rewrites_to_unique_nonzero_multiple():
@@ -289,13 +293,11 @@ def test_forall_quantifier_ignores_shadowed_outer_bounds():
         (check-sat)
         """
     )
-    print(asserts)
     out = asserts[1]
     assert out.is_forall()
     injected = out.arg(0)
     assert not injected.is_implies()
     assert injected == body or (injected.is_and() and body in injected.args())
-    assert False
 
 
 def test_forall_quantifier_uses_implication_for_nonshadowed_outer_bounds():
@@ -335,3 +337,57 @@ def test_quantifier_injection_only_uses_variables_present_in_body():
     )
     out = asserts[1]
     assert y not in out.get_free_variables()
+
+
+def test_quantifier_rewrites_inner_conjunction_with_singleton_flags():
+    p = int(ARGS().field_type.value)
+    asserts = _asserts_from_script(
+        f"""
+        (set-logic ALL)
+        (assert
+          (forall ((flag_b Int) (flag_c Int) (flag_d Int))
+            (not
+              (and
+                (or (= flag_b 0) (= flag_b 1))
+                (or (= flag_c 0) (= flag_c 1))
+                (or (= flag_d 0) (= flag_d 1))
+                (= (mod (+ flag_b (* 2 flag_c) (* 3 flag_d)) {p}) 0)))))
+        (check-sat)
+        """
+    )
+    out = asserts[0]
+    assert out.is_forall()
+    body = out.arg(0)
+    # Local fixed-point simplification can discharge the conjunction entirely.
+    assert body.is_false() or (body.is_not() and body.arg(0).is_true())
+
+
+def test_quantifier_handling():
+    x = Symbol("x", INT)
+    y = Symbol("y", INT)
+    asserts = _asserts_from_script(
+        """
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (assert (= x 0))
+        (assert
+            (forall ((y Int))
+                (or
+                    (= x 1)
+                    (= x 2)
+                    (and (<= 0 y) (<= y 10))
+                )
+            )
+        )
+        (check-sat)
+        """
+    )
+    out = asserts[1]
+    assert out.is_forall()
+    injected = out.arg(0)
+    assert injected.is_implies()
+    assert injected.arg(0) == Equals(x, Int(0))
+    consequence = injected.arg(1)
+    assert consequence.is_and()
+    assert And(Equals(x, Int(0)), And(LE(Int(0), y), LE(y, Int(10)))) in consequence.args()
+    assert Or(Equals(x, Int(1)), Equals(x, Int(2)), Bool(True)) in consequence.args()
