@@ -9,7 +9,7 @@ from ..smt.utils import *
 logger = logging.getLogger(__name__)
 
 REWRITES = {
-    operators.EQUALS: [rewrite_z3simplify, rewrite_eqmod],
+    operators.EQUALS: [rewrite_eqmod], # rewrite_z3simplify
     operators.MOD: [rewrite_mod],
 }
 REWRITES_SYMPY = {
