@@ -125,6 +125,16 @@ class IntervalReasoner:
             if True in vals:
                 return True
             if None in vals:
+                # If all disjuncts are negations, check whether the conjunction
+                # of their inner formulas is inconsistent. In that case:
+                #   (not a1) or ... or (not an)  is a tautology.
+                not_args = [a.arg(0) for a in f.args() if a.is_not()]
+                if len(not_args) == len(f.args()) and len(not_args) >= 2:
+                    local = IntervalReasoner(modulus=self.p)
+                    local.env = dict(state)
+                    local.assume_all(not_args, max_iters=6)
+                    if local._state_inconsistent(local.env):
+                        return True
                 return None
             return False
         if f.is_implies():
@@ -629,7 +639,8 @@ class IntervalReasoner:
             return Exists(qvars, injected_body) if n.is_exists() else ForAll(qvars, injected_body)
 
         if n.is_and():
-            rewritten_args = [self._inject_quantifier_bounds(a, inherited, max_iters) for a in n.args()]
+            base_args = [self._inject_quantifier_bounds(a, inherited, max_iters) for a in n.args()]
+            rewritten_args = list(base_args)
 
             # Local conjunction reasoning: if the conjunction itself forces
             # singleton integer symbols, make these facts explicit.
@@ -655,13 +666,18 @@ class IntervalReasoner:
                 if (val := local.get_domain(sym).singleton_value()) is not None
             }
             if substitutions:
-                rewritten_args = [a.substitute(substitutions).simplify() for a in rewritten_args]
+                substituted_base = [a.substitute(substitutions).simplify() for a in base_args]
+                derived_eqs = rewritten_args[len(base_args):]
+                rewritten_args = substituted_base + derived_eqs
 
-            # Re-simplify in the local fixed-point environment so newly
-            # inferred singleton equalities prune/eliminate sibling constraints.
-            local.assume_all(rewritten_args, max_iters=max_iters)
-            return local.simplify(And(*rewritten_args), prune=True, inject_quantifier_bounds=False)
+            return And(*rewritten_args).simplify()
         if n.is_or():
+            # Make negated-disjunction structure explicit so conjunction-local
+            # reasoning can infer facts from all inner constraints together.
+            if all(a.is_not() for a in n.args()):
+                inner = And(*[a.arg(0) for a in n.args()])
+                rewritten_inner = self._inject_quantifier_bounds(inner, inherited, max_iters)
+                return Not(rewritten_inner).simplify()
             return Or(*[self._inject_quantifier_bounds(a, inherited, max_iters) for a in n.args()])
         if n.is_implies():
             a, b = n.args()
