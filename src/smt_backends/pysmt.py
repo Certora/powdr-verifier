@@ -423,6 +423,7 @@ def convert_to_smt_script(f: FNode) -> script.SmtLibScript:
     #smtlib.commands.insert(4, script.SmtLibCommand(name='set-option', args=[':solver.proof.log', 'proof-log.smt2']))
     #smtlib.commands.insert(5, script.SmtLibCommand(name='set-option', args=[':sat.euf', 'true']))
     # get model and unsat cores
+    #smtlib.add_command(script.SmtLibCommand(name='get-info', args=[':reason-unknown']))
     smtlib.add_command(script.SmtLibCommand(name='get-model', args=[]))
     smtlib.add_command(script.SmtLibCommand(name='get-unsat-core', args=[]))
     return smtlib
