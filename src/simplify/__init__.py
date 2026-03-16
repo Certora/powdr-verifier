@@ -5,6 +5,7 @@ from ..rewriter import rewrite
 from .cvc5 import simplify_cvc5
 from .intervals import simplify_intervals
 from .z3 import simplify_z3
+from .andify import simplify_andify
 
 def simplify_model(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     assert ARGS().with_model is not None

@@ -4,7 +4,7 @@ from .smt.utils import *
 from .utils.args import ARGS
 from .utils.io import open_file
 
-from .simplify import check_isqf, simplify_cvc5, simplify_intervals, simplify_z3, simplify_rewrite, simplify_model
+from .simplify import check_isqf, simplify_cvc5, simplify_intervals, simplify_z3, simplify_rewrite, simplify_model, simplify_andify
 
 
 def simplify():
@@ -19,6 +19,8 @@ def simplify():
         logging.info(t)
         t,*args = t.split("-", 1)
         match t:
+            case "andify":
+                smt_script = simplify_andify(smt_script)
             case "rewrite":
                 smt_script = simplify_rewrite(smt_script)
             case "intervals":
@@ -33,7 +35,7 @@ def simplify():
                 if not check_isqf(smt_script):
                     logging.error("formula is not quantifier-free")
             case _:
-                logging.info(f"ignoring unknown tactic: {t}")
+                logging.error(f"ignoring unknown tactic: {t}")
 
     with open_file(ARGS().output, "w") as out:
         logging.info(f"dumping formula to {out.name}")
