@@ -158,10 +158,11 @@ def run_verify(*pairs):
         logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
         first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
         __run_main("verify", a, b, first)
-        __do_simplify(first.with_suffix(".completeness.smt2"), first.with_suffix(".completeness.rewrite.smt2"), "rewrite:intervals:z3:isqf:rewrite")
-        __do_simplify(first.with_suffix(".soundness.smt2"), first.with_suffix(".soundness.rewrite.smt2"), "rewrite:intervals:z3:isqf:rewrite")
-        __run_main("check", first.with_suffix(".completeness.rewrite.smt2"), "--print-model")
-        __run_main("check", first.with_suffix(".soundness.rewrite.smt2"), "--print-model")
+        for file in sorted(a.parent.glob(f"{first.stem}*.smt2")):
+            if file.stem.endswith(".rewrite"): continue
+            logging.warning(f"solving {file.relative_to(Path.cwd())}")
+            __do_simplify(file, file.with_suffix(".rewrite.smt2"), "rewrite:intervals:z3:isqf:rewrite")
+            __run_main("check", file.with_suffix(".rewrite.smt2"), "--print-model")
 
 
 if __name__ == '__main__':
