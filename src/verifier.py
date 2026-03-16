@@ -137,7 +137,7 @@ class ModelMapBuilder:
         return frozenset(self.result.keys())
 
 
-def encoding(before, after, qvars, builder, input_relation, output_relation):
+def encoding(before, after, qvars, builder, input_relation, output_relation, additional_asserts=[]):
     if ARGS().elim_with_skolem:
         res = And(
             *before.constraints,
@@ -153,6 +153,7 @@ def encoding(before, after, qvars, builder, input_relation, output_relation):
                 )
             ),
             *before.axioms,
+            *additional_asserts,
         )
     else:
         res = And(
@@ -172,6 +173,7 @@ def encoding(before, after, qvars, builder, input_relation, output_relation):
                 )
             ),
             *before.axioms,
+            *additional_asserts,
         )
     if ARGS().elim_with_model:
         model = load_json(ARGS().elim_with_model, "model")
@@ -183,6 +185,16 @@ def encoding(before, after, qvars, builder, input_relation, output_relation):
                 subs[Symbol(name, INT)] = Int(value)
         res = res.substitute(subs)
     return res
+
+def get_is_valid(vars: frozenset[FNode], prefix: str) -> FNode | None:
+    match [v for v in vars if v.symbol_name().startswith(f"{prefix}-is_valid@")]:
+        case []:
+            return None
+        case [is_valid]:
+            return is_valid
+        case _:
+            logging.warning("multiple is_valid variables found, this is not supported")
+            return None
 
 def verify():
     """Verify our versions of equivalence."""
@@ -239,19 +251,73 @@ def verify():
             logging.info(f"dumping completeness check to {dump.name}")
             smtlib = convert_to_smt_script(completeness)
             pretty_print_smtlib(smtlib, dump)
+        
+        is_valid_before = get_is_valid(var1, "before")
+        is_valid_after = get_is_valid(var2, "after")
 
-        with open_file(ARGS().output, "w", ".soundness.smt2") as dump:
-            dump.write(";; soundness check\n")
-            backward_builder = ModelMapBuilder(
-                var2 - globals - auxiliaries,
-                var1 - globals - auxiliaries,
-                after_smt,
-                before_smt,
-                eliminations,
-            )
-            backward_builder.build(before_conv)
-            soundness = encoding(after_smt, before_smt, var1 - globals, backward_builder, input_relation, output_relation)
+        if is_valid_before is None and is_valid_after is not None:
+            logging.warning("is_valid was introduced, perform special soundness check")
+            with open_file(ARGS().output, "w", ".soundness.smt2") as dump:
+                dump.write(";; soundness check\n")
+                backward_builder = ModelMapBuilder(
+                    var2 - globals - auxiliaries,
+                    var1 - globals - auxiliaries,
+                    after_smt,
+                    before_smt,
+                    eliminations,
+                )
+                backward_builder.build(before_conv)
+                soundness = encoding(after_smt, before_smt, var1 - globals, backward_builder, input_relation, output_relation, additional_asserts=[Equals(is_valid_after, Int(1))])
 
-            logging.info(f"dumping soundness check to {dump.name}")
-            smtlib = convert_to_smt_script(soundness)
-            pretty_print_smtlib(smtlib, dump)
+                logging.info(f"dumping soundness check to {dump.name}")
+                smtlib = convert_to_smt_script(soundness)
+                pretty_print_smtlib(smtlib, dump)
+
+            with open_file(ARGS().output, "w", ".soundness.zero-is-model.smt2") as dump:
+                dump.write(";; check that all zero is a model\n")
+                logging.info(f"dumping zero is model check to {dump.name}")
+                intvars = [ v for v in (var2 - auxiliaries) if v.get_type() == INT ]
+                intvars = sorted(intvars, key=lambda x: x.symbol_name())
+                smtlib = convert_to_smt_script(
+                    And(
+                        *after_smt.constraints,
+                        *after_smt.axioms,
+                        with_comment(
+                            And(*[ Equals(v, Int(0)) for v in intvars ]),
+                            "ZERO MODEL"
+                        )
+                    )
+                )
+                pretty_print_smtlib(smtlib, dump)
+            
+            with open_file(ARGS().output, "w", ".soundness.invalid-all-mult-zero.smt2") as dump:
+                dump.write(";; check that all is_valid zero makes all multiplicities zero\n")
+                logging.info(f"dumping invalid makes all multiplicities zero check to {dump.name}")
+
+                multiplicities = []
+                for encoder in after_conv.bus_interaction_encoder.encoders:
+                    for interaction in encoder._interactions:
+                        multiplicities.append(interaction.mult)
+                smtlib = convert_to_smt_script(
+                    And(
+                        Equals(is_valid_after, Int(0)),
+                        Or(*[Not(Equals(mult, Int(0))) for mult in multiplicities ])
+                    )
+                )
+                pretty_print_smtlib(smtlib, dump)
+        else:
+            with open_file(ARGS().output, "w", ".soundness.smt2") as dump:
+                dump.write(";; soundness check\n")
+                backward_builder = ModelMapBuilder(
+                    var2 - globals - auxiliaries,
+                    var1 - globals - auxiliaries,
+                    after_smt,
+                    before_smt,
+                    eliminations,
+                )
+                backward_builder.build(before_conv)
+                soundness = encoding(after_smt, before_smt, var1 - globals, backward_builder, input_relation, output_relation)
+
+                logging.info(f"dumping soundness check to {dump.name}")
+                smtlib = convert_to_smt_script(soundness)
+                pretty_print_smtlib(smtlib, dump)
