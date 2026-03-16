@@ -50,6 +50,118 @@ def test_prime_field_range_eliminates_redundant_mod():
     assert out == x
 
 
+(forall ((a Int) (x Int) (y Int) (z Int))
+(not
+    (and
+        (<= 0 a)
+        (<= 0 x)
+        (<= 0 y)
+        (<= 0 z)
+        (< a 2013265921)
+        (< x 2013265921)
+        (< y 2013265921)
+        (< z 2013265921)
+        (and
+            (or (= x 1) (= x 0))
+            (or (= y 1) (= y 0))
+            (or (= z 1) (= z 0))
+            (=
+                (mod
+                    (+
+                        x
+                        (* 2 y)
+                        (* 3 z)
+                    )
+                    2013265921
+                )
+                0
+            )
+        )
+        (=
+            (mod
+                (+ a x y z (- 1))
+                2013265921
+            )
+            0
+        )
+    )
+)
+)
+
+
+def test_simplify_intervals_or_negations():
+    parser = SmtLibParser()
+    script = parser.get_script(
+        StringIO(
+            dedent(
+                """
+                (set-logic ALL)
+                (assert
+                    (forall ((a Int) (x Int) (y Int) (z Int))
+                        (or
+                            (not (<= 0 a))
+                            (not (<= 0 x))
+                            (not (<= 0 y))
+                            (not (<= 0 z))
+                            (<= 2013265921 a)
+                            (<= 2013265921 x)
+                            (<= 2013265921 y)
+                            (<= 2013265921 z)
+                            (or
+                                (not (or (= x 1) (= x 0)))
+                                (not (or (= y 1) (= y 0)))
+                                (not (or (= z 1) (= z 0)))
+                                (not
+                                    (=
+                                        (mod
+                                            (+
+                                                x
+                                                (* 2 y)
+                                                (* 3 z)
+                                            )
+                                            2013265921
+                                        )
+                                        0
+                                    )
+                                )
+                            )
+                            (not 
+                                (=
+                                    (mod
+                                        (+ a x y z (- 1))
+                                        2013265921
+                                    )
+                                    0
+                                )
+                            )
+                        )
+                    )
+                )
+                (check-sat)
+                """
+            ).strip()
+            + "\n"
+        )
+    )
+
+    simplified = simplify_intervals(script)
+    print(simplified)
+    asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
+    assert len(asserts) == 1
+
+    x = Symbol("x", INT)
+    y = Symbol("y", INT)
+    z = Symbol("z", INT)
+    out = asserts[0]
+    print(out)
+    assert out.is_not()
+    inner = out.arg(0)
+    assert inner.is_and()
+    inner_args = set(inner.args())
+    assert Equals(x, Int(0)) in inner_args
+    assert Equals(y, Int(0)) in inner_args
+    assert Equals(z, Int(0)) in inner_args
+
 def test_simplify_intervals_marks_obvious_inconsistency():
     parser = SmtLibParser()
     script = parser.get_script(

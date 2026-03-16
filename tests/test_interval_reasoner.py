@@ -358,8 +358,16 @@ def test_quantifier_rewrites_inner_conjunction_with_singleton_flags():
     out = asserts[0]
     assert out.is_forall()
     body = out.arg(0)
-    # Local fixed-point simplification can discharge the conjunction entirely.
-    assert body.is_false() or (body.is_not() and body.arg(0).is_true())
+    b = Symbol("flag_b", INT)
+    c = Symbol("flag_c", INT)
+    d = Symbol("flag_d", INT)
+    assert body.is_not()
+    inner = body.arg(0)
+    assert inner.is_and()
+    inner_args = set(inner.args())
+    assert Equals(b, Int(0)) in inner_args
+    assert Equals(c, Int(0)) in inner_args
+    assert Equals(d, Int(0)) in inner_args
 
 
 def test_quantifier_handling():
@@ -390,4 +398,4 @@ def test_quantifier_handling():
     consequence = injected.arg(1)
     assert consequence.is_and()
     assert And(Equals(x, Int(0)), And(LE(Int(0), y), LE(y, Int(10)))) in consequence.args()
-    assert Or(Equals(x, Int(1)), Equals(x, Int(2)), Bool(True)) in consequence.args()
+    assert Or(Equals(x, Int(1)), Equals(x, Int(2)), And(LE(Int(0), y), LE(y, Int(10)))) in consequence.args()
