@@ -125,7 +125,9 @@ class OpenVMBusInteractionEncoder(InteractionEncoder):
             str(OpenVMBusInteraction.MEMORY): "Memory",
             str(OpenVMBusInteraction.PC_LOOKUP): "PcLookup",
             str(OpenVMBusInteraction.VARIABLE_RANGE_CHECKER): {"Other": "VariableRangeChecker"},
-            str(OpenVMBusInteraction.TUPLE_RANGE_CHECKER): {"Other": "TupleRangeChecker"},
+            str(OpenVMBusInteraction.TUPLE_RANGE_CHECKER): {"Other":
+                {"TupleRangeChecker": [self.tuple_range_checker.MAX_0, self.tuple_range_checker.MAX_1]}
+            },
             str(OpenVMBusInteraction.BITWISE_LOOKUP): {"Other": "BitwiseLookup"},
         }
 
