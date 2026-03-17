@@ -1,4 +1,5 @@
 import argparse
+import functools
 import itertools
 import logging
 import shutil
@@ -71,6 +72,7 @@ def parse_args():
 
     parser.add_argument('command', choices=[
         'powdr',
+        'powdr-guest',
         'trace',
         'diff',
         'evaluate',
@@ -96,27 +98,47 @@ def __do_simplify(input, output, tactic="rewrite:intervals:cvc5:rewrite:interval
     logging.info(f"simplifying {input.relative_to(Path.cwd())}")
     return __run_main("simplify", input, tactic, output)
 
-def run_powdr(test):
-    dir = DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True) / test
-    patch = None
-    if _ARGS.with_patch is not None:
-        patch = _ARGS.with_patch.resolve()
-    try:
-        if patch is not None:
-            logging.info(f"applying {patch}")
-            subprocess.run(["git", "apply", patch], cwd=POWDR_DIR, check=True)
-            dir = dir.with_name(f"{dir.name}-{patch.stem}")
-        cmd = [
-            f"APC_EXPORT_PATH={dir}",
-            "APC_EXPORT_LEVEL=3",
-            f"cargo test {test} -- --no-capture --exact",
-        ]
-        logging.warning(f"running {' '.join(cmd)}")
-        subprocess.run(" ".join(cmd), shell=True, cwd=POWDR_DIR, check=True)
-    finally:
-        if patch is not None:
-            logging.info(f"undoing {patch}")
-            subprocess.run(["git", "apply", "-R", patch], cwd=POWDR_DIR, check=True)
+def with_patch(func):
+    @functools.wraps(func)
+    def wrapped(*args, **kwargs):
+        patch = None
+        if _ARGS.with_patch is not None:
+            patch = _ARGS.with_patch.resolve()
+        
+        try:
+            if patch is not None:
+                logging.info(f"applying {patch}")
+                subprocess.run(["git", "apply", patch], cwd=POWDR_DIR, check=True)
+        
+            return func(*args, **kwargs, dirsuffix = f"-{patch.stem}" if patch is not None else "")
+        finally:
+            if patch is not None:
+                logging.info(f"undoing {patch}")
+                subprocess.run(["git", "apply", "-R", patch], cwd=POWDR_DIR, check=True)
+
+    return wrapped
+
+@with_patch
+def run_powdr(test, dirsuffix = ""):
+    dir = DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True) / f"{test}{dirsuffix}"
+    cmd = [
+        f"APC_EXPORT_PATH={dir}",
+        "APC_EXPORT_LEVEL=3",
+        f"cargo test {test} -- --no-capture --exact",
+    ]
+    logging.warning(f"running {' '.join(cmd)}")
+    subprocess.run(" ".join(cmd), shell=True, cwd=POWDR_DIR, check=True)
+
+@with_patch
+def run_powdr_guest(test, dirsuffix = ""):
+    dir = DATA_DIR.relative_to(POWDR_DIR, walk_up=True) / f"{test}{dirsuffix}"
+    cmd = [
+        f"APC_EXPORT_PATH={dir}",
+        "APC_EXPORT_LEVEL=3",
+        f"cargo run --bin powdr_openvm_riscv -r compile {test} --input 1 --autoprecompiles 1",
+    ]
+    logging.warning(f"running {' '.join(cmd)}")
+    subprocess.run(" ".join(cmd), shell=True, cwd=POWDR_DIR, check=True)
 
 def run_trace(*files):
     for f in files:
@@ -173,6 +195,11 @@ if __name__ == '__main__':
             if args.clean:
                 shutil.rmtree(DATA_DIR / args.test)
             run_powdr(args.test)
+            exit(0)
+        case 'powdr-guest':
+            if args.clean:
+                shutil.rmtree(DATA_DIR / args.test)
+            run_powdr_guest(args.test)
             exit(0)
 
     files = sorted((DATA_DIR / args.test).glob("apc_candidate_0_[0-9]*.json"))
