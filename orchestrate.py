@@ -1,11 +1,14 @@
 import argparse
+from collections import defaultdict
 import functools
-import itertools
 import logging
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+from src.utils.utils import s2range
 
 DATA_DIR = Path.cwd() / "data"
 POWDR_DIR = Path.cwd() / "powdr"
@@ -19,46 +22,39 @@ assert VERIFIER_DIR.exists()
 _ARGS = None
 PYTHON = sys.executable
 
+def load_files_by_block(args):
+    files = defaultdict(dict)
+    __FILENAMERE = re.compile("apc_candidate_(\\d+)_(\\d+)(.*)\\.json")
+    for file in (DATA_DIR / args.test).glob("apc_candidate_*.json"):
+        if m := __FILENAMERE.match(file.name):
+            block = int(m.group(1))
+            if args.blocks is None or block in args.blocks:
+                step = int(m.group(2))
+                assert step not in files[block]
+                files[block][step] = file
+                if "eliminations" not in files[block]:
+                    tmp = DATA_DIR / args.test / f"apc_candidate_{block}_substitutions.json"
+                    if tmp.exists():
+                        files[block]["eliminations"] = tmp
+    
+    return files
 
-def parse_range(ls, selectors):
-    if not selectors:
-        yield from ls
 
-    def int_or_None(s):
-        return None if s == "" else int(s)
+__FILENAMERE = re.compile("apc_candidate_(\\d+)_(\\d+)(.*)\\.json")
+def parse_range(files: dict, steps):
+    for id in sorted([k for k in files.keys() if isinstance(k, int)]):
+        if id in steps:
+            yield files[id]
 
-    for selector in selectors:
-        match selector.split(":", maxsplit=1):
-            case [start, stop]:
-                yield from ls[int_or_None(start):int_or_None(stop)]
-            case [index]:
-                yield ls[int(index)]
-            case _:
-                raise ValueError(f"invalid slice: {selector}")
 
-def parse_paired_range(ls, selectors):
-    if not selectors:
-        yield ls[0], ls[-1]
+def parse_paired_range(files: dict, steps):
+    ids = sorted([i for i in files.keys() if isinstance(i, int)])
+    if steps is None:
+        return (files[ids[0]], files[ids[-1]])
 
-    def start_int(s):
-        return None if s == "" else int(s)
-    def stop_int(s):
-        return None if s == "" else int(s) + 1
-
-    for selector in selectors:
-        match selector.split(":", maxsplit=1):
-            case [start, stop]:
-                yield from itertools.pairwise(ls[start_int(start):stop_int(stop)])
-            case [index]:
-                match index.split("/", maxsplit=1):
-                    case [first, second]:
-                        yield (ls[int(first)], ls[int(second)])
-                    case [id]:
-                        yield (ls[int(id)], ls[int(id)+1])
-                    case _:
-                        raise ValueError(f"invalid slice: {selector}")
-            case _:
-                raise ValueError(f"invalid slice: {selector}")
+    for k in range(max(steps.start, min(*ids)), min(steps.stop, max(*ids))):
+        if k in files and k+1 in files:
+            yield (files[k], files[k+1])
 
 
 def __split_args_for_main(args):
@@ -87,11 +83,28 @@ def parse_args():
     global _ARGS
     _ARGS, leftover = parser.parse_known_args()
     _ARGS._main_args, _ARGS._sub_args = __split_args_for_main(leftover)
+    _ARGS._additional_args = []
+
+
+    _ARGS.blocks = None
+    _ARGS.steps = None
+    match _ARGS.k:
+        case []:
+            pass
+        case [steps]:
+            pass
+            _ARGS.steps = s2range(steps)
+        case [blocks, steps]:
+            _ARGS.blocks = s2range(blocks)
+            _ARGS.steps = s2range(steps)
+        case _:
+            raise ValueError(f"invalid k: {_ARGS.k}")
+
     return _ARGS
 
 
 def __run_main(command, *args):
-    cmd = [PYTHON, VERIFIER_DIR / "main.py", *_ARGS._main_args, command, *args, *_ARGS._sub_args]
+    cmd = [PYTHON, VERIFIER_DIR / "main.py", *_ARGS._additional_args, *_ARGS._main_args, command, *args, *_ARGS._sub_args]
     subprocess.run(cmd, check=True)
 
 def __do_simplify(input, output, tactic="rewrite:intervals:cvc5:rewrite:intervals:rewrite"):
@@ -201,34 +214,35 @@ if __name__ == '__main__':
                 shutil.rmtree(DATA_DIR / args.test)
             run_powdr_guest(args.test)
             exit(0)
+    
+    all_files = load_files_by_block(args)
 
-    files = sorted((DATA_DIR / args.test).glob("apc_candidate_0_[0-9]*.json"))
-    eliminations = DATA_DIR / args.test / "apc_candidate_0_substitutions.json"
-
-    if files:
-        args._main_args += ["--base-dump", files[0]]
-    if eliminations.exists():
-        args._main_args += ["--eliminations", eliminations]
-
-    if not files:
+    if not all_files:
         logging.warning(f"no files found for {args.test}, did you run powdr?")
 
     try:
-        match args.command:
-            case 'trace':
-                run_trace(*parse_range(files, args.k))
-            case 'diff':
-                run_diff(*parse_paired_range(files, args.k))
-            case 'evaluate':
-                run_evaluate(files[0], *parse_range(files, args.k))
-            case 'eval':
-                run_eval(*parse_range(files, args.k))
-            case 'verify':
-                run_verify(*parse_paired_range(files, args.k))
+        for block,files in sorted(all_files.items()):
+            args._additional_args = []
+            if 0 in files:
+                args._additional_args += ["--base-dump", files[0]]
+            if "eliminations" in files:
+                args._additional_args += ["--eliminations", files["eliminations"]]
 
-            case _:
-                logging.error(f"unknown command: {args.command}")
-                exit(1)
+            match args.command:
+                case 'trace':
+                    run_trace(*parse_range(files, args.steps))
+                case 'diff':
+                    run_diff(*parse_paired_range(files, args.steps))
+                case 'evaluate':
+                    run_evaluate(files[0], *parse_range(files, args.steps))
+                case 'eval':
+                    run_eval(*parse_range(files, args.steps))
+                case 'verify':
+                    run_verify(*parse_paired_range(files, args.steps))
+
+                case _:
+                    logging.error(f"unknown command: {args.command}")
+                    exit(1)
     
     except subprocess.CalledProcessError:
         pass
