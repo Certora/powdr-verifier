@@ -302,6 +302,7 @@ def verify():
                 smtlib = convert_to_smt_script(
                     And(
                         Equals(is_valid_after, Int(0)),
+                        *after_smt.constraints,
                         Or(*[Not(Equals(mult, Int(0))) for mult in multiplicities ])
                     ),
                     status='unsat'
