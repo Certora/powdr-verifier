@@ -15,13 +15,27 @@ def check():
         logic=AUFNIA, name=ARGS().solver, solver_options={":timeout": 60000}
     ) as s:
         s.set_logic = lambda l: None
+        expected_result = None
         try:
             for cmd in smt_script:
+                if cmd.name == "set-info" and cmd.args[0] == ':status':
+                    match cmd.args[1]:
+                        case "sat":
+                            expected_result = True
+                        case "unsat":
+                            expected_result = False
+                        case _:
+                            expected_result = None
+                    continue
                 res = script.evaluate_command(cmd, s)
                 if cmd.name == "check-sat":
+                    correct = expected_result is not None and res == expected_result
+                    if correct:
+                        logging.warning("verified")
                     match res:
                         case True:
-                            logging.warning("SAT")
+                            if not correct:
+                                logging.warning("SAT but expected UNSAT")
                             model = to_nice_model(s.get_model())
                             if ARGS().print_model:
                                 print(json.dumps(model, indent=4))
@@ -29,13 +43,14 @@ def check():
                                 logging.info(f"dumping model to {ARGS().dump_model}")
                                 with open(ARGS().dump_model, "w") as f:
                                     json.dump(model, f, indent=4)
-                            return True, model
+                            return True
                         case False:
-                            logging.warning("UNSAT")
-                            return False, None
+                            if not correct:
+                                logging.warning("UNSAT but expected SAT")
+                            return False
                         case _:
                             logging.warning("UNKNOWN")
-                            return None, None
+                            return None
         except SolverReturnedUnknownResultError:
             logging.warning("UNKNOWN")
-            return None, None
+            return None
