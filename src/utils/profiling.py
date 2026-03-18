@@ -29,6 +29,18 @@ def simple_profile(func):
 
     return wrapper_timer
 
+class Profile:
+    def __init__(self, name: str):
+        self.name = name
+
+    def __enter__(self):
+        self.start_time = time.perf_counter_ns()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        took = (time.perf_counter_ns() - self.start_time) / 1000000000
+        logging.warning(f"{self.name} took {took:.3f} s")
+
 
 def print_profile():
     """Print the profile of the functions"""

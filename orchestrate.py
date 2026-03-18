@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from src.utils.utils import s2range
+from src.utils.profiling import Profile
 
 DATA_DIR = Path.cwd() / "data"
 POWDR_DIR = Path.cwd() / "powdr"
@@ -192,12 +193,14 @@ def run_verify(*pairs):
     for a,b in pairs:
         logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
         first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
-        __run_main("verify", a, b, first)
+        with Profile(f"verify {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}"):
+            __run_main("verify", a, b, first)
         for file in sorted(a.parent.glob(f"{first.stem}*.smt2")):
             if file.stem.endswith(".rewrite"): continue
-            logging.warning(f"solving {file.relative_to(Path.cwd())}")
-            __do_simplify(file, file.with_suffix(".rewrite.smt2"), "rewrite:intervals:z3:isqf:rewrite")
-            __run_main("check", file.with_suffix(".rewrite.smt2"), "--print-model")
+            with Profile(f"simplify {file.relative_to(Path.cwd())}"):
+                    __do_simplify(file, file.with_suffix(".rewrite.smt2"), "rewrite:intervals:z3:isqf:rewrite")
+            with Profile(f"check {file.relative_to(Path.cwd())}"):
+                __run_main("check", file.with_suffix(".rewrite.smt2"), "--print-model")
 
 
 if __name__ == '__main__':
