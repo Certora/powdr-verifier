@@ -249,7 +249,7 @@ def verify():
             completeness = encoding(before_smt, after_smt, var2 - globals, forward_builder, input_relation, output_relation)
 
             logging.info(f"dumping completeness check to {dump.name}")
-            smtlib = convert_to_smt_script(completeness)
+            smtlib = convert_to_smt_script(completeness, status='unsat')
             pretty_print_smtlib(smtlib, dump)
         
         is_valid_before = get_is_valid(var1, "before")
@@ -270,7 +270,7 @@ def verify():
                 soundness = encoding(after_smt, before_smt, var1 - globals, backward_builder, input_relation, output_relation, additional_asserts=[Equals(is_valid_after, Int(1))])
 
                 logging.info(f"dumping soundness check to {dump.name}")
-                smtlib = convert_to_smt_script(soundness)
+                smtlib = convert_to_smt_script(soundness, status='unsat')
                 pretty_print_smtlib(smtlib, dump)
 
             with open_file(ARGS().output, "w", ".soundness.zero-is-model.smt2") as dump:
@@ -286,7 +286,8 @@ def verify():
                             And(*[ Equals(v, Int(0)) for v in intvars ]),
                             "ZERO MODEL"
                         )
-                    )
+                    ),
+                    status='sat'
                 )
                 pretty_print_smtlib(smtlib, dump)
             
@@ -302,7 +303,8 @@ def verify():
                     And(
                         Equals(is_valid_after, Int(0)),
                         Or(*[Not(Equals(mult, Int(0))) for mult in multiplicities ])
-                    )
+                    ),
+                    status='unsat'
                 )
                 pretty_print_smtlib(smtlib, dump)
         else:
@@ -319,5 +321,5 @@ def verify():
                 soundness = encoding(after_smt, before_smt, var1 - globals, backward_builder, input_relation, output_relation)
 
                 logging.info(f"dumping soundness check to {dump.name}")
-                smtlib = convert_to_smt_script(soundness)
+                smtlib = convert_to_smt_script(soundness, status='unsat')
                 pretty_print_smtlib(smtlib, dump)
