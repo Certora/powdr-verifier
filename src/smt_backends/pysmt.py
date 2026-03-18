@@ -408,7 +408,7 @@ def script_with_sorted_declarefuns(smtlib: script.SmtLibScript) -> script.SmtLib
     smtlib.commands = newcmds
     return smtlib
 
-def convert_to_smt_script(f: FNode) -> script.SmtLibScript:
+def convert_to_smt_script(f: FNode, status = None) -> script.SmtLibScript:
     smtlib = script.smtlibscript_from_formula(f, None)
     smtlib = script_with_sorted_declarefuns(smtlib)
 
@@ -418,6 +418,8 @@ def convert_to_smt_script(f: FNode) -> script.SmtLibScript:
     # add model production and model retrieval
     smtlib.commands.insert(2, script.SmtLibCommand(name='set-option', args=[':produce-models', 'true']))
     smtlib.commands.insert(3, script.SmtLibCommand(name='set-option', args=[':produce-unsat-cores', 'true']))
+    if status is not None:
+        smtlib.commands.insert(4, script.SmtLibCommand(name='set-info', args=[':status', status]))
     #smtlib.commands.insert(2, script.SmtLibCommand(name='set-option', args=[':incremental', 'true']))
     # proof logging
     #smtlib.commands.insert(4, script.SmtLibCommand(name='set-option', args=[':solver.proof.log', 'proof-log.smt2']))
