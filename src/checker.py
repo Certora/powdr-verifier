@@ -30,14 +30,13 @@ def check():
                 res = script.evaluate_command(cmd, s)
                 if cmd.name == "check-sat":
                     correct = expected_result is not None and res == expected_result
-                    if correct:
-                        logging.warning("verified")
                     match res:
                         case True:
                             if not correct:
                                 logging.warning("SAT but expected UNSAT")
                             model = to_nice_model(s.get_model())
                             if ARGS().print_model:
+                                logging.warning("model:")
                                 print(json.dumps(model, indent=4))
                             if ARGS().dump_model:
                                 logging.info(f"dumping model to {ARGS().dump_model}")
