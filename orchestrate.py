@@ -148,7 +148,7 @@ def run_powdr_guest(test, dirsuffix = ""):
     cmd = [
         f"APC_EXPORT_PATH={dir}",
         "APC_EXPORT_LEVEL=3",
-        f"cargo run --bin powdr_openvm_riscv -r compile {test} --input 1 --autoprecompiles 1",
+        f"cargo run --bin powdr_openvm_riscv -r compile {test} --input 1 --autoprecompiles 1 --apc-candidates-dir {dir}",
     ]
     logging.warning(f"running {' '.join(cmd)}")
     subprocess.run(" ".join(cmd), shell=True, cwd=POWDR_DIR, check=True)
