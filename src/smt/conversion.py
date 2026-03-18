@@ -95,8 +95,8 @@ class SmtConverter:
                     b = self.convert_manual(b)
                     self.derived_columns[sym] = with_comment(
                         Ite(Equals(b, Int(0)), Int(0), wrap_mod(Div(a, b))),
-                        f"DERIVED COLUMN {name} = QuotientOrZero({a}, {b})",
-                    ),
+                        f"DERIVED COLUMN {name} = QuotientOrZero({a}, {b})"
+                    )
                 case _:
                     logging.error(f"Unsupported derived column: {derived}")
 
