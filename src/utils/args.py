@@ -12,8 +12,10 @@ def __build_parser(skip_subparsers=False):
     """Build the command line parser."""
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("-v", "--verbose", action="append", nargs="?", default=[])
-    parser.add_argument("-vv", "--very-verbose", action="append", nargs="?", default=[])
+    parser.add_argument("-v", action="count", default=0)
+    parser.add_argument("-vv", action="count", default=0)
+    parser.add_argument("-V", action="append", nargs="?", default=[])
+    parser.add_argument("-VV", action="append", nargs="?", default=[])
     parser.add_argument(
         "--bus-interaction-handler",
         type=BusInteractionHandlers,
@@ -110,10 +112,10 @@ def parse_args(args=None):
         if extra:
             logging.warning(f"unknown arguments: {" ".join(extra)}")
     
-    ARGS().verbose = ARGS().verbose + 2 * ARGS().very_verbose
+    ARGS().V = ARGS().V + 2 * ARGS().VV + ARGS().v * [""] + 2 * ARGS().vv * [""]
     def make_verbose(logger: logging.Logger):
         logger.setLevel(logger.getEffectiveLevel() - 10)
-    for v in ARGS().verbose:
+    for v in ARGS().V:
         if v is None or v == "":
             make_verbose(logging.root)
         else:
