@@ -142,7 +142,10 @@ def __serialize_command(self, outstream=None, printer=None, daggify=True):
         outstream.write("(%s" % self.name)
         for a in self.args:
             outstream.write(" (")
-            printer.printer(a)
+            if printer is not None:
+                printer.printer(a)
+            else:
+                outstream.write(a.serialize())
             outstream.write(")")
         outstream.write(")")
     else:
