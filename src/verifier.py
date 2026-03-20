@@ -176,7 +176,7 @@ def encoding(before, after, qvars, builder, input_relation, output_relation, add
             *additional_asserts,
         )
     if ARGS().elim_with_model:
-        model = load_json(ARGS().elim_with_model, "model")
+        model = load_json(ARGS().elim_with_model)
         subs = {}
         for name, value in model.items():
             if isinstance(value, bool):
@@ -199,8 +199,8 @@ def get_is_valid(vars: frozenset[FNode], prefix: str) -> FNode | None:
 def verify():
     """Verify our versions of equivalence."""
 
-    before = load_apc_dump(ARGS().input_before, 'before')
-    after = load_apc_dump(ARGS().input_after, 'after')
+    before = load_apc_dump(ARGS().input_before)
+    after = load_apc_dump(ARGS().input_after)
 
     block = BasicBlock(before["block"])
     assert block == BasicBlock(after["block"]), "The basic block has changed"
@@ -214,7 +214,7 @@ def verify():
 
         eliminations = {}
         if ARGS().eliminations is not None:
-            eliminations = before_conv.convert_eliminations(load_json(ARGS().eliminations, 'eliminations'))
+            eliminations = before_conv.convert_eliminations(load_json(ARGS().eliminations))
 
 
         # obtain input and output info

@@ -13,7 +13,7 @@ def analyze_aliases():
 
     ARGS().memory_encoding = "busat"
 
-    input = load_apc_dump(ARGS().input, 'input')
+    input = load_apc_dump(ARGS().input)
 
     with SmtConverter(None, BasicBlock(input["block"])) as conv:
         smt = conv.to_formula_with_axioms(input)

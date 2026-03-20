@@ -63,8 +63,8 @@ def _render_bus_contents(bus_contents: dict[int, dict[tuple[Any, ...], int]]) ->
 def visualize():
     """Print a timestamp-ordered interaction trace and bus contents after each step."""
 
-    input = load_apc_dump(ARGS().input, 'input')
-    model = load_json(ARGS().model, 'model')
+    input = load_apc_dump(ARGS().input)
+    model = load_json(ARGS().model)
 
     interactions: list[VisualizedInteraction] = []
 

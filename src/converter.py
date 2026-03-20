@@ -155,7 +155,7 @@ def convert_to_text(out: TextIO, input: dict, model: Optional[dict[str, Any]] = 
 
 
 def convert_and_print():
-    input = load_apc_dump(ARGS().input, 'input')
+    input = load_apc_dump(ARGS().input)
     out = StringIO()
     convert_to_text(None, out, input)
     print(out.getvalue())
