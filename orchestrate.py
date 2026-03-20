@@ -6,8 +6,11 @@ import re
 import shutil
 import subprocess
 import sys
+from io import StringIO
 from pathlib import Path
+from typing import Any, Optional
 
+from src.utils.io import load_json
 from src.utils.utils import s2range
 from src.utils.profiling import Profile
 
@@ -104,9 +107,15 @@ def parse_args():
     return _ARGS
 
 
-def __run_main(command, *args):
+def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
+    """Run ``main.py`` as a subprocess. With ``parse_output=True``, capture stdout and return ``load_json`` of it."""
+    
     cmd = [PYTHON, VERIFIER_DIR / "main.py", *_ARGS._additional_args, *_ARGS._main_args, command, *args, *_ARGS._sub_args]
+    if parse_output:
+        result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, text=True)
+        return load_json(StringIO(result.stdout))
     subprocess.run(cmd, check=True)
+    return None
 
 def __do_simplify(input, output, tactic="rewrite:intervals:cvc5:rewrite:intervals:rewrite"):
     logging.info(f"simplifying {input.relative_to(Path.cwd())}")
@@ -194,11 +203,10 @@ def run_verify(*pairs):
         logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
         first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
         with Profile(f"verify {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}"):
-            __run_main("verify", a, b, first)
-        for file in sorted(a.parent.glob(f"{first.stem}*.smt2")):
-            if file.stem.endswith(".rewrite"): continue
+            res_verify = __run_main("verify", a, b, first, parse_output=True)
+        for file in sorted(res_verify["outputs"]):
             with Profile(f"simplify {file.relative_to(Path.cwd())}"):
-                    __do_simplify(file, file.with_suffix(".rewrite.smt2"), "rewrite:intervals:z3:isqf:rewrite")
+                __do_simplify(file, file.with_suffix(".rewrite.smt2"), "rewrite:intervals:z3:isqf:rewrite")
             with Profile(f"check {file.relative_to(Path.cwd())}"):
                 __run_main("check", file.with_suffix(".rewrite.smt2"), "--print-model")
 
@@ -246,7 +254,7 @@ if __name__ == '__main__':
                 case _:
                     logging.error(f"unknown command: {args.command}")
                     exit(1)
-    
+
     except subprocess.CalledProcessError:
         pass
     except KeyboardInterrupt:
