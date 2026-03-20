@@ -13,10 +13,12 @@ from typing import Any, Optional
 from src.utils.io import load_json
 from src.utils.utils import s2range
 from src.utils.profiling import Profile
+from src.report.dumpers import ActionDumper, set_report_dir
 
 DATA_DIR = Path.cwd() / "data"
 POWDR_DIR = Path.cwd() / "powdr"
 VERIFIER_DIR = Path.cwd() / "verifier"
+set_report_dir(Path.cwd() / "reports")
 
 if not DATA_DIR.exists():
     DATA_DIR.mkdir(parents=True)
@@ -117,9 +119,9 @@ def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
     subprocess.run(cmd, check=True)
     return None
 
-def __do_simplify(input, output, tactic="rewrite:intervals:cvc5:rewrite:intervals:rewrite"):
-    logging.info(f"simplifying {input.relative_to(Path.cwd())}")
-    return __run_main("simplify", input, tactic, output)
+def __do_simplify(input, output, tactic="rewrite:intervals:z3:rewrite"):
+    logging.warning(f"simplifying with {tactic} {input.relative_to(Path.cwd())}")
+    return __run_main("simplify", input, tactic, output, parse_output=True)
 
 def with_patch(func):
     @functools.wraps(func)
@@ -166,10 +168,14 @@ def run_powdr_guest(test, dirsuffix = ""):
 def run_trace(*files):
     for f in files:
         logging.warning(f"running tracer on {f.relative_to(Path.cwd())}")
-        smt = f.parent / f"trace-{f.stem}.smt2"
-        __run_main("trace", f, smt)
-        __do_simplify(smt, smt.with_suffix(".rewrite.smt2"))
-        __run_main("check", smt.with_suffix(".rewrite.smt2"), "--dump-model", smt.with_suffix(".model"))
+        with ActionDumper("trace", _ARGS.test, f) as dump:
+            res_trace = __run_main("trace", f, f.parent / f"trace-{f.stem}.smt2", parse_output=True)
+            dump.add_action(res_trace)
+            for file in sorted(res_trace.outputs):
+                with dump.action("simplify"):
+                    __do_simplify(file, file.with_suffix(".rewrite.smt2"))
+                with dump.action("check"):
+                    __run_main("check", file.with_suffix(".rewrite.smt2"), "--dump-model", file.with_suffix(".model"))
 
 def run_diff(*pairs):
     for a,b in pairs:
@@ -200,15 +206,17 @@ def run_eval(*files):
 
 def run_verify(*pairs):
     for a,b in pairs:
-        logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
-        first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
-        with Profile(f"verify {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}"):
+        with ActionDumper("verify", _ARGS.test, a, b) as a_verify:
+            logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
+            first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
             res_verify = __run_main("verify", a, b, first, parse_output=True)
-        for file in sorted(res_verify["outputs"]):
-            with Profile(f"simplify {file.relative_to(Path.cwd())}"):
-                __do_simplify(file, file.with_suffix(".rewrite.smt2"), "rewrite:intervals:z3:isqf:rewrite")
-            with Profile(f"check {file.relative_to(Path.cwd())}"):
-                __run_main("check", file.with_suffix(".rewrite.smt2"), "--print-model")
+            a_verify.add_action(res_verify)
+            for file in sorted(res_verify.outputs):
+                with a_verify.action("verify-check", inputs=[file]) as a_check:
+                    res_simplify = __do_simplify(file, file.with_suffix(".rewrite.smt2"), "rewrite:intervals:z3:isqf:rewrite")
+                    a_check.add_action(res_simplify)
+                    with a_check.action("check"):
+                        __run_main("check", file.with_suffix(".rewrite.smt2"), "--print-model")
 
 
 if __name__ == '__main__':

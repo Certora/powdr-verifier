@@ -82,7 +82,7 @@ def __build_parser(skip_subparsers=False):
     sub_simplify = sub.add_parser("simplify")
     sub_simplify.add_argument("input", type=Path)
     sub_simplify.add_argument("tactic", type=str)
-    sub_simplify.add_argument("output", type=Path, nargs="?")
+    sub_simplify.add_argument("output", type=Path)
     sub_simplify.add_argument("--with-model", type=Path)
 
     sub_verify = sub.add_parser("verify")

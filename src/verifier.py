@@ -2,6 +2,7 @@ import json
 import sympy
 
 
+from .report.action import Action
 from .rewriter.conversion import to_smt, to_sympy
 from .rewriter import rewrite
 from .smt.encoding import build_input_output_relation, collect_variables
@@ -205,14 +206,15 @@ def verify():
     block = BasicBlock(before["block"])
     assert block == BasicBlock(after["block"]), "The basic block has changed"
 
-    res = { "outputs": [] }
-
     with (
+        Action("verify-encode") as action,
         SmtConverter(BEFORE_PREFIX, block) as before_conv,
         SmtConverter(AFTER_PREFIX, block) as after_conv,
     ):
-        before_smt = before_conv.to_formula_with_axioms(before)
-        after_smt = after_conv.to_formula_with_axioms(after)
+        action += {"outputs": []}
+        with action.action("encode"):
+            before_smt = before_conv.to_formula_with_axioms(before)
+            after_smt = after_conv.to_formula_with_axioms(after)
 
         eliminations = {}
         if ARGS().eliminations is not None:
@@ -254,7 +256,7 @@ def verify():
             logging.info(f"dumping completeness check to {dump.name}")
             smtlib = convert_to_smt_script(completeness, status='unsat')
             pretty_print_smtlib(smtlib, dump)
-            res["outputs"].append(outfile)
+            action += ("outputs", outfile)
         
         is_valid_before = get_is_valid(var1, "before")
         is_valid_after = get_is_valid(var2, "after")
@@ -277,7 +279,7 @@ def verify():
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(soundness, status='unsat')
                 pretty_print_smtlib(smtlib, dump)
-                res["outputs"].append(outfile)
+                action += ("outputs", outfile)
 
             outfile = ARGS().output.with_suffix(".soundness.zero-is-model.smt2")
             with open(outfile, "w") as dump:
@@ -297,7 +299,7 @@ def verify():
                     status='sat'
                 )
                 pretty_print_smtlib(smtlib, dump)
-                res["outputs"].append(outfile)
+                action += ("outputs", outfile)
 
             outfile = ARGS().output.with_suffix(".soundness.invalid-all-mult-zero.smt2")
             with open(outfile, "w") as dump:
@@ -317,7 +319,7 @@ def verify():
                     status='unsat'
                 )
                 pretty_print_smtlib(smtlib, dump)
-                res["outputs"].append(outfile)
+                action += ("outputs", outfile)
         else:
             outfile = ARGS().output.with_suffix(".soundness.smt2")
             with open(outfile, "w") as dump:
@@ -335,6 +337,6 @@ def verify():
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(soundness, status='unsat')
                 pretty_print_smtlib(smtlib, dump)
-                res["outputs"].append(outfile)
+                action += ("outputs", outfile)
 
-    return res
+    return action
