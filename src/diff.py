@@ -9,8 +9,8 @@ from .utils.io import load_apc_dump, load_json
 
 def diff():
     """Format two inputs (as JSON or text) and launch an external diff viewer (`meld`)."""
-    before = load_apc_dump(ARGS().input_before, "before")
-    after = load_apc_dump(ARGS().input_after, "after")
+    before = load_apc_dump(ARGS().input_before)
+    after = load_apc_dump(ARGS().input_after)
 
     match ARGS().format:
         case "json":
@@ -29,12 +29,12 @@ def diff():
             before_model = None
             after_model = None
             if ARGS().with_model:
-                before_model = load_json(ARGS().with_model, "model")
+                before_model = load_json(ARGS().with_model)
                 after_model = before_model
             elif ARGS().with_before_model:
-                before_model = load_json(ARGS().with_before_model, "model")
+                before_model = load_json(ARGS().with_before_model)
             elif ARGS().with_after_model:
-                after_model = load_json(ARGS().with_after_model, "model")
+                after_model = load_json(ARGS().with_after_model)
 
             before_formatted = ARGS().input_before.with_name(
                 f".formatted_{ARGS().input_before.name}.txt"

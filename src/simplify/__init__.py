@@ -9,7 +9,7 @@ from .andify import simplify_andify
 
 def simplify_model(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     assert ARGS().with_model is not None
-    model = load_json(ARGS().with_model, "model")
+    model = load_json(ARGS().with_model)
     substitutions = {}
     for name, value in model.items():
         if isinstance(value, bool):

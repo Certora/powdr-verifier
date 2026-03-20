@@ -1,11 +1,12 @@
 from io import StringIO
+import json
 import logging
 import sys
 
 from src.checker import check
 from src.evaluator import evaluate
 from src.utils.args import parse_args, ARGS
-from src.utils.io import load_apc_dump, load_json
+from src.utils.io import dump_json, load_apc_dump, load_json
 from src.utils.profiling import print_profile
 from src.tracer import trace
 from src.verifier import verify
@@ -21,14 +22,15 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.WARNING, force=True, format='%(levelname)s:%(relativeCreated)dms %(message)s')
     parse_args(sys.argv[1:])
 
+    res = None
     try:
         match ARGS().command:
             case 'trace':
-                trace()
+                res = trace()
 
             case 'eval':
-                input = load_apc_dump(ARGS().input, 'input')
-                model = load_json(ARGS().model, 'model')
+                input = load_apc_dump(ARGS().input)
+                model = load_json(ARGS().model)
                 evaluate(input, model)
 
             case 'visualize':
@@ -59,3 +61,5 @@ if __name__ == '__main__':
         raise e
     finally:
         print_profile()
+    
+    dump_json(res, indent=4)
