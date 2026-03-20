@@ -4,6 +4,24 @@ from ..utils.profiling import simple_profile
 from ..smt.utils import *
 
 
+def _flatten_times_factors(expr: FNode) -> list[FNode] | None:
+    """If `expr` is a (possibly nested) product, return its leaf factors; else None.
+    Returns None when there are fewer than two factors."""
+    if not expr.is_times():
+        return None
+    factors: list[FNode] = []
+
+    def collect(n: FNode) -> None:
+        if n.is_times():
+            for a in n.args():
+                collect(a)
+        else:
+            factors.append(n)
+
+    collect(expr)
+    return factors if len(factors) >= 2 else None
+
+
 def is_mul_by_minus_one(node: FNode) -> Optional[FNode]:
     if node.is_times() and len(node.args()) == 2:
         a, b = node.args()
@@ -12,6 +30,25 @@ def is_mul_by_minus_one(node: FNode) -> Optional[FNode]:
         if b.is_int_constant(-1) or b.is_int_constant(ARGS().field_type.value - 1):
             return a
     return None
+
+
+@simple_profile
+def rewrite_choice_simple(node_type: int, args: list[FNode]) -> FNode:
+    """Rewrite `Mod(e, p) = 0` with field modulus `p` when `e` is a plain product into a disjunction of factor congruences."""
+    assert node_type == operators.EQUALS
+    lhs, rhs = args
+    if not lhs.is_mod() or not rhs.is_zero():
+        return None
+    expr, modulus = lhs.args()
+    if (
+        not modulus.is_int_constant()
+        or modulus.constant_value() != ARGS().field_type.value
+    ):
+        return None
+    factors = _flatten_times_factors(expr)
+    if factors is None:
+        return None
+    return Or(*[Equals(Mod(f, modulus), Int(0)) for f in factors])
 
 
 @simple_profile

@@ -19,8 +19,10 @@ def rewrite_choice(node: Expr) -> Expr:
     match unpack_modeq(node):
         case e, c:
             factors = factor(e)
-            if isinstance(factors, Mul) and len(factors.args) > 1:
-                return Or(*[Eq(Mod(normalize(f), c), 0) for f in factors.args])
+            if isinstance(factors, Mul):
+                factors = [a for a in factors.args if not a.is_Integer]
+                if len(factors) > 1:
+                    return Or(*[Eq(Mod(normalize(f), c), 0) for f in factors])
     return None
 
 
