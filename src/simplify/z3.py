@@ -1,26 +1,11 @@
 from io import StringIO
-from pysmt.smtlib import script
+from ..smt_backends.pysmt import *
 import z3
 
 from .utils import _string_to_script
 
 def simplify_z3(smt_script: script.SmtLibScript, args = []) -> script.SmtLibScript:
-    prefix = []
-    main = []
-    suffix = []
-    before = True
-    for cmd in smt_script:
-        s = cmd.serialize_to_string(daggify=False)
-        match cmd.name:
-            case "assert" | "declare-fun" | "define-fun":
-                before = False
-                main.append(s)
-            case _:
-                if before:
-                    prefix.append(s)
-                else:
-                    suffix.append(s)
-    
+
     match args:
         case []:
             tactic = z3.Repeat(
@@ -35,13 +20,32 @@ def simplify_z3(smt_script: script.SmtLibScript, args = []) -> script.SmtLibScri
         case [*t]:
             tactic = z3.Then(*t)
 
-    query = z3.parse_smt2_string("\n".join(main))
-    goal = z3.Goal()
-    goal.add(query)
-    simplified = tactic(goal).as_expr()
-    solver = z3.Solver()
-    solver.add(simplified)
-    res = solver.sexpr()
+    s = tactic.solver()
+    conv = Z3Converter(get_env(), s.ctx)
 
-    return _string_to_script("\n".join(prefix + [res] + suffix))
+    output = []
 
+    in_suffix = False
+    for cmd in smt_script:
+        if in_suffix:
+            output.append(cmd)
+            continue
+        match cmd.name:
+            case "set-info" | "set-logic" | "set-option" | "get-model" | "get-unsat-core" | "echo":
+                output.append(cmd)
+            case "declare-fun":
+                output.append(cmd)
+                #decls[cmd.args[0].symbol_name()] = conv.walk_symbol(cmd.args[0])
+            case "assert":
+                s.add(conv.convert(cmd.args[0]))
+            case "check-sat":
+                s.check()
+                output += _string_to_script(s.sexpr()).commands
+                output.append(cmd)
+                in_suffix = True
+            case _:
+                assert False, f"unexpected command: {cmd.name}"
+    
+    res = script.SmtLibScript()
+    res.commands = output
+    return res
