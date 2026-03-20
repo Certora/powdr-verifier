@@ -10,30 +10,22 @@ def check():
     logging.info(f"loading from {ARGS().input}")
     smt_script = parser.get_script_fname(str(ARGS().input))
 
+    res = {}
+
     logging.info(f"checking formula with {ARGS().solver}")
     with Solver(
         logic=AUFNIA, name=ARGS().solver, solver_options={":timeout": 60000}
     ) as s:
         s.set_logic = lambda l: None
-        expected_result = None
         try:
             for cmd in smt_script:
                 if cmd.name == "set-info" and cmd.args[0] == ':status':
-                    match cmd.args[1]:
-                        case "sat":
-                            expected_result = True
-                        case "unsat":
-                            expected_result = False
-                        case _:
-                            expected_result = None
+                    res["expected"] = cmd.args[1]
                     continue
-                res = script.evaluate_command(cmd, s)
+                evald = script.evaluate_command(cmd, s)
                 if cmd.name == "check-sat":
-                    correct = expected_result is not None and res == expected_result
-                    match res:
+                    match evald:
                         case True:
-                            if not correct:
-                                logging.warning("SAT but expected UNSAT")
                             model = to_nice_model(s.get_model())
                             if ARGS().print_model:
                                 logging.warning("model:")
@@ -42,14 +34,10 @@ def check():
                                 logging.info(f"dumping model to {ARGS().dump_model}")
                                 with open(ARGS().dump_model, "w") as f:
                                     json.dump(model, f, indent=4)
-                            return True
+                            return res | { "result": "sat" }
                         case False:
-                            if not correct:
-                                logging.warning("UNSAT but expected SAT")
-                            return False
+                            return res | { "result": "unsat" }
                         case _:
-                            logging.warning("UNKNOWN")
-                            return None
+                            return res | { "result": "unknown" }
         except SolverReturnedUnknownResultError:
-            logging.warning("UNKNOWN")
-            return None
+            return res | { "result": "error-unknown" }
