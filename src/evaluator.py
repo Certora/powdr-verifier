@@ -2,14 +2,20 @@ import json
 import logging
 
 from .utils.basic_block import BasicBlock
+from .utils.io import load_apc_dump, load_json
 from .smt.conversion import SmtConverter
 from .smt.utils import *
 
 
-def evaluate(input: dict, model: dict[str, int]):
+def evaluate():
     """Check which parts of the SMT encoding hold under a provided variable assignment."""
 
+    input = load_apc_dump(ARGS().input)
+    model = load_json(ARGS().model)
+
     model = {f"input-{m}": v for m, v in model.items()}
+
+    res = {}
 
     with SmtConverter("input", BasicBlock(input["block"])) as conv:
         smt = conv.to_formula_with_axioms(input)
@@ -28,8 +34,10 @@ def evaluate(input: dict, model: dict[str, int]):
 
         logging.debug(f"evaluate on\n{json.dumps(model, indent=4)}")
         if eval_list(smt.constraints):
-            print("constraints are satisfied")
+            res["constraints"] = True
         if eval_list(smt.axioms):
-            print("axioms are satisfied")
+            res["axioms"] = True
         if eval_list([Equals(v, expr) for v, expr in smt.derived.items()]):
-            print("derived are satisfied")
+            res["derived"] = True
+
+    return res
