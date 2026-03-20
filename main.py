@@ -46,7 +46,7 @@ if __name__ == '__main__':
                 simplify()
 
             case 'verify':
-                verify()
+                res = verify()
             
             case 'check':
                 check()
@@ -62,4 +62,5 @@ if __name__ == '__main__':
     finally:
         print_profile()
     
-    dump_json(res, indent=4)
+    if res is not None:
+        dump_json(res, indent=4)
