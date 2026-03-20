@@ -132,8 +132,29 @@ from pysmt.smtlib.parser import SmtLibParser as OriginalSmtLibParser
 class SmtLibParser(OriginalSmtLibParser):
     def __init__(self, *args, **kwargs):
         OriginalSmtLibParser.__init__(self, *args, **kwargs)
+        self.interpreted["div"] = self._operator_adapter(self.Div)
         self.interpreted["mod"] = self._operator_adapter(self.env.formula_manager.Mod)
         self.interpreted["mod_total"] = self._operator_adapter(self.env.formula_manager.Mod)
+        self.commands["model-add"] = self._cmd_model_add
+    
+    def _cmd_model_add(self, current, tokens):
+        """(model-add <fun_def>)"""
+        formal = []
+        var = self.parse_atom(tokens, current)
+        namedparams = self.parse_named_params(tokens, current)
+        assert len(namedparams) == 0, "model-add does not support parameters"
+        rtype = self.parse_type(tokens, current)
+        var = self._get_var(var, rtype)
+        # Parse expression
+        ebody = self.get_expression(tokens)
+
+        # Finish Parsing
+        self.consume_closing(tokens, current)
+        self.cache.define(var, formal, ebody)
+        return script.SmtLibCommand("assert", [TRUE()])
+        #print(f"model-add {var} {ebody}")
+        print(f"model-add for {var}")
+        return script.SmtLibCommand("assert", [Equals(var, ebody)])
 
 def __serialize_command(self, outstream=None, printer=None, daggify=True):
     if self.name == 'echo':

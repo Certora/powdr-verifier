@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 from typing import Any, Optional, TextIO, Union
 
+from ..report.action import Action
 from .args import ARGS
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,8 @@ def load_json(file: Union[Path, TextIO]) -> Any:
         match d:
             case {"__Path": str(path), **rest} if rest == {}:
                 return Path(path)
+            case {"__Action": dict(action), **rest} if rest == {}:
+                return Action(**action)
             case _:
                 return d
 
@@ -47,6 +50,8 @@ def dump_json(
     def _default(o: Any) -> Any:
         if isinstance(o, Path):
             return {"__Path": str(o)}
+        if isinstance(o, Action):
+            return {"__Action": o.as_dict()}
         if default:
             return default(o)
         raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")

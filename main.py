@@ -41,7 +41,7 @@ if __name__ == '__main__':
                 convert_and_print()
 
             case 'simplify':
-                simplify()
+                res = simplify()
 
             case 'verify':
                 res = verify()

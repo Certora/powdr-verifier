@@ -34,8 +34,9 @@ def simplify_z3(smt_script: script.SmtLibScript, args = []) -> script.SmtLibScri
             case "set-info" | "set-logic" | "set-option" | "get-model" | "get-unsat-core" | "echo":
                 output.append(cmd)
             case "declare-fun":
-                output.append(cmd)
+                #output.append(cmd)
                 #decls[cmd.args[0].symbol_name()] = conv.walk_symbol(cmd.args[0])
+                pass
             case "assert":
                 s.add(conv.convert(cmd.args[0]))
             case "check-sat":
