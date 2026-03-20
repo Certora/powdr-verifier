@@ -29,9 +29,7 @@ if __name__ == '__main__':
                 res = trace()
 
             case 'eval':
-                input = load_apc_dump(ARGS().input)
-                model = load_json(ARGS().model)
-                evaluate(input, model)
+                res = evaluate()
 
             case 'visualize':
                 visualize()
