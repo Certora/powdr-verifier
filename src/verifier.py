@@ -8,7 +8,7 @@ from .smt.encoding import build_input_output_relation, collect_variables
 from .smt.conversion import FormulaWithAxioms, SmtConverter
 from .smt.utils import *
 from .utils.basic_block import BasicBlock
-from .utils.io import load_apc_dump, load_json, open_file
+from .utils.io import load_apc_dump, load_json
 
 BEFORE_PREFIX = "before"
 AFTER_PREFIX = "after"
@@ -205,6 +205,8 @@ def verify():
     block = BasicBlock(before["block"])
     assert block == BasicBlock(after["block"]), "The basic block has changed"
 
+    res = { "outputs": [] }
+
     with (
         SmtConverter(BEFORE_PREFIX, block) as before_conv,
         SmtConverter(AFTER_PREFIX, block) as after_conv,
@@ -236,7 +238,8 @@ def verify():
             | after_conv.bus_interaction_encoder.get_auxiliaries()
         ).values())
 
-        with open_file(ARGS().output, "w", ".completeness.smt2") as dump:
+        outfile = ARGS().output.with_suffix(".completeness.smt2")
+        with open(outfile, "w") as dump:
             dump.write(";; completeness check\n")
             forward_builder = ModelMapBuilder(
                 var1 - globals - auxiliaries,
@@ -251,13 +254,15 @@ def verify():
             logging.info(f"dumping completeness check to {dump.name}")
             smtlib = convert_to_smt_script(completeness, status='unsat')
             pretty_print_smtlib(smtlib, dump)
+            res["outputs"].append(outfile)
         
         is_valid_before = get_is_valid(var1, "before")
         is_valid_after = get_is_valid(var2, "after")
 
         if is_valid_before is None and is_valid_after is not None:
             logging.warning("is_valid was introduced, perform special soundness check")
-            with open_file(ARGS().output, "w", ".soundness.smt2") as dump:
+            outfile = ARGS().output.with_suffix(".soundness.smt2")
+            with open(outfile, "w") as dump:
                 dump.write(";; soundness check\n")
                 backward_builder = ModelMapBuilder(
                     var2 - globals - auxiliaries,
@@ -272,8 +277,10 @@ def verify():
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(soundness, status='unsat')
                 pretty_print_smtlib(smtlib, dump)
+                res["outputs"].append(outfile)
 
-            with open_file(ARGS().output, "w", ".soundness.zero-is-model.smt2") as dump:
+            outfile = ARGS().output.with_suffix(".soundness.zero-is-model.smt2")
+            with open(outfile, "w") as dump:
                 dump.write(";; check that all zero is a model\n")
                 logging.info(f"dumping zero is model check to {dump.name}")
                 intvars = [ v for v in (var2 - auxiliaries) if v.get_type() == INT ]
@@ -290,8 +297,10 @@ def verify():
                     status='sat'
                 )
                 pretty_print_smtlib(smtlib, dump)
-            
-            with open_file(ARGS().output, "w", ".soundness.invalid-all-mult-zero.smt2") as dump:
+                res["outputs"].append(outfile)
+
+            outfile = ARGS().output.with_suffix(".soundness.invalid-all-mult-zero.smt2")
+            with open(outfile, "w") as dump:
                 dump.write(";; check that all is_valid zero makes all multiplicities zero\n")
                 logging.info(f"dumping invalid makes all multiplicities zero check to {dump.name}")
 
@@ -308,8 +317,10 @@ def verify():
                     status='unsat'
                 )
                 pretty_print_smtlib(smtlib, dump)
+                res["outputs"].append(outfile)
         else:
-            with open_file(ARGS().output, "w", ".soundness.smt2") as dump:
+            outfile = ARGS().output.with_suffix(".soundness.smt2")
+            with open(outfile, "w") as dump:
                 dump.write(";; soundness check\n")
                 backward_builder = ModelMapBuilder(
                     var2 - globals - auxiliaries,
@@ -324,3 +335,6 @@ def verify():
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(soundness, status='unsat')
                 pretty_print_smtlib(smtlib, dump)
+                res["outputs"].append(outfile)
+
+    return res
