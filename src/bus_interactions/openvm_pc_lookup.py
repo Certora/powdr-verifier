@@ -86,22 +86,22 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
 
     def _get_instruction(self, pc: int):
         """Return the concrete instruction tuple for `pc` (expects `pc` is 4-byte aligned)."""
-        return self.basic_block.instructions[pc // 4]
+        return self.basic_block.instructions[pc]
 
     def __encode_block(self) -> Iterable[FNode]:
         """Encode the full instruction table as equalities over the PC lookup UFs."""
-        for id, stmt in enumerate(self.basic_block.instructions):
+        for id, stmt in self.basic_block.instructions.items():
             op, a, b, c, d, e, f, g = stmt
             yield with_comment(
                 And(
-                    Equals(Function(self.UF_OPCODE, [Int(4 * id)]), Int(op)),
-                    Equals(Function(self.UF_A, [Int(4 * id)]), Int(a)),
-                    Equals(Function(self.UF_B, [Int(4 * id)]), Int(b)),
-                    Equals(Function(self.UF_C, [Int(4 * id)]), Int(c)),
-                    Equals(Function(self.UF_D, [Int(4 * id)]), Int(d)),
-                    Equals(Function(self.UF_E, [Int(4 * id)]), Int(e)),
-                    Equals(Function(self.UF_F, [Int(4 * id)]), Int(f)),
-                    Equals(Function(self.UF_G, [Int(4 * id)]), Int(g)),
+                    Equals(Function(self.UF_OPCODE, [Int(id)]), Int(op)),
+                    Equals(Function(self.UF_A, [Int(id)]), Int(a)),
+                    Equals(Function(self.UF_B, [Int(id)]), Int(b)),
+                    Equals(Function(self.UF_C, [Int(id)]), Int(c)),
+                    Equals(Function(self.UF_D, [Int(id)]), Int(d)),
+                    Equals(Function(self.UF_E, [Int(id)]), Int(e)),
+                    Equals(Function(self.UF_F, [Int(id)]), Int(f)),
+                    Equals(Function(self.UF_G, [Int(id)]), Int(g)),
                 ),
                 f"{self.NAME} axiom #{id}"
             )
