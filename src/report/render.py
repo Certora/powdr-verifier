@@ -5,6 +5,8 @@ from typing import Optional
 
 from IPython.display import HTML, display
 
+from ..utils.io import load_json
+
 @dataclasses.dataclass
 class TreeNode:
     name: str
@@ -119,19 +121,16 @@ class TreeTableWidget:
 
 def to_tree_node(data: dict) -> TreeNode:
     return TreeNode(
-        name=data["name"],
-        inputs=data.get("inputs", []),
-        running_time=data["running_time"],
-        status=data.get("status", ""),
-        children=[to_tree_node(c) for c in data["actions"]]
+        name=data.name,
+        inputs=data.properties.get("inputs", []),
+        running_time=data.running_time,
+        status=data.properties.get("status", ""),
+        children=[to_tree_node(c) for c in data.actions]
     )
 
 def collect(basedir: Path):
     data = []
     for file in basedir.glob("**/*.json"):
-        with open(file, "r") as f:
-            data.append(json.load(f))
-    
-    data.sort(key=lambda x: (x["test"], x["inputs"]))
+        data.append(load_json(file))
 
     return TreeTableWidget([to_tree_node(d) for d in data])
