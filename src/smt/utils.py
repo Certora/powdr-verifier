@@ -188,17 +188,20 @@ def partial_evaluate(f: FNode, model: dict[str, Any], interpreters):
 
 def find_unique_solution(s: Solver, f: FNode) -> Optional[dict[str, int]]:
     """Return a unique satisfying assignment for `f` (over its free vars), or None if non-unique/unsat."""
-    s.push()
-    s.add_assertion(f)
-    if s.solve():
-        model = s.get_model()
-        vars = f.get_free_variables()
-        s.add_assertion(Or(*[Not(Equals(v, c)) for v, c in model if v in vars]))
-        res = s.solve()
-        s.pop()
-        if res:
-            return None
-        return {v: c for v, c in model if v in vars}
+    try:
+        s.push()
+        s.add_assertion(f)
+        if s.solve():
+            model = s.get_model()
+            vars = f.get_free_variables()
+            s.add_assertion(Or(*[Not(Equals(v, c)) for v, c in model if v in vars]))
+            res = s.solve()
+            s.pop()
+            if res:
+                return None
+            return {v: c for v, c in model if v in vars}
 
-    s.pop()
-    return None
+        s.pop()
+        return None
+    except:
+        return None
