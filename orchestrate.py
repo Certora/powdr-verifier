@@ -215,9 +215,8 @@ def run_verify(*pairs):
                 with a_verify.action("verify-check", inputs=[file]) as a_check:
                     res_simplify = __do_simplify(file, file.with_suffix(".rewrite.smt2"), "rewrite:intervals:z3:isqf:rewrite")
                     a_check.add_action(res_simplify)
-                    with a_check.action("check"):
-                        __run_main("check", file.with_suffix(".rewrite.smt2"), "--print-model")
-
+                    res_check = __run_main("check", file.with_suffix(".rewrite.smt2"), "--print-model", parse_output=True)
+                    a_check.add_action(res_check)
 
 if __name__ == '__main__':
     args = parse_args()
