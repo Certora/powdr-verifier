@@ -9,7 +9,9 @@ class BasicBlock:
         assert "start_pc" in data, "basic block has no start_pc"
         assert "instructions" in data, "basic block has no instructions"
         self.start_pc = data["start_pc"]
-        self.instructions = data["instructions"]
+        self.instructions = {
+            self.start_pc + i * 4: instr for i, instr in enumerate(data["instructions"])
+        }
 
     def __eq__(self, other: "BasicBlock") -> bool:
         """Return True iff both blocks have the same `start_pc` and `instructions`."""
