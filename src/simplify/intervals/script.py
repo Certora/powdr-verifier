@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
+
 from ...smt.utils import Bool, FNode, script
-from .reasoner import IntervalReasoner
+from .reasoner import IntervalReasoner, logger as interval_logger
 
 
 def _has_bottom_domain(reasoner: IntervalReasoner) -> bool:
@@ -21,9 +23,19 @@ def simplify_intervals(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     if not assertions:
         return smt_script
 
+    if interval_logger.isEnabledFor(logging.INFO):
+        interval_logger.info("intervals: simplify_intervals processing %d assertions", len(assertions))
+
     reasoner = IntervalReasoner()
     reasoner.assume_all(assertions)
     inconsistent = _has_bottom_domain(reasoner)
+
+    if interval_logger.isEnabledFor(logging.INFO):
+        interval_logger.info(
+            "intervals: propagation done (inconsistent=%s, tightened_symbols=%d)",
+            inconsistent,
+            len(reasoner.tightened_symbols),
+        )
 
     for cmd in smt_script:
         if cmd.name != "assert":
