@@ -1,10 +1,10 @@
 import dataclasses
-import json
 from pathlib import Path
 from typing import Optional
 
 from IPython.display import HTML, display
 
+from .action import Action
 from ..utils.io import load_json
 
 @dataclasses.dataclass
@@ -12,6 +12,7 @@ class TreeNode:
     name: str
     inputs: list = dataclasses.field(default_factory=list)
     running_time: Optional[float] = None   # seconds
+    result: str = "unknown"
     status: str = "pending"                # pending | running | success | error | skipped
     children: list = dataclasses.field(default_factory=list)
 
@@ -103,7 +104,7 @@ class TreeTableWidget:
             f'  <div class="ttt-cell ttt-t" style="background:{row_bg}">{time_str}</div>'
             f'  <div class="ttt-cell ttt-s" style="background:{row_bg}">'
             f'    <span class="ttt-badge" style="background:{bg};color:{fg};border-color:{fg}88">'
-            f'      {icon} {node.status}'
+            f'      {icon} {node.result}'
             f'    </span>'
             f'  </div>'
             f'</div>'
@@ -119,14 +120,24 @@ class TreeTableWidget:
 
         return row
 
-def to_tree_node(data: dict, inputdir: Path) -> TreeNode:
+def to_tree_node(data: Action, inputdir: Path) -> TreeNode:
+    result = ""
+    status = "unknown"
+    if s := data.status():
+        result = s[0]
+        status = {
+            True: "success",
+            False: "error",
+            None: "unknown",
+        }[s[1]]
     return TreeNode(
         name=data.name,
         inputs=[
             i.relative_to(inputdir, walk_up=True) for i in data.properties.get("inputs", [])
         ],
         running_time=data.running_time,
-        status=data.properties.get("status", ""),
+        result=result,
+        status=status,
         children=[to_tree_node(c, inputdir) for c in data.actions]
     )
 

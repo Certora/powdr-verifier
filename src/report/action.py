@@ -42,6 +42,23 @@ class Action:
     def __getattr__(self, name: str):
         return self.properties[name]
     
+    def status(self):
+        if "result" not in self.properties:
+            sub = [ a.status() for a in self.actions ]
+            sub = { s for s in sub if s is not None }
+            if len(sub) == 0:
+                return None
+            firsts = {s[0] for s in sub}
+            first = next(iter(firsts)) if len(firsts) == 1 else None
+            non_none_seconds = [s[1] for s in sub if s[1] is not None]
+            second = all(non_none_seconds) if non_none_seconds else None
+            return first, second
+
+        if "expected" in self.properties:
+            return self.result, self.result == self.expected
+        return self.result, None
+
+    
     def as_dict(self):
         return {
             **self.properties,
