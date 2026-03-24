@@ -119,18 +119,21 @@ class TreeTableWidget:
 
         return row
 
-def to_tree_node(data: dict) -> TreeNode:
+def to_tree_node(data: dict, inputdir: Path) -> TreeNode:
     return TreeNode(
         name=data.name,
-        inputs=data.properties.get("inputs", []),
+        inputs=[
+            i.relative_to(inputdir, walk_up=True) for i in data.properties.get("inputs", [])
+        ],
         running_time=data.running_time,
         status=data.properties.get("status", ""),
-        children=[to_tree_node(c) for c in data.actions]
+        children=[to_tree_node(c, inputdir) for c in data.actions]
     )
 
 def collect(basedir: Path):
+    inputdir = (Path(__file__).parent.parent.parent.parent / "data" / basedir.name).resolve()
     data = []
     for file in basedir.glob("**/*.json"):
         data.append(load_json(file))
 
-    return TreeTableWidget([to_tree_node(d) for d in data])
+    return TreeTableWidget([to_tree_node(d, inputdir) for d in data])
