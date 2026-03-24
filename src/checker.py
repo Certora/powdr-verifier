@@ -27,14 +27,14 @@ def check():
                     match evald:
                         case True:
                             model = to_nice_model(s.get_model())
-                            if ARGS().print_model:
-                                logging.warning("model:")
-                                print(json.dumps(model, indent=4))
                             if ARGS().dump_model:
                                 logging.info(f"dumping model to {ARGS().dump_model}")
                                 with open(ARGS().dump_model, "w") as f:
                                     json.dump(model, f, indent=4)
-                            action += { "result": "sat" }
+                            action += {
+                                "result": "sat",
+                                "model": model,
+                            }
                         case False:
                             action += { "result": "unsat" }
                         case _:
