@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Dict, Iterable, Optional
 
 from ...smt.utils import ARGS, And, Bool, Equals, Exists, FNode, ForAll, Implies, Int, Mod, Not, Or
@@ -13,11 +14,44 @@ from .helpers import (
     _unique_multiple_in_domain,
 )
 
+logger = logging.getLogger(__name__)
+
+
+def _fmt_interval(iv: IntInterval) -> str:
+    lo = "-inf" if iv.lo is None else str(iv.lo)
+    hi = "+inf" if iv.hi is None else str(iv.hi)
+    return f"[{lo},{hi}]"
+
+
+def _fmt_domain(dom: IntDomain) -> str:
+    if dom.is_bottom():
+        return "<empty>"
+    return " | ".join(_fmt_interval(iv) for iv in dom.parts)
+
+
+def _fmt_formula(f: FNode, max_len: int = 200) -> str:
+    s = str(f)
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 3] + "..."
+
+
+def _domain_is_full_field_hull(dom: IntDomain, p: int) -> bool:
+    """True if ``dom`` is the whole-field hull [0, p-1] or [0, p] (single interval, lo fixed at 0)."""
+    full = IntDomain.from_interval(IntInterval(0, p-1))
+    return dom.intersect(full) == full
+
 
 class IntervalReasoner:
     """Disjunctive interval propagation over pySMT Int formulas."""
 
-    def __init__(self, modulus: Optional[int] = None, p: Optional[int] = None):
+    def __init__(
+        self,
+        modulus: Optional[int] = None,
+        p: Optional[int] = None,
+        *,
+        log_interval_shrinks: bool = False,
+    ):
         if modulus is None and p is not None:
             modulus = p
         self.p = int(ARGS().field_type.value if modulus is None else modulus)
@@ -25,6 +59,10 @@ class IntervalReasoner:
         self.used_formulas: set[FNode] = set()
         self.tightened_symbols: set[FNode] = set()
         self._cache: Dict[FNode, IntDomain] = {}
+        self.log_interval_shrinks = log_interval_shrinks
+
+    def _should_log_shrinks(self) -> bool:
+        return self.log_interval_shrinks or logger.isEnabledFor(logging.INFO)
 
     def _default(self, sym: FNode) -> IntDomain:
         # Start from full integer domain. Field bounds are learned from constraints.
@@ -57,11 +95,17 @@ class IntervalReasoner:
         *,
         tightened: Optional[set[FNode]] = None,
         invalidate_global_cache: bool = False,
+        step: Optional[str] = None,
     ) -> bool:
         old = self._state_get(state, sym)
         merged = old.intersect(new_d)
         if merged == old:
             return False
+        if self._should_log_shrinks() and not _domain_is_full_field_hull(old, self.p) and not _domain_is_full_field_hull(merged, self.p):
+            msg = f"interval shrink: {sym!s}: {_fmt_domain(old)} intersect {_fmt_domain(new_d)} -> {_fmt_domain(merged)}"
+            if step:
+                msg = f"[{step}] {msg}"
+            logger.info(msg)
         state[sym] = merged
         if tightened is not None:
             tightened.add(sym)
@@ -130,7 +174,7 @@ class IntervalReasoner:
                 #   (not a1) or ... or (not an)  is a tautology.
                 not_args = [a.arg(0) for a in f.args() if a.is_not()]
                 if len(not_args) == len(f.args()) and len(not_args) >= 2:
-                    local = IntervalReasoner(modulus=self.p)
+                    local = IntervalReasoner(modulus=self.p, log_interval_shrinks=self.log_interval_shrinks)
                     local.env = dict(state)
                     local.assume_all(not_args, max_iters=6)
                     if local._state_inconsistent(local.env):
@@ -218,7 +262,9 @@ class IntervalReasoner:
 
             lo = _ceil_div(lo_num, coeff)
             hi = hi_num // coeff
-            changed |= self._state_set(state, sym, IntDomain.from_interval(IntInterval(lo, hi)))
+            changed |= self._state_set(
+                state, sym, IntDomain.from_interval(IntInterval(lo, hi)), step="affine_eq"
+            )
         return changed
 
     def _refine_affine_ineq(
@@ -261,14 +307,18 @@ class IntervalReasoner:
                     continue
                 rhs = target_hi - h.lo
                 hi = rhs // coeff
-                changed |= self._state_set(state, sym, IntDomain.from_interval(IntInterval(INF, hi)))
+                changed |= self._state_set(
+                    state, sym, IntDomain.from_interval(IntInterval(INF, hi)), step="affine_ineq_pos"
+                )
             elif coeff < 0:
                 if h.hi is None:
                     continue
                 den = -coeff
                 num = h.hi - target_hi
                 lo = _ceil_div(num, den)
-                changed |= self._state_set(state, sym, IntDomain.from_interval(IntInterval(lo, INF)))
+                changed |= self._state_set(
+                    state, sym, IntDomain.from_interval(IntInterval(lo, INF)), step="affine_ineq_neg"
+                )
         return changed
 
     def _refine_from_ineq(self, f: FNode, state: Dict[FNode, IntDomain], cache: Dict[FNode, IntDomain]) -> bool:
@@ -286,10 +336,14 @@ class IntervalReasoner:
         changed = False
         if a.is_symbol() and (c := _is_int_const(b)) is not None:
             ub = c - 1 if strict else c
-            changed |= self._state_set(state, a, IntDomain.from_interval(IntInterval(INF, ub)))
+            changed |= self._state_set(
+                state, a, IntDomain.from_interval(IntInterval(INF, ub)), step="ineq_sym_upper"
+            )
         if b.is_symbol() and (c := _is_int_const(a)) is not None:
             lb = c + 1 if strict else c
-            changed |= self._state_set(state, b, IntDomain.from_interval(IntInterval(lb, INF)))
+            changed |= self._state_set(
+                state, b, IntDomain.from_interval(IntInterval(lb, INF)), step="ineq_sym_lower"
+            )
         changed |= self._refine_affine_ineq(a, b, strict=strict, state=state, cache=cache)
         return changed
 
@@ -299,17 +353,17 @@ class IntervalReasoner:
         a, b = f.args()
         changed = False
         if a.is_symbol() and (c := _is_int_const(b)) is not None:
-            changed |= self._state_set(state, a, IntDomain.const(c))
+            changed |= self._state_set(state, a, IntDomain.const(c), step="eq_const")
         if b.is_symbol() and (c := _is_int_const(a)) is not None:
-            changed |= self._state_set(state, b, IntDomain.const(c))
+            changed |= self._state_set(state, b, IntDomain.const(c), step="eq_const")
 
         # Mod(sym,p) == c and sym already canonical -> sym == c
         if (x := _is_mod_p(a, self.p)) is not None and (c := _is_int_const(b)) is not None:
             if self._eval_int(x, state, cache).within_0_p(self.p) and x.is_symbol():
-                changed |= self._state_set(state, x, IntDomain.const(c))
+                changed |= self._state_set(state, x, IntDomain.const(c), step="mod_eq_const")
         if (x := _is_mod_p(b, self.p)) is not None and (c := _is_int_const(a)) is not None:
             if self._eval_int(x, state, cache).within_0_p(self.p) and x.is_symbol():
-                changed |= self._state_set(state, x, IntDomain.const(c))
+                changed |= self._state_set(state, x, IntDomain.const(c), step="mod_eq_const")
 
         changed |= self._refine_affine_eq(a, b, state, cache)
         return changed
@@ -337,7 +391,7 @@ class IntervalReasoner:
         if sym is None or not vals:
             return False
         dom = IntDomain.from_intervals(IntInterval.const(v) for v in vals)
-        return self._state_set(state, sym, dom)
+        return self._state_set(state, sym, dom, step="or_equalities")
 
     def _refine_from_mod_zero(self, f: FNode, state: Dict[FNode, IntDomain], cache: Dict[FNode, IntDomain]) -> bool:
         if not f.is_equals():
@@ -393,7 +447,7 @@ class IntervalReasoner:
                 if not vals:
                     continue
                 dom = IntDomain.from_intervals(IntInterval.const(v) for v in sorted(vals))
-                changed |= self._state_set(state, sym, dom)
+                changed |= self._state_set(state, sym, dom, step="mod_zero_product")
 
         return changed
 
@@ -415,6 +469,7 @@ class IntervalReasoner:
         *,
         tightened: Optional[set[FNode]] = None,
         invalidate_global_cache: bool = False,
+        step: str = "meet",
     ) -> bool:
         changed = False
         for sym, d in source.items():
@@ -424,14 +479,21 @@ class IntervalReasoner:
                 d,
                 tightened=tightened,
                 invalidate_global_cache=invalidate_global_cache,
+                step=step,
             )
         return changed
 
     def _propagate_atom_fixpoint(self, atom: FNode, base: Dict[FNode, IntDomain]) -> Dict[FNode, IntDomain]:
         state = dict(base)
-        for _ in range(8):
+        for r in range(8):
             cache: Dict[FNode, IntDomain] = {}
             changed = self._refine_atom(atom, state, cache)
+            if logger.isEnabledFor(logging.DEBUG) and changed:
+                logger.debug(
+                    "intervals: atom fixpoint round %d/8 changed state for %s",
+                    r + 1,
+                    _fmt_formula(atom),
+                )
             if not changed or self._state_inconsistent(state):
                 break
         return state
@@ -461,7 +523,7 @@ class IntervalReasoner:
                 changed = False
                 for a in f.args():
                     child = self._propagate_formula(a, state)
-                    changed |= self._meet_states_inplace(state, child)
+                    changed |= self._meet_states_inplace(state, child, step="and_propagate")
                     if self._state_inconsistent(state):
                         return state
                 if not changed:
@@ -475,7 +537,7 @@ class IntervalReasoner:
                 out = dict(base)
                 int_vars = [v for v in f.get_free_variables() if v.get_type().is_int_type()]
                 if int_vars:
-                    out[int_vars[0]] = IntDomain.bottom()
+                    self._state_set(out, int_vars[0], IntDomain.bottom(), step="or_all_inconsistent")
                 return out
 
             out = dict(base)
@@ -484,7 +546,7 @@ class IntervalReasoner:
                 joined = IntDomain.bottom()
                 for st in consistent:
                     joined = joined.union(st.get(sym, self._state_get(base, sym)))
-                out[sym] = self._state_get(base, sym).intersect(joined)
+                self._state_set(out, sym, joined, step="or_join")
             return out
 
         if f.is_implies():
@@ -502,9 +564,17 @@ class IntervalReasoner:
 
     def assume_all(self, assumptions: Iterable[FNode], max_iters: int = 10) -> None:
         work = list(assumptions)
-        for _ in range(max_iters):
+        if logger.isEnabledFor(logging.INFO):
+            logger.info(
+                "intervals: assume_all starting (%d assertions, max_iters=%d)",
+                len(work),
+                max_iters,
+            )
+        rounds_run = 0
+        for round_idx in range(max_iters):
+            rounds_run = round_idx + 1
             changed = False
-            for f in work:
+            for fi, f in enumerate(work):
                 normalized = self.simplify(f, prune=False, inject_quantifier_bounds=False)
                 local_state = self._propagate_formula(normalized, dict(self.env))
                 local_changed = self._meet_states_inplace(
@@ -512,12 +582,28 @@ class IntervalReasoner:
                     local_state,
                     tightened=self.tightened_symbols,
                     invalidate_global_cache=True,
+                    step="assume",
                 )
                 if local_changed:
                     self.used_formulas.add(f)
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "intervals: outer round %d: assertion %d/%d changed env: %s",
+                            rounds_run,
+                            fi + 1,
+                            len(work),
+                            _fmt_formula(normalized),
+                        )
                 changed |= local_changed
             if not changed:
                 break
+        if logger.isEnabledFor(logging.INFO):
+            logger.info(
+                "intervals: assume_all finished after %d round(s); %d tracked int vars, %d tightened",
+                rounds_run,
+                len(self.env),
+                len(self.tightened_symbols),
+            )
 
     def must_retain_formula(self, f: FNode) -> bool:
         """Return True for constraints that must not be pruned away."""
@@ -610,7 +696,7 @@ class IntervalReasoner:
                 if v in inherited and v.symbol_name() not in shadowed_names
             }
 
-            local = IntervalReasoner(modulus=self.p)
+            local = IntervalReasoner(modulus=self.p, log_interval_shrinks=self.log_interval_shrinks)
             local.env = dict(seed)
             local.assume_all([body], max_iters=max_iters)
 
@@ -646,7 +732,7 @@ class IntervalReasoner:
             # singleton integer symbols, make these facts explicit.
             # This is sound regardless of polarity because we only add facts
             # implied by the conjunction itself (no inherited seeding here).
-            local = IntervalReasoner(modulus=self.p)
+            local = IntervalReasoner(modulus=self.p, log_interval_shrinks=self.log_interval_shrinks)
             local.assume_all(rewritten_args, max_iters=max_iters)
             present = set(rewritten_args)
             for sym in sorted({v for v in n.get_free_variables() if v.get_type().is_int_type()}, key=str):
