@@ -5,7 +5,7 @@ from pysmt.typing import INT
 
 from src.simplify.intervals.bounded_formula import BoundedFormula
 from src.simplify.intervals.domain import IntDomain, IntInterval, IntVarDomains
-from src.smt.utils import And, Bool, Equals, Int, Or, Symbol
+from src.smt.utils import *
 
 
 def test_constructor_mirrors_args_and_starts_top_domains():
@@ -24,6 +24,13 @@ def test_constructor_leaf_has_no_subformulas():
     b = BoundedFormula(Int(7))
     assert b.subformulas == []
     assert b.formula.is_int_constant()
+
+
+def test_constructor_equals_not_unpacked():
+    e = Equals(Int(1), Int(1))
+    b = BoundedFormula(e)
+    assert b.subformulas == []
+    assert b.formula is e
 
 
 def test_as_fnode_leaf_returns_original_formula():
@@ -73,3 +80,14 @@ def test_as_fnode_and_top_domains_no_extra_conjuncts_from_domains():
     out = b.as_fnode()
     assert out.is_and()
     assert len(list(out.args())) == 2
+
+
+def test_as_fnode_roundtrip_mixed_bool_arith_quantifier():
+    """ForAll over a body with implies, conjunction, disjunction, negation, and int relations."""
+    x = Symbol("qx", INT)
+    inner = And(
+        Or(Not(LE(x, Int(0))), Equals(x, Int(1))),
+        LE(Int(0), x),
+    )
+    f = ForAll([x], Implies(LT(Int(0), x), inner))
+    assert BoundedFormula(f).as_fnode() == f
