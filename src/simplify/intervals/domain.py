@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Generic, Hashable, Iterable, Mapping, Optional, TypeVar
+
+V = TypeVar("V", bound=Hashable)
 
 
 INF = None  # unbounded side marker
@@ -226,3 +228,101 @@ class IntDomain:
         if iv.lo is None or iv.hi is None or iv.lo != iv.hi:
             return None
         return iv.lo
+
+
+class IntVarDomains(Generic[V]):
+    """Sparse map from variables to `IntDomain` (Cartesian product semantics).
+
+    Mutable: the internal mapping is a plain ``dict`` (copied on construction from inputs).
+
+    A key absent from the mapping means that variable is unconstrained (`IntDomain.top()`).
+
+    `intersect` is the meet (narrowing): per-variable domain intersection, with missing
+    variables treated as top on both sides.
+
+    `union` is the join (over-approximation of set union of concrete stores): per-variable
+    exact `IntDomain.union` followed by `IntDomain.hull` (interval convex hull), with
+    missing variables treated as top so a one-sided refinement widens to top on merge.
+    """
+
+    __slots__ = ("_bottom", "_m")
+
+    def __init__(self, mapping: Mapping[V, IntDomain] = {}, *, _bottom: bool = False) -> None:
+        self._bottom = _bottom or any(dom.is_bottom() for dom in mapping.values())
+        self._m: dict[V, IntDomain] = {}
+        if not self._bottom and mapping is not None:
+            self._m = {k: dom for k, dom in mapping.items() if not dom.is_top()}
+
+    @staticmethod
+    def bottom() -> "IntVarDomains":
+        return IntVarDomains(_bottom=True)
+
+    @staticmethod
+    def top() -> "IntVarDomains[V]":
+        return IntVarDomains()
+
+    @staticmethod
+    def from_mapping(mapping: Mapping[V, IntDomain]) -> "IntVarDomains[V]":
+        return IntVarDomains(mapping)
+
+    @staticmethod
+    def singleton(var: V, dom: IntDomain) -> "IntVarDomains[V]":
+        return IntVarDomains({var: dom})
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, IntVarDomains):
+            return NotImplemented
+        return self._bottom == other._bottom and self._m == other._m
+
+    def is_bottom(self) -> bool:
+        return self._bottom
+
+    def is_top(self) -> bool:
+        return not self._bottom and len(self._m) == 0
+
+    def get(self, var: V) -> IntDomain:
+        if self._bottom:
+            return IntDomain.bottom()
+        return self._m.get(var, IntDomain.top())
+
+    def keys(self) -> Iterable[V]:
+        if self._bottom:
+            return ()
+        return self._m.keys()
+
+    def items(self) -> Iterable[tuple[V, IntDomain]]:
+        if self._bottom:
+            return ()
+        return self._m.items()
+
+    def to_dict(self) -> dict[V, IntDomain]:
+        if self._bottom:
+            return {}
+        return dict(self._m)
+
+    def intersect(self, other: "IntVarDomains[V]") -> "IntVarDomains[V]":
+        if self._bottom or other._bottom:
+            return IntVarDomains.bottom()
+        keys_all = self._m.keys() | other._m.keys()
+        out: dict[V, IntDomain] = {}
+        for k in keys_all:
+            inter = self.get(k).intersect(other.get(k))
+            if inter.is_bottom():
+                return IntVarDomains.bottom()
+            if not inter.is_top():
+                out[k] = inter
+        return IntVarDomains(out)
+
+    def union(self, other: "IntVarDomains[V]") -> "IntVarDomains[V]":
+        """Join: over-approximate union of two abstract stores (per-variable hull after union)."""
+        if self._bottom:
+            return IntVarDomains(dict(other._m), _bottom=other._bottom)
+        if other._bottom:
+            return IntVarDomains(dict(self._m))
+        out: dict[V, IntDomain] = {}
+        for k in self._m.keys() | other._m.keys():
+            combined = self.get(k).union(other.get(k))
+            joined = IntDomain.from_interval(combined.hull())
+            if not joined.is_top():
+                out[k] = joined
+        return IntVarDomains(out)
