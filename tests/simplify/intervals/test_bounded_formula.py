@@ -91,3 +91,103 @@ def test_as_fnode_roundtrip_mixed_bool_arith_quantifier():
     )
     f = ForAll([x], Implies(LT(Int(0), x), inner))
     assert BoundedFormula(f).as_fnode() == f
+
+
+def test_refine_domains_le_leaf():
+    x = Symbol("rx", INT)
+    f = LE(x, Int(10))
+    b = BoundedFormula(f)
+    assert b.domains.is_top()
+    assert b.refine_domains() is True
+    d = b.domains.get(x)
+    assert not d.is_top()
+    assert d.hull().hi is not None and d.hull().hi <= 10
+    assert b.refine_domains() is False
+
+
+def test_refine_domains_does_not_visit_children_under_and():
+    x = Symbol("sx", INT)
+    inner_le = LE(x, Int(3))
+    inner_eq = Equals(x, Int(1))
+    f = And(inner_le, inner_eq)
+    b = BoundedFormula(f)
+    le_bf = next(s for s in b.subformulas if s.formula is inner_le)
+    eq_bf = next(s for s in b.subformulas if s.formula is inner_eq)
+    assert b.refine_domains() is False
+    assert b.domains.is_top()
+    assert le_bf.domains.is_top()
+    assert eq_bf.domains.is_top()
+
+
+def test_refine_domains_noop_on_bool_op_root_without_children():
+    b = BoundedFormula(And())
+    assert b.refine_domains() is False
+    assert b.domains.is_top()
+
+
+def test_push_down_leaf_returns_false():
+    x = Symbol("pd_leaf", INT)
+    b = BoundedFormula(LE(x, Int(1)))
+    assert b.push_down() is False
+
+
+def test_push_down_intersects_children_domains():
+    x = Symbol("px", INT)
+    f = And(Bool(True), Bool(True))
+    b = BoundedFormula(f)
+    dom = IntDomain.from_interval(IntInterval(0, 5))
+    b.domains = IntVarDomains({x: dom})
+    assert b.push_down() is True
+    for sub in b.subformulas:
+        assert sub.domains.get(x) == dom
+    assert b.push_down() is False
+
+
+def test_lift_up_leaf_returns_false():
+    x = Symbol("lu_leaf", INT)
+    b = BoundedFormula(LE(x, Int(1)))
+    assert b.lift_up() is False
+
+
+def test_lift_up_and_intersects_children_then_meets_parent():
+    x = Symbol("lx", INT)
+    f = And(Bool(True), Bool(True))
+    b = BoundedFormula(f)
+    d0 = IntDomain.from_interval(IntInterval(0, 5))
+    d1 = IntDomain.from_interval(IntInterval(2, 8))
+    b.subformulas[0].domains = IntVarDomains({x: d0})
+    b.subformulas[1].domains = IntVarDomains({x: d1})
+    assert b.lift_up() is True
+    assert b.domains.get(x) == d0.intersect(d1)
+    assert b.lift_up() is False
+
+
+def test_lift_up_or_unions_children_then_meets_parent():
+    x = Symbol("lox", INT)
+    f = Or(Bool(True), Bool(True))
+    b = BoundedFormula(f)
+    d0 = IntDomain.from_interval(IntInterval(0, 1))
+    d1 = IntDomain.from_interval(IntInterval(2, 3))
+    b.subformulas[0].domains = IntVarDomains({x: d0})
+    b.subformulas[1].domains = IntVarDomains({x: d1})
+    assert b.lift_up() is True
+    assert b.domains.get(x) == IntDomain.from_interval(d0.union(d1).hull())
+    assert b.lift_up() is False
+
+
+def test_lift_up_and_top_conjunct_does_not_erase_refinement():
+    x = Symbol("lsx", INT)
+    f = And(Bool(True), Bool(True))
+    b = BoundedFormula(f)
+    d = IntDomain.from_interval(IntInterval(0, 5))
+    b.subformulas[0].domains = IntVarDomains({x: d})
+    assert b.subformulas[1].domains.is_top()
+    assert b.lift_up() is True
+    assert b.domains.get(x) == d
+    assert b.lift_up() is False
+
+
+def test_lift_up_non_and_or_bool_op_is_noop():
+    b = BoundedFormula(Not(Bool(False)))
+    assert b.lift_up() is False
+    assert b.domains.is_top()
