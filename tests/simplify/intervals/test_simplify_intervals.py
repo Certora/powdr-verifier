@@ -50,45 +50,6 @@ def test_prime_field_range_eliminates_redundant_mod():
     assert out == x
 
 
-(forall ((a Int) (x Int) (y Int) (z Int))
-(not
-    (and
-        (<= 0 a)
-        (<= 0 x)
-        (<= 0 y)
-        (<= 0 z)
-        (< a 2013265921)
-        (< x 2013265921)
-        (< y 2013265921)
-        (< z 2013265921)
-        (and
-            (or (= x 1) (= x 0))
-            (or (= y 1) (= y 0))
-            (or (= z 1) (= z 0))
-            (=
-                (mod
-                    (+
-                        x
-                        (* 2 y)
-                        (* 3 z)
-                    )
-                    2013265921
-                )
-                0
-            )
-        )
-        (=
-            (mod
-                (+ a x y z (- 1))
-                2013265921
-            )
-            0
-        )
-    )
-)
-)
-
-
 def test_simplify_intervals_or_negations():
     parser = SmtLibParser()
     script = parser.get_script(
