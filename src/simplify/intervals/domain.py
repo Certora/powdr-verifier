@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Generic, Hashable, Iterable, Mapping, Optional, TypeVar
+from typing import Generic, Hashable, Iterable, Iterator, Mapping, Optional, TypeVar
+
+from ...smt.utils import *
 
 V = TypeVar("V", bound=Hashable)
 
@@ -76,6 +78,20 @@ class IntInterval:
         lo_ok = self.lo is None or self.lo <= v
         hi_ok = self.hi is None or v <= self.hi
         return lo_ok and hi_ok
+
+    def to_constraints(self, sym: FNode) -> Iterator[FNode]:
+        """Yield at most one integer-theory constraint for ``sym``; empty if unbounded (no finite guard)."""
+        if self.is_bottom():
+            yield Bool(False)
+        elif self.lo is None and self.hi is None:
+            pass
+        elif self.lo is not None and self.hi is not None and self.lo == self.hi:
+            yield Equals(sym, Int(self.lo))
+        else:
+            if self.lo is not None:
+                yield Int(self.lo) <= sym
+            if self.hi is not None:
+                yield sym <= Int(self.hi)
 
 
 def _lo_key(v: Optional[int]) -> float:
@@ -229,6 +245,18 @@ class IntDomain:
             return None
         return iv.lo
 
+    def to_constraints(self, sym: FNode) -> FNode:
+        """Yield at most one formula: a disjunction of per-interval guards; empty if the domain is unconstrained."""
+        if self.is_bottom():
+            return Bool(False)
+        disjuncts: list[FNode] = [
+            And(*list(iv.to_constraints(sym))) for iv in self.parts
+        ]
+        match len(disjuncts):
+            case 0: return TRUE()
+            case 1: return disjuncts[0]
+            case _: return Or(*disjuncts)
+
 
 class IntVarDomains(Generic[V]):
     """Sparse map from variables to `IntDomain` (Cartesian product semantics).
@@ -299,6 +327,14 @@ class IntVarDomains(Generic[V]):
         if self._bottom:
             return {}
         return dict(self._m)
+
+    def to_constraints(self) -> Iterator[FNode]:
+        """Yield one guard per stored binding (conjoin for a full guard). Keys must be integer symbols."""
+        if self.is_bottom():
+            yield Bool(False)
+            return
+        for sym, dom in self.items():
+            yield dom.to_constraints(sym)
 
     def intersect(self, other: "IntVarDomains[V]") -> "IntVarDomains[V]":
         if self._bottom or other._bottom:
