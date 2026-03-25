@@ -191,3 +191,59 @@ def test_lift_up_non_and_or_bool_op_is_noop():
     b = BoundedFormula(Not(Bool(False)))
     assert b.lift_up() is False
     assert b.domains.is_top()
+
+
+def test_refine_recursive_leaf_same_as_refine_domains():
+    x = Symbol("rr_leaf", INT)
+    f = LE(x, Int(10))
+    b = BoundedFormula(f)
+    r1 = b.refine_domains()
+    b2 = BoundedFormula(f)
+    r2 = b2.refine_recursive()
+    assert r1 is True and r2 is True
+    assert b.domains == b2.domains
+    assert b.refine_recursive() is False
+
+
+def test_refine_recursive_and_intersects_children_and_idempotent():
+    x = Symbol("rr_and", INT)
+    f = And(LE(x, Int(10)), LE(x, Int(3)))
+    b = BoundedFormula(f)
+    assert b.refine_recursive() is True
+    d = b.domains.get(x)
+    assert not d.is_top()
+    assert d.hull().hi is not None and d.hull().hi <= 3
+    assert b.refine_recursive() is False
+
+
+def test_refine_recursive_and_becomes_bottom_when_ranges_disjoint():
+    x = Symbol("rr_bot", INT)
+    f = And(LE(x, Int(0)), LE(Int(5), x))
+    b = BoundedFormula(f)
+    assert b.refine_recursive() is True
+    assert b.domains.is_bottom()
+
+
+def test_refine_domains_context_tightens_leaf_beyond_own_formula():
+    x = Symbol("rdx", INT)
+    f = LE(x, Int(10))
+    b = BoundedFormula(f)
+    tighter = LE(x, Int(3))
+    assert b.refine_domains(frozenset([tighter])) is True
+    hi = b.domains.get(x).hull().hi
+    assert hi is not None and hi <= 3
+
+
+def test_refine_domains_bool_op_root_refines_from_context_only():
+    x = Symbol("rbop", INT)
+    b = BoundedFormula(And())
+    assert b.refine_domains(frozenset([LE(x, Int(7))])) is True
+    hi = b.domains.get(x).hull().hi
+    assert hi is not None and hi <= 7
+
+
+def test_refine_recursive_or_does_not_extend_context():
+    x = Symbol("ctx_or", INT)
+    f = Or(LE(x, Int(1)), LE(x, Int(2)))
+    b = BoundedFormula(f)
+    assert b.refine_recursive(context=frozenset()) is True
