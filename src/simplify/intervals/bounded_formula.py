@@ -55,29 +55,36 @@ class BoundedFormula:
         mgr = get_env().formula_manager
         return mgr.create_node(node_type=self.formula.node_type(), args=tuple(children))
 
-    def refine_domains(self) -> bool:
-        """Intersect ``domains`` with information implied by ``formula`` (local, no child traversal).
+    def refine_domains(self, context: frozenset[FNode] = frozenset()) -> bool:
+        """Intersect ``domains`` with information implied by ``formula`` and ``context``.
 
-        If ``formula`` is a pySMT boolean operator (``is_bool_op()``), does nothing and returns
-        ``False``. Otherwise runs the same refinement as ``IntervalReasoner._refine_atom``
-        (fixpoint, up to 8 rounds). Returns ``True`` iff ``domains`` changed (strict shrink or
-        new bindings), ``False`` if unchanged.
+        Refinement runs ``IntervalReasoner._refine_atom`` on every formula in ``context``,
+        and on ``formula`` when it is not a boolean operator (``is_bool_op()``), in fixpoint
+        rounds (up to 8). If there is nothing to refine (``formula`` is a boolean operator
+        and ``context`` is empty), returns ``False``. Returns ``True`` iff ``domains``
+        changed.
         """
-        if self.formula.is_bool_op():
+        atoms: list[FNode] = list(context)
+        if not self.formula.is_bool_op():
+            if self.formula not in context:
+                atoms.append(self.formula)
+        if not atoms:
             return False
-        old_domains = self.domains
         r = IntervalReasoner()
         base: dict[FNode, IntDomain] = dict(self.domains.to_dict())
         for _ in range(8):
             cache: dict[FNode, IntDomain] = {}
-            changed = r._refine_atom(
-                self.formula,
-                base,
-                cache,
-                formula_ctx="BoundedFormula.refine_domains",
-            )
+            changed = False
+            for atom in atoms:
+                changed |= r._refine_atom(
+                    atom,
+                    base,
+                    cache,
+                    formula_ctx="BoundedFormula.refine_domains",
+                )
             if not changed or r._state_inconsistent(base):
                 break
+        old_domains = self.domains
         self.domains = IntVarDomains.from_mapping(base)
         return self.domains != old_domains
 
@@ -114,8 +121,42 @@ class BoundedFormula:
                 lifted = lifted.union(sub.domains)
         else:
             return False
-        merged = self.domains.intersect(lifted)
-        if merged == self.domains:
-            return False
-        self.domains = merged
-        return True
+        old_domains = self.domains
+        self.domains = old_domains.intersect(lifted)
+        return self.domains != old_domains
+
+    def refine_recursive(self, context: frozenset[FNode] = frozenset()) -> bool:
+        """Refine ``domains`` over this subtree (children first, then lift).
+
+        ``context`` collects conjunctive constraints from enclosing ``And`` nodes: when
+        ``formula`` is a conjunction, each direct child whose ``formula`` is not a
+        boolean operator (``is_bool_op()``) is added, then the same frozenset is passed to
+        recursive calls. Defaults to an empty frozenset.
+
+        Leaves without ``subformulas`` call ``refine_domains`` with that context.
+        Otherwise, repeat ``push_down``, recursive refinement of each child, then
+        ``lift_up`` until ``domains`` is bottom or a full round makes no progress.
+        Returns ``True`` if any refinement step changed a domain map in this subtree.
+        """
+        if self.formula.is_and():
+            ctx = context | frozenset(
+                sub.formula for sub in self.subformulas if not sub.formula.is_bool_op()
+            )
+        else:
+            ctx = context
+        progress_any = self.refine_domains(ctx)
+        if not self.subformulas:
+            return progress_any
+        while not self.domains.is_bottom():
+            progress = False
+            if self.push_down():
+                progress = True
+            for sub in self.subformulas:
+                if sub.refine_recursive(ctx):
+                    progress = True
+            if self.lift_up():
+                progress = True
+            if not progress:
+                break
+            progress_any = True
+        return progress_any
