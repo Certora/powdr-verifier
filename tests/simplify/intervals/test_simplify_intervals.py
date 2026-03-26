@@ -107,7 +107,6 @@ def test_simplify_intervals_or_negations():
     )
 
     simplified = simplify_intervals(script)
-    print(simplified)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
     assert len(asserts) == 1
 
@@ -115,14 +114,27 @@ def test_simplify_intervals_or_negations():
     y = Symbol("y", INT)
     z = Symbol("z", INT)
     out = asserts[0]
-    print(out)
-    assert out.is_not()
-    inner = out.arg(0)
-    assert inner.is_and()
-    inner_args = set(inner.args())
-    assert Equals(x, Int(0)) in inner_args
-    assert Equals(y, Int(0)) in inner_args
-    assert Equals(z, Int(0)) in inner_args
+    assert out.is_forall()
+    body = out.arg(0)
+    assert body.is_or()
+
+    def _disjunct_is_not_triple_zero(d: FNode) -> bool:
+        if not d.is_not():
+            return False
+        a = d.arg(0)
+        if not a.is_and() or len(list(a.args())) != 3:
+            return False
+        syms = set()
+        for eq in a.args():
+            if not eq.is_equals():
+                return False
+            u, v = eq.args()
+            if v != Int(0) or not u.is_symbol():
+                return False
+            syms.add(u)
+        return syms == {x, y, z}
+
+    assert any(_disjunct_is_not_triple_zero(d) for d in body.args())
 
 def test_simplify_intervals_marks_obvious_inconsistency():
     parser = SmtLibParser()

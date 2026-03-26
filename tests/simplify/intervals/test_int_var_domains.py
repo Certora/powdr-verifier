@@ -136,9 +136,7 @@ def test_str_int_var_domains_skips_full_field_and_top_shaped():
     assert "tight -> [1,1]" in str(mixed)
 
 
-def test_refine_atom():
-    logging.basicConfig(level=logging.WARNING, force=True, format='%(levelname)s:%(relativeCreated)dms %(message)s')
-    logging.getLogger("src.simplify.intervals").setLevel(logging.DEBUG)
+def test_refine_atom_1():
     p = int(ARGS().field_type.value)
     x,y,z = Symbol("x", INT), Symbol("y", INT), Symbol("z", INT)
     base1 = IntVarDomains(
@@ -172,22 +170,10 @@ def test_refine_atom():
         Int(0),
         wrap_mod(Minus(Plus(y, z, Int(1)), x))
     )
-    print(f"atom1: {atom1}")
-    print(f"atom2: {atom2}")
-    cache1 = {x: IntDomain.top(), y: IntDomain.top(), z: IntDomain.top()}
-    cache2 = {x: IntDomain.top(), y: IntDomain.top(), z: IntDomain.top()}
-    cache2 = {}
-
-    print(f"base1 before: {base1}")
-    print(f"base2 before: {base2}")
 
     assert base1 == base2
 
-    IntervalReasoner()._refine_atom(atom1, base1, cache1)
-    IntervalReasoner()._refine_atom(atom2, base2, cache2)
+    IntervalReasoner()._refine_atom(atom1, base1)
+    IntervalReasoner()._refine_atom(atom2, base2)
 
     assert base1 == base2
-    print(f"base1 after: {base1}")
-    print(f"base2 after: {base2}")
-
-    assert False

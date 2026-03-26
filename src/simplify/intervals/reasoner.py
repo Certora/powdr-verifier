@@ -65,7 +65,6 @@ class IntervalReasoner:
         self.env: Dict[FNode, IntDomain] = {}
         self.used_formulas: set[FNode] = set()
         self.tightened_symbols: set[FNode] = set()
-        self._cache: Dict[FNode, IntDomain] = {}
         self.log_interval_shrinks = log_interval_shrinks
 
     def _should_log_shrinks(self) -> bool:
@@ -101,7 +100,6 @@ class IntervalReasoner:
         new_d: IntDomain,
         *,
         tightened: Optional[set[FNode]] = None,
-        invalidate_global_cache: bool = False,
         step: Optional[str] = None,
         formula_ctx: Optional[str] = None,
     ) -> bool:
@@ -119,14 +117,9 @@ class IntervalReasoner:
         state[sym] = merged
         if tightened is not None:
             tightened.add(sym)
-        if invalidate_global_cache:
-            self._cache.clear()
         return True
 
-    def _eval_int(self, e: FNode, state: Dict[FNode, IntDomain], cache: Dict[FNode, IntDomain]) -> IntDomain:
-        if e in cache:
-            return cache[e]
-
+    def _eval_int(self, e: FNode, state: Dict[FNode, IntDomain]) -> IntDomain:
         if (c := _is_int_const(e)) is not None:
             r = IntDomain.const(c)
         elif e.is_symbol():
@@ -134,21 +127,21 @@ class IntervalReasoner:
         elif e.is_plus():
             acc = IntDomain.const(0)
             for a in e.args():
-                acc = acc.add(self._eval_int(a, state, cache))
+                acc = acc.add(self._eval_int(a, state))
             r = acc
         elif e.is_minus():
             a, b = e.args()
-            r = self._eval_int(a, state, cache).sub(self._eval_int(b, state, cache))
+            r = self._eval_int(a, state).sub(self._eval_int(b, state))
         elif e.is_times():
             acc = IntDomain.const(1)
             for a in e.args():
-                acc = acc.mul(self._eval_int(a, state, cache))
+                acc = acc.mul(self._eval_int(a, state))
             r = acc
         elif e.is_mod():
             a, m = e.args()
             mv = _is_int_const(m)
             if mv is not None and mv > 0:
-                ai = self._eval_int(a, state, cache)
+                ai = self._eval_int(a, state)
                 if ai.within_0_p(mv):
                     r = ai
                 else:
@@ -158,24 +151,23 @@ class IntervalReasoner:
         else:
             r = IntDomain.top()
 
-        cache[e] = r
         return r
 
-    def _eval_bool(self, f: FNode, state: Dict[FNode, IntDomain], cache: Dict[FNode, IntDomain]) -> Optional[bool]:
+    def _eval_bool(self, f: FNode, state: Dict[FNode, IntDomain]) -> Optional[bool]:
         if (bc := _is_bool_const(f)) is not None:
             return bc
         if f.is_not():
-            v = self._eval_bool(f.arg(0), state, cache)
+            v = self._eval_bool(f.arg(0), state)
             return None if v is None else (not v)
         if f.is_and():
-            vals = [self._eval_bool(a, state, cache) for a in f.args()]
+            vals = [self._eval_bool(a, state) for a in f.args()]
             if False in vals:
                 return False
             if None in vals:
                 return None
             return True
         if f.is_or():
-            vals = [self._eval_bool(a, state, cache) for a in f.args()]
+            vals = [self._eval_bool(a, state) for a in f.args()]
             if True in vals:
                 return True
             if None in vals:
@@ -197,8 +189,8 @@ class IntervalReasoner:
             return False
         if f.is_implies():
             a, b = f.args()
-            va = self._eval_bool(a, state, cache)
-            vb = self._eval_bool(b, state, cache)
+            va = self._eval_bool(a, state)
+            vb = self._eval_bool(b, state)
             if va is False or vb is True:
                 return True
             if va is True:
@@ -206,8 +198,8 @@ class IntervalReasoner:
             return None
         if f.is_equals() or f.is_lt() or f.is_le():
             a, b = f.args()
-            ai = self._eval_int(a, state, cache)
-            bi = self._eval_int(b, state, cache)
+            ai = self._eval_int(a, state)
+            bi = self._eval_int(b, state)
             if f.is_equals():
                 if ai.intersect(bi).is_bottom():
                     return False
@@ -232,14 +224,13 @@ class IntervalReasoner:
         return None
 
     def eval_bool(self, f: FNode) -> Optional[bool]:
-        return self._eval_bool(f, self.env, self._cache)
+        return self._eval_bool(f, self.env)
 
     def _refine_affine_eq(
         self,
         a: FNode,
         b: FNode,
         state: Dict[FNode, IntDomain],
-        cache: Dict[FNode, IntDomain],
         *,
         formula_ctx: Optional[str] = None,
     ) -> bool:
@@ -265,7 +256,7 @@ class IntervalReasoner:
             for t, c in terms.items():
                 if t is sym:
                     continue
-                other = other.add(self._eval_int(t, state, cache).scale(c))
+                other = other.add(self._eval_int(t, state).scale(c))
             h = other.hull()
             if h.lo is None or h.hi is None:
                 continue
@@ -294,7 +285,6 @@ class IntervalReasoner:
         *,
         strict: bool,
         state: Dict[FNode, IntDomain],
-        cache: Dict[FNode, IntDomain],
         formula_ctx: Optional[str] = None,
     ) -> bool:
         aff_a = _affine(a)
@@ -320,7 +310,7 @@ class IntervalReasoner:
             for t, c in terms.items():
                 if t is sym:
                     continue
-                rest = rest.add(self._eval_int(t, state, cache).scale(c))
+                rest = rest.add(self._eval_int(t, state).scale(c))
             h = rest.hull()
 
             if coeff > 0:
@@ -354,7 +344,6 @@ class IntervalReasoner:
         self,
         f: FNode,
         state: Dict[FNode, IntDomain],
-        cache: Dict[FNode, IntDomain],
         *,
         formula_ctx: Optional[str] = None,
     ) -> bool:
@@ -389,7 +378,7 @@ class IntervalReasoner:
                 formula_ctx=formula_ctx,
             )
         changed |= self._refine_affine_ineq(
-            a, b, strict=strict, state=state, cache=cache, formula_ctx=formula_ctx
+            a, b, strict=strict, state=state, formula_ctx=formula_ctx
         )
         return changed
 
@@ -397,7 +386,6 @@ class IntervalReasoner:
         self,
         f: FNode,
         state: Dict[FNode, IntDomain],
-        cache: Dict[FNode, IntDomain],
         *,
         formula_ctx: Optional[str] = None,
     ) -> bool:
@@ -416,17 +404,17 @@ class IntervalReasoner:
 
         # Mod(sym,p) == c and sym already canonical -> sym == c
         if (x := _is_mod_p(a, self.p)) is not None and (c := _is_int_const(b)) is not None:
-            if self._eval_int(x, state, cache).within_0_p(self.p) and x.is_symbol():
+            if self._eval_int(x, state).within_0_p(self.p) and x.is_symbol():
                 changed |= self._state_set(
                     state, x, IntDomain.const(c), step="mod_eq_const", formula_ctx=formula_ctx
                 )
         if (x := _is_mod_p(b, self.p)) is not None and (c := _is_int_const(a)) is not None:
-            if self._eval_int(x, state, cache).within_0_p(self.p) and x.is_symbol():
+            if self._eval_int(x, state).within_0_p(self.p) and x.is_symbol():
                 changed |= self._state_set(
                     state, x, IntDomain.const(c), step="mod_eq_const", formula_ctx=formula_ctx
                 )
 
-        changed |= self._refine_affine_eq(a, b, state, cache, formula_ctx=formula_ctx)
+        changed |= self._refine_affine_eq(a, b, state, formula_ctx=formula_ctx)
         return changed
 
     def _refine_from_or_equalities(
@@ -460,7 +448,6 @@ class IntervalReasoner:
         self,
         f: FNode,
         state: Dict[FNode, IntDomain],
-        cache: Dict[FNode, IntDomain],
         *,
         formula_ctx: Optional[str] = None,
     ) -> bool:
@@ -481,11 +468,11 @@ class IntervalReasoner:
             return False
 
         changed = False
-        inner_d = self._eval_int(inner, state, cache)
+        inner_d = self._eval_int(inner, state)
         uniq = _unique_multiple_in_domain(inner_d, p)
         if uniq is not None:
             changed |= self._refine_affine_eq(
-                inner, Int(uniq), state, cache, formula_ctx=formula_ctx
+                inner, Int(uniq), state, formula_ctx=formula_ctx
             )
 
         # Prime-field product reasoning:
@@ -530,20 +517,19 @@ class IntervalReasoner:
         self,
         atom: FNode,
         state: Dict[FNode, IntDomain],
-        cache: Dict[FNode, IntDomain],
         *,
         formula_ctx: Optional[str] = None,
     ) -> bool:
-        logger.debug(f"refine_atom: {self.p} {self.env} {self.used_formulas} {self.tightened_symbols} {self._cache}")
-        logger.debug(f"called with {atom} {state} {cache} {formula_ctx}")
+        logger.debug(f"refine_atom: {self.p} {self.env} {self.used_formulas} {self.tightened_symbols}")
+        logger.debug(f"called with {atom} {state} {formula_ctx}")
         changed = False
-        changed |= self._refine_from_ineq(atom, state, cache, formula_ctx=formula_ctx)
+        changed |= self._refine_from_ineq(atom, state, formula_ctx=formula_ctx)
         logger.debug(f"refine_atom after ineq: {state}")
-        changed |= self._refine_from_eq(atom, state, cache, formula_ctx=formula_ctx)
+        changed |= self._refine_from_eq(atom, state, formula_ctx=formula_ctx)
         logger.debug(f"refine_atom after eq: {state}")
         changed |= self._refine_from_or_equalities(atom, state, formula_ctx=formula_ctx)
         logger.debug(f"refine_atom after or_equalities: {state}")
-        changed |= self._refine_from_mod_zero(atom, state, cache, formula_ctx=formula_ctx)
+        changed |= self._refine_from_mod_zero(atom, state, formula_ctx=formula_ctx)
         logger.debug(f"refine_atom after mod_zero: {state}")
         return changed
 
@@ -556,7 +542,6 @@ class IntervalReasoner:
         source: Dict[FNode, IntDomain],
         *,
         tightened: Optional[set[FNode]] = None,
-        invalidate_global_cache: bool = False,
         step: str = "meet",
         formula_ctx: Optional[str] = None,
     ) -> bool:
@@ -567,7 +552,6 @@ class IntervalReasoner:
                 sym,
                 d,
                 tightened=tightened,
-                invalidate_global_cache=invalidate_global_cache,
                 step=step,
                 formula_ctx=formula_ctx,
             )
@@ -582,8 +566,7 @@ class IntervalReasoner:
     ) -> Dict[FNode, IntDomain]:
         state = dict(base)
         for r in range(8):
-            cache: Dict[FNode, IntDomain] = {}
-            changed = self._refine_atom(atom, state, cache, formula_ctx=formula_ctx)
+            changed = self._refine_atom(atom, state, formula_ctx=formula_ctx)
             if logger.isEnabledFor(logging.DEBUG) and changed:
                 logger.debug(
                     "intervals: atom fixpoint round %d/8 changed state (ctx=%s) for %s",
@@ -742,7 +725,6 @@ class IntervalReasoner:
                     self.env,
                     local_state,
                     tightened=self.tightened_symbols,
-                    invalidate_global_cache=True,
                     step="assume",
                     formula_ctx=sub_ctx,
                 )
@@ -1022,7 +1004,7 @@ class IntervalReasoner:
             if n.is_mod():
                 a, m = n.args()
                 mv = _is_int_const(m)
-                if mv is not None and self._eval_int(a, self.env, self._cache).within_0_p(mv):
+                if mv is not None and self._eval_int(a, self.env).within_0_p(mv):
                     memo[n] = a
                     return memo[n]
                 memo[n] = Mod(go(a), go(m))
@@ -1031,7 +1013,7 @@ class IntervalReasoner:
             if n.is_equals():
                 a, b = n.args()
                 if (x := _is_mod_p(a, self.p)) is not None and _is_int_const(b) == 0:
-                    x_dom = self._eval_int(x, self.env, self._cache)
+                    x_dom = self._eval_int(x, self.env)
                     if x_dom.within_open_pm_p(self.p):
                         memo[n] = Equals(x, Int(0))
                         return memo[n]
@@ -1039,7 +1021,7 @@ class IntervalReasoner:
                         memo[n] = Equals(x, Int(uniq))
                         return memo[n]
                 if (x := _is_mod_p(b, self.p)) is not None and _is_int_const(a) == 0:
-                    x_dom = self._eval_int(x, self.env, self._cache)
+                    x_dom = self._eval_int(x, self.env)
                     if x_dom.within_open_pm_p(self.p):
                         memo[n] = Equals(x, Int(0))
                         return memo[n]
