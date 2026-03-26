@@ -247,3 +247,17 @@ def test_refine_recursive_or_does_not_extend_context():
     f = Or(LE(x, Int(1)), LE(x, Int(2)))
     b = BoundedFormula(f)
     assert b.refine_recursive(context=frozenset()) is True
+
+
+def test_infinte_loop():
+    x = Symbol("x", INT)
+    f = And(
+        Or(
+            Equals(x, Int(1)),
+            Equals(x, Int(0))
+        ),
+        Equals(x, Int(1)),
+    )
+
+    b = BoundedFormula(f)
+    b.refine_recursive()

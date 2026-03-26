@@ -1,6 +1,9 @@
 """Unit tests for `IntVarDomains` (variable maps to `IntDomain`)."""
 
 from src.simplify.intervals.domain import IntDomain, IntInterval, IntVarDomains
+from src.simplify.intervals import IntervalReasoner
+from src.utils.args import ARGS
+from src.smt.utils import *
 
 
 def iv(lo: int | None, hi: int | None) -> IntInterval:
@@ -96,3 +99,95 @@ def test_union_bottom_is_identity_for_join():
     only_x = IntVarDomains.singleton("x", IntDomain.from_interval(iv(0, 2)))
     assert IntVarDomains.bottom().union(only_x) == only_x
     assert only_x.union(IntVarDomains.bottom()) == only_x
+
+
+def test_str_int_var_domains():
+    assert str(IntVarDomains.top()) == "IntVarDomains(top)"
+    assert str(IntVarDomains.bottom()) == "IntVarDomains(bottom)"
+    m = IntVarDomains(
+        {
+            "b": IntDomain.from_interval(iv(0, 1)),
+            "a": IntDomain.const(3),
+        }
+    )
+    s = str(m)
+    assert s.startswith("IntVarDomains({")
+    assert "a -> [3,3]" in s
+    assert "b -> [0,1]" in s
+
+
+def test_str_int_var_domains_skips_full_field_and_top_shaped():
+    p = int(ARGS().field_type.value)
+    only_field = IntVarDomains(
+        {
+            "x": IntDomain.from_interval(iv(0, p - 1)),
+            "y": IntDomain.from_interval(iv(0, p)),
+        }
+    )
+    assert str(only_field) == "IntVarDomains({})"
+
+    mixed = IntVarDomains(
+        {
+            "wide": IntDomain.from_interval(iv(0, p - 1)),
+            "tight": IntDomain.const(1),
+        }
+    )
+    assert "wide" not in str(mixed)
+    assert "tight -> [1,1]" in str(mixed)
+
+
+def test_refine_atom():
+    logging.basicConfig(level=logging.WARNING, force=True, format='%(levelname)s:%(relativeCreated)dms %(message)s')
+    logging.getLogger("src.simplify.intervals").setLevel(logging.DEBUG)
+    p = int(ARGS().field_type.value)
+    x,y,z = Symbol("x", INT), Symbol("y", INT), Symbol("z", INT)
+    base1 = IntVarDomains(
+        {
+            x: IntDomain.from_interval(iv(0, p - 1)),
+            y: IntDomain.from_interval(iv(0, p - 1)),
+            z: IntDomain.from_interval(iv(0, 131071)),
+        }
+    )._m
+    base2 = IntVarDomains(
+        {
+            x: IntDomain.from_interval(iv(0, p - 1)),
+            y: IntDomain.from_interval(iv(0, p - 1)),
+            z: IntDomain.from_interval(iv(0, 131071)),
+        }
+    )._m
+    atom1 = LE(
+        Int(0),
+        wrap_mod(
+            Minus(
+                Plus(
+                    Times(Int(1), y),
+                    Times(Int(1), z),
+                    Int(1),
+                ),
+                Times(Int(1), x),
+            ),
+        )
+    )
+    atom2 = LE(
+        Int(0),
+        wrap_mod(Minus(Plus(y, z, Int(1)), x))
+    )
+    print(f"atom1: {atom1}")
+    print(f"atom2: {atom2}")
+    cache1 = {x: IntDomain.top(), y: IntDomain.top(), z: IntDomain.top()}
+    cache2 = {x: IntDomain.top(), y: IntDomain.top(), z: IntDomain.top()}
+    cache2 = {}
+
+    print(f"base1 before: {base1}")
+    print(f"base2 before: {base2}")
+
+    assert base1 == base2
+
+    IntervalReasoner()._refine_atom(atom1, base1, cache1)
+    IntervalReasoner()._refine_atom(atom2, base2, cache2)
+
+    assert base1 == base2
+    print(f"base1 after: {base1}")
+    print(f"base2 after: {base2}")
+
+    assert False

@@ -1,4 +1,5 @@
 from src.simplify import simplify_intervals
+from src.simplify.intervals import simplify_intervals2
 from src.simplify.intervals import Interval, IntervalReasoner
 from src.smt.utils import *
 from textwrap import dedent
@@ -141,6 +142,29 @@ def test_simplify_intervals_marks_obvious_inconsistency():
     )
 
     simplified = simplify_intervals(script)
+    asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
+    assert asserts
+    assert all(a.is_false() for a in asserts)
+
+
+def test_simplify_intervals2_marks_obvious_inconsistency():
+    parser = SmtLibParser()
+    script = parser.get_script(
+        StringIO(
+            dedent(
+                """
+                (set-logic ALL)
+                (declare-fun x () Int)
+                (assert (<= x 1))
+                (assert (<= 3 x))
+                (check-sat)
+                """
+            ).strip()
+            + "\n"
+        )
+    )
+
+    simplified = simplify_intervals2(script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
     assert asserts
     assert all(a.is_false() for a in asserts)
