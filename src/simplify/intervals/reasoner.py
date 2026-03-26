@@ -36,6 +36,13 @@ def _fmt_formula(f: FNode, max_len: int = 200) -> str:
     return s[: max_len - 3] + "..."
 
 
+def _subformula_ctx(parent: Optional[str], label: str) -> str:
+    """Build a path label for logging propagation under a subformula."""
+    if parent:
+        return f"{parent}/{label}"
+    return label
+
+
 def _domain_is_full_field_hull(dom: IntDomain, p: int) -> bool:
     """True if ``dom`` is the whole-field hull [0, p-1] or [0, p] (single interval, lo fixed at 0)."""
     full = IntDomain.from_interval(IntInterval(0, p-1))
@@ -96,6 +103,7 @@ class IntervalReasoner:
         tightened: Optional[set[FNode]] = None,
         invalidate_global_cache: bool = False,
         step: Optional[str] = None,
+        formula_ctx: Optional[str] = None,
     ) -> bool:
         old = self._state_get(state, sym)
         merged = old.intersect(new_d)
@@ -105,6 +113,8 @@ class IntervalReasoner:
             msg = f"interval shrink: {sym!s}: {_fmt_domain(old)} intersect {_fmt_domain(new_d)} -> {_fmt_domain(merged)}"
             if step:
                 msg = f"[{step}] {msg}"
+            if formula_ctx:
+                msg = f"[ctx: {formula_ctx}] {msg}"
             logger.info(msg)
         state[sym] = merged
         if tightened is not None:
@@ -176,7 +186,11 @@ class IntervalReasoner:
                 if len(not_args) == len(f.args()) and len(not_args) >= 2:
                     local = IntervalReasoner(modulus=self.p, log_interval_shrinks=self.log_interval_shrinks)
                     local.env = dict(state)
-                    local.assume_all(not_args, max_iters=6)
+                    local.assume_all(
+                        not_args,
+                        max_iters=6,
+                        context=f"eval_bool Or-not-tautology {_fmt_formula(f, max_len=120)}",
+                    )
                     if local._state_inconsistent(local.env):
                         return True
                 return None
@@ -226,6 +240,8 @@ class IntervalReasoner:
         b: FNode,
         state: Dict[FNode, IntDomain],
         cache: Dict[FNode, IntDomain],
+        *,
+        formula_ctx: Optional[str] = None,
     ) -> bool:
         aff_a = _affine(a)
         aff_b = _affine(b)
@@ -263,7 +279,11 @@ class IntervalReasoner:
             lo = _ceil_div(lo_num, coeff)
             hi = hi_num // coeff
             changed |= self._state_set(
-                state, sym, IntDomain.from_interval(IntInterval(lo, hi)), step="affine_eq"
+                state,
+                sym,
+                IntDomain.from_interval(IntInterval(lo, hi)),
+                step="affine_eq",
+                formula_ctx=formula_ctx,
             )
         return changed
 
@@ -275,6 +295,7 @@ class IntervalReasoner:
         strict: bool,
         state: Dict[FNode, IntDomain],
         cache: Dict[FNode, IntDomain],
+        formula_ctx: Optional[str] = None,
     ) -> bool:
         aff_a = _affine(a)
         aff_b = _affine(b)
@@ -308,7 +329,11 @@ class IntervalReasoner:
                 rhs = target_hi - h.lo
                 hi = rhs // coeff
                 changed |= self._state_set(
-                    state, sym, IntDomain.from_interval(IntInterval(INF, hi)), step="affine_ineq_pos"
+                    state,
+                    sym,
+                    IntDomain.from_interval(IntInterval(INF, hi)),
+                    step="affine_ineq_pos",
+                    formula_ctx=formula_ctx,
                 )
             elif coeff < 0:
                 if h.hi is None:
@@ -317,11 +342,22 @@ class IntervalReasoner:
                 num = h.hi - target_hi
                 lo = _ceil_div(num, den)
                 changed |= self._state_set(
-                    state, sym, IntDomain.from_interval(IntInterval(lo, INF)), step="affine_ineq_neg"
+                    state,
+                    sym,
+                    IntDomain.from_interval(IntInterval(lo, INF)),
+                    step="affine_ineq_neg",
+                    formula_ctx=formula_ctx,
                 )
         return changed
 
-    def _refine_from_ineq(self, f: FNode, state: Dict[FNode, IntDomain], cache: Dict[FNode, IntDomain]) -> bool:
+    def _refine_from_ineq(
+        self,
+        f: FNode,
+        state: Dict[FNode, IntDomain],
+        cache: Dict[FNode, IntDomain],
+        *,
+        formula_ctx: Optional[str] = None,
+    ) -> bool:
         if not (f.is_lt() or f.is_le()):
             return False
         a, b = f.args()
@@ -337,38 +373,65 @@ class IntervalReasoner:
         if a.is_symbol() and (c := _is_int_const(b)) is not None:
             ub = c - 1 if strict else c
             changed |= self._state_set(
-                state, a, IntDomain.from_interval(IntInterval(INF, ub)), step="ineq_sym_upper"
+                state,
+                a,
+                IntDomain.from_interval(IntInterval(INF, ub)),
+                step="ineq_sym_upper",
+                formula_ctx=formula_ctx,
             )
         if b.is_symbol() and (c := _is_int_const(a)) is not None:
             lb = c + 1 if strict else c
             changed |= self._state_set(
-                state, b, IntDomain.from_interval(IntInterval(lb, INF)), step="ineq_sym_lower"
+                state,
+                b,
+                IntDomain.from_interval(IntInterval(lb, INF)),
+                step="ineq_sym_lower",
+                formula_ctx=formula_ctx,
             )
-        changed |= self._refine_affine_ineq(a, b, strict=strict, state=state, cache=cache)
+        changed |= self._refine_affine_ineq(
+            a, b, strict=strict, state=state, cache=cache, formula_ctx=formula_ctx
+        )
         return changed
 
-    def _refine_from_eq(self, f: FNode, state: Dict[FNode, IntDomain], cache: Dict[FNode, IntDomain]) -> bool:
+    def _refine_from_eq(
+        self,
+        f: FNode,
+        state: Dict[FNode, IntDomain],
+        cache: Dict[FNode, IntDomain],
+        *,
+        formula_ctx: Optional[str] = None,
+    ) -> bool:
         if not f.is_equals():
             return False
         a, b = f.args()
         changed = False
         if a.is_symbol() and (c := _is_int_const(b)) is not None:
-            changed |= self._state_set(state, a, IntDomain.const(c), step="eq_const")
+            changed |= self._state_set(
+                state, a, IntDomain.const(c), step="eq_const", formula_ctx=formula_ctx
+            )
         if b.is_symbol() and (c := _is_int_const(a)) is not None:
-            changed |= self._state_set(state, b, IntDomain.const(c), step="eq_const")
+            changed |= self._state_set(
+                state, b, IntDomain.const(c), step="eq_const", formula_ctx=formula_ctx
+            )
 
         # Mod(sym,p) == c and sym already canonical -> sym == c
         if (x := _is_mod_p(a, self.p)) is not None and (c := _is_int_const(b)) is not None:
             if self._eval_int(x, state, cache).within_0_p(self.p) and x.is_symbol():
-                changed |= self._state_set(state, x, IntDomain.const(c), step="mod_eq_const")
+                changed |= self._state_set(
+                    state, x, IntDomain.const(c), step="mod_eq_const", formula_ctx=formula_ctx
+                )
         if (x := _is_mod_p(b, self.p)) is not None and (c := _is_int_const(a)) is not None:
             if self._eval_int(x, state, cache).within_0_p(self.p) and x.is_symbol():
-                changed |= self._state_set(state, x, IntDomain.const(c), step="mod_eq_const")
+                changed |= self._state_set(
+                    state, x, IntDomain.const(c), step="mod_eq_const", formula_ctx=formula_ctx
+                )
 
-        changed |= self._refine_affine_eq(a, b, state, cache)
+        changed |= self._refine_affine_eq(a, b, state, cache, formula_ctx=formula_ctx)
         return changed
 
-    def _refine_from_or_equalities(self, f: FNode, state: Dict[FNode, IntDomain]) -> bool:
+    def _refine_from_or_equalities(
+        self, f: FNode, state: Dict[FNode, IntDomain], *, formula_ctx: Optional[str] = None
+    ) -> bool:
         if not f.is_or():
             return False
         sym = None
@@ -391,9 +454,16 @@ class IntervalReasoner:
         if sym is None or not vals:
             return False
         dom = IntDomain.from_intervals(IntInterval.const(v) for v in vals)
-        return self._state_set(state, sym, dom, step="or_equalities")
+        return self._state_set(state, sym, dom, step="or_equalities", formula_ctx=formula_ctx)
 
-    def _refine_from_mod_zero(self, f: FNode, state: Dict[FNode, IntDomain], cache: Dict[FNode, IntDomain]) -> bool:
+    def _refine_from_mod_zero(
+        self,
+        f: FNode,
+        state: Dict[FNode, IntDomain],
+        cache: Dict[FNode, IntDomain],
+        *,
+        formula_ctx: Optional[str] = None,
+    ) -> bool:
         if not f.is_equals():
             return False
         a, b = f.args()
@@ -414,7 +484,9 @@ class IntervalReasoner:
         inner_d = self._eval_int(inner, state, cache)
         uniq = _unique_multiple_in_domain(inner_d, p)
         if uniq is not None:
-            changed |= self._refine_affine_eq(inner, Int(uniq), state, cache)
+            changed |= self._refine_affine_eq(
+                inner, Int(uniq), state, cache, formula_ctx=formula_ctx
+            )
 
         # Prime-field product reasoning:
         #   (u1 * ... * uk) == 0 (mod p)  =>  ui == 0 (mod p) for some i.
@@ -447,16 +519,32 @@ class IntervalReasoner:
                 if not vals:
                     continue
                 dom = IntDomain.from_intervals(IntInterval.const(v) for v in sorted(vals))
-                changed |= self._state_set(state, sym, dom, step="mod_zero_product")
+                logger.debug(f"refine_from_mod_zero: {f} -> {dom}")
+                changed |= self._state_set(
+                    state, sym, dom, step="mod_zero_product", formula_ctx=formula_ctx
+                )
 
         return changed
 
-    def _refine_atom(self, atom: FNode, state: Dict[FNode, IntDomain], cache: Dict[FNode, IntDomain]) -> bool:
+    def _refine_atom(
+        self,
+        atom: FNode,
+        state: Dict[FNode, IntDomain],
+        cache: Dict[FNode, IntDomain],
+        *,
+        formula_ctx: Optional[str] = None,
+    ) -> bool:
+        logger.debug(f"refine_atom: {self.p} {self.env} {self.used_formulas} {self.tightened_symbols} {self._cache}")
+        logger.debug(f"called with {atom} {state} {cache} {formula_ctx}")
         changed = False
-        changed |= self._refine_from_ineq(atom, state, cache)
-        changed |= self._refine_from_eq(atom, state, cache)
-        changed |= self._refine_from_or_equalities(atom, state)
-        changed |= self._refine_from_mod_zero(atom, state, cache)
+        changed |= self._refine_from_ineq(atom, state, cache, formula_ctx=formula_ctx)
+        logger.debug(f"refine_atom after ineq: {state}")
+        changed |= self._refine_from_eq(atom, state, cache, formula_ctx=formula_ctx)
+        logger.debug(f"refine_atom after eq: {state}")
+        changed |= self._refine_from_or_equalities(atom, state, formula_ctx=formula_ctx)
+        logger.debug(f"refine_atom after or_equalities: {state}")
+        changed |= self._refine_from_mod_zero(atom, state, cache, formula_ctx=formula_ctx)
+        logger.debug(f"refine_atom after mod_zero: {state}")
         return changed
 
     def _state_inconsistent(self, state: Dict[FNode, IntDomain]) -> bool:
@@ -470,6 +558,7 @@ class IntervalReasoner:
         tightened: Optional[set[FNode]] = None,
         invalidate_global_cache: bool = False,
         step: str = "meet",
+        formula_ctx: Optional[str] = None,
     ) -> bool:
         changed = False
         for sym, d in source.items():
@@ -480,50 +569,91 @@ class IntervalReasoner:
                 tightened=tightened,
                 invalidate_global_cache=invalidate_global_cache,
                 step=step,
+                formula_ctx=formula_ctx,
             )
         return changed
 
-    def _propagate_atom_fixpoint(self, atom: FNode, base: Dict[FNode, IntDomain]) -> Dict[FNode, IntDomain]:
+    def _propagate_atom_fixpoint(
+        self,
+        atom: FNode,
+        base: Dict[FNode, IntDomain],
+        *,
+        formula_ctx: Optional[str] = None,
+    ) -> Dict[FNode, IntDomain]:
         state = dict(base)
         for r in range(8):
             cache: Dict[FNode, IntDomain] = {}
-            changed = self._refine_atom(atom, state, cache)
+            changed = self._refine_atom(atom, state, cache, formula_ctx=formula_ctx)
             if logger.isEnabledFor(logging.DEBUG) and changed:
                 logger.debug(
-                    "intervals: atom fixpoint round %d/8 changed state for %s",
+                    "intervals: atom fixpoint round %d/8 changed state (ctx=%s) for %s",
                     r + 1,
+                    formula_ctx or "?",
                     _fmt_formula(atom),
                 )
             if not changed or self._state_inconsistent(state):
                 break
         return state
 
-    def _propagate_not(self, f: FNode, base: Dict[FNode, IntDomain]) -> Dict[FNode, IntDomain]:
+    def _propagate_not(
+        self,
+        f: FNode,
+        base: Dict[FNode, IntDomain],
+        *,
+        formula_ctx: Optional[str] = None,
+    ) -> Dict[FNode, IntDomain]:
+        nctx = _subformula_ctx(formula_ctx, "Not")
         if f.is_not():
-            return self._propagate_formula(f.arg(0), base)
+            return self._propagate_formula(f.arg(0), base, formula_ctx=nctx)
         if f.is_and():
-            return self._propagate_formula(Or(*[Not(a) for a in f.args()]), base)
+            return self._propagate_formula(
+                Or(*[Not(a) for a in f.args()]),
+                base,
+                formula_ctx=_subformula_ctx(nctx, "Demorgan-And"),
+            )
         if f.is_or():
-            return self._propagate_formula(And(*[Not(a) for a in f.args()]), base)
+            return self._propagate_formula(
+                And(*[Not(a) for a in f.args()]),
+                base,
+                formula_ctx=_subformula_ctx(nctx, "Demorgan-Or"),
+            )
         if f.is_implies():
             a, b = f.args()
-            return self._propagate_formula(And(a, Not(b)), base)
+            return self._propagate_formula(
+                And(a, Not(b)), base, formula_ctx=_subformula_ctx(nctx, "Not-implies")
+            )
         if f.is_lt():
             a, b = f.args()
-            return self._propagate_formula(b <= a, base)
+            return self._propagate_formula(
+                b <= a, base, formula_ctx=_subformula_ctx(nctx, "Not-lt")
+            )
         if f.is_le():
             a, b = f.args()
-            return self._propagate_formula(b < a, base)
+            return self._propagate_formula(
+                b < a, base, formula_ctx=_subformula_ctx(nctx, "Not-le")
+            )
         return dict(base)
 
-    def _propagate_formula(self, f: FNode, base: Dict[FNode, IntDomain]) -> Dict[FNode, IntDomain]:
+    def _propagate_formula(
+        self,
+        f: FNode,
+        base: Dict[FNode, IntDomain],
+        *,
+        formula_ctx: Optional[str] = None,
+    ) -> Dict[FNode, IntDomain]:
         if f.is_and():
             state = dict(base)
             for _ in range(8):
                 changed = False
-                for a in f.args():
-                    child = self._propagate_formula(a, state)
-                    changed |= self._meet_states_inplace(state, child, step="and_propagate")
+                for i, a in enumerate(f.args()):
+                    child_ctx = _subformula_ctx(formula_ctx, f"And[{i}]")
+                    child = self._propagate_formula(a, state, formula_ctx=child_ctx)
+                    changed |= self._meet_states_inplace(
+                        state,
+                        child,
+                        step="and_propagate",
+                        formula_ctx=child_ctx,
+                    )
                     if self._state_inconsistent(state):
                         return state
                 if not changed:
@@ -531,42 +661,64 @@ class IntervalReasoner:
             return state
 
         if f.is_or():
-            branch_states = [self._propagate_formula(a, dict(base)) for a in f.args()]
+            branch_states = [
+                self._propagate_formula(
+                    a, dict(base), formula_ctx=_subformula_ctx(formula_ctx, f"Or[{i}]")
+                )
+                for i, a in enumerate(f.args())
+            ]
             consistent = [s for s in branch_states if not self._state_inconsistent(s)]
             if not consistent:
                 out = dict(base)
                 int_vars = [v for v in f.get_free_variables() if v.get_type().is_int_type()]
                 if int_vars:
-                    self._state_set(out, int_vars[0], IntDomain.bottom(), step="or_all_inconsistent")
+                    self._state_set(
+                        out,
+                        int_vars[0],
+                        IntDomain.bottom(),
+                        step="or_all_inconsistent",
+                        formula_ctx=_subformula_ctx(formula_ctx, "Or[bottom]"),
+                    )
                 return out
 
             out = dict(base)
+            join_ctx = _subformula_ctx(formula_ctx, "Or[join]")
             all_syms = set().union(*[set(s.keys()) for s in consistent])
             for sym in all_syms:
                 joined = IntDomain.bottom()
                 for st in consistent:
                     joined = joined.union(st.get(sym, self._state_get(base, sym)))
-                self._state_set(out, sym, joined, step="or_join")
+                self._state_set(out, sym, joined, step="or_join", formula_ctx=join_ctx)
             return out
 
         if f.is_implies():
             a, b = f.args()
-            return self._propagate_formula(Or(Not(a), b), base)
+            return self._propagate_formula(
+                Or(Not(a), b), base, formula_ctx=_subformula_ctx(formula_ctx, "Implies")
+            )
 
         if f.is_not():
-            return self._propagate_not(f.arg(0), base)
+            return self._propagate_not(f.arg(0), base, formula_ctx=formula_ctx)
 
         if f.is_exists() or f.is_forall():
             # Quantifiers are solved in a separate pass after root fixed point.
             return dict(base)
 
-        return self._propagate_atom_fixpoint(f, base)
+        return self._propagate_atom_fixpoint(f, base, formula_ctx=formula_ctx)
 
-    def assume_all(self, assumptions: Iterable[FNode], max_iters: int = 10) -> None:
+    def assume_all(
+        self,
+        assumptions: Iterable[FNode],
+        max_iters: int = 10,
+        *,
+        context: Optional[str] = None,
+    ) -> None:
         work = list(assumptions)
+        ctx_root = context or "global"
         if logger.isEnabledFor(logging.INFO):
             logger.info(
-                "intervals: assume_all starting (%d assertions, max_iters=%d)",
+                "intervals: assume_all starting [context=%s] (%d assertions, max_iters=%d)",
+                ctx_root,
                 len(work),
                 max_iters,
             )
@@ -575,14 +727,24 @@ class IntervalReasoner:
             rounds_run = round_idx + 1
             changed = False
             for fi, f in enumerate(work):
+                sub_ctx = _subformula_ctx(ctx_root, f"r{round_idx + 1}a{fi + 1}/{len(work)}")
                 normalized = self.simplify(f, prune=False, inject_quantifier_bounds=False)
-                local_state = self._propagate_formula(normalized, dict(self.env))
+                if logger.isEnabledFor(logging.INFO):
+                    logger.info(
+                        "intervals: propagating [context=%s] %s",
+                        sub_ctx,
+                        _fmt_formula(normalized),
+                    )
+                local_state = self._propagate_formula(
+                    normalized, dict(self.env), formula_ctx=sub_ctx
+                )
                 local_changed = self._meet_states_inplace(
                     self.env,
                     local_state,
                     tightened=self.tightened_symbols,
                     invalidate_global_cache=True,
                     step="assume",
+                    formula_ctx=sub_ctx,
                 )
                 if local_changed:
                     self.used_formulas.add(f)
@@ -599,7 +761,8 @@ class IntervalReasoner:
                 break
         if logger.isEnabledFor(logging.INFO):
             logger.info(
-                "intervals: assume_all finished after %d round(s); %d tracked int vars, %d tightened",
+                "intervals: assume_all finished [context=%s] after %d round(s); %d tracked int vars, %d tightened",
+                ctx_root,
                 rounds_run,
                 len(self.env),
                 len(self.tightened_symbols),
@@ -698,7 +861,11 @@ class IntervalReasoner:
 
             local = IntervalReasoner(modulus=self.p, log_interval_shrinks=self.log_interval_shrinks)
             local.env = dict(seed)
-            local.assume_all([body], max_iters=max_iters)
+            local.assume_all(
+                [body],
+                max_iters=max_iters,
+                context=f"inject_q quantifier {_fmt_formula(n, max_len=80)}",
+            )
 
             rewritten_body = self._inject_quantifier_bounds(body, local.env, max_iters)
 
@@ -733,7 +900,11 @@ class IntervalReasoner:
             # This is sound regardless of polarity because we only add facts
             # implied by the conjunction itself (no inherited seeding here).
             local = IntervalReasoner(modulus=self.p, log_interval_shrinks=self.log_interval_shrinks)
-            local.assume_all(rewritten_args, max_iters=max_iters)
+            local.assume_all(
+                rewritten_args,
+                max_iters=max_iters,
+                context=f"inject_q And {_fmt_formula(n, max_len=120)}",
+            )
             present = set(rewritten_args)
             for sym in sorted({v for v in n.get_free_variables() if v.get_type().is_int_type()}, key=str):
                 val = local.get_domain(sym).singleton_value()
