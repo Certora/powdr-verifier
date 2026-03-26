@@ -5,7 +5,7 @@ from .smt.utils import *
 from .utils.args import ARGS
 from .utils.io import open_file
 
-from .simplify import check_isqf, simplify_cvc5, simplify_intervals, simplify_z3, simplify_rewrite, simplify_model, simplify_andify
+from .simplify import check_isqf, simplify_cvc5, simplify_intervals, simplify_intervals2, simplify_z3, simplify_rewrite, simplify_model, simplify_andify
 
 
 def simplify():
@@ -32,6 +32,8 @@ def simplify():
                         smt_script = simplify_rewrite(smt_script)
                     case "intervals":
                         smt_script = simplify_intervals(smt_script)
+                    case "intervals2":
+                        smt_script = simplify_intervals2(smt_script)
                     case "cvc5":
                         smt_script = simplify_cvc5(smt_script)
                     case "z3":

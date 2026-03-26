@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 
-from ...smt.utils import Bool, FNode, script
+from ...smt.utils import *
+from .bounded_formula import BoundedFormula
 from .reasoner import IntervalReasoner, logger as interval_logger
 
 
@@ -27,7 +28,7 @@ def simplify_intervals(smt_script: script.SmtLibScript) -> script.SmtLibScript:
         interval_logger.info("intervals: simplify_intervals processing %d assertions", len(assertions))
 
     reasoner = IntervalReasoner()
-    reasoner.assume_all(assertions)
+    reasoner.assume_all(assertions, context="simplify_intervals")
     inconsistent = _has_bottom_domain(reasoner)
 
     if interval_logger.isEnabledFor(logging.INFO):
@@ -67,3 +68,59 @@ def simplify_intervals(smt_script: script.SmtLibScript) -> script.SmtLibScript:
             cmd.args[0] = reasoner.inject_root_bounds(cmd.args[0], only_tightened=True)
 
     return smt_script
+
+
+def simplify_intervals2(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+    """Interval-style propagation using ``BoundedFormula.refine_recursive`` (alternative to ``simplify_intervals``).
+
+    All assertions are conjoined, refined on a single ``BoundedFormula`` tree, then the
+    rebuilt formula is written to the first ``assert``; remaining ``assert`` commands are
+    set to ``true`` (semantically the conjunction of all asserts is unchanged). If the
+    abstract domain becomes bottom, every assert is replaced with ``false``.
+    """
+
+    prefix = []
+    assertions = []
+    suffix = []
+
+    in_suffix = False
+    for cmd in smt_script:
+        if in_suffix:
+            suffix.append(cmd)
+            continue
+        match cmd.name:
+            case "set-info" | "set-logic" | "set-option" | "get-model" | "get-unsat-core" | "echo" | "declare-fun":
+                prefix.append(cmd)
+            case "assert":
+                assertions.append(cmd.args[0])
+            case "check-sat":
+                in_suffix = True
+                suffix.append(cmd)
+            case _:
+                assert False, f"unexpected command: {cmd.name}"
+    
+    if not assertions:
+        return smt_script
+
+    if interval_logger.isEnabledFor(logging.INFO):
+        interval_logger.info("intervals: simplify_intervals2 processing %d assertions", len(assertions))
+
+    combined = And(*assertions) if len(assertions) > 1 else assertions[0]
+    bf = BoundedFormula(combined)
+    bf.refine_recursive()
+    inconsistent = bf.domains.is_bottom()
+
+    if interval_logger.isEnabledFor(logging.INFO):
+        interval_logger.info(
+            "intervals: simplify_intervals2 propagation done (inconsistent=%s)",
+            inconsistent,
+        )
+
+    if inconsistent:
+        assertions = FALSE()
+    else:
+        assertions = bf.as_fnode()
+
+    res = script.SmtLibScript()
+    res.commands = prefix + [script.SmtLibCommand(name="assert", args=[assertions])] + suffix
+    return res
