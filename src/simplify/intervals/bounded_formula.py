@@ -86,17 +86,14 @@ class BoundedFormula:
         r = IntervalReasoner()
         base: dict[FNode, IntDomain] = dict(self.domains.to_dict())
         for _ in range(8):
-            cache: dict[FNode, IntDomain] = {}
             changed = False
             for atom in atoms:
                 logger.debug(f"refine_domains: refining atom {atom}")
                 changed |= r._refine_atom(
                     atom,
                     base,
-                    cache,
                     formula_ctx="BoundedFormula.refine_domains",
                 )
-                print(f"base: {base}")
                 if r._state_inconsistent(base):
                     logger.debug(f"refine_domains: inconsistent after refining atom {atom}")
                     break

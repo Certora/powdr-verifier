@@ -1,6 +1,6 @@
 from textwrap import dedent
 
-from src.simplify import simplify_intervals
+from src.simplify import simplify_intervals, simplify_intervals2
 from src.smt.utils import *
 
 
@@ -13,10 +13,12 @@ def _has_mod(f: FNode) -> bool:
 def _is_or_has_conjunct(f: FNode, expected: FNode) -> bool:
     return f == expected or (f.is_and() and expected in f.args())
 
+def _parse_script(smt: str) -> script.SmtLibScript:
+    parser = SmtLibParser()
+    return parser.get_script(StringIO(dedent(smt).strip() + "\n"))
 
 def _asserts_from_script(smt: str) -> list[FNode]:
-    parser = SmtLibParser()
-    smt_script = parser.get_script(StringIO(dedent(smt).strip() + "\n"))
+    smt_script = _parse_script(smt)
     simplified = simplify_intervals(smt_script)
     return [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
 
@@ -131,8 +133,12 @@ def test_simplify_intervals_can_append_derived_ranges():
         (check-sat)
         """
     )
-    assert _is_or_has_conjunct(asserts[2], expected_range)
-    assert any(_is_or_has_conjunct(c, expected_range) for c in asserts)
+    a2 = asserts[2]
+    assert a2.is_and() and len(list(a2.args())) == 2
+    assert set(a2.args()) == set(expected_range.args())
+    assert any(
+        c.is_and() and set(c.args()) == set(expected_range.args()) for c in asserts
+    )
 
 
 def test_fixed_point_opcode_flags_sum_forces_all_zero():
@@ -399,3 +405,53 @@ def test_quantifier_handling():
     assert consequence.is_and()
     assert And(Equals(x, Int(0)), And(LE(Int(0), y), LE(y, Int(10)))) in consequence.args()
     assert Or(Equals(x, Int(1)), Equals(x, Int(2)), And(LE(Int(0), y), LE(y, Int(10)))) in consequence.args()
+
+
+def test_remains_sat():
+    x = Symbol("x", INT)
+    y = Symbol("y", INT)
+    z = Symbol("z", INT)
+    model = {
+        x: Int(1),
+        y: Int(0),
+        z: Int(0),
+    }
+    script = """
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (declare-fun y () Int)
+        (declare-fun z () Int)
+        (assert (<= 0 x))
+        (assert (< x 7))
+        (assert (<= 0 y))
+        (assert (< y 7))
+        (assert (<= 0 z))
+        (assert (< z 7))
+        (assert 
+            (<=
+                0
+                (mod (- (+ y z 1) x) 2013265921)
+            )
+        )
+        (assert 
+            (<
+                (mod
+                    (- (+ (* 2 y) (* 2 z) 2) (* 2 x))
+                    2013265921
+                )
+                11
+            )
+        )
+        (check-sat)
+        """
+
+    original = _parse_script(script)
+    simplified = simplify_intervals2(original)
+
+    for cmd in original:
+        if cmd.name == "assert":
+            assert cmd.args[0].substitute(model).simplify().is_true()
+
+    for cmd in simplified:
+        if cmd.name == "assert":
+            assert cmd.args[0].substitute(model).simplify().is_true()
