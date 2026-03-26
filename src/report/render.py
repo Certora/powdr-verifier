@@ -1,4 +1,5 @@
 import dataclasses
+import html
 from pathlib import Path
 from typing import Optional
 
@@ -6,6 +7,11 @@ from IPython.display import HTML, display
 
 from .action import Action
 from ..utils.io import load_json
+
+
+def _title_attr(s: str) -> str:
+    return f' title="{html.escape(s, quote=True)}"'
+
 
 @dataclasses.dataclass
 class TreeNode:
@@ -39,7 +45,7 @@ class TreeTableWidget:
         return f"""
 <style>
   .ttt-wrap  {{ border: 1px solid #dee2e6; border-radius: 4px; overflow: hidden;
-               width: fit-content; font-family: sans-serif; font-size: 13px; }}
+               width: 100%; font-family: sans-serif; font-size: 13px; }}
   .ttt-head  {{ display: flex; }}
   .ttt-hcell {{ background: #343a40; color: white !important; padding: 7px 10px;
                font-weight: 600; white-space: nowrap; box-sizing: border-box; }}
@@ -48,11 +54,11 @@ class TreeTableWidget:
   .ttt-cell  {{ padding: 5px 10px; display: flex; align-items: center;
                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
                box-sizing: border-box; }}
-  .ttt-n     {{ width: 280px; }}
-  .ttt-i     {{ width: 260px; font-size: 0.85em; color: #555; }}
-  .ttt-t     {{ width: 90px;  justify-content: flex-end;
+  .ttt-n     {{ width: 25%; }}
+  .ttt-i     {{ width: 50%; font-size: 0.85em; color: #555; }}
+  .ttt-t     {{ width: 10%;  justify-content: flex-end;
                font-variant-numeric: tabular-nums; color: #555; }}
-  .ttt-s     {{ width: 110px; }}
+  .ttt-s     {{ width: 15%; }}
   .ttt-badge {{ border-radius: 10px; padding: 1px 8px; font-size: 0.82em;
                border: 1px solid; white-space: nowrap; }}
   .ttt-btn   {{ background: none; border: none; cursor: pointer; font-size: 10px;
@@ -92,17 +98,18 @@ class TreeTableWidget:
             toggle = '<span class="ttt-spc"></span>'
 
         inputs_str = ", ".join(str(i) for i in node.inputs) if node.inputs else "—"
-        time_str   = f"{node.running_time:.3f}s" if node.running_time is not None else "—"
+        time_str   = f"{node.running_time:.2f}s" if node.running_time is not None else "—"
+        status_str = f"{icon} {node.result}"
 
         row = (
             f'<div class="ttt-row" style="background:{row_bg}">'
-            f'  <div class="ttt-cell ttt-n" style="background:{row_bg}">'
+            f'  <div class="ttt-cell ttt-n" style="background:{row_bg}"{_title_attr(node.name)}>'
             f'    {indent}{toggle}'
             f'    <code style="font-size:0.9em">{node.name}</code>'
             f'  </div>'
-            f'  <div class="ttt-cell ttt-i" style="background:{row_bg}">{inputs_str}</div>'
-            f'  <div class="ttt-cell ttt-t" style="background:{row_bg}">{time_str}</div>'
-            f'  <div class="ttt-cell ttt-s" style="background:{row_bg}">'
+            f'  <div class="ttt-cell ttt-i" style="background:{row_bg}"{_title_attr(inputs_str)}>{inputs_str}</div>'
+            f'  <div class="ttt-cell ttt-t" style="background:{row_bg}"{_title_attr(time_str)}>{time_str}</div>'
+            f'  <div class="ttt-cell ttt-s" style="background:{row_bg}"{_title_attr(status_str)}>'
             f'    <span class="ttt-badge" style="background:{bg};color:{fg};border-color:{fg}88">'
             f'      {icon} {node.result}'
             f'    </span>'
