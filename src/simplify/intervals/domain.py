@@ -23,6 +23,11 @@ class IntInterval:
     @staticmethod
     def const(v: int) -> "IntInterval":
         return IntInterval(v, v)
+    
+    def __repr__(self) -> str:
+        lo = "(-oo" if self.lo is None else f"[{self.lo}"
+        hi = "oo)" if self.hi is None else f"{self.hi}]"
+        return f"{lo},{hi}"
 
     def is_bottom(self) -> bool:
         return self.lo is not None and self.hi is not None and self.lo > self.hi
@@ -160,6 +165,9 @@ class IntDomain:
     @staticmethod
     def from_intervals(intervals: Iterable[IntInterval]) -> "IntDomain":
         return IntDomain(tuple(intervals))
+    
+    def __repr__(self) -> str:
+        return "|".join(str(iv) for iv in self.parts)
 
     def is_bottom(self) -> bool:
         return len(self.parts) == 0
@@ -258,6 +266,34 @@ class IntDomain:
             case _: return Or(*disjuncts)
 
 
+def _fmt_int_interval(iv: IntInterval) -> str:
+    lo = "-inf" if iv.lo is None else str(iv.lo)
+    hi = "+inf" if iv.hi is None else str(iv.hi)
+    return f"[{lo},{hi}]"
+
+
+def _fmt_int_domain(dom: IntDomain) -> str:
+    if dom.is_bottom():
+        return "<empty>"
+    if dom.is_top():
+        return "top"
+    return " | ".join(_fmt_int_interval(iv) for iv in dom.parts)
+
+
+def _omit_from_var_domains_str(dom: IntDomain) -> bool:
+    """True if ``dom`` is unconstrained ℤ or the full field range [0, p-1] / [0, p]."""
+    if dom.is_top():
+        return True
+    from ...utils.args import ARGS
+
+    p = int(ARGS().field_type.value)
+    if dom == IntDomain.from_interval(IntInterval(0, p - 1)):
+        return True
+    if dom == IntDomain.from_interval(IntInterval(0, p)):
+        return True
+    return False
+
+
 class IntVarDomains(Generic[V]):
     """Sparse map from variables to `IntDomain` (Cartesian product semantics).
 
@@ -302,11 +338,48 @@ class IntVarDomains(Generic[V]):
             return NotImplemented
         return self._bottom == other._bottom and self._m == other._m
 
+    def __repr__(self) -> str:
+        if self.is_bottom():
+            return "IntVarDomains(bottom)"
+        if self.is_top():
+            return "IntVarDomains(top)"
+        pairs = [
+            (sym, dom)
+            for sym, dom in sorted(self._m.items(), key=lambda kv: str(kv[0]))
+            if not _omit_from_var_domains_str(dom)
+        ]
+        if not pairs:
+            return "IntVarDomains({})"
+        inner = ", ".join(f"{sym} -> {_fmt_int_domain(dom)}" for sym, dom in pairs)
+        return f"IntVarDomains({{{inner}}})"
+
     def is_bottom(self) -> bool:
         return self._bottom
 
     def is_top(self) -> bool:
         return not self._bottom and len(self._m) == 0
+
+    def __contains__(self, var: V) -> bool:
+        if self._bottom:
+            return False
+        return var in self._m
+    
+    def __getitem__(self, var: V) -> IntDomain:
+        if self._bottom:
+            return IntDomain.bottom()
+        return self._m.get(var, IntDomain.top())
+    
+    def __setitem__(self, var: V, dom: IntDomain) -> None:
+        if self._bottom:
+            return
+        if dom.is_bottom():
+            self._bottom = True
+            self._m = {}
+            return
+        if dom.is_top():
+            self._m.pop(var, None)
+            return
+        self._m[var] = dom
 
     def get(self, var: V) -> IntDomain:
         if self._bottom:
@@ -334,19 +407,24 @@ class IntVarDomains(Generic[V]):
             yield Bool(False)
             return
         for sym, dom in self.items():
-            yield dom.to_constraints(sym)
+            if not _omit_from_var_domains_str(dom):
+                yield dom.to_constraints(sym)
 
     def intersect(self, other: "IntVarDomains[V]") -> "IntVarDomains[V]":
         if self._bottom or other._bottom:
             return IntVarDomains.bottom()
-        keys_all = self._m.keys() | other._m.keys()
         out: dict[V, IntDomain] = {}
-        for k in keys_all:
-            inter = self.get(k).intersect(other.get(k))
-            if inter.is_bottom():
-                return IntVarDomains.bottom()
-            if not inter.is_top():
-                out[k] = inter
+        for k in self._m.keys() | other._m.keys():
+            if k not in self:
+                out[k] = other.get(k)
+            elif k not in other:
+                out[k] = self.get(k)
+            else:
+                inter = self.get(k).intersect(other.get(k))
+                if inter.is_bottom():
+                    return IntVarDomains.bottom()
+                if not inter.is_top():
+                    out[k] = inter
         return IntVarDomains(out)
 
     def union(self, other: "IntVarDomains[V]") -> "IntVarDomains[V]":

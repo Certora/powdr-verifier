@@ -1,10 +1,20 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from ...smt.utils import *
 from .domain import IntDomain, IntVarDomains
 from .reasoner import IntervalReasoner
+
+logger = logging.getLogger(__name__)
+
+
+def _fmt_formula(f: FNode, max_len: int = 200) -> str:
+    s = str(f)
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 3] + "..."
 
 
 @dataclass(slots=True, init=False)
@@ -64,11 +74,14 @@ class BoundedFormula:
         and ``context`` is empty), returns ``False``. Returns ``True`` iff ``domains``
         changed.
         """
+        if self.domains.is_bottom():
+            return False
         atoms: list[FNode] = list(context)
         if not self.formula.is_bool_op():
             if self.formula not in context:
                 atoms.append(self.formula)
         if not atoms:
+            logger.debug("refine_domains: skip (no atoms) %s", _fmt_formula(self.formula))
             return False
         r = IntervalReasoner()
         base: dict[FNode, IntDomain] = dict(self.domains.to_dict())
@@ -76,17 +89,25 @@ class BoundedFormula:
             cache: dict[FNode, IntDomain] = {}
             changed = False
             for atom in atoms:
+                logger.debug(f"refine_domains: refining atom {atom}")
                 changed |= r._refine_atom(
                     atom,
                     base,
                     cache,
                     formula_ctx="BoundedFormula.refine_domains",
                 )
+                print(f"base: {base}")
+                if r._state_inconsistent(base):
+                    logger.debug(f"refine_domains: inconsistent after refining atom {atom}")
+                    break
             if not changed or r._state_inconsistent(base):
                 break
         old_domains = self.domains
         self.domains = IntVarDomains.from_mapping(base)
-        return self.domains != old_domains
+        changed = self.domains != old_domains
+        if changed:
+            logger.debug("refine_domains: domains changed %s", _fmt_formula(self.formula))
+        return changed
 
     def push_down(self) -> bool:
         """Narrow each child's ``domains`` by intersecting with this node's ``domains``.
@@ -98,6 +119,7 @@ class BoundedFormula:
         for sub in self.subformulas:
             merged = sub.domains.intersect(self.domains)
             if merged != sub.domains:
+                logger.debug("push_down: narrowed child %s to %s", _fmt_formula(sub.formula), merged)
                 progress = True
             sub.domains = merged
         return progress
@@ -123,7 +145,10 @@ class BoundedFormula:
             return False
         old_domains = self.domains
         self.domains = old_domains.intersect(lifted)
-        return self.domains != old_domains
+        changed = self.domains != old_domains
+        if changed:
+            logger.debug("lift_up: domains changed under %s", _fmt_formula(self.formula))
+        return changed
 
     def refine_recursive(self, context: frozenset[FNode] = frozenset()) -> bool:
         """Refine ``domains`` over this subtree (children first, then lift).
@@ -145,8 +170,21 @@ class BoundedFormula:
         else:
             ctx = context
         progress_any = self.refine_domains(ctx)
+        if progress_any:
+            logger.debug(
+                "refine_domain: leaf progressed bottom=%s %s",
+                self.domains.is_bottom(),
+                _fmt_formula(self.formula),
+            )
         if not self.subformulas:
+            if progress_any:
+                logger.debug(
+                    "refine_recursive: leaf progressed bottom=%s %s",
+                    self.domains.is_bottom(),
+                    _fmt_formula(self.formula),
+                )
             return progress_any
+        round_no = 0
         while not self.domains.is_bottom():
             progress = False
             if self.push_down():
@@ -157,6 +195,29 @@ class BoundedFormula:
             if self.lift_up():
                 progress = True
             if not progress:
+                logger.debug(
+                    "refine_recursive: fixpoint after %d round(s) %s",
+                    round_no,
+                    _fmt_formula(self.formula),
+                )
                 break
             progress_any = True
+            round_no += 1
+            logger.debug(
+                "refine_recursive: round %d progressed under %s",
+                round_no,
+                _fmt_formula(self.formula),
+            )
+            if round_no > 3:
+                import sys
+                sys.exit(17)
+        if self.domains.is_bottom():
+            logger.debug("refine_recursive: bottom domain %s", _fmt_formula(self.formula))
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "refine_recursive: subtree done progress=%s bottom=%s %s",
+                progress_any,
+                self.domains.is_bottom(),
+                _fmt_formula(self.formula),
+            )
         return progress_any
