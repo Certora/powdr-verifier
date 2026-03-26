@@ -45,35 +45,43 @@ class TreeTableWidget:
         return f"""
 <style>
   .ttt-wrap  {{ border: 1px solid #dee2e6; border-radius: 4px; overflow: hidden;
-               width: 100%; font-family: sans-serif; font-size: 13px; }}
-  .ttt-head  {{ display: flex; }}
-  .ttt-hcell {{ background: #343a40; color: white !important; padding: 7px 10px;
-               font-weight: 600; white-space: nowrap; box-sizing: border-box; }}
-  .ttt-row   {{ display: flex; align-items: stretch;
-               border-bottom: 1px solid #dee2e6; box-sizing: border-box; }}
-  .ttt-cell  {{ padding: 5px 10px; display: flex; align-items: center;
-               overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-               box-sizing: border-box; }}
+               width: 100%; font-family: sans-serif; font-size: 13px;
+               table-layout: fixed; color: #555; }}
+  .ttt-nested {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
+  .ttt-hcell {{ background: #343a40; color: white !important; text-align: left; }}
+  .ttt-row   {{ border-bottom: 1px solid #dee2e6; }}
+  .ttt-cell  {{ overflow: hidden; text-overflow: ellipsis;
+               white-space: nowrap; vertical-align: middle;
+               text-align: left; }}
   .ttt-n     {{ width: 25%; }}
-  .ttt-i     {{ width: 50%; font-size: 0.85em; color: #555; }}
-  .ttt-t     {{ width: 10%;  justify-content: flex-end;
-               font-variant-numeric: tabular-nums; color: #555; }}
+  .ttt-i     {{ width: 50%; }}
+  .ttt-t     {{ width: 10%; text-align: right;
+               font-variant-numeric: tabular-nums; }}
   .ttt-s     {{ width: 15%; }}
   .ttt-badge {{ border-radius: 10px; padding: 1px 8px; font-size: 0.82em;
                border: 1px solid; white-space: nowrap; }}
-  .ttt-btn   {{ background: none; border: none; cursor: pointer; font-size: 10px;
-               width: 20px; flex-shrink: 0; padding: 0; line-height: 1; }}
+  .ttt-btn   {{ background: none; border: none; font-size: 10px;
+               padding: 0; line-height: 1;
+               vertical-align: middle; }}
   .ttt-spc   {{ display: inline-block; width: 20px; flex-shrink: 0; }}
+  .ttt-nesttd {{ padding: 0 !important; border: none !important; vertical-align: top; }}
 </style>
-<div class="ttt-wrap">
-  <div class="ttt-head">
-    <div class="ttt-hcell ttt-n">Name</div>
-    <div class="ttt-hcell ttt-i">Inputs</div>
-    <div class="ttt-hcell ttt-t">Time</div>
-    <div class="ttt-hcell ttt-s">Status</div>
-  </div>
-  {rows}
-</div>
+<table class="ttt-wrap">
+  <colgroup>
+    <col class="ttt-n"><col class="ttt-i"><col class="ttt-t"><col class="ttt-s">
+  </colgroup>
+  <thead>
+    <tr>
+      <th class="ttt-hcell ttt-n">Name</th>
+      <th class="ttt-hcell ttt-i">Inputs</th>
+      <th class="ttt-hcell ttt-t">Time</th>
+      <th class="ttt-hcell ttt-s">Status</th>
+    </tr>
+  </thead>
+  <tbody>
+{rows}
+  </tbody>
+</table>
 """
 
     def _render_node(self, node: TreeNode, depth: int, alt: bool = False) -> str:
@@ -102,19 +110,19 @@ class TreeTableWidget:
         status_str = f"{icon} {node.result}"
 
         row = (
-            f'<div class="ttt-row" style="background:{row_bg}">'
-            f'  <div class="ttt-cell ttt-n" style="background:{row_bg}"{_title_attr(node.name)}>'
+            f'<tr class="ttt-row" style="background:{row_bg}">'
+            f'  <td class="ttt-cell ttt-n" style="background:{row_bg}"{_title_attr(node.name)}>'
             f'    {indent}{toggle}'
             f'    <code style="font-size:0.9em">{node.name}</code>'
-            f'  </div>'
-            f'  <div class="ttt-cell ttt-i" style="background:{row_bg}"{_title_attr(inputs_str)}>{inputs_str}</div>'
-            f'  <div class="ttt-cell ttt-t" style="background:{row_bg}"{_title_attr(time_str)}>{time_str}</div>'
-            f'  <div class="ttt-cell ttt-s" style="background:{row_bg}"{_title_attr(status_str)}>'
+            f'  </td>'
+            f'  <td class="ttt-cell ttt-i" style="background:{row_bg}"{_title_attr(inputs_str)}>{inputs_str}</td>'
+            f'  <td class="ttt-cell ttt-t" style="background:{row_bg}"{_title_attr(time_str)}>{time_str}</td>'
+            f'  <td class="ttt-cell ttt-s" style="background:{row_bg}"{_title_attr(status_str)}>'
             f'    <span class="ttt-badge" style="background:{bg};color:{fg};border-color:{fg}88">'
             f'      {icon} {node.result}'
             f'    </span>'
-            f'  </div>'
-            f'</div>'
+            f'  </td>'
+            f'</tr>'
         )
 
         if has_children:
@@ -123,7 +131,13 @@ class TreeTableWidget:
                 self._render_node(c, depth + 1, alt=not alt)
                 for c in node.children
             )
-            row += f'<div id="{node_id}" {hidden}>{children}</div>'
+            row += (
+                f'<tr id="{node_id}" {hidden}><td colspan="4" class="ttt-nesttd">'
+                f'<table class="ttt-nested"><colgroup>'
+                f'<col class="ttt-n"><col class="ttt-i"><col class="ttt-t"><col class="ttt-s">'
+                f'</colgroup><tbody>{children}</tbody></table>'
+                f'</td></tr>'
+            )
 
         return row
 
