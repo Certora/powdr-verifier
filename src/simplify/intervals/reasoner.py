@@ -340,6 +340,28 @@ class IntervalReasoner:
                 )
         return changed
 
+    def _mod_ineq_is_tautology(self, f: FNode) -> bool:
+        """True if ``f`` holds for every value of ``(mod E p)`` in ``[0, p-1]``."""
+        if not (f.is_lt() or f.is_le()):
+            return False
+        a, b = f.args()
+        strict = f.is_lt()
+        am = _is_mod_p(a, self.p)
+        bm = _is_mod_p(b, self.p)
+        p = self.p
+        if bm is not None:
+            if f.is_le() and _is_int_const(a) == 0:
+                return True
+            if strict and (ca := _is_int_const(a)) is not None and ca < 0:
+                return True
+        if am is not None:
+            if (cb := _is_int_const(b)) is not None:
+                if not strict and cb >= p - 1:
+                    return True
+                if strict and cb >= p:
+                    return True
+        return False
+
     def _refine_from_ineq(
         self,
         f: FNode,
@@ -349,13 +371,19 @@ class IntervalReasoner:
     ) -> bool:
         if not (f.is_lt() or f.is_le()):
             return False
-        a, b = f.args()
+        if self._mod_ineq_is_tautology(f):
+            return False
+        a_orig, b_orig = f.args()
         strict = f.is_lt()
-        am = _is_mod_p(a, self.p)
-        bm = _is_mod_p(b, self.p)
-        if am is not None:
+        am = _is_mod_p(a_orig, self.p)
+        bm = _is_mod_p(b_orig, self.p)
+        unwrap_a = am is not None and self._eval_int(am, state).within_0_p(self.p)
+        unwrap_b = bm is not None and self._eval_int(bm, state).within_0_p(self.p)
+        skip_affine = (am is not None and not unwrap_a) or (bm is not None and not unwrap_b)
+        a, b = a_orig, b_orig
+        if unwrap_a:
             a = am
-        if bm is not None:
+        if unwrap_b:
             b = bm
 
         changed = False
@@ -377,9 +405,10 @@ class IntervalReasoner:
                 step="ineq_sym_lower",
                 formula_ctx=formula_ctx,
             )
-        changed |= self._refine_affine_ineq(
-            a, b, strict=strict, state=state, formula_ctx=formula_ctx
-        )
+        if not skip_affine:
+            changed |= self._refine_affine_ineq(
+                a, b, strict=strict, state=state, formula_ctx=formula_ctx
+            )
         return changed
 
     def _refine_from_eq(
@@ -520,17 +549,11 @@ class IntervalReasoner:
         *,
         formula_ctx: Optional[str] = None,
     ) -> bool:
-        logger.debug(f"refine_atom: {self.p} {self.env} {self.used_formulas} {self.tightened_symbols}")
-        logger.debug(f"called with {atom} {state} {formula_ctx}")
         changed = False
         changed |= self._refine_from_ineq(atom, state, formula_ctx=formula_ctx)
-        logger.debug(f"refine_atom after ineq: {state}")
         changed |= self._refine_from_eq(atom, state, formula_ctx=formula_ctx)
-        logger.debug(f"refine_atom after eq: {state}")
         changed |= self._refine_from_or_equalities(atom, state, formula_ctx=formula_ctx)
-        logger.debug(f"refine_atom after or_equalities: {state}")
         changed |= self._refine_from_mod_zero(atom, state, formula_ctx=formula_ctx)
-        logger.debug(f"refine_atom after mod_zero: {state}")
         return changed
 
     def _state_inconsistent(self, state: Dict[FNode, IntDomain]) -> bool:

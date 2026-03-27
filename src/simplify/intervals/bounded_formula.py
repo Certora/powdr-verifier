@@ -217,3 +217,37 @@ class BoundedFormula:
                 _fmt_formula(self.formula),
             )
         return progress_any
+
+    def simplify(self, domains: IntVarDomains[FNode], context: frozenset[FNode]) -> None:
+        """Refine ``domains`` from ``context``, simplify children, then recurse.
+
+        Order: assign ``domains`` and call ``refine_domains(context)`` (only the given
+        context, not sibling conjuncts). Then evaluate each direct subformula on the
+        refined store and replace with ``Bool(True)`` / ``Bool(False)`` when definite.
+        Intersect each child's domains with this node's (``push_down``). If this node is
+        a conjunction, extend ``context`` with direct non-operator children; pass that
+        to recursive ``simplify`` on each child.
+        """
+        if not self.subformulas:
+            return
+        self.domains = domains
+        self.refine_domains(context)
+
+        r = IntervalReasoner()
+        state: dict[FNode, IntDomain] = dict(self.domains.to_dict())
+        for sub in self.subformulas:
+            vb = r._eval_bool(sub.formula, state)
+            if vb is True:
+                sub.formula = Bool(True)
+                sub.subformulas = []
+            elif vb is False:
+                sub.formula = Bool(False)
+                sub.subformulas = []
+
+        child_ctx = context
+        if self.formula.is_and():
+            child_ctx = child_ctx | frozenset(
+                sub.formula for sub in self.subformulas if not sub.formula.is_bool_op()
+            )
+        for sub in self.subformulas:
+            sub.simplify(domains, child_ctx)
