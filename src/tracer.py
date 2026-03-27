@@ -13,13 +13,10 @@ def trace():
     filename = ARGS().input
     input = load_apc_dump(filename)
     out_core = filename.parent / f"trace-{filename.stem}.core.smt2"
-    out_derived = filename.parent / f"trace-{filename.stem}.derived.smt2"
-    out_mult = filename.parent / f"trace-{filename.stem}.mult.smt2"
-    out_multpairs = filename.parent / f"trace-{filename.stem}.mult-pairs.smt2"
-    out_timestamps = filename.parent / f"trace-{filename.stem}.timestamps.smt2"
+    out_sanity = filename.parent / f"trace-{filename.stem}.sanity.smt2"
 
     with Action("tracer") as action:
-        action += {"outputs": [out_core, out_derived]}
+        action += {"outputs": [out_core, out_sanity]}
         with action.action("encode"):
             with SmtConverter(None, BasicBlock(input["block"])) as conv:
                 formula = conv.to_formula_with_axioms(input)
@@ -27,16 +24,7 @@ def trace():
         with action.action("out-core"):
             encode_to_file(out_core, encode_trace(formula))
 
-        with action.action("out-derived"):
-            encode_to_file(out_derived, encode_trace_satisfies_derived(formula))
-        
-        with action.action("out-mult"):
-            encode_to_file(out_mult, encode_mult_is_zero_or_pmone(conv, formula))
-        
-        with action.action("out-mult-pairs"):
-            encode_to_file(out_multpairs, encode_mult_in_pairs_if_stateful(conv, formula))
-
-        with action.action("out-timestamps"):
-            encode_to_file(out_timestamps, encode_timestamps_increase(conv, formula))
+        with action.action("out-sanity"):
+            encode_to_file(out_sanity, encode_trace_sanity(conv, formula))
 
         return action
