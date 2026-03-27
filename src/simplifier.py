@@ -37,9 +37,9 @@ def simplify():
                     case "cvc5":
                         smt_script = simplify_cvc5(smt_script)
                     case "z3":
+                        # TODO:
                         # for axioms: demodulator
                         # try qe
-                        # try to use tseitin-cnf, is there a way to make it equivalent?
                         smt_script = simplify_z3(smt_script, args)
                     case "model":
                         smt_script = simplify_model(smt_script)

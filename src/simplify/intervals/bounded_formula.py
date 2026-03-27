@@ -54,9 +54,11 @@ class BoundedFormula:
         if not children:
             return self.formula
         if self.formula.is_and():
+            vars = self.formula.get_free_variables()
+            bounds = [b for b in self.domains.to_constraints(vars) if b not in children]
             return And(
                 *children,
-                *list(self.domains.to_constraints()),
+                *bounds,
             )
         if self.formula.is_forall():
             return ForAll(self.formula.quantifier_vars(), children[0])
@@ -88,7 +90,7 @@ class BoundedFormula:
         for _ in range(8):
             changed = False
             for atom in atoms:
-                logger.debug(f"refine_domains: refining atom {atom}")
+                #logger.debug(f"refine_domains: refining atom {atom}")
                 changed |= r._refine_atom(
                     atom,
                     base,
@@ -205,9 +207,6 @@ class BoundedFormula:
                 round_no,
                 _fmt_formula(self.formula),
             )
-            if round_no > 3:
-                import sys
-                sys.exit(17)
         if self.domains.is_bottom():
             logger.debug("refine_recursive: bottom domain %s", _fmt_formula(self.formula))
         if logger.isEnabledFor(logging.DEBUG):
