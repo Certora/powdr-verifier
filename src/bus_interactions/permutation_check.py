@@ -254,7 +254,7 @@ class PermutationCheckMixin:
             # and then these bounds only lead to false positives
             conjuncts.append(
                 with_comment(
-                    Implies(  # send: data[0] == 1
+                    Implies(  # send: data[0] == 0
                         Equals(wrap_mod(data[1]), Int(0)),
                         And(
                             *[
