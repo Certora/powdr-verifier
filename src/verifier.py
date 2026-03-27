@@ -144,16 +144,14 @@ def encoding(before, after, qvars, builder, input_relation, output_relation, add
             *before.constraints,
             ForAll(
                 qvars - builder.result.keys(),
-                And(
-                    Or(
-                        Not(And(*after.constraints)),
-                        Not(input_relation),
-                        Not(output_relation)
-                    ).substitute(builder.result),
-                    *after.axioms,
-                )
+                Or(
+                    Not(And(*after.constraints)),
+                    Not(input_relation),
+                    Not(output_relation)
+                ).substitute(builder.result)
             ),
             *before.axioms,
+            *after.axioms,
             *additional_asserts,
         )
     else:
@@ -161,19 +159,17 @@ def encoding(before, after, qvars, builder, input_relation, output_relation, add
             *before.constraints,
             ForAll(
                 qvars,
-                And(
-                    Implies(
-                        builder.get_map(),
-                        Or(
-                            Not(And(*after.constraints)),
-                            Not(input_relation),
-                            Not(output_relation)
-                        )
-                    ),
-                    *after.axioms,
+                Implies(
+                    builder.get_map(),
+                    Or(
+                        Not(And(*after.constraints)),
+                        Not(input_relation),
+                        Not(output_relation)
+                    )
                 )
             ),
             *before.axioms,
+            *after.axioms,
             *additional_asserts,
         )
     if ARGS().elim_with_model:
