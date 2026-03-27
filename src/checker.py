@@ -16,6 +16,7 @@ def check():
         Action("check") as action,
         Solver(logic=AUFNIA, name=ARGS().solver, solver_options={":timeout": 60000}) as s
     ):
+        action += { "inputs": [ARGS().input] }
         s.set_logic = lambda l: None
         try:
             for cmd in smt_script:
