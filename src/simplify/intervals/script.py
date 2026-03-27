@@ -4,6 +4,7 @@ import logging
 
 from ...smt.utils import *
 from .bounded_formula import BoundedFormula
+from .domain import IntVarDomains
 from .reasoner import IntervalReasoner, logger as interval_logger
 
 
@@ -119,8 +120,13 @@ def simplify_intervals2(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     if inconsistent:
         assertions = FALSE()
     else:
-        assertions = bf.as_fnode()
+        bf.simplify(IntVarDomains.top(), frozenset())
+        res = bf.as_fnode()
+        assert res.is_and()
+        assertions = [
+            script.SmtLibCommand(name="assert", args=[a]) for a in res.args()
+        ]
 
     res = script.SmtLibScript()
-    res.commands = prefix + [script.SmtLibCommand(name="assert", args=[assertions])] + suffix
+    res.commands = prefix + assertions + suffix
     return res

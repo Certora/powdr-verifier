@@ -401,12 +401,14 @@ class IntVarDomains(Generic[V]):
             return {}
         return dict(self._m)
 
-    def to_constraints(self) -> Iterator[FNode]:
+    def to_constraints(self, vars: frozenset[FNode] = None) -> Iterator[FNode]:
         """Yield one guard per stored binding (conjoin for a full guard). Keys must be integer symbols."""
         if self.is_bottom():
             yield Bool(False)
             return
         for sym, dom in self.items():
+            if vars is not None and sym not in vars:
+                continue
             if not _omit_from_var_domains_str(dom):
                 yield dom.to_constraints(sym)
 
