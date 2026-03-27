@@ -22,8 +22,12 @@ class SingleInteractionEncoder:
     """
 
     _interactions: list[BusInteraction]
+    # name of the bus, used for comments and variable names
     NAME: str
+    # whether the last data is a timestamp, used by the visualizer
     TIMESTAMPED: bool = False
+    # whether the bus is stateful
+    STATEFUL: bool = False
 
     def __init__(self):
         """Initialize an empty interaction buffer for this bus."""
