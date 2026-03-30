@@ -93,6 +93,8 @@ class PermutationCheckMixin:
         We return the encoding itself (list of conjuncts) as well as the inputs and outputs.
         """
 
+        USE_ITE_ENCODING = True
+
         def def_vars(id: int):
             """Create the per-step array symbols (mult + data arrays) for step `id`."""
             return [
@@ -174,98 +176,191 @@ class PermutationCheckMixin:
 
             conjuncts.extend(itertools.chain(*conj))
 
-            # encode hadinput
-            conjuncts.append(
-                with_comment(
-                    And(
-                        Implies(
-                            Not(Equals(data[1], Int(0))),
-                            And(
-                                newvals[0],
-                                Implies(Not(oldvals[0]), isinputs[id]),
-                                Implies(oldvals[0], Not(isinputs[id])),
-                            ),
-                        ),
-                        Implies(
-                            Equals(data[1], Int(0)),
-                            And(
-                                Equals(newvals[0], oldvals[0]),
-                                Not(isinputs[id]),
-                            ),
-                        ),
-                    ),
-                    "encode hadinput and isinput",
-                )
-            )
+            if USE_ITE_ENCODING:
 
-            # encode the receive case
-            assert oldvals[1].is_symbol()
-            conjuncts.append(
-                with_comment(
-                    Implies(  # receive: data[0] == -1
-                        Equals(wrap_mod(Plus(data[1], Int(1))), Int(0)),
-                        And(
-                            # multiplicities
-                            Equals(oldvals[1], Int(1)),
-                            Equals(newvals[1], Int(0)),
-                            # data + timestamps
-                            *[
-                                Equals(oldvals[k], wrap_mod(data[k]))
-                                for k in range(2, len(newvals))
-                            ],
-                            *[
-                                Equals(newvals[k], Int(0))
-                                for k in range(2, len(newvals))
-                            ],
-                            # ensure intermediate values are in range
-                            *bounds,
+                mul_zero = Equals(wrap_mod(data[1]), Int(0))
+                mul_pone = Equals(wrap_mod(Minus(data[1], Int(1))), Int(0))
+                mul_mone = Equals(wrap_mod(Plus(data[1], Int(1))), Int(0))
+
+                # encode hadinput
+                conjuncts.append(
+                    with_comment(
+                        Equals(
+                            newvals[0],
+                            Ite(mul_zero, oldvals[0], TRUE())
                         ),
-                    ),
-                    "receive: mult == -1",
+                        "new value for hadinput"
+                    )
                 )
-            )
-            # encode the send case
-            conjuncts.append(
-                with_comment(
-                    Implies(  # send: data[0] == 1
-                        Equals(wrap_mod(Minus(data[1], Int(1))), Int(0)),
-                        And(
-                            # multiplicities
-                            Equals(oldvals[1], Int(0)),
-                            Equals(newvals[1], Int(1)),
-                            # data + timestamps
-                            *[
-                                Equals(oldvals[k], Int(0))
-                                for k in range(2, len(newvals))
-                            ],
-                            *[
-                                Equals(newvals[k], wrap_mod(data[k]))
-                                for k in range(2, len(newvals))
-                            ],
-                            # ensure intermediate values are in range
-                            *bounds,
+                conjuncts.append(
+                    with_comment(
+                        Iff(
+                            isinputs[id],
+                            Ite(mul_zero, FALSE(), Not(oldvals[0]))
                         ),
-                    ),
-                    "send: mult == 1",
+                        "isinput logic",
+                    )
                 )
-            )
-            # encode the zero case: everything is unchanged
-            # do not bound intermediate values: this entire sequence may be disabled,
-            # and then these bounds only lead to false positives
-            conjuncts.append(
-                with_comment(
-                    Implies(  # send: data[0] == 0
-                        Equals(wrap_mod(data[1]), Int(0)),
-                        And(
-                            *[
-                                Equals(newvals[k], oldvals[k])
-                                for k in range(1, len(newvals))
-                            ]
+                # encode mult change logic
+                conjuncts.append(
+                    with_comment(
+                        Or(mul_zero, mul_pone, mul_mone),
+                        "sanity check on mult value"
+                    )
+                )
+                conjuncts.append(
+                    with_comment(
+                        Equals(
+                            oldvals[1],
+                            Ite(
+                                mul_mone,
+                                Int(1),
+                                Ite(mul_pone, Int(0), newvals[1])
+                            )
                         ),
-                    ),
-                    "ignore: mult == 0",
+                        "value of old mult"
+                    )
                 )
-            )
+                conjuncts.append(
+                    with_comment(
+                        Equals(
+                            newvals[1],
+                            Ite(
+                                mul_mone,
+                                Int(0),
+                                Ite(mul_pone, Int(1), oldvals[1])
+                            )
+                        ),
+                        "value of new mult"
+                    )
+                )
+                conjuncts.append(
+                    with_comment(
+                        And(*[
+                            Equals(
+                                oldvals[k],
+                                Ite(
+                                    mul_mone,
+                                    wrap_mod(data[k]),
+                                    Ite(mul_pone, Int(0), oldvals[k])
+                                )
+                            )
+                            for k in range(2, len(newvals))
+                        ]),
+                        "value of old data and timestamps"
+                    )
+                )
+                conjuncts.append(
+                    with_comment(
+                        And(*[
+                            Equals(
+                                newvals[k],
+                                Ite(
+                                    mul_mone,
+                                    wrap_mod(Int(0)),
+                                    Ite(mul_pone, data[k], oldvals[k])
+                                )
+                            )
+                            for k in range(2, len(newvals))
+                        ]),
+                        "value of new data and timestamps"
+                    )
+                )
+                conjuncts.append(And(*bounds))
+            
+            else:
+                # encode hadinput
+                conjuncts.append(
+                    with_comment(
+                        And(
+                            Implies(
+                                Not(Equals(data[1], Int(0))),
+                                And(
+                                    newvals[0],
+                                    Implies(Not(oldvals[0]), isinputs[id]),
+                                    Implies(oldvals[0], Not(isinputs[id])),
+                                ),
+                            ),
+                            Implies(
+                                Equals(data[1], Int(0)),
+                                And(
+                                    Equals(newvals[0], oldvals[0]),
+                                    Not(isinputs[id]),
+                                ),
+                            ),
+                        ),
+                        "encode hadinput and isinput",
+                    )
+                )
+
+                # encode the receive case
+                assert oldvals[1].is_symbol()
+                conjuncts.append(
+                    with_comment(
+                        Implies(  # receive: data[1] == -1
+                            Equals(wrap_mod(Plus(data[1], Int(1))), Int(0)),
+                            And(
+                                # multiplicities
+                                Equals(oldvals[1], Int(1)),
+                                Equals(newvals[1], Int(0)),
+                                # data + timestamps
+                                *[
+                                    Equals(oldvals[k], wrap_mod(data[k]))
+                                    for k in range(2, len(newvals))
+                                ],
+                                *[
+                                    Equals(newvals[k], Int(0))
+                                    for k in range(2, len(newvals))
+                                ],
+                                # ensure intermediate values are in range
+                                *bounds,
+                            ),
+                        ),
+                        "receive: mult == -1",
+                    )
+                )
+                # encode the send case
+                conjuncts.append(
+                    with_comment(
+                        Implies(  # send: data[1] == 1
+                            Equals(wrap_mod(Minus(data[1], Int(1))), Int(0)),
+                            And(
+                                # multiplicities
+                                Equals(oldvals[1], Int(0)),
+                                Equals(newvals[1], Int(1)),
+                                # data + timestamps
+                                *[
+                                    Equals(oldvals[k], Int(0))
+                                    for k in range(2, len(newvals))
+                                ],
+                                *[
+                                    Equals(newvals[k], wrap_mod(data[k]))
+                                    for k in range(2, len(newvals))
+                                ],
+                                # ensure intermediate values are in range
+                                *bounds,
+                            ),
+                        ),
+                        "send: mult == 1",
+                    )
+                )
+                # encode the zero case: everything is unchanged
+                # do not bound intermediate values: this entire sequence may be disabled,
+                # and then these bounds only lead to false positives
+                conjuncts.append(
+                    with_comment(
+                        Implies(  # send: data[1] == 0
+                            Equals(wrap_mod(data[1]), Int(0)),
+                            And(
+                                *[
+                                    Equals(newvals[k], oldvals[k])
+                                    for k in range(1, len(newvals))
+                                ]
+                            ),
+                        ),
+                        "ignore: mult == 0",
+                    )
+                )
 
             news = def_vars(id + 1)
             intermediates |= set(news)
