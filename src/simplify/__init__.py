@@ -6,6 +6,7 @@ from .cvc5 import simplify_cvc5
 from .intervals import simplify_intervals
 from .z3 import simplify_z3
 from .andify import simplify_andify
+from .nnf import simplify_nnf
 from .lift_forall import simplify_lift_forall
 from .intervals import simplify_intervals2
 
