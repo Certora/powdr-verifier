@@ -136,6 +136,7 @@ class SmtLibParser(OriginalSmtLibParser):
         self.interpreted["mod"] = self._operator_adapter(self.env.formula_manager.Mod)
         self.interpreted["mod_total"] = self._operator_adapter(self.env.formula_manager.Mod)
         self.commands["model-add"] = self._cmd_model_add
+        self.commands["model-del"] = self._cmd_model_del
     
     def _cmd_model_add(self, current, tokens):
         """(model-add <fun_def>)"""
@@ -155,6 +156,12 @@ class SmtLibParser(OriginalSmtLibParser):
         #print(f"model-add {var} {ebody}")
         print(f"model-add for {var}")
         return script.SmtLibCommand("assert", [Equals(var, ebody)])
+
+    def _cmd_model_del(self, current, tokens):
+        """(model-del <var>)"""
+        var = self.parse_atom(tokens, current)
+        self.consume_closing(tokens, current)
+        return script.SmtLibCommand("assert", [TRUE()])
 
 def __serialize_command(self, outstream=None, printer=None, daggify=True):
     if self.name == 'echo':
