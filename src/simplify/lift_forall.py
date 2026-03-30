@@ -12,7 +12,7 @@ def _or_disjuncts(f: FNode) -> Iterable[FNode]:
         yield f
 
 def _is_potential_lift_pair(d: FNode) -> bool:
-    return d.is_not() and d.arg(0).is_equals()
+    return d.is_not() and d.arg(0).is_equals() or d.arg(0).is_iff()
 
 def _match_lift_pair(d: FNode, qvars: frozenset[FNode]) -> tuple[FNode, FNode] | None:
     assert _is_potential_lift_pair(d)
