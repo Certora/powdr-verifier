@@ -94,7 +94,7 @@ class SmtConverter:
                     a = self.convert_manual(a)
                     b = self.convert_manual(b)
                     self.derived_columns[sym] = with_comment(
-                        Ite(Equals(b, Int(0)), Int(0), wrap_mod(Div(a, b))),
+                        Int(0) if b.is_zero() else Ite(Equals(b, Int(0)), Int(0), wrap_mod(Div(a, b))),
                         f"DERIVED COLUMN {name} = QuotientOrZero({a}, {b})"
                     )
                 case _:
