@@ -119,7 +119,7 @@ def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
     subprocess.run(cmd, check=True)
     return None
 
-def __do_simplify(input, output, tactic="rewrite:intervals:z3:rewrite"):
+def __do_simplify(input, output, tactic="nnf:lift:rewrite:z3:rewrite:isqf"):
     logging.warning(f"simplifying with {tactic} {input.relative_to(Path.cwd())}")
     return __run_main("simplify", input, tactic, output, parse_output=True)
 
@@ -212,10 +212,10 @@ def run_verify(*pairs):
             res_verify = __run_main("verify", a, b, first, parse_output=True)
             a_verify.add_action(res_verify)
             for file in sorted(res_verify.outputs):
-                with a_verify.action("verify-check", inputs=[file]) as a_check:
-                    res_simplify = __do_simplify(file, file.with_suffix(".rewrite.smt2"), "rewrite:intervals:z3:isqf:rewrite")
+                with a_verify.action("verify-check-plain", inputs=[file]) as a_check:
+                    res_simplify = __do_simplify(file, file.with_suffix(".rewritea.smt2"))
                     a_check.add_action(res_simplify)
-                    res_check = __run_main("check", file.with_suffix(".rewrite.smt2"), "--print-model", parse_output=True)
+                    res_check = __run_main("check", file.with_suffix(".rewritea.smt2"), parse_output=True)
                     a_check.add_action(res_check)
 
 if __name__ == '__main__':
