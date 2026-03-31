@@ -8,10 +8,10 @@ def check():
     """Check the smt2 file."""
 
     parser = SmtLibParser()
-    logging.warning(f"loading from {ARGS().input}")
+    logging.info(f"loading from {ARGS().input}")
     smt_script = parser.get_script_fname(str(ARGS().input))
 
-    logging.info(f"checking formula with {ARGS().solver}")
+    logging.warning(f"checking {ARGS().input.relative_to(Path.cwd())} with {ARGS().solver}")
     with (
         Action("check") as action,
         Solver(logic=AUFNIA, name=ARGS().solver, solver_options={":timeout": 60000}) as s
