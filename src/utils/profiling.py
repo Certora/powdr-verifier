@@ -1,5 +1,6 @@
 import functools
 import logging
+import sys
 import tabulate
 import time
 
@@ -44,7 +45,8 @@ class Profile:
 
 def print_profile():
     """Print the profile of the functions"""
-    if logging.getLogger(__name__).getEffectiveLevel() > logging.INFO:
+    logger = logging.getLogger(__name__)
+    if logger.getEffectiveLevel() > logging.INFO:
         return
     table = [
         [name, PROFILE_COUNT[name], PROFILE_TIME[name] / 1000000000]
@@ -53,4 +55,4 @@ def print_profile():
     t = tabulate.tabulate(
         table, headers=["Function", "Count", "Time"], floatfmt=".3f", tablefmt="github"
     )
-    print(t)
+    logger.info(f"Profile for {sys.argv}\n{t}")
