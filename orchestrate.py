@@ -1,6 +1,7 @@
 import argparse
 from collections import defaultdict
 import functools
+import json
 import logging
 import re
 import shutil
@@ -115,7 +116,11 @@ def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
     cmd = [PYTHON, VERIFIER_DIR / "main.py", *_ARGS._additional_args, *_ARGS._main_args, command, *args, *_ARGS._sub_args]
     if parse_output:
         result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, text=True)
-        return load_json(StringIO(result.stdout))
+        try:
+            return load_json(StringIO(result.stdout))
+        except json.JSONDecodeError:
+            logging.error(f"failed to parse output of {cmd}: {result.stdout}")
+            return None
     subprocess.run(cmd, check=True)
     return None
 
