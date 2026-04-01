@@ -21,15 +21,6 @@ class NNFConverter(substituter.Substituter):
             return self._again(self.mgr.Or([self.mgr.Not(a) for a in arg.args()]))
         if arg.is_or():
             return self._again(self.mgr.And([self.mgr.Not(a) for a in arg.args()]))
-        if arg.is_iff():
-            return self.mgr.Not(arg)
-            a, b = arg.args()
-            return self._again(
-                self.mgr.Or(
-                    self.mgr.And(a, self.mgr.Not(b)),
-                    self.mgr.And(self.mgr.Not(a), b),
-                )
-            )
         return self.mgr.Not(arg)
 
     def walk_and(self, formula, args, **kwargs):
