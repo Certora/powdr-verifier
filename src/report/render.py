@@ -165,7 +165,7 @@ def to_tree_node(data: Action, inputdir: Path) -> TreeNode:
 def collect(basedir: Path):
     inputdir = (Path(__file__).parent.parent.parent.parent / "data" / basedir.name).resolve()
     data = []
-    for file in basedir.glob("**/*.json"):
+    for file in sorted(basedir.glob("**/*.json")):
         data.append(load_json(file))
 
     return TreeTableWidget([to_tree_node(d, inputdir) for d in data])
