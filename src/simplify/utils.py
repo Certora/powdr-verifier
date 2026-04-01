@@ -5,7 +5,7 @@ from ..smt.utils import *
 
 def _script_to_string(smt_script: script.SmtLibScript) -> str:
     smt2_in = StringIO()
-    pretty_print_smtlib(smt_script, smt2_in)
+    serialize_smtlib(smt_script, smt2_in)
     return smt2_in.getvalue()
 
 def _string_to_script(smt2_string: str) -> script.SmtLibScript:
