@@ -55,4 +55,4 @@ def print_profile():
     t = tabulate.tabulate(
         table, headers=["Function", "Count", "Time"], floatfmt=".3f", tablefmt="github"
     )
-    logger.info(f"Profile for {sys.argv}\n{t}")
+    logger.info(f"Profile for {" ".join(sys.argv)}\n{t}")
