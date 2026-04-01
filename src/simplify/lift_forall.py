@@ -1,18 +1,9 @@
 from typing import Iterable
 
-from pysmt.walkers import IdentityDagWalker
-
 from ..smt.utils import *
 
-
-def _or_disjuncts(f: FNode) -> Iterable[FNode]:
-    if f.is_or():
-        yield from f.args()
-    else:
-        yield f
-
 def _is_potential_lift_pair(d: FNode) -> bool:
-    return d.is_not() and d.arg(0).is_equals() or d.arg(0).is_iff()
+    return d.is_not() and (d.arg(0).is_equals() or d.arg(0).is_iff())
 
 def _match_lift_pair(d: FNode, qvars: frozenset[FNode]) -> tuple[FNode, FNode] | None:
     assert _is_potential_lift_pair(d)
@@ -32,38 +23,35 @@ def _match_lift_pair(d: FNode, qvars: frozenset[FNode]) -> tuple[FNode, FNode] |
 class LiftForallWalker(IdentityDagWalker):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.lifted = set()
+        self.lifted = {}
 
     def walk_forall(self, formula, args, **kwargs):
+        # only consider forall over a disjunction
+        if not args[0].is_or():
+            return formula
+        
+        # collect potential lift pairs
+        candidates = set(d for d in args[0].args() if _is_potential_lift_pair(d))
+        # current set of quantified variables
         qvars = frozenset(formula.quantifier_vars())
-        skolems = set()
-        disjuncts = set()
-        discarded = set()
-        for d in _or_disjuncts(args[0]):
-            if _is_potential_lift_pair(d):
-                disjuncts.add(d)
-            else:
-                discarded.add(d)
+
         progressed = True
         while progressed:
+            # loop until no candidate can be lifted
             progressed = False
-            for d in list(disjuncts):
+            for d in list(candidates):
                 m = _match_lift_pair(d, qvars)
                 if m is not None:
                     lifted, _eq = m
-                    disjuncts.remove(d)
-                    skolems.add(_eq)
-                    self.lifted.add(lifted)
+                    candidates.remove(d)
+                    self.lifted[lifted] = _eq
                     qvars = frozenset(x for x in qvars if x != lifted)
                     progressed = True
 
-        if not qvars:
-            return args[0]
-        return And(
-            ForAll([
-                v for v in formula.quantifier_vars() if v in qvars
-            ], args[0]),
-            *skolems
+        # remove lifted equalities from the body
+        return ForAll(
+            [v for v in formula.quantifier_vars() if v in qvars],
+            Or(*[a for a in args[0].args() if Not(a) not in self.lifted.values()])
         )
 
 
@@ -84,6 +72,8 @@ def simplify_lift_forall(smt_script: script.SmtLibScript) -> script.SmtLibScript
     
     declares = [
         script.SmtLibCommand(name="declare-fun", args=[v, v.get_type()]) for v in w.lifted
+    ] + [
+        script.SmtLibCommand(name="assert", args=[eq]) for eq in w.lifted.values()
     ]
     smt_script.commands = prefix + declares + suffix
     
