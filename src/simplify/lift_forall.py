@@ -30,6 +30,10 @@ def _match_lift_pair(d: FNode, qvars: frozenset[FNode]) -> tuple[FNode, FNode] |
 
 
 class LiftForallWalker(IdentityDagWalker):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.lifted = set()
+
     def walk_forall(self, formula, args, **kwargs):
         qvars = frozenset(formula.quantifier_vars())
         skolems = set()
@@ -49,6 +53,7 @@ class LiftForallWalker(IdentityDagWalker):
                     lifted, _eq = m
                     disjuncts.remove(d)
                     skolems.add(_eq)
+                    self.lifted.add(lifted)
                     qvars = frozenset(x for x in qvars if x != lifted)
                     progressed = True
 
@@ -64,7 +69,22 @@ class LiftForallWalker(IdentityDagWalker):
 
 def simplify_lift_forall(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     w = LiftForallWalker(env=get_env())
+    prefix = []
+    suffix = []
+    in_prefix = True
     for cmd in smt_script:
         if cmd.name == "assert":
+            in_prefix = False
             cmd.args[0] = keep_comment(w.walk(cmd.args[0]), cmd.args[0])
+            suffix.append(cmd)
+        elif in_prefix:
+            prefix.append(cmd)
+        else:
+            suffix.append(cmd)
+    
+    declares = [
+        script.SmtLibCommand(name="declare-fun", args=[v, v.get_type()]) for v in w.lifted
+    ]
+    smt_script.commands = prefix + declares + suffix
+    
     return smt_script
