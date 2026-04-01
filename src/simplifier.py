@@ -2,6 +2,7 @@ import logging
 
 from .report.action import Action
 from .smt.utils import *
+from .smt_backends.pysmt import pretty_print_smtlib, serialize_smtlib
 from .utils.args import ARGS
 from .utils.io import open_file
 
@@ -22,7 +23,10 @@ def simplify():
                 logging.info(f"loading from {f.name}")
                 smt_script = parser.get_script(f)
 
+        dump_pretty = False
         for t in ARGS().tactic.split(":"):
+            dump_pretty = False
+            logging.info(f"simplifying with {t}")
             with action.action(t):
                 t,*args = t.split("-", 1)
                 match t:
@@ -47,11 +51,16 @@ def simplify():
                     case "isqf":
                         if not check_isqf(smt_script):
                             logging.error("formula is not quantifier-free")
+                    case "pretty" | "p":
+                        dump_pretty = True
                     case _:
                         logging.error(f"ignoring unknown tactic: {t}")
 
         with action.action("dump"):
             with open_file(ARGS().output, "w") as out:
                 logging.info(f"dumping formula to {out.name}")
-                pretty_print_smtlib(smt_script, out)
+                if dump_pretty:
+                    pretty_print_smtlib(smt_script, out)
+                else:
+                    serialize_smtlib(smt_script, out)
         return action

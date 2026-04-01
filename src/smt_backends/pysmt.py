@@ -409,6 +409,12 @@ class SMTPrettyPrinter(script.SmtPrinter):
             yield assign[k]
             self.write(")")
 
+def serialize_smtlib(smtlib: script.SmtLibScript, file: TextIO):
+    for cmd in smtlib.commands:
+        cmd.serialize(file, printer=None, daggify=True)
+        file.write("\n")
+
+
 def pretty_print_smtlib(smtlib: script.SmtLibScript, file: TextIO):
     printer = SMTPrettyPrinter(file, in_script=True)
     for cmd in smtlib.commands:
