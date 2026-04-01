@@ -62,3 +62,4 @@ if __name__ == '__main__':
     
     if res is not None:
         dump_json(res, indent=4)
+        sys.stdout.write("\n")
