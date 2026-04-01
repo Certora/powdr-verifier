@@ -10,9 +10,8 @@ def simplify_z3(smt_script: script.SmtLibScript, args = []) -> script.SmtLibScri
         case []:
             tactic = z3.Repeat(
                 z3.Then(
-                    z3.Repeat(z3.Then("simplify", "propagate-values", "solve-eqs")),
+                    z3.Repeat(z3.Then("simplify", "propagate-values", "propagate-ineqs", "solve-eqs")),
                     "ctx-simplify",
-                    "propagate-ineqs",
                 )
             )
         case [t]:
