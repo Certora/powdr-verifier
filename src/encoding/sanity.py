@@ -6,7 +6,7 @@ from ..smt.utils import *
 def sanity_satisfies_derived(formula: FormulaWithAxioms) -> Iterable[FNode]:
     for v, expr in formula.derived.items():
         yield with_comment(
-            Equals(wrap_mod(Minus(v, expr)), Int(0)),
+            Not(Equals(wrap_mod(Minus(v, expr)), Int(0))),
             f"derived {v} = {expr}"
         )
 
@@ -31,8 +31,8 @@ def sanity_mult_values(conv: SmtConverter, formula: FormulaWithAxioms) -> Iterab
 
     for mult,data in mults.items():
         yield with_comment(
-            Or(
-                Equals(wrap_mod(Minus(mult, Int(v))), Int(0)) for v in data["values"]
+            And(
+                Not(Equals(wrap_mod(Minus(mult, Int(v))), Int(0))) for v in data["values"]
             ),
             f"multiplicities of {", ".join(data["names"])} in {data["values"]}"
         )
@@ -49,15 +49,15 @@ def sanity_stateful_mult_pairs(conv: SmtConverter, formula: FormulaWithAxioms) -
                     Equals(wrap_mod(b.mult), Int(0))
                 ),
                 And(
-                    Equals(wrap_mod(Minus(a.mult, Int(1))), Int(0)),
-                    Equals(wrap_mod(Plus(b.mult, Int(1))), Int(0))
+                    Equals(wrap_mod(Plus(a.mult, Int(1))), Int(0)),
+                    Equals(wrap_mod(Minus(b.mult, Int(1))), Int(0))
                 ),
             )
             name = f"{encoder.NAME}#{ida}/{idb}"
             pairs[f].append(name)
 
     for p,names in pairs.items():
-        yield with_comment(p, f"balancing of mult for {', '.join(names)}")
+        yield with_comment(Not(p), f"balancing of mult for {', '.join(names)}")
 
 def sanity_timestamps_increase(conv: SmtConverter, formula: FormulaWithAxioms) -> Iterable[FNode]:
     for encoder in conv.bus_interaction_encoder.encoders:
@@ -66,11 +66,11 @@ def sanity_timestamps_increase(conv: SmtConverter, formula: FormulaWithAxioms) -
         for ((ida,a),(idb,b)) in itertools.batched(enumerate(encoder._interactions), 2, strict=True):
             f = Implies(
                 And(
-                    Not(Equals(wrap_mod(a.mult), Int(0))),
-                    Not(Equals(wrap_mod(b.mult), Int(0)))
+                    Equals(wrap_mod(a.mult), Int(0)),
+                    Equals(wrap_mod(b.mult), Int(0)),
                 ),
                 LT(a.args[-1], b.args[-1])
             )
             name = f"{encoder.NAME}#{ida}/{idb} timestamps increase"
-            yield with_comment(f, name)
+            yield with_comment(Not(f), name)
 
