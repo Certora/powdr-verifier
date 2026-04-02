@@ -97,6 +97,10 @@ def __build_parser(skip_subparsers=False):
     sub_aliasing = sub.add_parser("aliasing")
     sub_aliasing.add_argument("input", type=Path)
 
+    sub_report = sub.add_parser("report")
+    sub_report.add_argument("report_dir", type=Path)
+    sub_report.add_argument("output", type=Path)
+
     return parser
 
 

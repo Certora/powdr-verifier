@@ -15,6 +15,7 @@ from src.simplifier import simplify
 from src.converter import convert_and_print
 from src.encoding_analysis import analyze_aliases
 from src.visualizer import visualize
+from src.report.render import report
 
 
 if __name__ == '__main__':
@@ -51,6 +52,9 @@ if __name__ == '__main__':
             
             case 'aliasing':
                 analyze_aliases()
+
+            case 'report':
+                report()
 
             case _:
                 logging.error(f"unknown command: {ARGS().command}")
