@@ -175,12 +175,12 @@ def run_trace(*files):
         logging.warning(f"running tracer on {f.relative_to(Path.cwd())}")
         with ActionDumper("trace", _ARGS.test, f) as dump:
             res_trace = __run_main("trace", f, f.parent / f"trace-{f.stem}.smt2", parse_output=True)
-            dump.add_action(res_trace)
+            dump += res_trace
             for file in sorted(res_trace.outputs):
-                with dump.action("simplify"):
-                    __do_simplify(file, file.with_suffix(".rewrite.smt2"))
-                with dump.action("check"):
-                    __run_main("check", file.with_suffix(".rewrite.smt2"), "--dump-model", file.with_suffix(".model"))
+                with dump.action("check") as check:
+                    check += { "inputs": [file] }
+                    check += __do_simplify(file, file.with_suffix(".rewrite.smt2"))
+                    check += __run_main("check", file.with_suffix(".rewrite.smt2"), "--dump-model", file.with_suffix(".model"), parse_output=True)
 
 def run_diff(*pairs):
     for a,b in pairs:
@@ -215,13 +215,12 @@ def run_verify(*pairs):
             logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
             first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
             res_verify = __run_main("verify", a, b, first, parse_output=True)
-            a_verify.add_action(res_verify)
+            a_verify += res_verify
             for file in sorted(res_verify.outputs):
                 with a_verify.action("verify-check-plain", inputs=[file]) as a_check:
-                    res_simplify = __do_simplify(file, file.with_suffix(".rewritea.smt2"))
-                    a_check.add_action(res_simplify)
-                    res_check = __run_main("check", file.with_suffix(".rewritea.smt2"), parse_output=True)
-                    a_check.add_action(res_check)
+                    a_check += __do_simplify(file, file.with_suffix(".rewritea.smt2"))
+                    a_check += __run_main("check", file.with_suffix(".rewritea.smt2"), parse_output=True)
+
 
 if __name__ == '__main__':
     args = parse_args()

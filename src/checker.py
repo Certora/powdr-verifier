@@ -43,4 +43,6 @@ def check():
                     break
         except SolverReturnedUnknownResultError:
             action += { "result": "error-unknown" }
+        if action.result != action.expected:
+            logging.error(f"expected {action.expected} but got {action.result}")
         return action

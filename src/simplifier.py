@@ -27,7 +27,7 @@ def simplify():
         for t in ARGS().tactic.split(":"):
             dump_pretty = False
             logging.info(f"simplifying with {t}")
-            with action.action(t):
+            with action.action(t) as subaction:
                 t,*args = t.split("-", 1)
                 match t:
                     case "andify":
@@ -49,8 +49,12 @@ def simplify():
                     case "model":
                         smt_script = simplify_model(smt_script)
                     case "isqf":
+                        subaction += { "expected": "qf" }
                         if not check_isqf(smt_script):
-                            logging.error("formula is not quantifier-free")
+                            logging.warning("formula is not quantifier-free")
+                            subaction += { "result": "not-qf" }
+                        else:
+                            subaction += { "result": "qf" }
                     case "pretty" | "p":
                         dump_pretty = True
                     case _:
