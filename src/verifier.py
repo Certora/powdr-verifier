@@ -208,9 +208,8 @@ def verify():
         SmtConverter(AFTER_PREFIX, block) as after_conv,
     ):
         action += {"outputs": []}
-        with action.action("encode"):
-            before_smt = before_conv.to_formula_with_axioms(before)
-            after_smt = after_conv.to_formula_with_axioms(after)
+        before_smt = before_conv.to_formula_with_axioms(before)
+        after_smt = after_conv.to_formula_with_axioms(after)
 
         eliminations = {}
         if ARGS().eliminations is not None:
