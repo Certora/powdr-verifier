@@ -57,7 +57,8 @@ def parse_range(files: dict, steps):
 def parse_paired_range(files: dict, steps):
     ids = sorted([i for i in files.keys() if isinstance(i, int)])
     if steps is None:
-        return (files[ids[0]], files[ids[-1]])
+        yield (files[ids[0]], files[ids[-1]])
+        return
 
     for k in range(max(steps.start, min(*ids)), min(steps.stop, max(*ids))):
         if k in files and k+1 in files:
