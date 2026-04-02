@@ -38,6 +38,6 @@ def encode_trace_sanity(conv: SmtConverter, formula: FormulaWithAxioms) -> scrip
     return And(
         *formula.constraints,
         *formula.axioms,
-        Or(Not(check) for check in checks),
+        Or(*checks),
     )
 
