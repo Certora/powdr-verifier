@@ -183,13 +183,10 @@ jobs:
     - name: upload reports
       uses: actions/upload-artifact@v7
       with:
-        path: report_*.html
+        path: report_single_add_1.html
         archive: false
-
-    - name: HTML Preview
-      id: html_preview
-      uses: pavi2410/html-preview-action@v5
+    - name: upload reports
+      uses: actions/upload-artifact@v7
       with:
-        html_file: report_single_add_1.html
-        upload: auto
-        job_summary: true
+        path: report_single_loadbu.html
+        archive: false
