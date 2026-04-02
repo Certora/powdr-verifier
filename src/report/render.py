@@ -1,11 +1,13 @@
 import dataclasses
 import html
+import os
+import tempfile
+import webbrowser
 from pathlib import Path
 from typing import Optional
 
-from IPython.display import HTML, display
-
 from .action import Action
+from ..utils.args import ARGS
 from ..utils.io import load_json
 
 
@@ -36,8 +38,25 @@ class TreeTableWidget:
         self._roots = roots
         self._collapsed = collapsed
 
-    def display(self):
-        display(HTML(self._render()))
+    def display(self, path: Path) -> Path:
+        path.write_text(self._full_html(), encoding="utf-8")
+        webbrowser.open(path.resolve().as_uri())
+        return path
+
+    def _full_html(self) -> str:
+        inner = self._render()
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Report</title>
+</head>
+<body>
+{inner}
+</body>
+</html>
+"""
 
     def _render(self) -> str:
         rows = "\n".join(self._render_node(n, depth=0, alt=i % 2 == 1)
@@ -105,7 +124,7 @@ class TreeTableWidget:
         else:
             toggle = '<span class="ttt-spc"></span>'
 
-        inputs_str = ", ".join(str(i) for i in node.inputs) if node.inputs else "—"
+        inputs_str = ", ".join(str(i).removeprefix("apc_candidate_") for i in node.inputs) if node.inputs else "—"
         time_str   = f"{node.running_time:.2f}s" if node.running_time is not None else "—"
         status_str = f"{icon} {node.result}"
 
@@ -169,3 +188,7 @@ def collect(basedir: Path):
         data.append(load_json(file))
 
     return TreeTableWidget([to_tree_node(d, inputdir) for d in data])
+
+
+def report():
+    collect(ARGS().report_dir).display(path=ARGS().output)

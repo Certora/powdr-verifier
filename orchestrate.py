@@ -125,7 +125,7 @@ def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
     return None
 
 def __do_simplify(input, output, tactic="nnf:lift:rewrite:z3:rewrite:isqf"):
-    logging.warning(f"simplifying with {tactic} {input.relative_to(Path.cwd())}")
+    logging.info(f"simplifying with {tactic} {input.relative_to(Path.cwd())}")
     return __run_main("simplify", input, tactic, output, parse_output=True)
 
 def with_patch(func):
