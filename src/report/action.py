@@ -23,12 +23,11 @@ class Action:
         action = Action(name, **kwargs)
         self.actions.append(action)
         return action
-    
-    def add_action(self, action: "Action"):
-        self.actions.append(action)
-    
+
     def __iadd__(self, kwargs):
-        if isinstance(kwargs, dict):
+        if isinstance(kwargs, Action):
+            self.actions.append(kwargs)
+        elif isinstance(kwargs, dict):
             self.properties.update(kwargs)
         elif isinstance(kwargs, tuple):
             assert len(kwargs) == 2
@@ -48,11 +47,9 @@ class Action:
             sub = { s for s in sub if s is not None }
             if len(sub) == 0:
                 return None
-            firsts = {s[0] for s in sub}
-            first = next(iter(firsts)) if len(firsts) == 1 else None
             non_none_seconds = [s[1] for s in sub if s[1] is not None]
             second = all(non_none_seconds) if non_none_seconds else None
-            return first, second
+            return "", second
 
         if "expected" in self.properties:
             return self.result, self.result == self.expected
