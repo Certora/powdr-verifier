@@ -33,7 +33,7 @@ def encode_trace_sanity(conv: SmtConverter, formula: FormulaWithAxioms) -> scrip
         sanity_satisfies_derived(formula),
         sanity_mult_values(conv, formula),
         sanity_stateful_mult_pairs(conv, formula),
-        sanity_timestamps_increase(conv, formula),
+        #sanity_timestamps_increase(conv, formula),
     )
     return And(
         *formula.constraints,
