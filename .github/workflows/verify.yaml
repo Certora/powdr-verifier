@@ -179,8 +179,13 @@ jobs:
           python3 verifier/main.py report reports/${test} report_${test}.html || exit 1
           echo "::endgroup::"
         done
-
     
+    - name: upload reports
+      uses: actions/upload-artifact@v7
+      with:
+        path: report_*.html
+        archive: false
+
     - name: HTML Preview
       id: html_preview
       uses: pavi2410/html-preview-action@v5
