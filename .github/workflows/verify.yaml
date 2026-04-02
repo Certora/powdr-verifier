@@ -172,3 +172,19 @@ jobs:
           echo "::endgroup::"
         done
     
+    - name: generate reports
+      run: |
+        for test in ${{ env.TEST_CASES }}; do
+          echo "::group::run verifier on ${test}"
+          python3 verifier/main.py report reports/${test} report_${test}.html || exit 1
+          echo "::endgroup::"
+        done
+
+    
+    - name: HTML Preview
+      id: html_preview
+      uses: pavi2410/html-preview-action@v5
+      with:
+        html_file: report_single_add_1.html
+        upload: auto
+        job_summary: true
