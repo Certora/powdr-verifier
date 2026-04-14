@@ -2,6 +2,7 @@ import json
 import sympy
 
 
+from .encoding.utils import get_is_valid
 from .report.action import Action
 from .rewriter.conversion import to_smt, to_sympy
 from .rewriter import rewrite
@@ -182,16 +183,6 @@ def encoding(before, after, qvars, builder, input_relation, output_relation, add
                 subs[Symbol(name, INT)] = Int(value)
         res = res.substitute(subs)
     return res
-
-def get_is_valid(vars: frozenset[FNode], prefix: str) -> FNode | None:
-    match [v for v in vars if v.symbol_name().startswith(f"{prefix}-is_valid@")]:
-        case []:
-            return None
-        case [is_valid]:
-            return is_valid
-        case _:
-            logging.warning("multiple is_valid variables found, this is not supported")
-            return None
 
 def verify():
     """Verify our versions of equivalence."""
