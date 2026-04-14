@@ -87,6 +87,7 @@ def parse_args():
     parser.add_argument('k', type=str, nargs='*')
     parser.add_argument('--clean', action='store_true')
     parser.add_argument("--with-patch", type=Path, default=None)
+    parser.add_argument("-j", "--jobs", type=int, default=1)
 
     global _ARGS
     _ARGS, leftover = parser.parse_known_args()
@@ -116,16 +117,23 @@ def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
     
     cmd = [PYTHON, VERIFIER_DIR / "main.py", *_ARGS._additional_args, *_ARGS._main_args, command, *args, *_ARGS._sub_args]
     if parse_output:
-        result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, text=True)
+        try:
+            result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            logging.error(f"timed out running {cmd}")
+            return {"result": "timeout"}
         try:
             return load_json(StringIO(result.stdout))
         except json.JSONDecodeError:
             logging.error(f"failed to parse output of {cmd}: {result.stdout}")
-            return None
-    subprocess.run(cmd, check=True)
+            return {"result": "invalid-json"}
+    try:
+        subprocess.run(cmd, check=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        logging.error(f"timed out running {cmd}")
     return None
 
-def __do_simplify(input, output, tactic="nnf:lift:rewrite:z3:rewrite:isqf"):
+def __do_simplify(input, output, tactic="nnf:lift:rewrite:z3:rewrite"):
     logging.info(f"simplifying with {tactic} {input.relative_to(Path.cwd())}")
     return __run_main("simplify", input, tactic, output, parse_output=True)
 
@@ -210,18 +218,27 @@ def run_eval(*files):
         logging.warning(f"evaluating trace from {model.relative_to(Path.cwd())} on {f.relative_to(Path.cwd())}")
         __run_main("eval", f, model)
 
-def run_verify(*pairs):
-    for a,b in pairs:
-        with ActionDumper("verify", _ARGS.test, a, b) as a_verify:
-            logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
-            first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
-            res_verify = __run_main("verify", a, b, first, parse_output=True)
-            a_verify += res_verify
-            for file in sorted(res_verify.outputs):
-                with a_verify.action("verify-check-plain", inputs=[file]) as a_check:
-                    a_check += __do_simplify(file, file.with_suffix(".rewritea.smt2"))
+def __run_single_verify(a, b):
+    with ActionDumper("verify", _ARGS.test, a, b) as a_verify:
+        logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
+        first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
+        res_verify = __run_main("verify", a, b, first, parse_output=True)
+        a_verify += res_verify
+        for file in sorted(res_verify.outputs):
+            with a_verify.action("verify-check-plain", inputs=[file]) as a_check:
+                a_check += __do_simplify(file, file.with_suffix(".rewritea.smt2"))
+                if file.with_suffix(".rewritea.smt2").exists():
                     a_check += __run_main("check", file.with_suffix(".rewritea.smt2"), parse_output=True)
 
+def run_verify(*pairs):
+    if _ARGS.jobs == 1:
+        for a,b in pairs:
+            __run_single_verify(a, b)
+    else:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_ARGS.jobs) as executor:
+            for a,b in pairs:
+                executor.submit(__run_single_verify, a, b)
 
 if __name__ == '__main__':
     args = parse_args()
