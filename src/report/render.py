@@ -1,14 +1,25 @@
 import dataclasses
 import html
-import os
 import tempfile
 import webbrowser
 from pathlib import Path
 from typing import Optional
 
+from .database import clear_verification_steps, close_db, commit_db, connect_db, create_db, insert_verification_row
+from .plots import (
+    basic_stats,
+    block_solved_percentage_ecdf,
+    cactus_time_blocks,
+    cactus_time_passes,
+    pass_solved_percentage_ecdf,
+    scatter_time_size_by_outcome,
+    scatter_time_size_success_only,
+    verified_over_time,
+)
 from .action import Action
 from ..utils.args import ARGS
 from ..utils.io import load_json
+from ..utils.inputs import load_files_by_block, load_verification_steps
 
 
 def _title_attr(s: str) -> str:
@@ -23,7 +34,8 @@ class TreeNode:
     result: str = "unknown"
     status: str = "pending"                # pending | running | success | error | skipped
     children: list = dataclasses.field(default_factory=list)
-
+    block: Optional[int] = None
+    passname: Optional[str] = None
 
 class TreeTableWidget:
     _STATUS = {
@@ -34,29 +46,10 @@ class TreeTableWidget:
         "skipped":  ("–", "#856404", "#fff3cd"),
     }
 
-    def __init__(self, roots: list[TreeNode], *, collapsed: bool = False):
+    def __init__(self, roots: list[TreeNode], *, collapsed: bool = False, basedir: Path):
         self._roots = roots
         self._collapsed = collapsed
-
-    def display(self, path: Path) -> Path:
-        path.write_text(self._full_html(), encoding="utf-8")
-        webbrowser.open(path.resolve().as_uri())
-        return path
-
-    def _full_html(self) -> str:
-        inner = self._render()
-        return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Report</title>
-</head>
-<body>
-{inner}
-</body>
-</html>
-"""
+        self._basedir = basedir
 
     def _render(self) -> str:
         rows = "\n".join(self._render_node(n, depth=0, alt=i % 2 == 1)
@@ -124,7 +117,11 @@ class TreeTableWidget:
         else:
             toggle = '<span class="ttt-spc"></span>'
 
-        inputs_str = ", ".join(str(i).removeprefix("apc_candidate_") for i in node.inputs) if node.inputs else "—"
+        if node.inputs:
+            inputs = [i.relative_to(self._basedir, walk_up=True) for i in node.inputs]
+            inputs_str = ", ".join(str(i).removeprefix("apc_candidate_") for i in inputs)
+        else:
+            inputs_str = "—"
         time_str   = f"{node.running_time:.2f}s" if node.running_time is not None else "—"
         status_str = f"{icon} {node.result}"
 
@@ -160,35 +157,78 @@ class TreeTableWidget:
 
         return row
 
-def to_tree_node(data: Action, inputdir: Path) -> TreeNode:
-    result = ""
-    status = "unknown"
-    if s := data.status():
-        result = s[0]
-        status = {
-            True: "success",
-            False: "error",
-            None: "unknown",
-        }[s[1]]
+def to_tree_node(data: Action) -> TreeNode:
     return TreeNode(
         name=data.name,
-        inputs=[
-            i.relative_to(inputdir, walk_up=True) for i in data.properties.get("inputs", [])
-        ],
+        inputs=data.properties.get("inputs", []),
         running_time=data.running_time,
-        result=result,
-        status=status,
-        children=[to_tree_node(c, inputdir) for c in data.actions]
+        result=data.properties.get("result", "unknown"),
+        status=data.status(),
+        children=[to_tree_node(c) for c in data.actions]
     )
 
 def collect(basedir: Path):
     inputdir = (Path(__file__).parent.parent.parent.parent / "data" / basedir.name).resolve()
     data = []
     for file in sorted(basedir.glob("**/*.json")):
-        data.append(load_json(file))
+        try:
+            res = load_json(file)
+            data.append(res)
+        except Exception as e:
+            continue
 
-    return TreeTableWidget([to_tree_node(d, inputdir) for d in data])
-
+    ttw = TreeTableWidget([to_tree_node(d) for d in data], basedir=inputdir)
+    results = load_verification_steps(inputdir)
+    for node in ttw._roots:
+        if node.name == "verify":
+            assert len(node.inputs) == 2
+            i1, i2 = node.inputs
+            assert (i1, i2) in results
+            node.block, node.passname = results[(i1, i2)]
+            results[(i1, i2)] = node
+            insert_verification_row(i1, i2, node)
+    for (i1, i2), val in results.items():
+        if isinstance(val, tuple):
+            insert_verification_row(i1, i2, val)
+    commit_db()
+    return ttw, results
 
 def report():
-    collect(ARGS().report_dir).display(path=ARGS().output)
+    report_dir = ARGS().report_dir
+    connect_db(report_dir / "verification_results.db")
+    try:
+        create_db()
+        clear_verification_steps()
+        table, _ = collect(report_dir)
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Report</title>
+</head>
+<body>
+{basic_stats()}
+
+{verified_over_time()}
+
+{cactus_time_blocks()}
+
+{block_solved_percentage_ecdf()}
+
+{pass_solved_percentage_ecdf()}
+
+{cactus_time_passes(table)}
+
+{scatter_time_size_success_only()}
+
+{scatter_time_size_by_outcome()}
+
+<!--{table._render()}-->
+</body>
+</html>
+"""
+        ARGS().output.write_text(html, encoding="utf-8")
+    finally:
+        close_db()
+    #webbrowser.open(ARGS().output.resolve().as_uri())

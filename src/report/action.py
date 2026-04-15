@@ -47,13 +47,23 @@ class Action:
             sub = { s for s in sub if s is not None }
             if len(sub) == 0:
                 return None
-            non_none_seconds = [s[1] for s in sub if s[1] is not None]
-            second = all(non_none_seconds) if non_none_seconds else None
-            return "", second
+            if len(sub) == 1:
+                return list(sub)[0]
+            if "error" in sub:
+                return "error"
+            if "wrong" in sub:
+                return "wrong"
+            if "timeout" in sub:
+                return "timeout"
+            if "unknown" in sub:
+                return "unknown"
+            return "success"
 
         if "expected" in self.properties:
-            return self.result, self.result == self.expected
-        return self.result, None
+            if self.result == self.expected:
+                return "success"
+            return "error"
+        return self.result
 
     
     def as_dict(self):
