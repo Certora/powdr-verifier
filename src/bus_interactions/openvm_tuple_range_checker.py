@@ -1,6 +1,7 @@
 from .single_interaction_encoder import SingleInteractionEncoder
 
 from ..smt.utils import *
+from ..utils.utils import none_if
 
 
 class OpenVMTupleRangeCheckerEncoder(SingleInteractionEncoder):
@@ -11,6 +12,7 @@ class OpenVMTupleRangeCheckerEncoder(SingleInteractionEncoder):
 
     NAME = "tuple range checker"
 
+    @none_if(lambda: ARGS().no_tuprange)
     def encode_pointwise(self, mult: Any, x: Any, y: Any) -> FNode:
         """
         Encodes tuple range checker bus interactions. It constrains the values

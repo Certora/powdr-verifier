@@ -5,6 +5,7 @@ from .single_interaction_encoder import SingleInteractionEncoder
 
 from ..smt.utils import *
 from ..utils.enums import XOrEncoding
+from ..utils.utils import none_if
 
 
 class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
@@ -63,6 +64,7 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
             case _:
                 raise ValueError(f"Unsupported XOR encoding: {ARGS().xor}")
 
+    @none_if(lambda: ARGS().no_bitwise)
     def encode_pointwise(self, mult: Any, x: Any, y: Any, z: Any, op: Any) -> Optional[FNode]:
         """Encode byte-range constraints and XOR relation depending on `op`."""
         if op == Int(0) and z == Int(0):

@@ -221,7 +221,7 @@ def verify():
         var1 = collect_variables(before_smt)
         var2 = collect_variables(after_smt)
         globals = before_smt.globals | after_smt.globals
-        auxiliaries = set.union(*(
+        auxiliaries = frozenset.union(frozenset(), *(
             before_conv.bus_interaction_encoder.get_auxiliaries()
             | after_conv.bus_interaction_encoder.get_auxiliaries()
         ).values())

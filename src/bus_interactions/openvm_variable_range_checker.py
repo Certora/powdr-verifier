@@ -3,6 +3,7 @@ from typing import Any
 from .single_interaction_encoder import SingleInteractionEncoder
 
 from ..smt.utils import *
+from ..utils.utils import none_if
 
 
 class OpenVMVariableRangeCheckerEncoder(SingleInteractionEncoder):
@@ -13,6 +14,7 @@ class OpenVMVariableRangeCheckerEncoder(SingleInteractionEncoder):
 
     NAME = "variable range checker"
 
+    @none_if(lambda: ARGS().no_varrange)
     def encode_pointwise(self, mult: Any, x: Any, bits: Any) -> FNode:
         """Constrain `x` to be in [0, 2^bits) when the interaction is enabled."""
         curbits = 25

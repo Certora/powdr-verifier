@@ -2,6 +2,7 @@ from .permutation_check import PermutationCheckMixin, TimestampCheckMixin
 from .single_interaction_encoder import SingleInteractionEncoder
 
 from ..smt.utils import *
+from ..utils.utils import none_if
 
 
 class OpenVMExecutionBridgeEncoder(
@@ -16,6 +17,7 @@ class OpenVMExecutionBridgeEncoder(
     TIMESTAMPED = True
     STATEFUL = True
 
+    @none_if(lambda: ARGS().no_bridge)
     def encode_all(self) -> Iterable[FNode]:
         """Return timestamp and permutation axioms over all execution-bridge interactions."""
         if len(self._interactions) == 0:
