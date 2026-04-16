@@ -1,28 +1,10 @@
 import functools
 from pathlib import Path
-from typing import Iterable
 import pandas
 import plotly.express
-import re
 
 from .database import query, query_single_value
 
-RE_FILENAME = re.compile(r"^.*/apc_candidate_(\d+)_(\d+)(?:_(.*))?\.json$")
-def parse_filename(filename: str) -> tuple[int, int, str]:
-    m = RE_FILENAME.match(filename)
-    assert m, f"Invalid filename: {filename}"
-    return int(m.group(1)), int(m.group(2)), m.group(3) or ""
-
-def list_verifications(data) -> Iterable:
-    for d in data._roots:
-        if d.name == "verify":
-            yield d
-
-def list_passes(data) -> Iterable:
-    for v in list_verifications(data):
-        assert len(v.inputs) == 2
-        _,_,name = parse_filename(str(v.inputs[1]))
-        yield name, v
 
 def basic_stats() -> str:
     n_blocks = query_single_value(
@@ -43,27 +25,45 @@ def basic_stats() -> str:
 <dd>{n_passes}</dd>
 </dl>
 
-TODO:
-- Why does stuff timeout? Stacked (line or bar) chart over all samples
-- Show soundness and completeness separately?
-
 """
 
 def verified_over_time() -> str:
-    rows = query(
-        "SELECT running_time FROM verification_steps WHERE status = 'success'"
+    whole = query(
+        """
+        SELECT running_time FROM verification_steps
+        WHERE status = 'success' AND running_time IS NOT NULL
+        """
     )
-    d = [{"id": i, "time": row[0]} for i, row in enumerate(rows)]
-    df = pandas.DataFrame(d, columns=["id", "time"])
+    sub = query(
+        """
+        SELECT name, running_time FROM substeps
+        WHERE status = 'success' AND running_time IS NOT NULL
+        """
+    )
+    rec: list[dict[str, object]] = []
+    for (rt,) in whole:
+        rec.append({"series": "verification", "time": rt})
+    for name, rt in sub:
+        rec.append({"series": str(name), "time": rt})
+    if not rec:
+        return ""
+    df = pandas.DataFrame(rec)
+    names = {r["series"] for r in rec}
+    order: list[str] = []
+    if "verification" in names:
+        order.append("verification")
+        names.discard("verification")
+    order.extend(sorted(names))
     fig = plotly.express.ecdf(
         df,
         y="time",
+        color="series",
         title="Verifies solved",
         ecdfnorm=None,
         orientation="h",
-        labels={"count": "# verifies", "time": "Time (s)"},
+        category_orders={"series": order},
+        labels={"count": "# samples", "time": "Time (s)", "series": "Series"},
     )
-
     return fig.to_html(full_html=False)
 
 @functools.lru_cache(maxsize=1)
@@ -148,7 +148,7 @@ def cactus_time_blocks() -> str:
 
 
 def block_solved_percentage_ecdf() -> str:
-    rows = query(
+    whole = query(
         """
         SELECT block,
                100.0 * SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) / COUNT(*) AS pct
@@ -158,17 +158,42 @@ def block_solved_percentage_ecdf() -> str:
         HAVING COUNT(*) > 0
         """
     )
-    d = [{"blkid": row[0], "pct": row[1]} for row in rows]
-    df = pandas.DataFrame(d, columns=["blkid", "pct"])
+    sub = query(
+        """
+        SELECT v.block, s.name,
+               100.0 * SUM(CASE WHEN s.status = 'success' THEN 1 ELSE 0 END) / COUNT(*) AS pct
+        FROM substeps s
+        JOIN verification_steps v ON v.id = s.verification_step_id
+        WHERE v.block IS NOT NULL
+        GROUP BY v.block, s.name
+        HAVING COUNT(*) > 0
+        """
+    )
+    rec: list[dict[str, object]] = []
+    for _blk, pct in whole:
+        rec.append({"series": "verification", "pct": pct})
+    for _blk, name, pct in sub:
+        rec.append({"series": str(name), "pct": pct})
+    if not rec:
+        return ""
+    df = pandas.DataFrame(rec)
+    names = {r["series"] for r in rec}
+    order: list[str] = []
+    if "verification" in names:
+        order.append("verification")
+        names.discard("verification")
+    order.extend(sorted(names))
     fig = plotly.express.ecdf(
         df,
         y="pct",
+        color="series",
         title="Percentage of verification steps solved per block",
         ecdfnorm=None,
         orientation="h",
         ecdfmode="complementary",
         range_y=[0, 100],
-        labels={"count": "# blocks", "pct": "% steps solved"},
+        category_orders={"series": order},
+        labels={"count": "# blocks", "pct": "% solved", "series": "Series"},
     )
     return fig.to_html(full_html=False)
 
@@ -209,7 +234,7 @@ def substeps_stacked_lines(input_base: Path) -> str:
     rows = query(
         """
         SELECT sub.verification_step_id, sub.name, COALESCE(sub.running_time, 0),
-               v.input1, v.input2
+               v.input1, v.input2, sub.status
         FROM substeps sub
         JOIN verification_steps v ON v.id = sub.verification_step_id
         """
@@ -217,12 +242,14 @@ def substeps_stacked_lines(input_base: Path) -> str:
     if not rows:
         return ""
     df = pandas.DataFrame(
-        rows, columns=["verification_step_id", "name", "running_time", "input1", "input2"]
+        rows,
+        columns=["verification_step_id", "name", "running_time", "input1", "input2", "status"],
     )
     df = df.groupby(["verification_step_id", "name"], as_index=False).agg(
         running_time=("running_time", "sum"),
         input1=("input1", "first"),
         input2=("input2", "first"),
+        status=("status", "first"),
     )
     df["input1"] = df["input1"].map(lambda p: _path_relative_to_base(str(p), input_base))
     df["input2"] = df["input2"].map(lambda p: _path_relative_to_base(str(p), input_base))
@@ -245,7 +272,7 @@ def substeps_stacked_lines(input_base: Path) -> str:
         stack_order.append(enc_col)
     stack_order.extend(sorted(n for n in names if n != enc_col))
 
-    fig = plotly.express.area(
+    fig = plotly.express.bar(
         df,
         x="x_rank",
         y="running_time",
@@ -259,28 +286,9 @@ def substeps_stacked_lines(input_base: Path) -> str:
             "input1": "Input file 1",
             "input2": "Input file 2",
             "verification_step_id": "Step id",
+            "status": "Status",
         },
-        hover_data=["verification_step_id", "input1", "input2"],
+        hover_data=["verification_step_id", "input1", "input2", "status"],
     )
-    return fig.to_html(full_html=False)
-
-
-def cactus_time_passes(data) -> str:
-    d = []
-    for name,v in list_passes(data):
-        d.append({
-            "name": name,
-            "time": v.running_time,
-        })
-
-    df = pandas.DataFrame(d, columns=["name", "time"])
-    fig = plotly.express.ecdf(
-        df,
-        y="time",
-        title="Total number of optimization passes solved",
-        ecdfnorm=None,
-        orientation="h",
-        labels={"count": "# optimization passes", "time": "Time (s)"},
-    )
-
+    fig.update_layout(barmode="stack", bargap=0)
     return fig.to_html(full_html=False)

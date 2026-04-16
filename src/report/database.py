@@ -46,6 +46,7 @@ def create_db() -> None:
             verification_step_id INTEGER NOT NULL,
             name TEXT NOT NULL,
             running_time REAL,
+            status TEXT,
             FOREIGN KEY (verification_step_id) REFERENCES verification_steps(id) ON DELETE CASCADE
         )
         """
@@ -97,13 +98,13 @@ def insert_verification_row(i1, i2, val) -> int:
 
 def insert_substeps(
     verification_step_id: int,
-    steps: Sequence[tuple[str, Optional[float]]],
+    steps: Sequence[tuple[str, Optional[float], Optional[str]]],
 ) -> None:
     assert __DB is not None
-    for name, rt in steps:
+    for name, rt, st in steps:
         __DB.execute(
-            "INSERT INTO substeps (verification_step_id, name, running_time) VALUES (?, ?, ?)",
-            (verification_step_id, name, rt),
+            "INSERT INTO substeps (verification_step_id, name, running_time, status) VALUES (?, ?, ?, ?)",
+            (verification_step_id, name, rt, st),
         )
 
 
