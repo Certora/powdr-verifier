@@ -225,10 +225,15 @@ def __run_single_verify(a, b):
         res_verify = __run_main("verify", a, b, first, parse_output=True)
         a_verify += res_verify
         for file in sorted(res_verify.outputs):
-            with a_verify.action("verify-check-plain", inputs=[file]) as a_check:
-                a_check += __do_simplify(file, file.with_suffix(".rewritea.smt2"))
-                if file.with_suffix(".rewritea.smt2").exists():
-                    a_check += __run_main("check", file.with_suffix(".rewritea.smt2"), parse_output=True)
+            with a_verify.action("check", inputs=[file]) as a_check:
+                a_check += __do_simplify(file, file.with_suffix(".rewrite.smt2"))
+                if file.with_suffix(".rewrite.smt2").exists():
+                    a_check += __run_main(
+                        "check",
+                        file.with_suffix(".rewrite.smt2"),
+                        "--dump-model", file.with_suffix(".model"),
+                        parse_output=True
+                    )
 
 def run_verify(*pairs):
     if _ARGS.jobs == 1:
