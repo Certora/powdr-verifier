@@ -5,7 +5,15 @@ import webbrowser
 from pathlib import Path
 from typing import Optional
 
-from .database import clear_verification_steps, close_db, commit_db, connect_db, create_db, insert_verification_row
+from .database import (
+    clear_verification_steps,
+    close_db,
+    commit_db,
+    connect_db,
+    create_db,
+    insert_substeps,
+    insert_verification_row,
+)
 from .plots import (
     basic_stats,
     block_solved_percentage_ecdf,
@@ -14,6 +22,7 @@ from .plots import (
     pass_solved_percentage_ecdf,
     scatter_time_size_by_outcome,
     scatter_time_size_success_only,
+    substeps_stacked_lines,
     verified_over_time,
 )
 from .action import Action
@@ -24,6 +33,10 @@ from ..utils.inputs import load_files_by_block, load_verification_steps
 
 def _title_attr(s: str) -> str:
     return f' title="{html.escape(s, quote=True)}"'
+
+
+def report_data_dir(report_dir: Path) -> Path:
+    return (Path(__file__).parent.parent.parent.parent / "data" / report_dir.name).resolve()
 
 
 @dataclasses.dataclass
@@ -157,6 +170,22 @@ class TreeTableWidget:
 
         return row
 
+
+def _substep_label(node: TreeNode) -> str:
+    if not node.name.startswith("verify-check"):
+        return node.name
+    blob = " ".join(str(p) for p in node.inputs).lower()
+    if "soundness" in blob:
+        return f"{node.name} (soundness)"
+    if "completeness" in blob:
+        return f"{node.name} (completeness)"
+    return node.name
+
+
+def collect_substeps(node: TreeNode) -> list[tuple[str, float | None]]:
+    return [(_substep_label(c), c.running_time) for c in node.children]
+
+
 def to_tree_node(data: Action) -> TreeNode:
     return TreeNode(
         name=data.name,
@@ -168,7 +197,7 @@ def to_tree_node(data: Action) -> TreeNode:
     )
 
 def collect(basedir: Path):
-    inputdir = (Path(__file__).parent.parent.parent.parent / "data" / basedir.name).resolve()
+    inputdir = report_data_dir(basedir)
     data = []
     for file in sorted(basedir.glob("**/*.json")):
         try:
@@ -186,7 +215,8 @@ def collect(basedir: Path):
             assert (i1, i2) in results
             node.block, node.passname = results[(i1, i2)]
             results[(i1, i2)] = node
-            insert_verification_row(i1, i2, node)
+            step_id = insert_verification_row(i1, i2, node)
+            insert_substeps(step_id, collect_substeps(node))
     for (i1, i2), val in results.items():
         if isinstance(val, tuple):
             insert_verification_row(i1, i2, val)
@@ -223,6 +253,8 @@ def report():
 {scatter_time_size_success_only()}
 
 {scatter_time_size_by_outcome()}
+
+{substeps_stacked_lines(report_data_dir(report_dir))}
 
 <!--{table._render()}-->
 </body>

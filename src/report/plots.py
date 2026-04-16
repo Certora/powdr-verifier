@@ -43,6 +43,10 @@ def basic_stats() -> str:
 <dd>{n_passes}</dd>
 </dl>
 
+TODO:
+- Why does stuff timeout? Stacked (line or bar) chart over all samples
+- Show soundness and completeness separately?
+
 """
 
 def verified_over_time() -> str:
@@ -191,6 +195,73 @@ def pass_solved_percentage_ecdf() -> str:
         labels={"passname": "pass", "pct": "% steps solved"},
     )
     fig.update_xaxes(tickangle=-35)
+    return fig.to_html(full_html=False)
+
+
+def _path_relative_to_base(path_str: str, base: Path) -> str:
+    try:
+        return str(Path(path_str).resolve().relative_to(base.resolve()))
+    except ValueError:
+        return path_str
+
+
+def substeps_stacked_lines(input_base: Path) -> str:
+    rows = query(
+        """
+        SELECT sub.verification_step_id, sub.name, COALESCE(sub.running_time, 0),
+               v.input1, v.input2
+        FROM substeps sub
+        JOIN verification_steps v ON v.id = sub.verification_step_id
+        """
+    )
+    if not rows:
+        return ""
+    df = pandas.DataFrame(
+        rows, columns=["verification_step_id", "name", "running_time", "input1", "input2"]
+    )
+    df = df.groupby(["verification_step_id", "name"], as_index=False).agg(
+        running_time=("running_time", "sum"),
+        input1=("input1", "first"),
+        input2=("input2", "first"),
+    )
+    df["input1"] = df["input1"].map(lambda p: _path_relative_to_base(str(p), input_base))
+    df["input2"] = df["input2"].map(lambda p: _path_relative_to_base(str(p), input_base))
+    pt = df.pivot_table(
+        index="verification_step_id",
+        columns="name",
+        values="running_time",
+        aggfunc="sum",
+        fill_value=0,
+    )
+    enc_col = "verify-encode"
+    encode_series = pt[enc_col] if enc_col in pt.columns else pandas.Series(0.0, index=pt.index)
+    step_order = encode_series.sort_values(ascending=True).index.tolist()
+    rank = {vid: i for i, vid in enumerate(step_order)}
+    df["x_rank"] = df["verification_step_id"].map(rank)
+
+    names = list(df["name"].unique())
+    stack_order = []
+    if enc_col in names:
+        stack_order.append(enc_col)
+    stack_order.extend(sorted(n for n in names if n != enc_col))
+
+    fig = plotly.express.area(
+        df,
+        x="x_rank",
+        y="running_time",
+        color="name",
+        category_orders={"name": stack_order},
+        title="Substep time by verification step (stacked)",
+        labels={
+            "x_rank": "Step order (sorted by encode time)",
+            "running_time": "Time (s)",
+            "name": "Substep",
+            "input1": "Input file 1",
+            "input2": "Input file 2",
+            "verification_step_id": "Step id",
+        },
+        hover_data=["verification_step_id", "input1", "input2"],
+    )
     return fig.to_html(full_html=False)
 
 

@@ -10,6 +10,7 @@ def connect_db(uri: Path | str) -> sqlite3.Connection:
     if __DB is not None:
         __DB.close()
     __DB = sqlite3.connect(uri if isinstance(uri, str) else str(uri))
+    __DB.execute("PRAGMA foreign_keys = ON")
     return __DB
 
 
@@ -19,12 +20,14 @@ def close_db() -> None:
         __DB.close()
         __DB = None
 
-
 def create_db() -> None:
     assert __DB is not None
+    __DB.execute("DROP TABLE IF EXISTS substeps")
+    __DB.execute("DROP TABLE IF EXISTS verification_steps")
     __DB.execute(
         """
-        CREATE TABLE IF NOT EXISTS verification_steps (
+        CREATE TABLE verification_steps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             input1 TEXT NOT NULL,
             input2 TEXT NOT NULL,
             block INTEGER,
@@ -32,11 +35,25 @@ def create_db() -> None:
             running_time REAL,
             result TEXT,
             status TEXT,
-            PRIMARY KEY (input1, input2)
+            UNIQUE(input1, input2)
         )
         """
     )
-    __DB.execute("CREATE INDEX IF NOT EXISTS idx_verification_steps_block ON verification_steps(block)")
+    __DB.execute(
+        """
+        CREATE TABLE substeps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            verification_step_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            running_time REAL,
+            FOREIGN KEY (verification_step_id) REFERENCES verification_steps(id) ON DELETE CASCADE
+        )
+        """
+    )
+    __DB.execute("CREATE INDEX idx_verification_steps_block ON verification_steps(block)")
+    __DB.execute(
+        "CREATE INDEX idx_substeps_verification_step_id ON substeps(verification_step_id)"
+    )
     __DB.commit()
 
 
@@ -45,12 +62,12 @@ def clear_verification_steps() -> None:
     __DB.execute("DELETE FROM verification_steps")
 
 
-def insert_verification_row(i1, i2, val) -> None:
+def insert_verification_row(i1, i2, val) -> int:
     assert __DB is not None
     p1, p2 = str(Path(i1).resolve()), str(Path(i2).resolve())
     if isinstance(val, tuple):
         block, passname = val
-        __DB.execute(
+        cur = __DB.execute(
             """
             INSERT INTO verification_steps (
                 input1, input2, block, passname, running_time, result, status
@@ -59,13 +76,34 @@ def insert_verification_row(i1, i2, val) -> None:
             (p1, p2, block, passname),
         )
     else:
-        __DB.execute(
+        cur = __DB.execute(
             """
             INSERT INTO verification_steps (
                 input1, input2, block, passname, running_time, result, status
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (p1, p2, val.block, val.passname, val.running_time, val.result, val.status),
+            (
+                p1,
+                p2,
+                val.block,
+                val.passname,
+                val.running_time,
+                val.result,
+                val.status,
+            ),
+        )
+    return int(cur.lastrowid)
+
+
+def insert_substeps(
+    verification_step_id: int,
+    steps: Sequence[tuple[str, Optional[float]]],
+) -> None:
+    assert __DB is not None
+    for name, rt in steps:
+        __DB.execute(
+            "INSERT INTO substeps (verification_step_id, name, running_time) VALUES (?, ?, ?)",
+            (verification_step_id, name, rt),
         )
 
 
