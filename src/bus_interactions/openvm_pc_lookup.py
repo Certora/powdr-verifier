@@ -4,6 +4,7 @@ from .single_interaction_encoder import SingleInteractionEncoder
 
 from ..utils.basic_block import BasicBlock
 from ..smt.utils import *
+from ..utils.utils import none_if
 
 
 class OpenVMPCLookupEncoder(SingleInteractionEncoder):
@@ -53,6 +54,7 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
             self.UF_G: lambda pc: Int(self.basic_block.instructions[pc // 4][7]),
         }
 
+    @none_if(lambda: ARGS().no_pclookup)
     def encode_pointwise(
         self,
         mult: Any,

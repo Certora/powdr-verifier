@@ -7,6 +7,7 @@ from .permutation_check import PermutationCheckMixin, TimestampCheckMixin
 from .single_interaction_encoder import BusInteraction, SingleInteractionEncoder
 
 from ..smt.utils import *
+from ..utils.utils import none_if
 
 
 class MemoryAnalysis:
@@ -183,6 +184,7 @@ class OpenVMMemoryEncoder(
             f"MEMORY interaction for {address_space} {pointer}",
         )
 
+    @none_if(lambda: ARGS().no_memory)
     def encode_all(self) -> Iterable[FNode]:
         """Return timestamp + array-based permutation axioms for the memory bus."""
         ts = self.ordered_timestamp_check()

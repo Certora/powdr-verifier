@@ -125,7 +125,7 @@ def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
         try:
             return load_json(StringIO(result.stdout))
         except json.JSONDecodeError:
-            logging.error(f"failed to parse output of {cmd}: {result.stdout}")
+            logging.error(f"failed to parse output of {cmd}:\n{result.stdout}")
             return {"result": "invalid-json"}
     try:
         subprocess.run(cmd, check=True, timeout=60)

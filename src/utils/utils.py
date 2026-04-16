@@ -1,4 +1,18 @@
+from functools import wraps
 from typing import Any, Callable, Iterable
+
+
+def none_if(pred: Callable[[], bool]):
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            if pred():
+                return None
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 def s2range(s: str) -> range:
