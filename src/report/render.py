@@ -18,7 +18,6 @@ from .plots import (
     basic_stats,
     block_solved_percentage_ecdf,
     cactus_time_blocks,
-    cactus_time_passes,
     pass_solved_percentage_ecdf,
     scatter_time_size_by_outcome,
     scatter_time_size_success_only,
@@ -182,8 +181,12 @@ def _substep_label(node: TreeNode) -> str:
     return node.name
 
 
-def collect_substeps(node: TreeNode) -> list[tuple[str, float | None]]:
-    return [(_substep_label(c), c.running_time) for c in node.children]
+def collect_substeps(node: TreeNode) -> list[tuple[str, float | None, str | None]]:
+    out: list[tuple[str, float | None, str | None]] = []
+    for c in node.children:
+        st = c.status
+        out.append((_substep_label(c), c.running_time, str(st) if st is not None else None))
+    return out
 
 
 def to_tree_node(data: Action) -> TreeNode:
@@ -247,8 +250,6 @@ def report():
 {block_solved_percentage_ecdf()}
 
 {pass_solved_percentage_ecdf()}
-
-{cactus_time_passes(table)}
 
 {scatter_time_size_success_only()}
 
