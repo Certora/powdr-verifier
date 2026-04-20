@@ -165,12 +165,12 @@ def encoding(before, after, qvars, builder, input_relation, output_relation, add
                     Or(
                         Not(And(*after.constraints)),
                         Not(input_relation),
-                        Not(output_relation)
+                        Not(output_relation),
+                        Not(And(*after.axioms))
                     )
                 )
             ),
             *before.axioms,
-            *after.axioms,
             *additional_asserts,
         )
     if ARGS().elim_with_model:
