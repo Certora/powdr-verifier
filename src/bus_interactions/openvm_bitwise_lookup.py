@@ -88,7 +88,7 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
                     LE(x, Int(255)),
                     LE(Int(0), y),
                     LE(y, Int(255)),
-                    Equals(self.__XOR(x, y), z),
+                    Equals(self.__XOR(x, y), wrap_mod(z)),
                     Equals(op, Int(1)),
                 ),
             )
