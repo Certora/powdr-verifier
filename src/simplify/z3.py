@@ -26,6 +26,7 @@ def simplify_z3(smt_script: script.SmtLibScript, args = []) -> script.SmtLibScri
     conv = Z3Converter(get_env(), s.ctx)
 
     output = []
+    used_vars = set()
 
     in_suffix = False
     for cmd in smt_script:
@@ -43,12 +44,25 @@ def simplify_z3(smt_script: script.SmtLibScript, args = []) -> script.SmtLibScri
                 s.add(conv.convert(cmd.args[0]))
             case "check-sat":
                 s.check()
-                output += _string_to_script(s.sexpr()).commands
+                cmds = _string_to_script(s.sexpr()).commands
+                for c in cmds:
+                    if c.name != "declare-fun":
+                        used_vars.update(c.args[0].get_free_variables())
+                output.extend(cmds)
                 output.append(cmd)
                 in_suffix = True
             case _:
                 assert False, f"unexpected command: {cmd.name}"
     
+
+    
     res = script.SmtLibScript()
-    res.commands = output
+    for o in output:
+        if o.name == "declare-fun":
+            if o.args[0] not in used_vars:
+                continue
+        if o.name == "assert":
+            if o.args[0].is_true():
+                continue
+        res.commands.append(o)
     return res
