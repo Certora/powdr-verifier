@@ -103,18 +103,28 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
             case XOrEncoding.AXIOMS:
                 if self.needs_xor_axioms:
                     x = Symbol("x", INT)
+                    y = Symbol("y", INT)
                     yield ForAll([x], Equals(Function(self.UF_XOR, [x, Int(0)]), x))
                     yield ForAll([x], Equals(Function(self.UF_XOR, [Int(0), x]), x))
                     yield ForAll([x], Equals(Function(self.UF_XOR, [x, x]), Int(0)))
+                    yield ForAll([x,y], Implies(
+                        Equals(Function(self.UF_XOR, [x, y]), x),
+                        Equals(y, Int(0))
+                    ))
+                    yield ForAll([x,y], Implies(
+                        Equals(Function(self.UF_XOR, [y, x]), x),
+                        Equals(y, Int(0))
+                    ))
             case XOrEncoding.GROUNDED:
                 for x, y in self.instantiations:
                     term = Function(self.UF_XOR, [x, y])
                     if x == y:
                         yield Equals(term, Int(0))
                     else:
-                        yield Implies(Equals(x, Int(0)), Equals(term, y))
-                        yield Implies(Equals(y, Int(0)), Equals(term, x))
-                        yield Implies(Equals(x, y), Equals(term, Int(0)))
+                        yield Iff(Equals(x, Int(0)), Equals(term, y))
+                        yield Iff(Equals(y, Int(0)), Equals(term, x))
+                        yield Iff(Equals(x, term), Equals(y, Int(0)))
+                        yield Iff(Equals(y, term), Equals(x, Int(0)))
             case XOrEncoding.WRAPPED_AXIOMS | XOrEncoding.WRAPPED_GROUNDED:
                 pass
             case _:
