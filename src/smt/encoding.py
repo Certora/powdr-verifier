@@ -14,10 +14,15 @@ def collect_variables(data: FormulaWithAxioms) -> frozenset[FNode]:
 def build_input_output_relation(name: str, a: dict, b: dict) -> FNode:
     """Build a conjunction equating shared input/output symbols between two encodings."""
     keys = a.keys() & b.keys()
+    def equals(x: FNode, y: FNode) -> FNode:
+        if x.get_type().is_int_type() and y.get_type().is_int_type():
+            return Equals(wrap_mod(Minus(x, y)), Int(0))
+        else:
+            return Equals(x, y)
     return And(
         *[
             with_comment(
-                And(Equals(x, y) for x, y in zip(a[k], b[k])), f"{name} for {k}"
+                And(equals(x, y) for x, y in zip(a[k], b[k])), f"{name} for {k}"
             )
             for k in keys
         ],
