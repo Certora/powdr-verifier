@@ -67,7 +67,7 @@ def verified_over_time() -> str:
     return fig.to_html(full_html=False)
 
 @functools.lru_cache(maxsize=1)
-def _scatter_time_size_frame() -> pandas.DataFrame:
+def _scatter_time_size_frame(input_base: Path) -> pandas.DataFrame:
     rows = query(
         "SELECT input1, input2, running_time, status FROM verification_steps "
         "WHERE running_time IS NOT NULL"
@@ -83,13 +83,15 @@ def _scatter_time_size_frame() -> pandas.DataFrame:
                 "size": s / 1024,
                 "time": rt,
                 "outcome": "success" if status == "success" else "failed",
+                "input1": _path_relative_to_base(str(input1), input_base),
+                "input2": _path_relative_to_base(str(input2), input_base),
             }
         )
-    return pandas.DataFrame(rec, columns=["size", "time", "outcome"])
+    return pandas.DataFrame(rec, columns=["size", "time", "outcome", "input1", "input2"])
 
 
-def scatter_time_size_success_only() -> str:
-    df = _scatter_time_size_frame()
+def scatter_time_size_success_only(input_base: Path) -> str:
+    df = _scatter_time_size_frame(input_base)
     df = df[df["outcome"] == "success"]
     if df.empty:
         return ""
@@ -98,15 +100,21 @@ def scatter_time_size_success_only() -> str:
         x="size",
         y="time",
         title="Verification Size vs. Time (success only)",
-        labels={"size": "Size (KiB)", "time": "Time (s)"},
+        labels={
+            "size": "Size (KiB)",
+            "time": "Time (s)",
+            "input1": "Input file 1",
+            "input2": "Input file 2",
+        },
         range_x=[0, df["size"].max() * 1.1],
         range_y=[0, df["time"].max() * 1.1],
+        hover_data=["input1", "input2"],
     )
     return fig.to_html(full_html=False)
 
 
-def scatter_time_size_by_outcome() -> str:
-    df = _scatter_time_size_frame()
+def scatter_time_size_by_outcome(input_base: Path) -> str:
+    df = _scatter_time_size_frame(input_base)
     if df.empty:
         return ""
     fig = plotly.express.scatter(
@@ -116,9 +124,16 @@ def scatter_time_size_by_outcome() -> str:
         color="outcome",
         color_discrete_map={"success": "#636EFA", "failed": "red"},
         title="Verification Size vs. Time (by outcome)",
-        labels={"size": "Size (KiB)", "time": "Time (s)", "outcome": "Outcome"},
+        labels={
+            "size": "Size (KiB)",
+            "time": "Time (s)",
+            "outcome": "Outcome",
+            "input1": "Input file 1",
+            "input2": "Input file 2",
+        },
         range_x=[0, df["size"].max() * 1.1],
         range_y=[0, df["time"].max() * 1.1],
+        hover_data=["input1", "input2"],
     )
     return fig.to_html(full_html=False)
 
