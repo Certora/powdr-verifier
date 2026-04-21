@@ -17,7 +17,6 @@ from .database import (
 from .plots import (
     basic_stats,
     block_solved_percentage_ecdf,
-    cactus_time_blocks,
     pass_solved_percentage_ecdf,
     scatter_time_size_by_outcome,
     scatter_time_size_success_only,
@@ -244,8 +243,6 @@ def report():
 {basic_stats()}
 
 {verified_over_time()}
-
-{cactus_time_blocks()}
 
 {block_solved_percentage_ecdf()}
 
