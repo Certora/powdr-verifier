@@ -71,10 +71,10 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
             return Implies(
                 Not(Equals(wrap_mod(mult), Int(0))),
                 And(
-                    LE(Int(0), x),
-                    LE(x, Int(255)),
-                    LE(Int(0), y),
-                    LE(y, Int(255)),
+                    LE(Int(0), wrap_mod(x)),
+                    LE(wrap_mod(x), Int(255)),
+                    LE(Int(0), wrap_mod(y)),
+                    LE(wrap_mod(y), Int(255)),
                     Equals(z, Int(0)),
                     Equals(op, Int(0)),
                 ),
@@ -84,11 +84,11 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
             return Implies(
                 Not(Equals(wrap_mod(mult), Int(0))),
                 And(
-                    LE(Int(0), x),
-                    LE(x, Int(255)),
-                    LE(Int(0), y),
-                    LE(y, Int(255)),
-                    Equals(self.__XOR(x, y), wrap_mod(z)),
+                    LE(Int(0), wrap_mod(x)),
+                    LE(wrap_mod(x), Int(255)),
+                    LE(Int(0), wrap_mod(y)),
+                    LE(wrap_mod(y), Int(255)),
+                    Equals(self.__XOR(wrap_mod(x), wrap_mod(y)), wrap_mod(z)),
                     Equals(op, Int(1)),
                 ),
             )
