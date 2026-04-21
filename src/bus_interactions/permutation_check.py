@@ -257,8 +257,8 @@ class PermutationCheckMixin:
                                 newvals[k],
                                 Ite(
                                     mul_mone,
-                                    wrap_mod(Int(0)),
-                                    Ite(mul_pone, data[k], oldvals[k])
+                                    Int(0),
+                                    Ite(mul_pone, wrap_mod(data[k]), oldvals[k])
                                 )
                             )
                             for k in range(2, len(newvals))
