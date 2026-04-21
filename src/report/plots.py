@@ -199,7 +199,7 @@ def block_solved_percentage_ecdf() -> str:
 
 
 def pass_solved_percentage_ecdf() -> str:
-    rows = query(
+    whole = query(
         """
         SELECT passname,
                100.0 * SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) / COUNT(*) AS pct
@@ -209,16 +209,44 @@ def pass_solved_percentage_ecdf() -> str:
         HAVING COUNT(*) > 0
         """
     )
-    d = [{"passname": row[0], "pct": row[1]} for row in rows]
-    df = pandas.DataFrame(d, columns=["passname", "pct"]).sort_values("pct", ascending=False)
+    sub = query(
+        """
+        SELECT v.passname, s.name,
+               100.0 * SUM(CASE WHEN s.status = 'success' THEN 1 ELSE 0 END) / COUNT(*) AS pct
+        FROM substeps s
+        JOIN verification_steps v ON v.id = s.verification_step_id
+        WHERE v.passname IS NOT NULL AND v.passname != ''
+        GROUP BY v.passname, s.name
+        HAVING COUNT(*) > 0
+        """
+    )
+    rec: list[dict[str, object]] = []
+    for passname, pct in whole:
+        rec.append({"series": "verification", "passname": passname, "pct": pct})
+    for passname, name, pct in sub:
+        rec.append({"series": str(name), "passname": passname, "pct": pct})
+    if not rec:
+        return ""
+    df = pandas.DataFrame(rec)
+    ver = df[df["series"] == "verification"].set_index("passname")["pct"]
+    pass_order = ver.sort_values(ascending=False).index.tolist()
+    names = {r["series"] for r in rec}
+    order: list[str] = []
+    if "verification" in names:
+        order.append("verification")
+        names.discard("verification")
+    order.extend(sorted(names))
     fig = plotly.express.bar(
         df,
         x="passname",
         y="pct",
+        color="series",
+        category_orders={"passname": pass_order, "series": order},
         title="Percentage of verification steps solved per pass",
         range_y=[0, 100],
-        labels={"passname": "pass", "pct": "% steps solved"},
+        labels={"passname": "pass", "pct": "% solved", "series": "Series"},
     )
+    fig.update_layout(barmode="group")
     fig.update_xaxes(tickangle=-35)
     return fig.to_html(full_html=False)
 
