@@ -28,7 +28,7 @@ def load_json(file: Union[Path, TextIO]) -> Any:
     def object_decoder(d: dict[Any, Any]) -> Any:
         match d:
             case {"__Path": str(path), **rest} if rest == {}:
-                return Path(path)
+                return Path(path).resolve()
             case {"__Action": dict(action), **rest} if rest == {}:
                 return Action(**action)
             case _:
@@ -49,7 +49,7 @@ def dump_json(
     default = kwargs.pop("default", None)
     def _default(o: Any) -> Any:
         if isinstance(o, Path):
-            return {"__Path": str(o)}
+            return {"__Path": str(o.relative_to(Path.cwd()))}
         if isinstance(o, Action):
             return {"__Action": o.as_dict()}
         if default:
