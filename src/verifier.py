@@ -324,5 +324,6 @@ def verify():
                 smtlib = convert_to_smt_script(soundness, status='unsat')
                 pretty_print_smtlib(smtlib, dump)
                 action += ("outputs", outfile)
+        action += {"result": "success"}
 
     return action
