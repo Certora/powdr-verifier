@@ -123,30 +123,6 @@ def scatter_time_size_by_outcome() -> str:
     return fig.to_html(full_html=False)
 
 
-def cactus_time_blocks() -> str:
-    rows = query(
-        """
-        SELECT block, SUM(running_time)
-        FROM verification_steps
-        WHERE block IS NOT NULL
-        GROUP BY block
-        HAVING SUM(running_time) IS NOT NULL
-        """
-    )
-    d = [{"blkid": row[0], "time": row[1]} for row in rows]
-    df = pandas.DataFrame(d, columns=["blkid", "time"])
-    fig = plotly.express.ecdf(
-        df,
-        y="time",
-        title="Total number of blocks solved",
-        ecdfnorm=None,
-        orientation="h",
-        labels={"count": "# blocks", "time": "Time (s)"},
-    )
-
-    return fig.to_html(full_html=False)
-
-
 def block_solved_percentage_ecdf() -> str:
     whole = query(
         """
