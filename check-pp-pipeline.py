@@ -2,14 +2,23 @@ from pathlib import Path
 import subprocess
 import sys
 
+#    "z3-elim-term-ite",
+#    "z3-solve-eqs",
+
 
 TACTICS = [
+    "nnf",
+#    "lift",
     "rewrite",
     "z3",
-    "intervals",
+    "rewrite",
+    "isqf",
+    #"z3-propagate-values",
+    #"z3-propagate-values",
+    #"z3-propagate-values",
+    #"intervals2",
     #"z3",
     #"z3-propagate-values",
-    #"z3-solve-eqs",
     #"z3-propagate-ineqs",
     #"intervals",
     #"rewrite",
@@ -23,8 +32,8 @@ TACTICS = [
 #    "z3-solve-eqs",
 #    "z3-propagate-ineqs",
 ]
-SKIP = 2
-SKIP_DIFF = 0
+SKIP = 0
+SKIP_DIFF = 10
 
 
 def main() -> None:
