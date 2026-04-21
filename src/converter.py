@@ -25,6 +25,8 @@ EMPTY_INPUT = {
 def _collect_variables(data) -> frozenset[str]:
     """Collect variable names appearing in the JSON expression format used by dumps."""
     match data:
+        case []:
+            return frozenset()
         case [left, "+", right]:
             return _collect_variables(left) | _collect_variables(right)
         case [left, "-", right]:
