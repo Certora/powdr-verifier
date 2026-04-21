@@ -116,21 +116,21 @@ def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
     """Run ``main.py`` as a subprocess. With ``parse_output=True``, capture stdout and return ``load_json`` of it."""
     
     cmd = [PYTHON, VERIFIER_DIR / "main.py", *_ARGS._additional_args, *_ARGS._main_args, command, *args, *_ARGS._sub_args]
+    cmdstr = " ".join(map(str, cmd))
     if parse_output:
         try:
             result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, text=True, timeout=60)
-        except subprocess.TimeoutExpired:
-            logging.error(f"timed out running {cmd}")
-            return {"result": "timeout"}
-        try:
             return load_json(StringIO(result.stdout))
+        except subprocess.TimeoutExpired:
+            logging.error(f"timed out running {cmdstr}")
+            return {"result": "timeout"}
         except json.JSONDecodeError:
-            logging.error(f"failed to parse output of {cmd}:\n{result.stdout}")
+            logging.error(f"failed to parse output of {cmdstr}:\n{result.stdout}")
             return {"result": "invalid-json"}
     try:
         subprocess.run(cmd, check=True, timeout=60)
     except subprocess.TimeoutExpired:
-        logging.error(f"timed out running {cmd}")
+        logging.error(f"timed out running {cmdstr}")
     return None
 
 def __do_simplify(input, output, tactic="nnf:lift:rewrite:z3:rewrite"):
