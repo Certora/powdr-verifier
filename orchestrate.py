@@ -14,6 +14,7 @@ from typing import Any, Optional
 from src.utils.io import load_json
 from src.utils.utils import s2range
 from src.utils.profiling import Profile
+from src.report.action import Action
 from src.report.dumpers import ActionDumper, set_report_dir
 
 DATA_DIR = Path.cwd() / "data"
@@ -135,10 +136,10 @@ def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
             return load_json(StringIO(result.stdout))
         except subprocess.TimeoutExpired:
             logging.error(f"timed out running {cmdstr}")
-            return {"result": "timeout"}
+            return Action(command, result="timeout")
         except json.JSONDecodeError:
             logging.error(f"failed to parse output of {cmdstr}:\n{result.stdout}")
-            return {"result": "invalid-json"}
+            return Action(command, result="invalid-json")
     try:
         subprocess.run(cmd, check=True, timeout=60)
     except subprocess.TimeoutExpired:
@@ -241,11 +242,12 @@ def run_verify(a, b, k, n):
         a_verify += res_verify
         for file in sorted(res_verify.outputs):
             with a_verify.action("check", inputs=[file]) as a_check:
-                a_check += __do_simplify(file, file.with_suffix(".rewrite.smt2"))
-                if file.with_suffix(".rewrite.smt2").exists():
+                res_simp = __do_simplify(file, file.with_suffix(".rewrite.smt2"))
+                a_check += res_simp
+                for rewritten in (res_simp.outputs or []):
                     a_check += __run_main(
                         "check",
-                        file.with_suffix(".rewrite.smt2"),
+                        rewritten,
                         "--dump-model", file.with_suffix(".model"),
                         parse_output=True
                     )
