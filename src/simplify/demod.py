@@ -149,7 +149,7 @@ def simplify_demod(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     """Run the lightweight de-mod pass over all assertions in an SMT-LIB script."""
     constraints = [cmd.args[0] for cmd in smt_script if cmd.name == "assert"]
     ranges, protected_constraints = extract_symbol_ranges(constraints)
-    demod = DeModSubstituter(ranges, protected_constraints)
+    demod = DeModSubstituter(None, ranges, protected_constraints)
     for cmd in smt_script:
         if cmd.name == "assert":
             cmd.args[0] = demod.substitute(cmd.args[0])
