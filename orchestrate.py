@@ -241,11 +241,12 @@ def run_verify(a, b, k, n):
         a_verify += res_verify
         for file in sorted(res_verify.outputs):
             with a_verify.action("check", inputs=[file]) as a_check:
-                a_check += __do_simplify(file, file.with_suffix(".rewrite.smt2"))
-                if file.with_suffix(".rewrite.smt2").exists():
+                res_simp = __do_simplify(file, file.with_suffix(".rewrite.smt2"))
+                a_check += res_simp
+                for rewritten in res_simp.outputs:
                     a_check += __run_main(
                         "check",
-                        file.with_suffix(".rewrite.smt2"),
+                        rewritten,
                         "--dump-model", file.with_suffix(".model"),
                         parse_output=True
                     )
