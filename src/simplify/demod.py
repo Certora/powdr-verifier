@@ -101,9 +101,9 @@ class DeModSubstituter(substituter.Substituter):
 
     def __init__(
         self,
+        env=None,
         ranges: dict[FNode, IntInterval] = {},
         protected_constraints: frozenset[FNode] = frozenset(),
-        env=None,
     ):
         substituter.Substituter.__init__(self, env=env)
         self.ranges = ranges
@@ -126,8 +126,8 @@ class DeModSubstituter(substituter.Substituter):
         qvars = list(formula.quantifier_vars())
         # Outer top-level bounds do not justify rewriting quantified variables.
         inner = DeModSubstituter(
-            {sym: interval for sym, interval in self.ranges.items() if sym not in qvars},
-            self.protected_constraints,
+            ranges={sym: interval for sym, interval in self.ranges.items() if sym not in qvars},
+            protected_constraints=self.protected_constraints,
         )
         body = inner.substitute(formula.arg(0))
         if formula.is_forall():
@@ -149,7 +149,7 @@ def simplify_demod(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     """Run the lightweight de-mod pass over all assertions in an SMT-LIB script."""
     constraints = [cmd.args[0] for cmd in smt_script if cmd.name == "assert"]
     ranges, protected_constraints = extract_symbol_ranges(constraints)
-    demod = DeModSubstituter(ranges, protected_constraints)
+    demod = DeModSubstituter(ranges=ranges, protected_constraints=protected_constraints)
     for cmd in smt_script:
         if cmd.name == "assert":
             cmd.args[0] = demod.substitute(cmd.args[0])
