@@ -3,6 +3,7 @@ from ..smt.utils import *
 from ..rewriter import rewrite
 
 from .cvc5 import simplify_cvc5
+from .demod import simplify_demod
 from .intervals import simplify_intervals
 from .z3 import simplify_z3
 from .andify import simplify_andify
