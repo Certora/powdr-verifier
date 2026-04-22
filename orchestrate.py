@@ -147,10 +147,7 @@ def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
 
 def __do_simplify(input, output, tactic="nnf:lift:rewrite:demod:z3:demod:pretty"):
     logging.info(f"simplifying with {tactic} {input.relative_to(Path.cwd())}")
-    res = __run_main("simplify", input, tactic, output, parse_output=True)
-    if res == {"result": "timeout"}:
-        output.unlink()
-    return res
+    return __run_main("simplify", input, tactic, output, parse_output=True)
 
 def with_patch(func):
     @functools.wraps(func)
@@ -203,8 +200,10 @@ def run_trace(*files):
             for file in sorted(res_trace.outputs):
                 with dump.action("check") as check:
                     check += { "inputs": [file] }
-                    check += __do_simplify(file, file.with_suffix(".rewrite.smt2"))
-                    check += __run_main("check", file.with_suffix(".rewrite.smt2"), "--dump-model", file.with_suffix(".model"), parse_output=True)
+                    res_simp = __do_simplify(file, file.with_suffix(".rewrite.smt2"))
+                    check += res_simp
+                    for rewritten in res_simp.outputs:
+                        check += __run_main("check", rewritten, "--dump-model", rewritten.with_suffix(".model"), parse_output=True)
 
 def run_diff(*pairs):
     for a,b in pairs:
