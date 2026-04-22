@@ -46,6 +46,18 @@ def load_files_by_block(args):
     
     return files
 
+def parallelize(func):
+    def wrapped(*args, **kwargs):
+        total = len(args)
+        if _ARGS.jobs == 1:
+            for i,t in enumerate(args):
+                func(*t, i, total, **kwargs)
+        else:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=_ARGS.jobs) as executor:
+                for i,t in enumerate(args):
+                    executor.submit(func, *t, i, total, **kwargs)
+    return wrapped
 
 __FILENAMERE = re.compile("apc_candidate_(\\d+)_(\\d+)(.*)\\.json")
 def parse_range(files: dict, steps):
@@ -218,9 +230,10 @@ def run_eval(*files):
         logging.warning(f"evaluating trace from {model.relative_to(Path.cwd())} on {f.relative_to(Path.cwd())}")
         __run_main("eval", f, model)
 
-def __run_single_verify(a, b):
+@parallelize
+def run_verify(a, b, k, n):
     with ActionDumper("verify", _ARGS.test, a, b) as a_verify:
-        logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
+        logging.warning(f"verify equivalence [{k}/{n}] of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
         first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
         res_verify = __run_main("verify", a, b, first, parse_output=True)
         a_verify += res_verify
@@ -234,16 +247,6 @@ def __run_single_verify(a, b):
                         "--dump-model", file.with_suffix(".model"),
                         parse_output=True
                     )
-
-def run_verify(*pairs):
-    if _ARGS.jobs == 1:
-        for a,b in pairs:
-            __run_single_verify(a, b)
-    else:
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=_ARGS.jobs) as executor:
-            for a,b in pairs:
-                executor.submit(__run_single_verify, a, b)
 
 if __name__ == '__main__':
     args = parse_args()
