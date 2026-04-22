@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 REWRITES = {
     operators.EQUALS: [rewrite_choice_simple, rewrite_eqmod],  # rewrite_z3simplify
-    operators.MOD: [rewrite_mod],
+#    operators.MOD: [rewrite_mod],
 }
 REWRITES_SYMPY = {
     operators.EQUALS: [rewrite_choice],

@@ -6,7 +6,7 @@ from .smt_backends.pysmt import pretty_print_smtlib, serialize_smtlib
 from .utils.args import ARGS
 from .utils.io import open_file
 
-from .simplify import check_isqf, simplify_cvc5, simplify_intervals, simplify_intervals2, simplify_z3, simplify_rewrite, simplify_model, simplify_andify, simplify_lift_forall, simplify_nnf
+from .simplify import check_isqf, simplify_cvc5, simplify_demod, simplify_intervals, simplify_intervals2, simplify_z3, simplify_rewrite, simplify_model, simplify_andify, simplify_lift_forall, simplify_nnf
 
 
 def simplify():
@@ -38,6 +38,8 @@ def simplify():
                         smt_script = simplify_lift_forall(smt_script)
                     case "rewrite":
                         smt_script = simplify_rewrite(smt_script)
+                    case "demod":
+                        smt_script = simplify_demod(smt_script)
                     case "intervals":
                         smt_script = simplify_intervals(smt_script)
                     case "intervals2":
