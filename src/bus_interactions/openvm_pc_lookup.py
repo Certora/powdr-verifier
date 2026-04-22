@@ -73,8 +73,10 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
         return Implies(
             Not(Equals(wrap_mod(mult), Int(0))),
             And(
-                LT(pc, Int(4 * self.stmt_count - 3)),
-                Equals(wrap_mod(pc, Int(4)), Int(0)),
+                Or(
+                    Equals(pc, Int(k))
+                    for k in self.basic_block.instructions.keys()
+                ),
                 Equals(Function(self.UF_OPCODE, [pc]), wrap_mod(op)),
                 Equals(Function(self.UF_A, [pc]), wrap_mod(a)),
                 Equals(Function(self.UF_B, [pc]), wrap_mod(b)),
