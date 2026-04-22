@@ -101,8 +101,8 @@ class DeModSubstituter(substituter.Substituter):
 
     def __init__(
         self,
-        ranges: dict[FNode, IntInterval],
-        protected_constraints: frozenset[FNode],
+        ranges: dict[FNode, IntInterval] = {},
+        protected_constraints: frozenset[FNode] = frozenset(),
         env=None,
     ):
         substituter.Substituter.__init__(self, env=env)
