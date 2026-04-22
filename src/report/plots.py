@@ -90,6 +90,14 @@ def _scatter_time_size_frame(input_base: Path) -> pandas.DataFrame:
     return pandas.DataFrame(rec, columns=["size", "time", "outcome", "input1", "input2"])
 
 
+def _append_trace_counts(fig, counts: dict[str, int]) -> None:
+    for trace in fig.data:
+        name = str(trace.name)
+        count = counts.get(name)
+        if count is not None:
+            trace.name = f"{name} ({count})"
+
+
 def scatter_time_size_success_only(input_base: Path) -> str:
     df = _scatter_time_size_frame(input_base)
     df = df[df["outcome"] == "success"]
@@ -135,6 +143,7 @@ def scatter_time_size_by_outcome(input_base: Path) -> str:
         range_y=[0, df["time"].max() * 1.1],
         hover_data=["input1", "input2"],
     )
+    _append_trace_counts(fig, df["outcome"].value_counts().to_dict())
     return fig.to_html(full_html=False)
 
 
