@@ -147,7 +147,10 @@ def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
 
 def __do_simplify(input, output, tactic="nnf:lift:rewrite:demod:z3:demod:pretty"):
     logging.info(f"simplifying with {tactic} {input.relative_to(Path.cwd())}")
-    return __run_main("simplify", input, tactic, output, parse_output=True)
+    res = __run_main("simplify", input, tactic, output, parse_output=True)
+    if res == {"result": "timeout"}:
+        output.unlink()
+    return res
 
 def with_patch(func):
     @functools.wraps(func)
