@@ -3,6 +3,16 @@ from .smt.utils import *
 from .utils.args import ARGS
 from .utils.profiling import simple_profile
 
+def _get_reason_unknown(solver):
+    if not hasattr(solver, "solver_stdin") or not hasattr(solver, "solver_stdout"):
+        return None
+    try:
+        solver.solver_stdin.write("(get-info :reason-unknown)\n")
+        solver.solver_stdin.flush()
+        return solver.solver_stdout.readline().strip() or None
+    except Exception:
+        return None
+
 @simple_profile
 def check():
     """Check the smt2 file."""
@@ -45,6 +55,9 @@ def check():
                         break
             except SolverReturnedUnknownResultError:
                 action += { "result": "error-unknown" }
+                if reason := _get_reason_unknown(s):
+                    action += { "reason_unknown": reason }
+                    logging.warning(f"reason-unknown: {reason}")
             if action.result != action.expected:
                 logging.error(f"expected {action.expected} but got {action.result}")
             return action
