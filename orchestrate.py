@@ -49,15 +49,14 @@ def load_files_by_block(args):
 
 def parallelize(func):
     def wrapped(*args, **kwargs):
-        total = len(args)
         if _ARGS.jobs == 1:
-            for i,t in enumerate(args):
-                func(*t, i, total, **kwargs)
+            for t in args:
+                func(*t, **kwargs)
         else:
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=_ARGS.jobs) as executor:
-                for i,t in enumerate(args):
-                    executor.submit(func, *t, i, total, **kwargs)
+                for t in args:
+                    executor.submit(func, *t, **kwargs)
     return wrapped
 
 __FILENAMERE = re.compile("apc_candidate_(\\d+)_(\\d+)(.*)\\.json")
@@ -234,9 +233,9 @@ def run_eval(*files):
         __run_main("eval", f, model)
 
 @parallelize
-def run_verify(a, b, k, n):
+def run_verify(a, b):
     with ActionDumper("verify", _ARGS.test, a, b) as a_verify:
-        logging.warning(f"verify equivalence [{k}/{n}] of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
+        logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
         first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
         res_verify = __run_main("verify", a, b, first, parse_output=True)
         a_verify += res_verify
@@ -273,7 +272,8 @@ if __name__ == '__main__':
         logging.warning(f"no files found for {args.test}, did you run powdr?")
 
     try:
-        for block,files in sorted(all_files.items()):
+        for i,(block,files) in enumerate(sorted(all_files.items())):
+            logging.warning(f"processing block {i+1} of {len(all_files)}")
             args._additional_args = []
             if 0 in files:
                 args._additional_args += ["--base-dump", files[0]]
