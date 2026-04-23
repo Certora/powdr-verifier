@@ -137,6 +137,8 @@ class DeModSubstituter(substituter.Substituter):
     @substituter.handles(frozenset([operators.MOD]))
     def walk_mod(self, formula, args, **kwargs):
         expr, modulus = args
+        if (ec := _int_constant(expr)) is not None and (mc := _int_constant(modulus)) is not None and mc != 0:
+            return keep_comment(Int(ec % mc), formula)
         # The decision is local to this mod node, but uses the interval accumulated from top-level facts.
         if expr.is_symbol() and (m := _int_constant(modulus)) is not None:
             interval = self.ranges.get(expr)
