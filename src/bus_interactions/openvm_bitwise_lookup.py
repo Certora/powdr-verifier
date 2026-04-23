@@ -43,23 +43,18 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
     def __init__(self) -> None:
         """Initialize the encoder and mark the `uf_xor` UF as a global symbol."""
         super().__init__()
-        self.instantiations = set()
-        self.needs_xor_axioms = False
         self.globals = frozenset([self.UF_XOR])
     
     def __XOR(self, x: Any, y: Any) -> FNode:
         match ARGS().xor:
-            case XOrEncoding.GROUNDED:
-                self.instantiations.add((x, y))
-                return Function(self.UF_XOR, [x, y])
-            case XOrEncoding.AXIOMS:
-                self.needs_xor_axioms = True
+            case (
+                XOrEncoding.GROUNDED
+                | XOrEncoding.AXIOMS
+            ):
                 return Function(self.UF_XOR, [x, y])
             case XOrEncoding.WRAPPED_AXIOMS:
-                self.needs_xor_axioms = True
                 return self.WRAP_XOR(x, y)
             case XOrEncoding.WRAPPED_GROUNDED:
-                self.instantiations.add((x, y))
                 return self.WRAP_XOR(x, y)
             case _:
                 raise ValueError(f"Unsupported XOR encoding: {ARGS().xor}")
@@ -80,7 +75,6 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
                 ),
             )
         elif op == Int(1):
-            self.needs_xor_axioms = True
             return Implies(
                 Not(Equals(wrap_mod(mult), Int(0))),
                 And(
@@ -95,37 +89,3 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
         else:
             logging.error(f"Unsupported bitwise operation: {op}")
             return None
-
-    @attach_comment("{0.NAME} axioms")
-    def get_axioms(self) -> Iterable[FNode]:
-        """Return basic axioms restricting `uf_xor` when XOR is used in any interaction."""
-        match ARGS().xor:
-            case XOrEncoding.AXIOMS:
-                if self.needs_xor_axioms:
-                    x = Symbol("x", INT)
-                    y = Symbol("y", INT)
-                    yield ForAll([x], Equals(Function(self.UF_XOR, [x, Int(0)]), x))
-                    yield ForAll([x], Equals(Function(self.UF_XOR, [Int(0), x]), x))
-                    yield ForAll([x], Equals(Function(self.UF_XOR, [x, x]), Int(0)))
-                    yield ForAll([x,y], Implies(
-                        Equals(Function(self.UF_XOR, [x, y]), x),
-                        Equals(y, Int(0))
-                    ))
-                    yield ForAll([x,y], Implies(
-                        Equals(Function(self.UF_XOR, [y, x]), x),
-                        Equals(y, Int(0))
-                    ))
-            case XOrEncoding.GROUNDED:
-                for x, y in self.instantiations:
-                    term = Function(self.UF_XOR, [x, y])
-                    if x == y:
-                        yield Equals(term, Int(0))
-                    else:
-                        yield Iff(Equals(x, Int(0)), Equals(term, y))
-                        yield Iff(Equals(y, Int(0)), Equals(term, x))
-                        yield Iff(Equals(x, term), Equals(y, Int(0)))
-                        yield Iff(Equals(y, term), Equals(x, Int(0)))
-            case XOrEncoding.WRAPPED_AXIOMS | XOrEncoding.WRAPPED_GROUNDED:
-                pass
-            case _:
-                raise ValueError(f"Unsupported XOR encoding: {ARGS().xor}")
