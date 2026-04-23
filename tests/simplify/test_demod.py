@@ -105,3 +105,24 @@ def test_demod_uses_actual_modulus_not_field_modulus():
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
 
     assert Equals(Symbol("x", INT), Int(3)) in asserts
+
+
+def test_demod_folds_mod_of_two_constants():
+    parser = SmtLibParser()
+    smt_script = parser.get_script(
+        StringIO(
+            dedent(
+                """
+                (set-logic ALL)
+                (assert (= (mod 17 5) 2))
+                (check-sat)
+                """
+            ).strip()
+            + "\n"
+        )
+    )
+
+    simplified = simplify_demod(smt_script)
+    asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
+
+    assert Equals(Int(2), Int(2)) in asserts
