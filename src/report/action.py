@@ -39,6 +39,8 @@ class Action:
         return self
     
     def __getattr__(self, name: str):
+        if name not in self.properties:
+            return None
         return self.properties[name]
     
     def status(self):
