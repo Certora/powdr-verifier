@@ -46,7 +46,7 @@ class PermutationCheckMixin:
                     # correct permutation on odd->even pairs
                     yield And(
                         Equals(wrap_mod(Plus(a.mult, b.mult)), Int(0)),
-                        *[Equals(a, b) for a, b in zip(a.args, b.args, strict=True)],
+                        *[Equals(wrap_mod(Minus(a, b)), Int(0)) for a, b in zip(a.args, b.args, strict=True)],
                     )
 
         return And(*encode())
