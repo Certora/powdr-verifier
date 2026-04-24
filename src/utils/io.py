@@ -49,7 +49,7 @@ def dump_json(
     default = kwargs.pop("default", None)
     def _default(o: Any) -> Any:
         if isinstance(o, Path):
-            return {"__Path": str(o.relative_to(Path.cwd()))}
+            return {"__Path": str(o.resolve().relative_to(Path.cwd()))}
         if isinstance(o, Action):
             return {"__Action": o.as_dict()}
         if default:
