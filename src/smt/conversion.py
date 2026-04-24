@@ -168,13 +168,6 @@ class SmtConverter:
             self.convert_manual(k): self.convert_manual(v) for k, v in data
         }
 
-    def __add_basic_range_axioms(self) -> Iterable[FNode]:
-        """Generate and assert basic field-range axioms for all seen variable symbols."""
-        for sym in sorted(self.field_symbols, key=lambda x: str(x)):
-            fs = field_symbol(sym)
-            self.constraint_solver.add_assertion(fs)
-            yield fs
-
     @simple_profile
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
         """Convert input data and return constraints, interactions, axioms, derived columns, and globals."""
@@ -184,7 +177,6 @@ class SmtConverter:
         fwa = FormulaWithAxioms(
             constraints=list(itertools.chain(
                     without_trues(self.constraints),
-                    self.__add_basic_range_axioms(),
                     without_trues(self.bus_interaction_encoder.encode())
                 )),
             axioms=list(without_trues(self.bus_interaction_encoder.get_axioms())),

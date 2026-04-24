@@ -9,6 +9,7 @@ from .utils.io import open_file
 from .simplify import (
     check_isqf,
     simplify_andify,
+    simplify_bounds,
     simplify_cvc5,
     simplify_demod,
     simplify_gxor,
@@ -46,6 +47,8 @@ def simplify():
                 match t:
                     case "andify":
                         smt_script = simplify_andify(smt_script)
+                    case "bounds":
+                        smt_script = simplify_bounds(smt_script)
                     case "nnf":
                         smt_script = simplify_nnf(smt_script)
                     case "lift":
