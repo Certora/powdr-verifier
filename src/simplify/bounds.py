@@ -9,7 +9,7 @@ def _needs_basic_range_axiom(sym: FNode) -> bool:
     return (
         sym.is_symbol()
         and sym.get_type().is_int_type()
-        and _BOUNDED_INT_VAR_RE.search(sym.symbol_name()) is not None
+#        and _BOUNDED_INT_VAR_RE.search(sym.symbol_name()) is not None
     )
 
 
