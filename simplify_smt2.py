@@ -49,8 +49,11 @@ SIMP_SUBS = {
     fr"\(ite\s+false\s+({ID})\s+({ID})\s*\)": r"\2",
     fr"\(ite\s+true\s+({ID})\s+({ID})\s*\)": r"\1",
 
-    fr"\({ID} Int\)\n\s+": "",
-    fr"\({ID} Bool\)\n\s+": "",
+#    fr"\({ID} Int\)\n\s+": "",
+#    fr"\({ID} Bool\)\n\s+": "",
+    fr"\(-?[0-9]+ Int\)\n\s+": "",
+    fr"\(true Bool\)\n\s+": "",
+    fr"\(false Bool\)\n\s+": "",
 }
 
 FIX_NEG = {
