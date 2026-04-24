@@ -239,6 +239,7 @@ def run_verify(a, b):
         logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
         first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
         res_verify = __run_main("verify", a, b, first, parse_output=True)
+        res_verify.name = "verify-encode"
         a_verify += res_verify
         for file in sorted(res_verify.outputs):
             with a_verify.action("check", inputs=[file]) as a_check:
