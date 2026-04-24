@@ -37,6 +37,20 @@ def _self_mod_symbol(formula: FNode) -> tuple[FNode, int] | None:
     return None
 
 
+def _normalized_relation(formula: FNode) -> tuple[str, FNode, FNode] | None:
+    """Return a normalized arithmetic relation, pushing a top-level negation inward."""
+    negated = formula.is_not()
+    relation = formula.arg(0) if negated else formula
+
+    if relation.is_equals():
+        return ("!=", *relation.args()) if negated else ("=", *relation.args())
+    if relation.is_lt():
+        return (">=", *relation.args()) if negated else ("<", *relation.args())
+    if relation.is_le():
+        return (">", *relation.args()) if negated else ("<=", *relation.args())
+    return None
+
+
 def _intersect_range(
     ranges: dict[FNode, IntInterval], sym: FNode, interval: IntInterval
 ) -> None:
@@ -61,8 +75,11 @@ def extract_symbol_ranges(
             protected.add(formula)
             continue
 
-        if formula.is_equals():
-            a, b = formula.args()
+        if (relation := _normalized_relation(formula)) is None:
+            continue
+
+        op, a, b = relation
+        if op == "=":
             ac = _int_constant(a)
             bc = _int_constant(b)
             # Equalities to constants pin the variable to a singleton interval.
@@ -72,26 +89,36 @@ def extract_symbol_ranges(
                 _intersect_range(ranges, b, IntInterval.const(ac))
             continue
 
-        if formula.is_le():
-            a, b = formula.args()
-            ac = _int_constant(a)
-            bc = _int_constant(b)
+        ac = _int_constant(a)
+        bc = _int_constant(b)
+        if op == "<=":
             # Non-strict inequalities contribute one-sided bounds as written.
-            if b.is_symbol() and ac is not None and ac >= 0:
+            if b.is_symbol() and ac is not None:
                 _intersect_range(ranges, b, IntInterval(ac, INF))
             if a.is_symbol() and bc is not None:
                 _intersect_range(ranges, a, IntInterval(INF, bc))
             continue
 
-        if formula.is_lt():
-            a, b = formula.args()
-            ac = _int_constant(a)
-            bc = _int_constant(b)
+        if op == "<":
             # Strict inequalities are converted to closed integer bounds.
             if b.is_symbol() and ac is not None:
                 _intersect_range(ranges, b, IntInterval(ac + 1, INF))
             if a.is_symbol() and bc is not None:
                 _intersect_range(ranges, a, IntInterval(INF, bc - 1))
+            continue
+
+        if op == ">=":
+            if a.is_symbol() and bc is not None:
+                _intersect_range(ranges, a, IntInterval(bc, INF))
+            if b.is_symbol() and ac is not None:
+                _intersect_range(ranges, b, IntInterval(INF, ac))
+            continue
+
+        if op == ">":
+            if a.is_symbol() and bc is not None:
+                _intersect_range(ranges, a, IntInterval(bc + 1, INF))
+            if b.is_symbol() and ac is not None:
+                _intersect_range(ranges, b, IntInterval(INF, ac - 1))
 
     return ranges, frozenset(protected)
 

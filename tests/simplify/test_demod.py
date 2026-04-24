@@ -1,7 +1,8 @@
 from io import StringIO
 from textwrap import dedent
 
-from src.simplify.demod import simplify_demod
+from src.simplify.demod import extract_symbol_ranges, simplify_demod
+from src.simplify.intervals.domain import IntInterval
 from src.smt.utils import *
 
 
@@ -126,3 +127,39 @@ def test_demod_folds_mod_of_two_constants():
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
 
     assert Equals(Int(2), Int(2)) in asserts
+
+
+def test_extract_symbol_ranges_understands_all_relation_symbols():
+    x = Symbol("x", INT)
+    y = Symbol("y", INT)
+
+    ranges, protected = extract_symbol_ranges(
+        [
+            GE(x, Int(0)),
+            GT(Int(17), x),
+            GT(y, Int(2)),
+            GE(Int(16), y),
+        ]
+    )
+
+    assert ranges[x] == IntInterval(0, 16)
+    assert ranges[y] == IntInterval(3, 16)
+    assert not protected
+
+
+def test_extract_symbol_ranges_understands_negated_relations():
+    x = Symbol("x", INT)
+    y = Symbol("y", INT)
+
+    ranges, protected = extract_symbol_ranges(
+        [
+            Not(LT(x, Int(0))),
+            Not(GE(x, Int(17))),
+            Not(LE(y, Int(2))),
+            Not(GT(y, Int(16))),
+        ]
+    )
+
+    assert ranges[x] == IntInterval(0, 16)
+    assert ranges[y] == IntInterval(3, 16)
+    assert not protected
