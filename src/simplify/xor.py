@@ -58,26 +58,40 @@ class XOrQuantifierSubstituter(substituter.Substituter):
         self.axiom_builder = axiom_builder
 
     @substituter.handles(
-        set(operators.ALL_TYPES) - frozenset([operators.FORALL, operators.EXISTS])
+        set(operators.ALL_TYPES)
+        - frozenset([operators.FORALL, operators.EXISTS, operators.FUNCTION])
     )
     def walk_identity(self, formula, args, **kwargs):
         return keep_comment(
             substituter.Substituter.super(self, formula, args=args, **kwargs), formula
         )
 
+    @substituter.handles(frozenset([operators.FUNCTION]))
+    def walk_function(self, formula, args, **kwargs):
+        if formula.function_name() == UF_XOR:
+            x, y = args
+            if x.is_zero():
+                return keep_comment(y, formula)
+            if y.is_zero():
+                return keep_comment(x, formula)
+            if x == y:
+                return keep_comment(Int(0), formula)
+        return keep_comment(Function(formula.function_name(), args), formula)
+
     @substituter.handles(frozenset([operators.FORALL, operators.EXISTS]))
     def walk_quantifier(self, formula, args, **kwargs):
         qvars = list(formula.quantifier_vars())
         qvarset = frozenset(qvars)
-        body = args[0]
+        body = self.substitute(formula.arg(0))
         local_terms = {
             term
             for term in _collect_xor_terms(body)
             if term.get_free_variables() & qvarset
         }
-        local_axioms = list(without_trues(self.axiom_builder(local_terms)))
-        if local_axioms:
-            body = And(body, *local_axioms)
+        if local_terms:
+            local_axioms = list(without_trues(self.axiom_builder(local_terms)))
+            if local_axioms:
+                body = And(body, *local_axioms)
         if formula.is_forall():
             return keep_comment(ForAll(qvars, body), formula)
         return keep_comment(Exists(qvars, body), formula)
