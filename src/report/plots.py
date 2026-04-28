@@ -37,7 +37,7 @@ def verified_over_time() -> str:
     sub = query(
         """
         SELECT name, running_time FROM substeps
-        WHERE status = 'success' AND running_time IS NOT NULL
+        WHERE parent IS NULL AND status = 'success' AND running_time IS NOT NULL
         """
     )
     rec: list[dict[str, object]] = []
@@ -69,18 +69,14 @@ def verified_over_time() -> str:
 @functools.lru_cache(maxsize=1)
 def _scatter_time_size_frame(input_base: Path) -> pandas.DataFrame:
     rows = query(
-        "SELECT input1, input2, running_time, status FROM verification_steps "
-        "WHERE running_time IS NOT NULL"
+        "SELECT input1, input2, size_bytes, running_time, status FROM verification_steps "
+        "WHERE running_time IS NOT NULL AND size_bytes IS NOT NULL"
     )
     rec = []
-    for input1, input2, rt, status in rows:
-        try:
-            s = Path(input1).stat().st_size + Path(input2).stat().st_size
-        except OSError:
-            continue
+    for input1, input2, size_bytes, rt, status in rows:
         rec.append(
             {
-                "size": s / 1024,
+                "size": size_bytes,
                 "time": rt,
                 "outcome": "success" if status == "success" else "failed",
                 "input1": _path_relative_to_base(str(input1), input_base),
@@ -109,7 +105,7 @@ def scatter_time_size_success_only(input_base: Path) -> str:
         y="time",
         title="Verification Size vs. Time (success only)",
         labels={
-            "size": "Size (KiB)",
+            "size": "Size",
             "time": "Time (s)",
             "input1": "Input file 1",
             "input2": "Input file 2",
@@ -133,7 +129,7 @@ def scatter_time_size_by_outcome(input_base: Path) -> str:
         color_discrete_map={"success": "#636EFA", "failed": "red"},
         title="Verification Size vs. Time (by outcome)",
         labels={
-            "size": "Size (KiB)",
+            "size": "Size",
             "time": "Time (s)",
             "outcome": "Outcome",
             "input1": "Input file 1",
@@ -144,6 +140,71 @@ def scatter_time_size_by_outcome(input_base: Path) -> str:
         hover_data=["input1", "input2"],
     )
     _append_trace_counts(fig, df["outcome"].value_counts().to_dict())
+    return fig.to_html(full_html=False)
+
+
+def scatter_time_size_by_isqf_and_outcome(input_base: Path) -> str:
+    rows = query(
+        """
+        SELECT v.id, v.input1, v.input2, v.size_bytes, v.running_time, v.status, s.status
+        FROM verification_steps v
+        JOIN substeps s ON s.verification_step_id = v.id
+        WHERE v.running_time IS NOT NULL
+          AND v.size_bytes IS NOT NULL
+          AND s.name = 'isqf'
+          AND s.status IN ('qf', 'not-qf')
+        """
+    )
+    by_step: dict[int, dict[str, object]] = {}
+    for step_id, input1, input2, size_bytes, rt, status, isqf_result in rows:
+        rec = by_step.setdefault(
+            int(step_id),
+            {
+                "size": size_bytes,
+                "time": rt,
+                "outcome": "success" if status == "success" else "failed",
+                "isqf_result": None,
+                "input1": _path_relative_to_base(str(input1), input_base),
+                "input2": _path_relative_to_base(str(input2), input_base),
+            },
+        )
+        if isqf_result == "not-qf" or rec["isqf_result"] is None:
+            rec["isqf_result"] = str(isqf_result)
+    rec = []
+    for row in by_step.values():
+        isqf_result = row["isqf_result"]
+        if isqf_result is None:
+            continue
+        rec.append({**row, "series": f"{isqf_result} / {row['outcome']}"})
+    if not rec:
+        return ""
+    df = pandas.DataFrame(rec)
+    series_order = ["qf / success", "qf / failed", "not-qf / success", "not-qf / failed"]
+    fig = plotly.express.scatter(
+        df,
+        x="size",
+        y="time",
+        color="series",
+        category_orders={"series": series_order},
+        color_discrete_map={
+            "qf / success": "#636EFA",
+            "qf / failed": "#7F7F7F",
+            "not-qf / success": "#00CC96",
+            "not-qf / failed": "#EF553B",
+        },
+        title="Verification Size vs. Time (by isqf result and outcome)",
+        labels={
+            "size": "Size",
+            "time": "Time (s)",
+            "series": "Series",
+            "input1": "Input file 1",
+            "input2": "Input file 2",
+        },
+        range_x=[0, df["size"].max() * 1.1],
+        range_y=[0, df["time"].max() * 1.1],
+        hover_data=["input1", "input2"],
+    )
+    _append_trace_counts(fig, df["series"].value_counts().to_dict())
     return fig.to_html(full_html=False)
 
 
@@ -164,7 +225,7 @@ def block_solved_percentage_ecdf() -> str:
                100.0 * SUM(CASE WHEN s.status = 'success' THEN 1 ELSE 0 END) / COUNT(*) AS pct
         FROM substeps s
         JOIN verification_steps v ON v.id = s.verification_step_id
-        WHERE v.block IS NOT NULL
+        WHERE s.parent IS NULL AND v.block IS NOT NULL
         GROUP BY v.block, s.name
         HAVING COUNT(*) > 0
         """
@@ -215,7 +276,7 @@ def pass_solved_percentage_ecdf() -> str:
                100.0 * SUM(CASE WHEN s.status = 'success' THEN 1 ELSE 0 END) / COUNT(*) AS pct
         FROM substeps s
         JOIN verification_steps v ON v.id = s.verification_step_id
-        WHERE v.passname IS NOT NULL AND v.passname != ''
+        WHERE s.parent IS NULL AND v.passname IS NOT NULL AND v.passname != ''
         GROUP BY v.passname, s.name
         HAVING COUNT(*) > 0
         """
@@ -265,6 +326,7 @@ def substeps_stacked_lines(input_base: Path) -> str:
                v.input1, v.input2, sub.status
         FROM substeps sub
         JOIN verification_steps v ON v.id = sub.verification_step_id
+        WHERE sub.parent IS NULL
         """
     )
     if not rows:
