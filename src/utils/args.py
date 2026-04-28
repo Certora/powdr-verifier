@@ -90,6 +90,7 @@ def __build_parser(skip_subparsers=False):
     sub_simplify.add_argument("input", type=Path)
     sub_simplify.add_argument("tactic", type=str)
     sub_simplify.add_argument("output", type=Path)
+    sub_simplify.add_argument("--dump-steps", action="store_true")
     sub_simplify.add_argument("--with-model", type=Path)
 
     sub_verify = sub.add_parser("verify")
