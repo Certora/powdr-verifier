@@ -1,6 +1,9 @@
 import sqlite3
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Optional, Sequence
+
+if TYPE_CHECKING:
+    from .render import TreeNode
 
 __DB: Optional[sqlite3.Connection] = None
 
@@ -30,6 +33,7 @@ def create_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             input1 TEXT NOT NULL,
             input2 TEXT NOT NULL,
+            size_bytes INTEGER,
             block INTEGER,
             passname TEXT,
             running_time REAL,
@@ -44,10 +48,12 @@ def create_db() -> None:
         CREATE TABLE substeps (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             verification_step_id INTEGER NOT NULL,
+            parent INTEGER,
             name TEXT NOT NULL,
             running_time REAL,
             status TEXT,
-            FOREIGN KEY (verification_step_id) REFERENCES verification_steps(id) ON DELETE CASCADE
+            FOREIGN KEY (verification_step_id) REFERENCES verification_steps(id) ON DELETE CASCADE,
+            FOREIGN KEY (parent) REFERENCES substeps(id) ON DELETE CASCADE
         )
         """
     )
@@ -55,6 +61,7 @@ def create_db() -> None:
     __DB.execute(
         "CREATE INDEX idx_substeps_verification_step_id ON substeps(verification_step_id)"
     )
+    __DB.execute("CREATE INDEX idx_substeps_parent ON substeps(parent)")
     __DB.commit()
 
 
@@ -66,26 +73,31 @@ def clear_verification_steps() -> None:
 def insert_verification_row(i1, i2, val) -> int:
     assert __DB is not None
     p1, p2 = str(Path(i1).resolve()), str(Path(i2).resolve())
+    try:
+        size_bytes = Path(p1).stat().st_size + Path(p2).stat().st_size
+    except OSError:
+        size_bytes = None
     if isinstance(val, tuple):
         block, passname = val
         cur = __DB.execute(
             """
             INSERT INTO verification_steps (
-                input1, input2, block, passname, running_time, result, status
-            ) VALUES (?, ?, ?, ?, NULL, NULL, NULL)
+                input1, input2, size_bytes, block, passname, running_time, result, status
+            ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL)
             """,
-            (p1, p2, block, passname),
+            (p1, p2, size_bytes, block, passname),
         )
     else:
         cur = __DB.execute(
             """
             INSERT INTO verification_steps (
-                input1, input2, block, passname, running_time, result, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                input1, input2, size_bytes, block, passname, running_time, result, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 p1,
                 p2,
+                size_bytes,
                 val.block,
                 val.passname,
                 val.running_time,
@@ -96,16 +108,39 @@ def insert_verification_row(i1, i2, val) -> int:
     return int(cur.lastrowid)
 
 
-def insert_substeps(
-    verification_step_id: int,
-    steps: Sequence[tuple[str, Optional[float], Optional[str]]],
-) -> None:
+def insert_substeps(verification_step_id: int, steps: Sequence["TreeNode"]) -> None:
     assert __DB is not None
-    for name, rt, st in steps:
-        __DB.execute(
-            "INSERT INTO substeps (verification_step_id, name, running_time, status) VALUES (?, ?, ?, ?)",
-            (verification_step_id, name, rt, st),
+    for step in steps:
+        _insert_substep(verification_step_id, step, parent=None)
+
+
+def _insert_substep(
+    verification_step_id: int,
+    step: "TreeNode",
+    parent: int | None,
+) -> int:
+    assert __DB is not None
+    cur = __DB.execute(
+        """
+        INSERT INTO substeps (verification_step_id, parent, name, running_time, status)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            verification_step_id,
+            parent,
+            step.name,
+            step.running_time,
+            step.status,
+        ),
+    )
+    substep_id = int(cur.lastrowid)
+    for child in step.children:
+        _insert_substep(
+            verification_step_id,
+            child,
+            parent=substep_id,
         )
+    return substep_id
 
 
 def commit_db() -> None:

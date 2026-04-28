@@ -18,6 +18,7 @@ from .plots import (
     basic_stats,
     block_solved_percentage_ecdf,
     pass_solved_percentage_ecdf,
+    scatter_time_size_by_isqf_and_outcome,
     scatter_time_size_by_outcome,
     scatter_time_size_success_only,
     substeps_stacked_lines,
@@ -180,12 +181,17 @@ def _substep_label(node: TreeNode) -> str:
     return node.name
 
 
-def collect_substeps(node: TreeNode) -> list[tuple[str, float | None, str | None]]:
-    out: list[tuple[str, float | None, str | None]] = []
-    for c in node.children:
-        st = c.status
-        out.append((_substep_label(c), c.running_time, str(st) if st is not None else None))
-    return out
+def normalize_substep_tree(node: TreeNode) -> TreeNode:
+    return TreeNode(
+        name=_substep_label(node),
+        inputs=node.inputs,
+        running_time=node.running_time,
+        result=node.result,
+        status=node.status,
+        children=[normalize_substep_tree(child) for child in node.children],
+        block=node.block,
+        passname=node.passname,
+    )
 
 
 def to_tree_node(data: Action) -> TreeNode:
@@ -218,7 +224,7 @@ def collect(basedir: Path):
             node.block, node.passname = results[(i1, i2)]
             results[(i1, i2)] = node
             step_id = insert_verification_row(i1, i2, node)
-            insert_substeps(step_id, collect_substeps(node))
+            insert_substeps(step_id, [normalize_substep_tree(child) for child in node.children])
     for (i1, i2), val in results.items():
         if isinstance(val, tuple):
             insert_verification_row(i1, i2, val)
@@ -251,6 +257,8 @@ def report():
 {scatter_time_size_success_only(report_data_dir(report_dir))}
 
 {scatter_time_size_by_outcome(report_data_dir(report_dir))}
+
+{scatter_time_size_by_isqf_and_outcome(report_data_dir(report_dir))}
 
 {substeps_stacked_lines(report_data_dir(report_dir))}
 
