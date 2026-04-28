@@ -174,7 +174,12 @@ class PermutationCheckMixin:
                     bounds.append(field_symbol(oldval))
                     bounds.append(field_symbol(newval))
 
-            conjuncts.extend(itertools.chain(*conj))
+            conjuncts.append(
+                Implies(
+                    Not(Equals(wrap_mod(data[1]), Int(0))),
+                    And(itertools.chain(*conj))
+                )
+            )
 
             if USE_ITE_ENCODING:
 
@@ -365,7 +370,18 @@ class PermutationCheckMixin:
             news = def_vars(id + 1)
             intermediates |= set(news)
             for k, s in enumerate(stores):
-                conjuncts.append(Equals(news[k], s))
+                conjuncts.append(
+                    Implies(
+                        Not(Equals(wrap_mod(data[1]), Int(0))),
+                        Equals(news[k], s)
+                    )
+                )
+                conjuncts.append(
+                    Implies(
+                        Equals(wrap_mod(data[1]), Int(0)),
+                        Equals(news[k], inputs[k])
+                    )
+                )
             inputs = news
 
         conjuncts = [c for c in conjuncts]
