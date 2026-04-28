@@ -41,7 +41,6 @@ def simplify():
         dump_pretty = False
         for i, t in enumerate(ARGS().tactic.split(":"), start=1):
             raw_tactic = t
-            dump_pretty = False
             logging.info(f"simplifying with {t}")
             with action.action(t) as subaction:
                 t,*args = t.split("-", 1)
@@ -88,7 +87,7 @@ def simplify():
                 stem = output.name[:-len(output.suffix)] if output.suffix else output.name
                 dump_file = output.with_name(f"{stem}.{i:02d}.{raw_tactic}.smt2")
                 with open_file(dump_file, "w") as out:
-                    logging.warning(f"dumping intermediate formula to {out.name}")
+                    logging.info(f"dumping intermediate formula to {out.name}")
                     if dump_pretty:
                         pretty_print_smtlib(smt_script, out)
                     else:
