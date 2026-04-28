@@ -32,6 +32,9 @@ class VisualizedInteraction:
     timestamp: int
     additional: str = ""
 
+    def __str__(self):
+        return f"{self.key} -> {self.mult} (={self.mult_eval}) with {self.args} (={self.args_eval}) at {self.timestamp} {self.additional}"
+
 def balancing(a: VisualizedInteraction, b: VisualizedInteraction) -> bool:
     return a.bus == b.bus and a.key == b.key and \
         mod(a.mult_eval + b.mult_eval) == 0 and \
@@ -59,6 +62,11 @@ def _render_bus_contents(bus_contents: dict[int, dict[tuple[Any, ...], int]]) ->
         return "  <empty>"
     return "\n".join(lines)
 
+def evaluate(f, model, interpreters):
+    pe = partial_evaluate(f, model, interpreters)
+    if pe.is_int_constant():
+        return pe.constant_value()
+    return str(pe)
 
 def visualize():
     """Print a timestamp-ordered interaction trace and bus contents after each step."""
@@ -71,7 +79,7 @@ def visualize():
     with SmtConverter(ARGS().var_prefix, BasicBlock(input["block"])) as conv:
         conv.to_formula_with_axioms(input)
         interpreters = conv.bus_interaction_encoder.get_interpreters()
-        eval_fn = lambda f: partial_evaluate(f, model, interpreters).constant_value()
+        eval_fn = lambda f: evaluate(f, model, interpreters)
 
         for encoder in conv.bus_interaction_encoder.encoders:
             if not encoder.TIMESTAMPED:
@@ -115,13 +123,22 @@ def visualize():
                     raise ValueError(f"Input for {it.key} already exists")
                 else:
                     old = bus_contents[it.key]
-                    inputs[it.key] = dataclasses.replace(old, mult_eval=mod(-old.mult_eval), additional="PRE")
+                    inputs[it.key] = dataclasses.replace(
+                        old,
+                        mult=mod(-old.mult_eval),
+                        mult_eval=mod(-old.mult_eval),
+                        additional="PRE")
                     bus_contents[it.key] = it
         else:
             bus_contents[it.key] = it
 
     outputs: dict[tuple, VisualizedInteraction] = {
-        k: dataclasses.replace(v, mult_eval=mod(-v.mult_eval), additional="POST")
+        k: dataclasses.replace(
+            v,
+            mult=mod(-v.mult_eval),
+            mult_eval=mod(-v.mult_eval),
+            additional="POST"
+        )
         for k, v in bus_contents.items()
     }
 
@@ -135,6 +152,7 @@ def visualize():
     for it in interactions:
         if it.mult_eval != 0:
             if it.key in bus_contents:
+                print(f"balancing\n\t{it}\n\t{bus_contents[it.key]}")
                 assert balancing(it, bus_contents[it.key])
                 del bus_contents[it.key]
             else:
