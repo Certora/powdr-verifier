@@ -32,7 +32,6 @@ class SmtConverter:
     def __init__(self, name: Optional[str], basic_block: BasicBlock):
         """Create a converter that turns JSON-like dumps into SMT, namespacing symbols by `name`."""
         self.basic_block = basic_block
-        self.field_symbols = set()
         self.constraints = []
         self.derived_columns = {}
         self.name = name
@@ -147,9 +146,7 @@ class SmtConverter:
             case int(value):
                 return Int(value)
             case str(var):
-                sym = self._symbol(var, INT)
-                self.field_symbols.add(sym)
-                return sym
+                return self._symbol(var, INT)
 
             # bus interactions
             case {"id": int(id), "mult": mult, "args": list(args)}:

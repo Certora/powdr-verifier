@@ -168,12 +168,6 @@ class PermutationCheckMixin:
             updates = [update_multidim_array(input, keys) for input in inputs]
             oldvals, newvals, stores, conj = zip(*updates)
 
-            bounds = []
-            for oldval, newval in zip(oldvals, newvals):
-                if oldval.get_type().is_int_type():
-                    bounds.append(field_symbol(oldval))
-                    bounds.append(field_symbol(newval))
-
             conjuncts.append(
                 Implies(
                     Not(Equals(wrap_mod(data[1]), Int(0))),
@@ -271,7 +265,6 @@ class PermutationCheckMixin:
                         "value of new data and timestamps"
                     )
                 )
-                conjuncts.append(And(*bounds))
             
             else:
                 # encode hadinput
@@ -317,8 +310,6 @@ class PermutationCheckMixin:
                                     Equals(newvals[k], Int(0))
                                     for k in range(2, len(newvals))
                                 ],
-                                # ensure intermediate values are in range
-                                *bounds,
                             ),
                         ),
                         "receive: mult == -1",
@@ -342,8 +333,6 @@ class PermutationCheckMixin:
                                     Equals(newvals[k], wrap_mod(data[k]))
                                     for k in range(2, len(newvals))
                                 ],
-                                # ensure intermediate values are in range
-                                *bounds,
                             ),
                         ),
                         "send: mult == 1",
