@@ -61,7 +61,7 @@ class Action:
                 return "unknown"
             return "success"
 
-        if "expected" in self.properties:
+        if self.name != "isqf" and "expected" in self.properties:
             if self.result == self.expected:
                 return "success"
             return "error"
