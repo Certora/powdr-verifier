@@ -1,14 +1,40 @@
 #!/bin/bash
 
+set -euo pipefail
+
+if [ "$#" -ne 1 ]; then
+    echo "usage: $0 <keccak|pairing>" >&2
+    exit 1
+fi
+
+scenario="$1"
+
 cd ~/
 
 pushd verifier
 git pull
 popd
 
-rm -rf data/guest-keccak/ reports/guest-keccak/
-
 source .venv/bin/activate
 
-python3 verifier/orchestrate.py powdr-guest guest-keccak
-python3 verifier/orchestrate.py -j24 verify guest-keccak : :
+case "$scenario" in
+    keccak)
+        rm -rf data/guest-keccak/ reports/guest-keccak/
+        python3 verifier/orchestrate.py powdr-guest guest-keccak
+        python3 verifier/orchestrate.py -j24 verify guest-keccak : :
+        ;;
+    pairing)
+        rm -rf \
+            data/guest-pairing/ \
+            reports/guest-pairing/ \
+            data/guest-pairing-selection/ \
+            reports/guest-pairing-selection/
+        python3 verifier/orchestrate.py powdr-guest guest-pairing
+        python3 verifier/select_blocks.py data/guest-pairing
+        python3 verifier/orchestrate.py -j24 verify guest-pairing-selection : :
+        ;;
+    *)
+        echo "unknown scenario: $scenario" >&2
+        exit 1
+        ;;
+esac
