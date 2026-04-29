@@ -63,7 +63,7 @@ class ModelMapBuilder:
     def __check(self):
         """Warn if not all `new` variables were mapped; return True iff the map is complete."""
         if self.todo:
-            logging.warning("model map is not complete, this can cause slowdowns")
+            logging.info("model map is not complete, this can cause slowdowns")
             logging.debug("have:")
             for k,v in self.result.items():
                 logging.debug(f"\t{k} = {v}")
