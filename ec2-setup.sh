@@ -10,7 +10,7 @@ pip install -r verifier/requirements.txt
 pysmt-install --z3 --confirm-agreement
 
 mkdir -p ~/bin/
-python3 verifier/download_z3.py z3-4.15.4 ~/bin/
+python3 verifier/download_z3.py z3-4.16.0 ~/bin/
 chmod +x ~/bin/*
 
 sudo apt install build-essential
