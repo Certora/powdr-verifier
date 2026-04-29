@@ -234,7 +234,7 @@ solvers = [
     },
     {
         'name': 'z3-latest',
-        'path': Path('~/bin/z3-4.15.4').expanduser(),
+        'path': Path('~/bin/z3-4.16.0').expanduser(),
         'options': ['-smt2', '-in'],
         'logics': logics.SMTLIB2_LOGICS,
         'min-version': ('Z3 version ([0-9.]+)', '4.12.2'),

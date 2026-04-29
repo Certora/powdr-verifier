@@ -21,7 +21,7 @@ def check():
     logging.info(f"loading from {ARGS().input}")
     smt_script = parser.get_script_fname(str(ARGS().input))
 
-    logging.warning(f"checking {ARGS().input.relative_to(Path.cwd())} with {ARGS().solver}")
+    logging.warning(f"checking {ARGS().input.resolve().relative_to(Path.cwd())} with {ARGS().solver}")
     try:
         with (
             Action("check") as action,
