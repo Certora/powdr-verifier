@@ -174,7 +174,14 @@ class OpenVMMemoryEncoder(
         """(Currently a stub) Placeholder for per-interaction local memory constraints."""
         if address_space.is_int_constant() and address_space.constant_value() == 0:
             assert mult.is_int_constant() and mult.constant_value() == 0
-        return None
+        return Implies(
+            And(
+                Equals(wrap_mod(Plus(mult, Int(1))), Int(0)),
+                Equals(wrap_mod(address_space), Int(1)),
+                Equals(wrap_mod(pointer), Int(0)),
+            ),
+            And(*[Equals(wrap_mod(d), Int(0)) for d in data]),
+        )
         return with_comment(
             Implies(
                 # Equals(wrap_mod(mult), wrap_mod(Int(-1))),
@@ -221,7 +228,7 @@ class OpenVMMemoryEncoder(
                     isinput,
                     And(
                         *[
-                            And(LE(Int(0), d), LE(d, Int(255)))
+                            And(LE(Int(0), wrap_mod(d)), LE(wrap_mod(d), Int(255)))
                             for d in self._interactions[id].args[2]
                         ]
                     ),
