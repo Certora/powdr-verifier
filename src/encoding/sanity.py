@@ -4,10 +4,10 @@ from ..smt.conversion import FormulaWithAxioms, SmtConverter
 from ..smt.utils import *
 
 def sanity_satisfies_derived(formula: FormulaWithAxioms) -> Iterable[FNode]:
-    for v, expr in formula.derived.items():
+    for v, constraint in formula.derived.items():
         yield with_comment(
-            Not(Equals(wrap_mod(Minus(v, expr)), Int(0))),
-            f"derived {v} = {expr}"
+            Not(constraint),
+            f"derived {v}"
         )
 
 def sanity_mult_values(conv: SmtConverter, formula: FormulaWithAxioms) -> Iterable[FNode]:
