@@ -12,6 +12,7 @@ from .nnf import simplify_nnf
 from .lift_forall import simplify_lift_forall
 from .intervals import simplify_intervals2
 from .xor import simplify_gxor, simplify_qxor
+from .witness import simplify_witnesses
 
 def simplify_model(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     assert ARGS().with_model is not None
