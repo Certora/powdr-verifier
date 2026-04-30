@@ -37,7 +37,7 @@ def evaluate():
             res["constraints"] = True
         if eval_list(smt.axioms):
             res["axioms"] = True
-        if eval_list([Equals(v, expr) for v, expr in smt.derived.items()]):
+        if eval_list(list(smt.derived.values())):
             res["derived"] = True
 
     return res

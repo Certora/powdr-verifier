@@ -49,6 +49,7 @@ class ModelMapBuilder:
         self.nderivedmap = {strip_prefix(k.symbol_name()): v for k,v in derived.items()}
         # maps new variables to expressions
         self.result = {}
+        self.derived_constraints = []
         self.todo = set(self.nmap.keys())
     
     def __add_result(self, name: str, value: FNode):
@@ -84,7 +85,8 @@ class ModelMapBuilder:
         for k in self.todo & self.nderivedmap.keys():
             v = self.nderivedmap[k]
             logging.debug(f"derived: found {k} = {v}")
-            self.__add_result(k, v)
+            self.derived_constraints.append(v)
+            self.todo.remove(k)
         self.nderivedmap = {}
 
     def __heuristic_simple_equality(self):
@@ -132,7 +134,10 @@ class ModelMapBuilder:
     def get_map(self):
         """Return the computed mapping as a conjunction of equalities."""
         s = sorted(self.result.items(), key=lambda x: x[0].symbol_name())
-        return And(*[Equals(a, wrap_mod(b)) for a, b in s])
+        return And(
+            *[Equals(a, wrap_mod(b)) for a, b in s],
+            *self.derived_constraints,
+        )
     
     def get_skolemized_variables(self) -> frozenset:
         """Return the computed mapping as a conjunction of equalities."""

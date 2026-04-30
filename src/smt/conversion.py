@@ -82,7 +82,7 @@ class SmtConverter:
                     sym = self._symbol(name, INT)
                     assert sym not in self.derived_columns
                     self.derived_columns[sym] = with_comment(
-                        Int(value), f"DERIVED COLUMN {name} = {value}"
+                        Equals(sym, Int(value)), f"DERIVED COLUMN {name} = {value}"
                     )
                 case [str(name), {"QuotientOrZero": [a, b]}] | {
                     "variable": str(name),
@@ -93,8 +93,12 @@ class SmtConverter:
                     a = self.convert_manual(a)
                     b = self.convert_manual(b)
                     self.derived_columns[sym] = with_comment(
-                        Int(0) if b.is_zero() else Ite(Equals(b, Int(0)), Int(0), wrap_mod(Div(a, b))),
-                        f"DERIVED COLUMN {name} = QuotientOrZero({a}, {b})"
+                        Ite(
+                            Equals(wrap_mod(b), Int(0)),
+                            Equals(sym, Int(0)),
+                            Equals(wrap_mod(Minus(Times(sym, b), a)), Int(0)),
+                        ),
+                        f"DERIVED COLUMN {name} = QuotientOrZero({a}, {b})",
                     )
                 case _:
                     logging.error(f"Unsupported derived column: {derived}")
