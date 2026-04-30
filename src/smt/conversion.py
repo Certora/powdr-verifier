@@ -175,13 +175,32 @@ class SmtConverter:
         logging.debug(f"{self.name}: converting")
         self.convert_manual(data)
         logging.debug(f"{self.name}: assemble")
+        constraints = list(itertools.chain(
+            without_trues(self.constraints),
+            without_trues(self.bus_interaction_encoder.encode())
+        ))
+        axioms = list(without_trues(self.bus_interaction_encoder.get_axioms()))
+        live = set()
+        for f in itertools.chain(constraints, axioms):
+            live.update(f.get_free_variables())
+        remaining_derived = dict(self.derived_columns)
+        derived = {}
+        while True:
+            used = {
+                sym: constraint
+                for sym, constraint in remaining_derived.items()
+                if sym in live
+            }
+            if not used:
+                break
+            for sym, constraint in used.items():
+                derived[sym] = constraint
+                live.update(constraint.get_free_variables())
+                del remaining_derived[sym]
         fwa = FormulaWithAxioms(
-            constraints=list(itertools.chain(
-                    without_trues(self.constraints),
-                    without_trues(self.bus_interaction_encoder.encode())
-                )),
-            axioms=list(without_trues(self.bus_interaction_encoder.get_axioms())),
-            derived=self.derived_columns,
+            constraints=constraints,
+            axioms=axioms,
+            derived=derived,
             globals=self.bus_interaction_encoder.get_globals(),
         )
         logging.debug(f"{self.name}: done converting")
