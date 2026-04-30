@@ -15,6 +15,7 @@ from .simplify import (
     simplify_gxor,
     simplify_intervals,
     simplify_intervals2,
+    simplify_isolate,
     simplify_lift_forall,
     simplify_model,
     simplify_nnf,
@@ -52,6 +53,8 @@ def simplify():
                         smt_script = simplify_bounds(smt_script)
                     case "nnf":
                         smt_script = simplify_nnf(smt_script)
+                    case "isolate":
+                        smt_script = simplify_isolate(smt_script)
                     case "lift":
                         smt_script = simplify_lift_forall(smt_script)
                     case "witness":
