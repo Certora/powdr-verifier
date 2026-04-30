@@ -166,7 +166,8 @@ class SmtConverter:
     def convert_eliminations(self, data: Iterable[Any]):
         """Convert eliminations into SMT terms."""
         return {
-            self.convert_manual(k): self.convert_manual(v) for k, v in data
+            self.convert_manual(k): Equals(self.convert_manual(k), self.convert_manual(v))
+            for k, v in data
         }
 
     @simple_profile
