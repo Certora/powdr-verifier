@@ -78,6 +78,7 @@ def test_gxor_grounds_axioms_for_seen_terms():
     z = Symbol("z", INT)
     xy = Function(UF_XOR, [x, y])
 
+    assert Iff(Equals(x, y), Equals(xy, Int(0))) in asserts
     assert Iff(Equals(x, Int(0)), Equals(xy, y)) in asserts
     assert Iff(Equals(y, Int(0)), Equals(xy, x)) in asserts
     assert Iff(Equals(x, xy), Equals(y, Int(0))) in asserts
@@ -110,6 +111,7 @@ def test_gxor_injects_axioms_inside_quantifier():
     body = asserts[0].arg(0)
     assert body.is_and()
     assert Equals(xy, z) in body.args()
+    assert Iff(Equals(x, y), Equals(xy, Int(0))) in body.args()
     assert Iff(Equals(x, Int(0)), Equals(xy, y)) in body.args()
     assert Iff(Equals(y, Int(0)), Equals(xy, x)) in body.args()
     assert Iff(Equals(x, xy), Equals(y, Int(0))) in body.args()
