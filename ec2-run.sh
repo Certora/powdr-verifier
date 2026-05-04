@@ -3,7 +3,7 @@
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
-    echo "usage: $0 <keccak|pairing>" >&2
+    echo "usage: $0 <keccak|pairing|reth>" >&2
     exit 1
 fi
 
@@ -32,6 +32,10 @@ case "$scenario" in
         python3 verifier/orchestrate.py powdr-guest guest-pairing
         python3 verifier/select_blocks.py data/guest-pairing
         python3 verifier/orchestrate.py -j28 verify guest-pairing-selection : :
+        ;;
+    reth)
+        rm -rf data/reth-selection/ reports/reth-selection/
+        python3 verifier/orchestrate.py -j28 verify reth-selection : :
         ;;
     *)
         echo "unknown scenario: $scenario" >&2
