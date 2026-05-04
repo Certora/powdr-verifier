@@ -34,7 +34,7 @@ case "$scenario" in
         python3 verifier/orchestrate.py -j28 verify guest-pairing-selection : :
         ;;
     reth)
-        rm -rf data/reth-selection/ reports/reth-selection/
+        rm -rf data/reth-selection/*.smt2 reports/reth-selection/
         python3 verifier/orchestrate.py -j28 verify reth-selection : :
         ;;
     *)
