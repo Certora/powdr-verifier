@@ -122,7 +122,7 @@ class SmtConverter:
             }:
                 assert not rest_machine
                 if "bus_map" in rest_apc:
-                    self.bus_interaction_encoder.verify_bus_ids(rest_apc["bus_map"]["bus_ids"])
+                    self.bus_interaction_encoder.configure_from_bus_ids(rest_apc["bus_map"]["bus_ids"])
                     del rest_apc["bus_map"]
                 assert not rest_apc
                 

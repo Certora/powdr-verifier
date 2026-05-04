@@ -19,16 +19,15 @@ from ..utils.utils import merge_dicts
 class InteractionEncoder:
     """Base class for an encoder of arbitrary bus interactions."""
 
-    def __init__(self, encoders: list[SingleInteractionEncoder], cur_state: Any):
-        """
-        Initialize with the list of encoders. The order in this list fixes the
-        order in which the encoders are applied.
-        """
-        self.encoders = encoders
-        for e in encoders:
-            setattr(e, "_cur_state", cur_state)
+    def __init__(self, cur_state: Any):
+        self._cur_state = cur_state
+        self.encoders = []
+    
+    def add_encoder(self, encoder: SingleInteractionEncoder):
+        self.encoders.append(encoder)
+        setattr(encoder, "_cur_state", self._cur_state)
 
-    def verify_bus_ids(self, bus_ids: dict[str, int]):
+    def configure_from_bus_ids(self, bus_ids: dict[str, int]):
         """Verify that the bus ids are correct."""
         pass
 
@@ -107,68 +106,110 @@ class OpenVMBusInteractionEncoder(InteractionEncoder):
             openvm_tuple_range_checker.OpenVMTupleRangeCheckerEncoder()
         )
 
-        super().__init__(
-            [
-                self.bitwise_lookup,
-                self.execution_bridge,
-                self.pc_lookup,
-                self.variable_range_checker,
-                self.tuple_range_checker,
-                self.memory,
-            ],
-            cur_state,
-        )
+        super().__init__(cur_state)
+        self.matchers = []
+    
+    def __match_execution_bridge(self, defid: int, data: Any):
+        match data:
+            case {
+                "id": id,
+                "mult": mult,
+                "args": [pc, timestamp],
+            } if id == defid:
+                self.execution_bridge.add(mult, pc, timestamp)
+                return True
+            case _:
+                return False
+    
+    def __match_memory(self, defid: int, data: Any):
+        match data:
+            case {
+                "id": id,
+                "mult": mult,
+                "args": [address_space, pointer, *data, timestamp],
+            } if id == defid:
+                self.memory.add(mult, address_space, pointer, data, timestamp)
+                return True
+            case _:
+                return False
+    
+    def __match_pc_lookup(self, defid: int, data: Any):
+        match data:
+            case {
+                "id": id,
+                "mult": mult,
+                "args": [pc, op, a, b, c, d, e, f, g],
+            } if id == defid:
+                self.pc_lookup.add(mult, pc, op, a, b, c, d, e, f, g)
+                return True
+            case _:
+                return False
 
-    def verify_bus_ids(self, bus_ids: dict[str, Any]):
-        assert bus_ids == {
-            str(OpenVMBusInteraction.EXECUTION_BRIDGE): "ExecutionBridge",
-            str(OpenVMBusInteraction.MEMORY): "Memory",
-            str(OpenVMBusInteraction.PC_LOOKUP): "PcLookup",
-            str(OpenVMBusInteraction.VARIABLE_RANGE_CHECKER): {"Other": "VariableRangeChecker"},
-            str(OpenVMBusInteraction.TUPLE_RANGE_CHECKER): {"Other":
-                {"TupleRangeChecker": [self.tuple_range_checker.MAX_0, self.tuple_range_checker.MAX_1]}
-            },
-            str(OpenVMBusInteraction.BITWISE_LOOKUP): {"Other": "BitwiseLookup"},
-        }
+    def __match_variable_range_checker(self, defid: int, data: Any):
+        match data:
+            case {
+                "id": id,
+                "mult": mult,
+                "args": [x, bits],
+            } if id == defid:
+                self.variable_range_checker.add(mult, x, bits)
+                return True
+            case _:
+                return False
+
+    def __match_bitwise_lookup(self, defid: int, data: Any):
+        match data:
+            case {
+                "id": id,
+                "mult": mult,
+                "args": [x, y, z, op],
+            } if id == defid:
+                self.bitwise_lookup.add(mult, x, y, z, op)
+                return True
+            case _:
+                return False
+
+    def __match_tuple_range_checker(self, defid: int, data: Any):
+        match data:
+            case {
+                "id": id,
+                "mult": mult,
+                "args": [x, y],
+            } if id == defid:
+                self.tuple_range_checker.add(mult, x, y)
+                return True
+            case _:
+                return False
+
+    def configure_from_bus_ids(self, bus_ids: dict[str, Any]):
+        for id,data in bus_ids.items():
+            id = int(id)
+            match data:
+                case "ExecutionBridge":
+                    self.add_encoder(self.execution_bridge)
+                    self.matchers.append(lambda data, id=id: self.__match_execution_bridge(id, data))
+                case "Memory":
+                    self.add_encoder(self.memory)
+                    self.matchers.append(lambda data, id=id: self.__match_memory(id, data))
+                case "PcLookup":
+                    self.add_encoder(self.pc_lookup)
+                    self.matchers.append(lambda data, id=id: self.__match_pc_lookup(id, data))
+                case {"Other": "VariableRangeChecker"}:
+                    self.add_encoder(self.variable_range_checker)
+                    self.matchers.append(lambda data, id=id: self.__match_variable_range_checker(id, data))
+                case {"Other": "BitwiseLookup"}:
+                    self.add_encoder(self.bitwise_lookup)
+                    self.matchers.append(lambda data, id=id: self.__match_bitwise_lookup(id, data))
+                case {"Other": {"TupleRangeChecker": [max0, max1]}}:
+                    self.tuple_range_checker.MAX_0 = max0
+                    self.tuple_range_checker.MAX_1 = max1
+                    self.matchers.append(lambda data, id=id: self.__match_tuple_range_checker(id, data))
+                case _:
+                    logging.error(f"Unsupported bus definition: {id} -> {data}")
 
     def add(self, data: Any):
         """Pattern-match a raw bus interaction record and forward it to the right encoder."""
-        match data:
-            case {
-                "id": OpenVMBusInteraction.EXECUTION_BRIDGE.value,
-                "mult": mult,
-                "args": [pc, timestamp],
-            }:
-                self.execution_bridge.add(mult, pc, timestamp)
-            case {
-                "id": OpenVMBusInteraction.MEMORY.value,
-                "mult": mult,
-                "args": [address_space, pointer, *data, timestamp],
-            }:
-                self.memory.add(mult, address_space, pointer, data, timestamp)
-            case {
-                "id": OpenVMBusInteraction.PC_LOOKUP.value,
-                "mult": mult,
-                "args": [pc, op, a, b, c, d, e, f, g],
-            }:
-                self.pc_lookup.add(mult, pc, op, a, b, c, d, e, f, g)
-            case {
-                "id": OpenVMBusInteraction.VARIABLE_RANGE_CHECKER.value,
-                "mult": mult,
-                "args": [x, bits],
-            }:
-                self.variable_range_checker.add(mult, x, bits)
-            case {
-                "id": OpenVMBusInteraction.BITWISE_LOOKUP.value,
-                "mult": mult,
-                "args": [x, y, z, op],
-            }:
-                self.bitwise_lookup.add(mult, x, y, z, op)
-            case {
-                "id": OpenVMBusInteraction.TUPLE_RANGE_CHECKER.value,
-                "mult": mult,
-                "args": [x, y],
-            }:
-                self.tuple_range_checker.add(mult, x, y)
-            case _:
-                logging.error(f"Unsupported bus interaction: {data}")
+        for matcher in self.matchers:
+            if matcher(data):
+                return
+        logging.error(f"Unsupported bus interaction: {data}")
