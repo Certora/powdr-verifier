@@ -72,6 +72,16 @@ def run(command: list[str | Path], timeout: int = 180) -> dict:
     assert completed.returncode == 0, completed.stderr + completed.stdout
     return json.loads(completed.stdout)
 
+def run_checked(command: list[str | Path], timeout: int = 180) -> None:
+    completed = subprocess.run(
+        [str(part) for part in command],
+        cwd=WORKSPACE,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+
 
 @pytest.mark.parametrize("case", CASES, ids=[case.id for case in CASES])
 def test_optimizer_regression(case: RegressionCase):
@@ -96,3 +106,78 @@ def test_optimizer_regression(case: RegressionCase):
 
         result = run([PYTHON if PYTHON.exists() else sys.executable, MAIN, "check", simplified])
         assert result["__Action"]["result"] == "unsat"
+
+
+@dataclass(frozen=True)
+class ReplayCase:
+    dataset: str
+    block: str
+    optimizer_pass: str
+    before: str
+    after: str
+
+    @property
+    def id(self) -> str:
+        return f"{self.dataset}-{self.block}-{self.optimizer_pass}"
+
+
+REPLAY_CASES = [
+    ReplayCase(
+        "guest-keccak",
+        "2106172",
+        "exec_bus",
+        "apc_candidate_2106172_000_unopt",
+        "apc_candidate_2106172_001_exec_bus",
+    ),
+    ReplayCase(
+        "guest-keccak",
+        "2106456",
+        "inlining",
+        "apc_candidate_2106456_031_low_degree_bus",
+        "apc_candidate_2106456_032_inlining",
+    ),
+    ReplayCase(
+        "select",
+        "2099448",
+        "rule_based",
+        "apc_candidate_2099448_008_trivial_simp",
+        "apc_candidate_2099448_009_rule_based",
+    ),
+]
+
+
+@pytest.mark.parametrize("case", REPLAY_CASES, ids=[case.id for case in REPLAY_CASES])
+def test_orchestrate_powdr_opt_replay_matches_pipeline(case: ReplayCase):
+    data_dir = WORKSPACE / "data" / case.dataset
+    if not data_dir.exists():
+        pytest.skip(f"missing benchmark data: {data_dir}")
+
+    base = data_dir / f"apc_candidate_{case.block}_000_unopt.json"
+    before = data_dir / f"{case.before}.json"
+    after = data_dir / f"{case.after}.json"
+    for path in [base, before, after]:
+        assert path.exists(), path
+
+    with tempfile.TemporaryDirectory(prefix=".tmp-opt-replay-", dir=WORKSPACE) as tmp:
+        tmp_dir = Path(tmp)
+        replay_output = tmp_dir / "replay.json"
+
+        run_checked(
+            [
+                PYTHON if PYTHON.exists() else sys.executable,
+                MAIN,
+                "powdr-opt",
+                before,
+                case.optimizer_pass,
+                replay_output,
+                "--base-dump",
+                base,
+            ],
+            timeout=300,
+        )
+
+        with open(replay_output, "r") as replay_file:
+            replay_data = json.load(replay_file)
+        with open(after, "r") as after_file:
+            after_data = json.load(after_file)
+        assert replay_data == after_data
