@@ -35,6 +35,8 @@ def load_files_by_block(args):
     files = defaultdict(dict)
     __FILENAMERE = re.compile("apc_candidate_(\\d+)_(\\d+)(.*)\\.json")
     for file in (DATA_DIR / args.test).glob("apc_candidate_*.json"):
+        if ".powdr-opt-" in file.stem:
+            continue
         if m := __FILENAMERE.match(file.name):
             block = int(m.group(1))
             if args.blocks is None or block in args.blocks:
@@ -90,6 +92,7 @@ def parse_args():
     parser.add_argument('command', choices=[
         'powdr',
         'powdr-guest',
+        'verify-opt',
         'trace',
         'diff',
         'evaluate',
@@ -233,6 +236,30 @@ def run_eval(*files):
         logging.warning(f"evaluating trace from {model.relative_to(Path.cwd())} on {f.relative_to(Path.cwd())}")
         __run_main("eval", f, model)
 
+def _parse_step_and_pass(file: Path) -> tuple[int, str]:
+    m = __FILENAMERE.match(file.name)
+    assert m is not None, file
+    step = int(m.group(2))
+    passname = m.group(3).removeprefix("_")
+    return step, passname
+
+def run_verify_opt(files: dict, pairs):
+    for input_file, next_file in pairs:
+        _, next_pass = _parse_step_and_pass(next_file)
+        if not next_pass:
+            logging.warning(f"could not infer next pass from {next_file.name}, skipping")
+            continue
+
+        output = input_file.with_name(f"{input_file.stem}.powdr-opt-{next_pass}.json")
+        logging.warning(
+            f"running powdr-opt {next_pass} on {input_file.relative_to(Path.cwd())}"
+        )
+        powdr_opt_args = [input_file, next_pass, output]
+        if 0 in files:
+            powdr_opt_args += ["--base-dump", files[0]]
+        __run_main("powdr-opt", *powdr_opt_args)
+        run_verify((input_file, output))
+
 @parallelize
 def run_verify(a, b):
     with ActionDumper("verify", _ARGS.test, a, b) as a_verify:
@@ -293,6 +320,8 @@ if __name__ == '__main__':
                     run_eval(*parse_range(files, args.steps))
                 case 'verify':
                     run_verify(*parse_paired_range(files, args.steps))
+                case 'verify-opt':
+                    run_verify_opt(files, parse_paired_range(files, args.steps))
 
                 case _:
                     logging.error(f"unknown command: {args.command}")
