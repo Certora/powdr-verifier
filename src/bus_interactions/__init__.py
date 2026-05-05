@@ -27,7 +27,7 @@ class InteractionEncoder:
         self.encoders.append(encoder)
         setattr(encoder, "_cur_state", self._cur_state)
 
-    def verify_bus_ids(self, bus_ids: dict[str, int]):
+    def configure_from_bus_ids(self, bus_ids: dict[str, int]):
         """Verify that the bus ids are correct."""
         pass
 
