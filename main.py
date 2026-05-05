@@ -16,6 +16,7 @@ from src.converter import convert_and_print
 from src.encoding_analysis import analyze_aliases
 from src.visualizer import visualize
 from src.report.render import report
+from src.powdr_opt import run_powdr_opt
 
 
 if __name__ == '__main__':
@@ -55,6 +56,9 @@ if __name__ == '__main__':
 
             case 'report':
                 report()
+
+            case 'powdr-opt':
+                run_powdr_opt()
 
             case _:
                 logging.error(f"unknown command: {ARGS().command}")

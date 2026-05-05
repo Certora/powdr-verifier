@@ -109,6 +109,12 @@ def __build_parser(skip_subparsers=False):
     sub_report.add_argument("report_dir", type=Path)
     sub_report.add_argument("output", type=Path)
 
+    sub_powdr_opt = sub.add_parser("powdr-opt")
+    sub_powdr_opt.add_argument("input", type=Path)
+    sub_powdr_opt.add_argument("opt_pass", type=str)
+    sub_powdr_opt.add_argument("output", type=Path)
+    sub_powdr_opt.add_argument("--base-dump", type=Path, default=None)
+
     return parser
 
 
