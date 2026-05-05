@@ -203,6 +203,7 @@ class OpenVMBusInteractionEncoder(InteractionEncoder):
                 case {"Other": {"TupleRangeChecker": [max0, max1]}}:
                     self.tuple_range_checker.MAX_0 = max0
                     self.tuple_range_checker.MAX_1 = max1
+                    self.add_encoder(self.tuple_range_checker)
                     self.matchers.append(lambda data, id=id: self.__match_tuple_range_checker(id, data))
                 case _:
                     logging.error(f"Unsupported bus definition: {id} -> {data}")
