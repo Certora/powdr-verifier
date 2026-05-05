@@ -228,7 +228,7 @@ class OpenVMMemoryEncoder(
                     isinput,
                     And(
                         *[
-                            And(LE(Int(0), d), LE(d, Int(255)))
+                            And(LE(Int(0), wrap_mod(d)), LE(wrap_mod(d), Int(255)))
                             for d in self._interactions[id].args[2]
                         ]
                     ),
