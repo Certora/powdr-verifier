@@ -46,10 +46,25 @@ def _gxor_axioms(terms: Iterable[FNode]) -> Iterable[FNode]:
         if x == y:
             yield Equals(term, Int(0))
         else:
+            # x ^ x == 0
             yield Iff(Equals(x, y), Equals(term, Int(0)))
+            # 0 ^ y == y
             yield Iff(Equals(x, Int(0)), Equals(term, y))
+            # x ^ 0 == x
             yield Iff(Equals(y, Int(0)), Equals(term, x))
+            # (0 <= x <= 255) and (y == 255) -> term == 255 - x
+            yield Implies(
+                And(LE(Int(0), x), LE(x, Int(255)), Equals(y, Int(255))),
+                Equals(term, Minus(Int(255), x)),
+            )
+            # (0 <= y <= 255) and (x == 255) -> term == 255 - y
+            yield Implies(
+                And(LE(Int(0), y), LE(y, Int(255)), Equals(x, Int(255))),
+                Equals(term, Minus(Int(255), y)),
+            )
+            # (x == term) -> y == 0
             yield Iff(Equals(x, term), Equals(y, Int(0)))
+            # (y == term) -> x == 0
             yield Iff(Equals(y, term), Equals(x, Int(0)))
 
 
