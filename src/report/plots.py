@@ -60,6 +60,9 @@ def basic_stats() -> str:
         *[("unknown", *row) for row in fastest_unknown],
         *[("timeout", *row) for row in smallest_timed_out],
     ]
+    selected_jobs.sort(
+        key=lambda r: float(r[3]) if r[3] is not None else float("-inf"),
+    )
     selected_jobs_list = _render_selected_jobs_list("Jobs of interest", selected_jobs)
     return f"""
 <section class="container-fluid py-3">
