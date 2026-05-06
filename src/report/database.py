@@ -51,6 +51,8 @@ def create_db() -> None:
             parent INTEGER,
             name TEXT NOT NULL,
             running_time REAL,
+            result TEXT,
+            expected TEXT,
             status TEXT,
             FOREIGN KEY (verification_step_id) REFERENCES verification_steps(id) ON DELETE CASCADE,
             FOREIGN KEY (parent) REFERENCES substeps(id) ON DELETE CASCADE
@@ -122,14 +124,18 @@ def _insert_substep(
     assert __DB is not None
     cur = __DB.execute(
         """
-        INSERT INTO substeps (verification_step_id, parent, name, running_time, status)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO substeps (
+            verification_step_id, parent, name, running_time, result, expected, status
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             verification_step_id,
             parent,
             step.name,
             step.running_time,
+            step.result,
+            step.expected,
             step.status,
         ),
     )

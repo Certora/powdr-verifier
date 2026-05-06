@@ -1,9 +1,14 @@
 import functools
+import html
 from pathlib import Path
 import pandas
 import plotly.express
 
 from .database import query, query_single_value
+
+
+def _fig_html(fig) -> str:
+    return fig.to_html(full_html=False, include_plotlyjs=False)
 
 
 def basic_stats() -> str:
@@ -15,17 +20,139 @@ def basic_stats() -> str:
         "SELECT COUNT(DISTINCT passname) FROM verification_steps "
         "WHERE passname IS NOT NULL AND passname != ''"
     )
+    fastest_unexpected_sat = query(
+        """
+        SELECT v.input1, v.input2, v.running_time, v.size_bytes
+        FROM verification_steps v
+        WHERE v.running_time IS NOT NULL
+          AND EXISTS (
+              SELECT 1
+              FROM substeps s
+              WHERE s.verification_step_id = v.id
+                AND s.expected IN ('sat', 'unsat')
+                AND s.result IN ('sat', 'unsat')
+                AND s.result != s.expected
+          )
+        ORDER BY v.running_time ASC
+        LIMIT 5
+        """
+    )
+    fastest_unknown = query(
+        """
+        SELECT input1, input2, running_time, size_bytes
+        FROM verification_steps
+        WHERE status = 'unknown' AND running_time IS NOT NULL
+        ORDER BY running_time ASC
+        LIMIT 5
+        """
+    )
+    smallest_timed_out = query(
+        """
+        SELECT input1, input2, running_time, size_bytes
+        FROM verification_steps
+        WHERE status = 'timeout' AND size_bytes IS NOT NULL
+        ORDER BY size_bytes ASC, running_time ASC
+        LIMIT 5
+        """
+    )
+    selected_jobs = [
+        *[("wrong", *row) for row in fastest_unexpected_sat],
+        *[("unknown", *row) for row in fastest_unknown],
+        *[("timeout", *row) for row in smallest_timed_out],
+    ]
+    selected_jobs_list = _render_selected_jobs_list("Jobs of interest", selected_jobs)
     return f"""
-<dl>
-<dt>#blocks</dt>
-<dd>{n_blocks}</dd>
-<dt>#verification steps</dt>
-<dd>{n_steps}</dd>
-<dt>#passes</dt>
-<dd>{n_passes}</dd>
-</dl>
+<section class="container-fluid py-3">
+  <div class="row g-2 mb-3">
+    {_render_stat_card("#verification steps", n_steps)}
+    {_render_stat_card("#blocks", n_blocks)}
+    {_render_stat_card("#passes", n_passes)}
+  </div>
+  <div class="row g-3">
+    <div class="col-12">{selected_jobs_list}</div>
+  </div>
+</section>
 
 """
+
+
+def _job_name(input1: str, input2: str) -> str:
+    p1 = Path(input1).name.removesuffix(".json")
+    p2 = Path(input2).name.removesuffix(".json")
+    return f"{p1} -> {p2}"
+
+
+def _render_stat_card(label: str, value: object) -> str:
+    return (
+        '<div class="col-12 col-md-4">'
+        '<div class="card h-100 shadow-sm">'
+        '<div class="card-body py-2 px-3">'
+        f'<div class="small text-body-secondary">{html.escape(str(label))}</div>'
+        f'<div class="fs-5 fw-semibold">{html.escape(str(value))}</div>'
+        "</div></div></div>"
+    )
+
+
+def _render_selected_jobs_list(title: str, rows: list[tuple]) -> str:
+    if not rows:
+        return (
+            '<div class="card h-100 shadow-sm"><div class="card-body py-2 px-3">'
+            f'<h6 class="mb-2">{html.escape(title)}</h6>'
+            '<span class="text-body-secondary">None</span>'
+            "</div></div>"
+        )
+    items = []
+    for idx, (kind, input1, input2, running_time, size_bytes) in enumerate(rows, start=1):
+        job = html.escape(_job_name(str(input1), str(input2)))
+        kind_badge = _badge_kind(str(kind))
+        time_badge = _badge_time(running_time)
+        size_badge = _badge_bytes(size_bytes)
+        items.append(
+            '<li class="list-group-item px-0 d-flex align-items-center">'
+            f"<span><span class='text-body-secondary me-2'>{idx}.</span><code>{job}</code></span>"
+            f"<span class='ms-auto'>{kind_badge} {time_badge} {size_badge}</span>"
+            "</li>"
+        )
+    return (
+        '<div class="card h-100 shadow-sm"><div class="card-body py-2 px-3">'
+        f'<h6 class="mb-2">{html.escape(title)}</h6>'
+        f"<ul class='list-group list-group-flush'>{''.join(items)}</ul>"
+        "</div></div>"
+    )
+
+
+def _badge_time(running_time: object) -> str:
+    if running_time is None:
+        label = "n/a"
+    else:
+        label = f"{float(running_time):.2f}s"
+    return f'<span class="badge text-bg-primary">{html.escape(label)}</span>'
+
+
+def _badge_bytes(size_bytes: object) -> str:
+    if size_bytes is None:
+        label = "n/a"
+    else:
+        label = _format_bytes(int(size_bytes))
+    return f'<span class="badge text-bg-secondary">{html.escape(label)}</span>'
+
+
+def _format_bytes(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+def _badge_kind(kind: str) -> str:
+    if kind == "wrong":
+        css = "text-bg-danger"
+    elif kind == "unknown":
+        css = "text-bg-warning"
+    else:
+        css = "text-bg-dark"
+    return f'<span class="badge {css}">{html.escape(kind)}</span>'
 
 def verified_over_time() -> str:
     whole = query(
@@ -64,7 +191,7 @@ def verified_over_time() -> str:
         category_orders={"series": order},
         labels={"count": "# samples", "time": "Time (s)", "series": "Series"},
     )
-    return fig.to_html(full_html=False)
+    return _fig_html(fig)
 
 @functools.lru_cache(maxsize=1)
 def _scatter_time_size_frame(input_base: Path) -> pandas.DataFrame:
@@ -114,7 +241,7 @@ def scatter_time_size_success_only(input_base: Path) -> str:
         range_y=[0, df["time"].max() * 1.1],
         hover_data=["input1", "input2"],
     )
-    return fig.to_html(full_html=False)
+    return _fig_html(fig)
 
 
 def scatter_time_size_by_outcome(input_base: Path) -> str:
@@ -140,7 +267,7 @@ def scatter_time_size_by_outcome(input_base: Path) -> str:
         hover_data=["input1", "input2"],
     )
     _append_trace_counts(fig, df["outcome"].value_counts().to_dict())
-    return fig.to_html(full_html=False)
+    return _fig_html(fig)
 
 
 def scatter_time_size_by_isqf_and_outcome(input_base: Path) -> str:
@@ -205,7 +332,7 @@ def scatter_time_size_by_isqf_and_outcome(input_base: Path) -> str:
         hover_data=["input1", "input2"],
     )
     _append_trace_counts(fig, df["series"].value_counts().to_dict())
-    return fig.to_html(full_html=False)
+    return _fig_html(fig)
 
 
 def block_solved_percentage_ecdf() -> str:
@@ -256,7 +383,7 @@ def block_solved_percentage_ecdf() -> str:
         category_orders={"series": order},
         labels={"count": "# blocks", "pct": "% solved", "series": "Series"},
     )
-    return fig.to_html(full_html=False)
+    return _fig_html(fig)
 
 
 def pass_solved_percentage_ecdf() -> str:
@@ -309,7 +436,7 @@ def pass_solved_percentage_ecdf() -> str:
     )
     fig.update_layout(barmode="group")
     fig.update_xaxes(tickangle=-35)
-    return fig.to_html(full_html=False)
+    return _fig_html(fig)
 
 
 def _path_relative_to_base(path_str: str, base: Path) -> str:
@@ -381,4 +508,4 @@ def substeps_stacked_lines(input_base: Path) -> str:
         hover_data=["verification_step_id", "input1", "input2", "status"],
     )
     fig.update_layout(barmode="stack", bargap=0)
-    return fig.to_html(full_html=False)
+    return _fig_html(fig)

@@ -43,7 +43,8 @@ class TreeNode:
     name: str
     inputs: list = dataclasses.field(default_factory=list)
     running_time: Optional[float] = None   # seconds
-    result: str = "unknown"
+    result: Optional[str] = None
+    expected: Optional[str] = None
     status: str = "pending"                # pending | running | success | error | skipped
     children: list = dataclasses.field(default_factory=list)
     block: Optional[int] = None
@@ -135,7 +136,8 @@ class TreeTableWidget:
         else:
             inputs_str = "—"
         time_str   = f"{node.running_time:.2f}s" if node.running_time is not None else "—"
-        status_str = f"{icon} {node.result}"
+        shown_result = node.result if node.result is not None else node.status
+        status_str = f"{icon} {shown_result}"
 
         row = (
             f'<tr class="ttt-row" style="background:{row_bg}">'
@@ -147,7 +149,7 @@ class TreeTableWidget:
             f'  <td class="ttt-cell ttt-t" style="background:{row_bg}"{_title_attr(time_str)}>{time_str}</td>'
             f'  <td class="ttt-cell ttt-s" style="background:{row_bg}"{_title_attr(status_str)}>'
             f'    <span class="ttt-badge" style="background:{bg};color:{fg};border-color:{fg}88">'
-            f'      {icon} {node.result}'
+            f'      {icon} {shown_result}'
             f'    </span>'
             f'  </td>'
             f'</tr>'
@@ -187,6 +189,7 @@ def normalize_substep_tree(node: TreeNode) -> TreeNode:
         inputs=node.inputs,
         running_time=node.running_time,
         result=node.result,
+        expected=node.expected,
         status=node.status,
         children=[normalize_substep_tree(child) for child in node.children],
         block=node.block,
@@ -199,7 +202,8 @@ def to_tree_node(data: Action) -> TreeNode:
         name=data.name,
         inputs=data.properties.get("inputs", []),
         running_time=data.running_time,
-        result=data.properties.get("result", "unknown"),
+        result=data.properties.get("result"),
+        expected=data.properties.get("expected"),
         status=data.status(),
         children=[to_tree_node(c) for c in data.actions]
     )
@@ -237,13 +241,15 @@ def report():
     try:
         create_db()
         clear_verification_steps()
-        table, _ = collect(report_dir)
+        collect(report_dir)
         html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Report</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@latest/dist/css/bootstrap.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@latest/plotly.min.js"></script>
 </head>
 <body>
 {basic_stats()}
@@ -261,8 +267,6 @@ def report():
 {scatter_time_size_by_isqf_and_outcome(report_data_dir(report_dir))}
 
 {substeps_stacked_lines(report_data_dir(report_dir))}
-
-<!--{table._render()}-->
 </body>
 </html>
 """
