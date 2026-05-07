@@ -19,6 +19,9 @@ class OpenVMTupleRangeCheckerEncoder(SingleInteractionEncoder):
         of `x` and `y` to be in the range [0, MAX_0] and [0, MAX_1], respectively.
         `MAX_0` and `MAX_1` are constants from the VM config.
         """
+        x = wrap_mod(x)
+        y = wrap_mod(y)
+
         return Implies(
             Not(Equals(wrap_mod(mult), Int(0))),
             And(
