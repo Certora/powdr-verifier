@@ -44,7 +44,7 @@ class _OutsideQuantifierModInvRewriter(substituter.Substituter):
                     memo[node] = keep_comment(replacement, node)
                 else:
                     memo[node] = keep_comment(
-                        substituter.Substituter.super(self, node, args=args), node
+                        substituter.Substituter.super(self, node, args=args, interpretations=None), node
                     )
                 continue
             stack.append((node, True))
