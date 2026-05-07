@@ -1,5 +1,5 @@
 from io import StringIO
-import json
+import cProfile
 import logging
 import sys
 
@@ -24,8 +24,8 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.WARNING, force=True, format='%(levelname)s:%(relativeCreated)dms %(message)s')
     parse_args(sys.argv[1:])
 
-    res = None
-    try:
+    def run():
+        res = None
         match ARGS().command:
             case 'trace':
                 res = trace()
@@ -63,9 +63,21 @@ if __name__ == '__main__':
             case _:
                 logging.error(f"unknown command: {ARGS().command}")
                 exit(1)
+        return res
+
+    profiler = cProfile.Profile() if ARGS().cprofile else None
+    if profiler is not None:
+        profiler.enable()
+
+    try:
+        res = run()
     except Exception as e:
         raise e
     finally:
+        if profiler is not None:
+            profiler.disable()
+            profiler.dump_stats("cprofile.prof")
+            logging.warning("cProfile written to cprofile.prof")
         print_profile()
     
     if res is not None:
