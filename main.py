@@ -5,6 +5,7 @@ import sys
 
 from src.checker import check
 from src.evaluator import evaluate
+from src.smt_backends.pysmt import disable_typecheck
 from src.utils.args import parse_args, ARGS
 from src.utils.io import dump_json, load_apc_dump, load_json
 from src.utils.profiling import print_profile
@@ -23,6 +24,9 @@ if __name__ == '__main__':
 
     logging.basicConfig(level=logging.WARNING, force=True, format='%(levelname)s:%(relativeCreated)dms %(message)s')
     parse_args(sys.argv[1:])
+    if ARGS().no_typecheck:
+        disable_typecheck()
+        logging.warning("PySMT type checking disabled")
 
     def run():
         res = None

@@ -218,6 +218,9 @@ def Mod(left, right):
     r""".. math:: l % r """
     return get_env().formula_manager.Mod(left, right)
 
+def disable_typecheck():
+    get_env().formula_manager._do_type_check = lambda formula: None
+
 def Equals(left, right):
     assert left.get_type() == right.get_type()
     if left.get_type().is_bool_type():
