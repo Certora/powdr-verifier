@@ -12,7 +12,7 @@ WORKSPACE = Path(__file__).resolve().parents[3]
 VERIFIER = WORKSPACE / "verifier"
 MAIN = VERIFIER / "main.py"
 PYTHON = VERIFIER / ".venv" / "bin" / "python"
-TACTIC = "nnf:isolate:lift:witness:z3-propagate-values:isqf:bounds:rewrite:gxor:demod:pretty"
+TACTIC = "nnf:isolate:lift:witness:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:pretty"
 
 
 @dataclass(frozen=True)

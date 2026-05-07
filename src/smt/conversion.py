@@ -28,6 +28,7 @@ def _check_is_valid(self: Solver, f: FNode) -> bool:
 
 class SmtConverter:
     """Convert JSON-like APC dumps (constraints + bus interactions) into SMT constraints and axioms."""
+    UF_MOD_INV = Symbol("uf_mod_inv", FunctionType(INT, [INT]))
 
     def __init__(self, name: Optional[str], basic_block: BasicBlock):
         """Create a converter that turns JSON-like dumps into SMT, namespacing symbols by `name`."""
@@ -93,10 +94,16 @@ class SmtConverter:
                     a = self.convert_manual(a)
                     b = self.convert_manual(b)
                     self.derived_columns[sym] = with_comment(
-                        Ite(
-                            Equals(wrap_mod(b), Int(0)),
-                            Equals(sym, Int(0)),
-                            Equals(wrap_mod(Minus(Times(sym, b), a)), Int(0)),
+                        Equals(
+                            sym,
+                            Ite(
+                                Equals(wrap_mod(b), Int(0)),
+                                Int(0),
+                                Times(
+                                    wrap_mod(a),
+                                    Function(self.UF_MOD_INV, [wrap_mod(b)]),
+                                )
+                            ),
                         ),
                         f"DERIVED COLUMN {name} = QuotientOrZero({a}, {b})",
                     )
@@ -202,7 +209,7 @@ class SmtConverter:
             constraints=constraints,
             axioms=axioms,
             derived=derived,
-            globals=self.bus_interaction_encoder.get_globals(),
+            globals=self.bus_interaction_encoder.get_globals() | frozenset([self.UF_MOD_INV]),
         )
         logging.debug(f"{self.name}: done converting")
         return fwa

@@ -17,6 +17,7 @@ from .simplify import (
     simplify_intervals2,
     simplify_isolate,
     simplify_lift_forall,
+    simplify_mod_inv,
     simplify_model,
     simplify_nnf,
     simplify_qxor,
@@ -67,6 +68,8 @@ def simplify():
                         smt_script = simplify_qxor(smt_script)
                     case "gxor":
                         smt_script = simplify_gxor(smt_script)
+                    case "mod_inv":
+                        smt_script = simplify_mod_inv(smt_script)
                     case "intervals":
                         smt_script = simplify_intervals(smt_script)
                     case "intervals2":
