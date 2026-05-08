@@ -12,6 +12,7 @@ Pure utilities used by :mod:`.skolem` and the per-contributor modules
   splitter used by every contributor that consumes pin equations.
 """
 
+import functools
 import io
 
 from pysmt.smtlib.parser import Tokenizer
@@ -64,14 +65,25 @@ def _build_parser_with_cache(smt_script: script.SmtLibScript) -> SmtLibParser:
     """Make a parser whose symbol cache mirrors the script's symbols.
 
     Includes both top-level ``declare-fun``s and any forall-bound qvars
-    so embedded pin equations can refer to either.
+    so embedded pin equations can refer to either. UF (function-typed)
+    symbols are bound to pysmt's ``_function_call_helper`` partial, the
+    same way ``_cmd_declare_fun`` would have bound them when parsing a
+    fresh script - otherwise the parser raises ``Unknown function`` on
+    ``(uf_mod_inv x)`` because a bare ``Symbol`` is not callable.
     """
     parser = SmtLibParser()
     for cmd in smt_script:
         if cmd.name != "declare-fun":
             continue
         sym = cmd.args[0]
-        if sym.is_symbol():
+        if not sym.is_symbol():
+            continue
+        if sym.symbol_type().is_function_type():
+            parser.cache.bind(
+                sym.symbol_name(),
+                functools.partial(parser._function_call_helper, sym),
+            )
+        else:
             parser.cache.bind(sym.symbol_name(), sym)
     for name, sym in _collect_forall_qvars(smt_script).items():
         parser.cache.bind(name, sym)
