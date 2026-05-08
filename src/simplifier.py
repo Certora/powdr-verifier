@@ -22,6 +22,7 @@ from .simplify import (
     simplify_nnf,
     simplify_qxor,
     simplify_rewrite,
+    simplify_rules,
     simplify_witnesses,
     simplify_z3,
 )
@@ -70,6 +71,8 @@ def simplify():
                         smt_script = simplify_gxor(smt_script)
                     case "mod_inv":
                         smt_script = simplify_mod_inv(smt_script)
+                    case "rules":
+                        smt_script = simplify_rules(smt_script)
                     case "intervals":
                         smt_script = simplify_intervals(smt_script)
                     case "intervals2":
