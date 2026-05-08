@@ -1,13 +1,19 @@
-"""Skolemization pass for OpenVM-style ``EqualZeroCheck`` patterns.
+"""Rule-derived skolem contributor for OpenVM ``EqualZeroCheck`` patterns.
+
+This module is *not* a standalone simplifier pass anymore; it provides the
+:func:`contribute` function used by :mod:`.skolem` to populate a shared
+:class:`~.skolem.SkolemMap` with witnesses for ``diff_val`` and
+``diff_marker__i`` qvars.
 
 Background
 ----------
 The powdr ``rule_based`` optimizer (see
-``powdr/constraint-solver/src/rule_based_optimizer/rules.rs``) recognizes the
-constraint set produced by OpenVM's ``LessThan`` core (see
+``powdr/constraint-solver/src/rule_based_optimizer/rules.rs``) recognizes
+the constraint set produced by OpenVM's ``LessThan`` core (see
 https://github.com/powdr-labs/openvm/blob/4300c42df8f860085b6ca46311f2750a01da3dec/extensions/rv32im/circuit/src/less_than/core.rs)
-and replaces it with a much simpler equivalent using a fresh ``inv_of_sum``
-witness. The original constraint set has the shape (per limb ``i in 0..4``)::
+and replaces it with a much simpler equivalent using a fresh
+``inv_of_sum`` witness. The original constraint set has the shape (per
+limb ``i in 0..4``)::
 
     diff_marker__i * (a_i_e * sign + diff_val) = 0           (constr_5..8)
     (1 - sum_dm_>=i) * (-a_i) * sign         = 0             (constr_0..2)
@@ -18,68 +24,38 @@ witness. The original constraint set has the shape (per limb ``i in 0..4``)::
     sign = 2 * cmp_result - 1
 
 where ``a_0_e == a_0 - 1`` (i.e. ``c[0] = 1``) and ``a_i_e == a_i`` for
-``i in {1,2,3}`` (i.e. ``c[i] = 0``). In other words the constraints encode a
-4-limb less-than against the constant ``c = (1, 0, 0, 0)`` (LSB-first).
+``i in {1,2,3}`` (i.e. ``c[i] = 0``); the constraints encode a 4-limb
+less-than against the constant ``c = (1, 0, 0, 0)`` (LSB-first). The
+optimizer drops every constraint that connects ``diff_val`` /
+``diff_marker__i`` to ``b`` in the *after* system, so the same-name pin
+that the verifier would normally use for these qvars is unsound: it
+propagates an arbitrary (typically all-zero) after-side witness onto the
+before side. This contributor instead computes the canonical OpenVM
+witness in terms of ``b`` and registers it with the :class:`SkolemMap`
+*before* ``contribute_skolem_names`` runs, so the rule-based witness wins.
 
-The verifier soundness check turns the *before* (pre-optimization) constraint
-system into a universal: ``forall <before-vars>. Implies(map, Or(Not(C_i)))``.
-Most ``before-`` variables are pinned to their ``after-`` counterpart through
-the ``ModelMapBuilder`` same-name heuristic and are then lifted out of the
-forall by ``simplify_lift_forall``. The ``EqualZeroCheck`` rewrite drops every
-constraint that connects ``diff_val`` and ``diff_marker__i`` to ``b`` in the
-*after* system, so:
+For every ``diff_val`` qvar this contributor:
 
-* ``before-diff_val`` has no ``after-`` counterpart at all and stays
-  universally quantified. With ``diff_val`` free, ``Not(before.constraints)``
-  is trivially satisfiable for any inconsistent ``diff_val``.
-* ``before-diff_marker__i`` does have an ``after-diff_marker__i`` of the same
-  name, but the after-side variable is unconstrained. The same-name map
-  therefore propagates an arbitrary ``after-dm`` choice (typically ``0``)
-  onto ``before-dm``, blocking the only consistent witness in which exactly
-  one marker is one.
-
-Either alone is enough to make the soundness check spuriously satisfiable; in
-practice both are needed.
-
-What this pass does
--------------------
-For every ``forall`` whose body is a disjunction (NNF) and that quantifies a
-variable whose stripped name starts with ``diff_val``, this pass:
-
-1. Locates the four ``DiffMarkerConstraint`` shapes for that ``diff_val`` in
-   the body (matched in both pre-rewrite ``(= (mod (* dm (+ (* X sign) dv)) p) 0)``
-   and post-rewrite ``(or (= dm 0) (= (mod (+ (* X sign) dv) p) 0))`` forms),
-   indexed by the trailing number of the ``diff_marker__N`` symbol.
-2. Confirms a single shared ``cmp_result``, requires the constr_5 entry to
-   carry the ``a_0 - 1`` offset, and requires constr_6..8 to carry no offset.
-3. Builds the canonical OpenVM witness for ``diff_val``: scan limbs MSB-first
-   and pick the first differing limb against ``c = (1, 0, 0, 0)``::
+1. Locates the four ``DiffMarkerConstraint`` shapes in the forall body
+   (matched in both pre-rewrite ``(= (mod (* dm (+ (* X sign) dv)) p) 0)``
+   and post-rewrite ``(or (= dm 0) (= (mod (+ (* X sign) dv) p) 0))``
+   forms), indexed by the trailing number of the ``diff_marker__N``
+   symbol.
+2. Confirms a single shared ``cmp_result``, requires constr_5 to carry
+   the ``a_0 - 1`` offset and constr_6..8 to carry no offset.
+3. Builds the canonical witness for ``diff_val``::
 
        diff_val := (c[i] - b[i]) * sign   for the highest i with b[i] != c[i]
                  := 0                     when b == c
 
-   Encoded as nested ``Ite`` (modulo ``p``).
-4. Builds the canonical OpenVM witness for each ``diff_marker__i``: ``1`` at
-   the highest index where ``b[i] != c[i]``, ``0`` everywhere else. Also
-   nested ``Ite``.
-5. Appends ``Not(diff_val = skolem)`` and ``Not(dm_i = skolem_i)`` (only when
-   ``dm_i`` is actually quantified by this forall) as fresh disjuncts.
+   and pins it on the :class:`SkolemMap`.
+4. Builds the canonical ``diff_marker__i`` witnesses (``1`` at the
+   highest differing limb, ``0`` elsewhere) and pins each that is
+   actually quantified by this forall.
 
-The downstream ``simplify_lift_forall`` pass recognises these disjuncts (the
-qvar is on one side of an equality and the other side mentions no qvar) and
-hoists ``qvar = skolem`` out as a top-level assertion, removing ``qvar`` from
-the universal. From the solver's perspective this is the standard
-``forall x. (x != t) | P(x)  ==  P(t)`` rewrite: it does not weaken the
-formula, it only commits each variable to the witness OpenVM would actually
-produce, so the remaining body becomes a concrete (per ``b``, ``cmp_result``)
-constraint instead of a universal. For ``diff_marker``, lifting also turns
-the still-present same-name map disjunct ``Not(before-dm = after-dm)`` into a
-real constraint linking ``after-dm`` to the canonical witness, which is what
-recovers soundness when the optimizer's ``EqualZeroCheck`` rewrite drops the
-original marker constraints.
-
-This pass therefore must run after ``nnf`` (so the body is an ``Or``) and
-before ``lift``.
+All emission (``Not(q = wrap_mod(expr))``) is delegated to the
+:class:`SkolemMap`. ``simplify_lift_forall`` later hoists each pin to a
+top-level assertion.
 """
 
 from ..smt.utils import *
@@ -379,10 +355,9 @@ def _build_marker_skolems(matches: dict[int, dict]) -> list[tuple[FNode, FNode]]
         marker[0] = 1 iff b3 = 0 ∧ b2 = 0 ∧ b1 = 0 ∧ b0 != 1
 
     Returned as a list of ``(dm_var, skolem_expr)`` pairs (one per limb).
-    Pinning these alongside ``diff_val`` lets ``simplify_lift_forall`` discard
-    the bogus same-name map equalities ``before-dm_i = after-dm_i`` (which the
-    optimizer's ``EqualZeroCheck`` rewrite leaves unconstrained on the after
-    side) and force the canonical OpenVM witness instead.
+    Pinning these instead of the same-name ``before-dm_i = after-dm_i`` skolem
+    avoids the soundness hole introduced by the optimizer's ``EqualZeroCheck``
+    rewrite, which leaves the after-side markers unconstrained.
     """
     b0, b1, b2, b3 = (matches[i]["data"] for i in range(4))
     eq3 = Equals(b3, Int(0))
@@ -411,120 +386,47 @@ def _strip_prefix(name: str) -> str:
     return name
 
 
-def _peel_mod(f: FNode) -> FNode:
-    """Strip an outer ``(mod x p)`` (with ``p`` the field prime) and return ``x``."""
-    if f.node_type() != operators.MOD:
-        return f
-    if _int_constant(f.arg(1)) != ARGS().field_type.value:
-        return f
-    return f.arg(0)
+def contribute(skolem_map, body: FNode) -> None:
+    """Pin OpenVM ``EqualZeroCheck`` witnesses on ``skolem_map`` from ``body``.
 
-
-def _is_same_name_map_disjunct(d: FNode, qvars: frozenset[FNode]) -> bool:
-    """Return ``True`` for a body disjunct ``Not(before-X = after-X)`` whose ``before-X`` symbol is in ``qvars``.
-
-    These disjuncts are emitted by ``ModelMapBuilder``'s same-name heuristic
-    via the ``map`` conjunction at encoding time; after ``nnf`` they appear as
-    ``Not(eq)`` disjuncts of the forall body, with the ``after`` side wrapped
-    in ``(mod _ p)`` because the encoder emits all field equalities through
-    ``wrap_mod``. ``simplify_lift_forall`` is happy to lift either this map
-    equality or our skolem equality but only one per qvar, and Python ``set``
-    iteration order is not stable. To guarantee that the canonical witness
-    wins, we drop the same-name map disjuncts for the qvars we are about to
-    skolemize.
+    Walks the disjunctive forall body for every ``diff_val`` qvar of the
+    map, and for each one that has all four ``DiffMarkerConstraint``
+    shapes pins both the ``diff_val`` witness and the four
+    ``diff_marker__i`` witnesses (when they are themselves qvars).
+    Already-pinned qvars on ``skolem_map`` are left untouched.
     """
-    if not qvars:
-        return False
-    if not d.is_not():
-        return False
-    eq = d.arg(0)
-    if not eq.is_equals():
-        return False
-    l, r = _peel_mod(eq.arg(0)), _peel_mod(eq.arg(1))
-    if not (l.is_symbol() and r.is_symbol()):
-        return False
-    for vside, other in ((l, r), (r, l)):
-        if vside not in qvars:
-            continue
-        if _strip_prefix(vside.symbol_name()) == _strip_prefix(other.symbol_name()):
-            return True
-    return False
+    targets = [
+        v for v in skolem_map.qvars
+        if _strip_prefix(v.symbol_name()).startswith("diff_val")
+    ]
+    if not targets:
+        return
 
-
-class _RulesWalker(IdentityDagWalker):
-    """Visit each ``forall`` and inject a skolem disjunct for matching qvars."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.applied_diff_val = 0
-        self.applied_diff_marker = 0
-
-    def walk_forall(self, formula, args, **kwargs):
-        body = args[0]
-        if not body.is_or():
-            return formula
-        qvars = list(formula.quantifier_vars())
-        qvar_set = frozenset(qvars)
-        targets = [v for v in qvars if _strip_prefix(v.symbol_name()).startswith("diff_val")]
-        if not targets:
-            return formula
-
-        new_disjuncts = []
-        suppressed_qvars: set[FNode] = set()
-        for qvar in targets:
-            matches: dict[int, dict] = {}
-            cmp_var = None
-            for node in _iter_nodes(body):
-                m = _match_constraint(node, qvar)
-                if m is None:
-                    continue
-                idx = _diff_marker_index(m["dm"])
-                if idx is None or idx not in (0, 1, 2, 3):
-                    continue
-                expected_off = (ARGS().field_type.value - 1) % ARGS().field_type.value if idx == 0 else 0
-                if m["data_offset"] != expected_off:
-                    continue
-                if cmp_var is None:
-                    cmp_var = m["cmp"]
-                elif cmp_var != m["cmp"]:
-                    continue
-                if idx in matches:
-                    if matches[idx] != m:
-                        continue
-                else:
-                    matches[idx] = m
-            if cmp_var is None or set(matches.keys()) != {0, 1, 2, 3}:
+    for qvar in targets:
+        matches: dict[int, dict] = {}
+        cmp_var = None
+        for node in _iter_nodes(body):
+            m = _match_constraint(node, qvar)
+            if m is None:
                 continue
-            skolem = _build_skolem(matches, cmp_var, ARGS().field_type.value)
-            new_disjuncts.append(Not(Equals(qvar, skolem)))
-            self.applied_diff_val += 1
-            for dm_var, dm_skolem in _build_marker_skolems(matches):
-                if dm_var in qvar_set:
-                    new_disjuncts.append(Not(Equals(dm_var, dm_skolem)))
-                    suppressed_qvars.add(dm_var)
-                    self.applied_diff_marker += 1
-
-        if not new_disjuncts:
-            return formula
-        kept = [d for d in body.args() if not _is_same_name_map_disjunct(d, suppressed_qvars)]
-        return ForAll(qvars, Or(*kept, *new_disjuncts))
-
-
-def simplify_rules(smt_script: script.SmtLibScript) -> script.SmtLibScript:
-    """Add OpenVM ``LessThan`` ``diff_val`` skolem definitions to forall bodies.
-
-    See the module docstring for the full reasoning. The pass is a no-op on
-    forall nodes whose body is not a disjunction (run after ``nnf``) or that
-    do not quantify a ``diff_val`` variable, and on ``diff_val`` quantifiers
-    where the four ``DiffMarkerConstraint`` shapes cannot all be located.
-    """
-    w = _RulesWalker(env=get_env())
-    for cmd in smt_script:
-        if cmd.name == "assert":
-            cmd.args[0] = keep_comment(w.walk(cmd.args[0]), cmd.args[0])
-    if w.applied_diff_val or w.applied_diff_marker:
-        logging.info(
-            f"rules: applied skolem for {w.applied_diff_val} diff_val and "
-            f"{w.applied_diff_marker} diff_marker variable(s)"
-        )
-    return smt_script
+            idx = _diff_marker_index(m["dm"])
+            if idx is None or idx not in (0, 1, 2, 3):
+                continue
+            expected_off = (ARGS().field_type.value - 1) % ARGS().field_type.value if idx == 0 else 0
+            if m["data_offset"] != expected_off:
+                continue
+            if cmp_var is None:
+                cmp_var = m["cmp"]
+            elif cmp_var != m["cmp"]:
+                continue
+            if idx in matches:
+                if matches[idx] != m:
+                    continue
+            else:
+                matches[idx] = m
+        if cmp_var is None or set(matches.keys()) != {0, 1, 2, 3}:
+            continue
+        skolem = _build_skolem(matches, cmp_var, ARGS().field_type.value)
+        skolem_map.pin(qvar, skolem, source="rules")
+        for dm_var, dm_skolem in _build_marker_skolems(matches):
+            skolem_map.pin(dm_var, dm_skolem, source="rules")
