@@ -149,7 +149,7 @@ def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
         logging.error(f"timed out running {cmdstr}")
     return None
 
-def __do_simplify(input, output, tactic="nnf:isolate:lift:witness:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:pretty"):
+def __do_simplify(input, output, tactic="nnf:rules:isolate:lift:witness:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:pretty"):
     logging.info(f"simplifying with {tactic} {input.relative_to(Path.cwd())}")
     return __run_main("simplify", input, tactic, output, parse_output=True)
 
