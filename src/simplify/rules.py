@@ -25,11 +25,21 @@ The verifier soundness check turns the *before* (pre-optimization) constraint
 system into a universal: ``forall <before-vars>. Implies(map, Or(Not(C_i)))``.
 Most ``before-`` variables are pinned to their ``after-`` counterpart through
 the ``ModelMapBuilder`` same-name heuristic and are then lifted out of the
-forall by ``simplify_lift_forall``. ``before-diff_val`` has no ``after-``
-counterpart (the optimizer eliminates it), so it remains universally
-quantified. With ``diff_val`` free under ``forall`` the body is trivially
-satisfied (``Not(before.constraints)`` is true for any inconsistent
-``diff_val``), hiding genuine consistency information from the SMT solver.
+forall by ``simplify_lift_forall``. The ``EqualZeroCheck`` rewrite drops every
+constraint that connects ``diff_val`` and ``diff_marker__i`` to ``b`` in the
+*after* system, so:
+
+* ``before-diff_val`` has no ``after-`` counterpart at all and stays
+  universally quantified. With ``diff_val`` free, ``Not(before.constraints)``
+  is trivially satisfiable for any inconsistent ``diff_val``.
+* ``before-diff_marker__i`` does have an ``after-diff_marker__i`` of the same
+  name, but the after-side variable is unconstrained. The same-name map
+  therefore propagates an arbitrary ``after-dm`` choice (typically ``0``)
+  onto ``before-dm``, blocking the only consistent witness in which exactly
+  one marker is one.
+
+Either alone is enough to make the soundness check spuriously satisfiable; in
+practice both are needed.
 
 What this pass does
 -------------------
@@ -49,16 +59,24 @@ variable whose stripped name starts with ``diff_val``, this pass:
                  := 0                     when b == c
 
    Encoded as nested ``Ite`` (modulo ``p``).
-4. Appends ``Not(diff_val = skolem)`` as a fresh disjunct of the forall body.
+4. Builds the canonical OpenVM witness for each ``diff_marker__i``: ``1`` at
+   the highest index where ``b[i] != c[i]``, ``0`` everywhere else. Also
+   nested ``Ite``.
+5. Appends ``Not(diff_val = skolem)`` and ``Not(dm_i = skolem_i)`` (only when
+   ``dm_i`` is actually quantified by this forall) as fresh disjuncts.
 
-The downstream ``simplify_lift_forall`` pass recognises this disjunct (the
+The downstream ``simplify_lift_forall`` pass recognises these disjuncts (the
 qvar is on one side of an equality and the other side mentions no qvar) and
-hoists ``diff_val = skolem`` out as a top-level assertion, removing
-``diff_val`` from the universal. From the solver's perspective this is the
-standard ``forall x. (x != t) \/ P(x)  ==  P(t)`` rewrite: it does not weaken
-the formula, it only commits ``diff_val`` to the witness OpenVM would
-actually produce so the remaining body becomes a concrete (per ``b``,
-``cmp_result``) constraint instead of a universal.
+hoists ``qvar = skolem`` out as a top-level assertion, removing ``qvar`` from
+the universal. From the solver's perspective this is the standard
+``forall x. (x != t) | P(x)  ==  P(t)`` rewrite: it does not weaken the
+formula, it only commits each variable to the witness OpenVM would actually
+produce, so the remaining body becomes a concrete (per ``b``, ``cmp_result``)
+constraint instead of a universal. For ``diff_marker``, lifting also turns
+the still-present same-name map disjunct ``Not(before-dm = after-dm)`` into a
+real constraint linking ``after-dm`` to the canonical witness, which is what
+recovers soundness when the optimizer's ``EqualZeroCheck`` rewrite drops the
+original marker constraints.
 
 This pass therefore must run after ``nnf`` (so the body is an ``Or``) and
 before ``lift``.
@@ -349,6 +367,42 @@ def _build_skolem(matches: dict[int, dict], cmp: FNode, p: int) -> FNode:
     return wrap_mod(expr)
 
 
+def _build_marker_skolems(matches: dict[int, dict]) -> list[tuple[FNode, FNode]]:
+    """Build canonical ``diff_marker__i`` witnesses against ``c = (1, 0, 0, 0)``.
+
+    OpenVM sets ``marker[i] = 1`` exactly at the highest index where the operand
+    differs from ``c`` (LSB-first ``c = (1, 0, 0, 0)``)::
+
+        marker[3] = 1 iff b3 != 0
+        marker[2] = 1 iff b3 = 0 ∧ b2 != 0
+        marker[1] = 1 iff b3 = 0 ∧ b2 = 0 ∧ b1 != 0
+        marker[0] = 1 iff b3 = 0 ∧ b2 = 0 ∧ b1 = 0 ∧ b0 != 1
+
+    Returned as a list of ``(dm_var, skolem_expr)`` pairs (one per limb).
+    Pinning these alongside ``diff_val`` lets ``simplify_lift_forall`` discard
+    the bogus same-name map equalities ``before-dm_i = after-dm_i`` (which the
+    optimizer's ``EqualZeroCheck`` rewrite leaves unconstrained on the after
+    side) and force the canonical OpenVM witness instead.
+    """
+    b0, b1, b2, b3 = (matches[i]["data"] for i in range(4))
+    eq3 = Equals(b3, Int(0))
+    eq2 = Equals(b2, Int(0))
+    eq1 = Equals(b1, Int(0))
+    eq0 = Equals(b0, Int(1))
+    dm3_skolem = Ite(eq3, Int(0), Int(1))
+    dm2_skolem = Ite(eq3, Ite(eq2, Int(0), Int(1)), Int(0))
+    dm1_skolem = Ite(eq3, Ite(eq2, Ite(eq1, Int(0), Int(1)), Int(0)), Int(0))
+    dm0_skolem = Ite(
+        eq3, Ite(eq2, Ite(eq1, Ite(eq0, Int(0), Int(1)), Int(0)), Int(0)), Int(0)
+    )
+    return [
+        (matches[0]["dm"], dm0_skolem),
+        (matches[1]["dm"], dm1_skolem),
+        (matches[2]["dm"], dm2_skolem),
+        (matches[3]["dm"], dm3_skolem),
+    ]
+
+
 def _strip_prefix(name: str) -> str:
     """Strip the verifier's ``before-``/``after-`` symbol prefix, if present."""
     for prefix in ("before-", "after-"):
@@ -357,23 +411,66 @@ def _strip_prefix(name: str) -> str:
     return name
 
 
+def _peel_mod(f: FNode) -> FNode:
+    """Strip an outer ``(mod x p)`` (with ``p`` the field prime) and return ``x``."""
+    if f.node_type() != operators.MOD:
+        return f
+    if _int_constant(f.arg(1)) != ARGS().field_type.value:
+        return f
+    return f.arg(0)
+
+
+def _is_same_name_map_disjunct(d: FNode, qvars: frozenset[FNode]) -> bool:
+    """Return ``True`` for a body disjunct ``Not(before-X = after-X)`` whose ``before-X`` symbol is in ``qvars``.
+
+    These disjuncts are emitted by ``ModelMapBuilder``'s same-name heuristic
+    via the ``map`` conjunction at encoding time; after ``nnf`` they appear as
+    ``Not(eq)`` disjuncts of the forall body, with the ``after`` side wrapped
+    in ``(mod _ p)`` because the encoder emits all field equalities through
+    ``wrap_mod``. ``simplify_lift_forall`` is happy to lift either this map
+    equality or our skolem equality but only one per qvar, and Python ``set``
+    iteration order is not stable. To guarantee that the canonical witness
+    wins, we drop the same-name map disjuncts for the qvars we are about to
+    skolemize.
+    """
+    if not qvars:
+        return False
+    if not d.is_not():
+        return False
+    eq = d.arg(0)
+    if not eq.is_equals():
+        return False
+    l, r = _peel_mod(eq.arg(0)), _peel_mod(eq.arg(1))
+    if not (l.is_symbol() and r.is_symbol()):
+        return False
+    for vside, other in ((l, r), (r, l)):
+        if vside not in qvars:
+            continue
+        if _strip_prefix(vside.symbol_name()) == _strip_prefix(other.symbol_name()):
+            return True
+    return False
+
+
 class _RulesWalker(IdentityDagWalker):
     """Visit each ``forall`` and inject a skolem disjunct for matching qvars."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.applied = 0
+        self.applied_diff_val = 0
+        self.applied_diff_marker = 0
 
     def walk_forall(self, formula, args, **kwargs):
         body = args[0]
         if not body.is_or():
             return formula
         qvars = list(formula.quantifier_vars())
+        qvar_set = frozenset(qvars)
         targets = [v for v in qvars if _strip_prefix(v.symbol_name()).startswith("diff_val")]
         if not targets:
             return formula
 
         new_disjuncts = []
+        suppressed_qvars: set[FNode] = set()
         for qvar in targets:
             matches: dict[int, dict] = {}
             cmp_var = None
@@ -400,11 +497,17 @@ class _RulesWalker(IdentityDagWalker):
                 continue
             skolem = _build_skolem(matches, cmp_var, ARGS().field_type.value)
             new_disjuncts.append(Not(Equals(qvar, skolem)))
-            self.applied += 1
+            self.applied_diff_val += 1
+            for dm_var, dm_skolem in _build_marker_skolems(matches):
+                if dm_var in qvar_set:
+                    new_disjuncts.append(Not(Equals(dm_var, dm_skolem)))
+                    suppressed_qvars.add(dm_var)
+                    self.applied_diff_marker += 1
 
         if not new_disjuncts:
             return formula
-        return ForAll(qvars, Or(*body.args(), *new_disjuncts))
+        kept = [d for d in body.args() if not _is_same_name_map_disjunct(d, suppressed_qvars)]
+        return ForAll(qvars, Or(*kept, *new_disjuncts))
 
 
 def simplify_rules(smt_script: script.SmtLibScript) -> script.SmtLibScript:
@@ -419,6 +522,9 @@ def simplify_rules(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     for cmd in smt_script:
         if cmd.name == "assert":
             cmd.args[0] = keep_comment(w.walk(cmd.args[0]), cmd.args[0])
-    if w.applied:
-        logging.info(f"rules: applied skolem for {w.applied} diff_val variable(s)")
+    if w.applied_diff_val or w.applied_diff_marker:
+        logging.info(
+            f"rules: applied skolem for {w.applied_diff_val} diff_val and "
+            f"{w.applied_diff_marker} diff_marker variable(s)"
+        )
     return smt_script
