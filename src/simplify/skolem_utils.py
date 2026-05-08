@@ -12,6 +12,7 @@ Pure utilities used by :mod:`.skolem` and the per-contributor modules
   splitter used by every contributor that consumes pin equations.
 """
 
+import functools
 import io
 
 from pysmt.smtlib.parser import Tokenizer
@@ -22,15 +23,17 @@ from ..smt.utils import *
 def emit_pin_setinfo(prefix: str, idx: int, equation: FNode) -> script.SmtLibCommand:
     """Build a ``(set-info :{prefix}{idx} <smtlib-equation>)`` command.
 
-    The equation is serialized to SMT-LIB and stored as the attribute
-    value verbatim. pysmt's command printer wraps the string in
-    ``|...|`` (quoted-symbol syntax) on emission and the parser strips
-    the wrapper on read, so the round-trip is transparent as long as
-    the serialized form does not itself contain literal ``|``
-    characters - which it never does for arithmetic / equality terms.
+    The equation is serialized to SMT-LIB without daggification (no
+    ``let`` bindings) and stored as the attribute value verbatim.
+    pysmt's command printer wraps the string in ``|...|`` (quoted-symbol
+    syntax) on emission and the parser strips the wrapper on read, so
+    the round-trip is transparent as long as the serialized form does
+    not itself contain literal ``|`` characters - which it never does
+    for arithmetic / equality terms.
     """
     return script.SmtLibCommand(
-        name="set-info", args=[f":{prefix}{idx}", equation.to_smtlib()]
+        name="set-info",
+        args=[f":{prefix}{idx}", equation.to_smtlib(daggify=False)],
     )
 
 
@@ -62,14 +65,25 @@ def _build_parser_with_cache(smt_script: script.SmtLibScript) -> SmtLibParser:
     """Make a parser whose symbol cache mirrors the script's symbols.
 
     Includes both top-level ``declare-fun``s and any forall-bound qvars
-    so embedded pin equations can refer to either.
+    so embedded pin equations can refer to either. UF (function-typed)
+    symbols are bound to pysmt's ``_function_call_helper`` partial, the
+    same way ``_cmd_declare_fun`` would have bound them when parsing a
+    fresh script - otherwise the parser raises ``Unknown function`` on
+    ``(uf_mod_inv x)`` because a bare ``Symbol`` is not callable.
     """
     parser = SmtLibParser()
     for cmd in smt_script:
         if cmd.name != "declare-fun":
             continue
         sym = cmd.args[0]
-        if sym.is_symbol():
+        if not sym.is_symbol():
+            continue
+        if sym.symbol_type().is_function_type():
+            parser.cache.bind(
+                sym.symbol_name(),
+                functools.partial(parser._function_call_helper, sym),
+            )
+        else:
             parser.cache.bind(sym.symbol_name(), sym)
     for name, sym in _collect_forall_qvars(smt_script).items():
         parser.cache.bind(name, sym)

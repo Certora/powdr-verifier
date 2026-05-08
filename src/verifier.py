@@ -28,6 +28,32 @@ def _eq_pin_setinfo(prefix: str, pins: list[FNode]) -> list:
     return [emit_pin_setinfo(prefix, i, eq) for i, eq in enumerate(pins)]
 
 
+def _vars_only(symbols: frozenset[FNode]) -> frozenset[FNode]:
+    """Drop UF function-typed symbols, keep plain variables.
+
+    Used by the ``live`` filter on emitted pins: UFs (``uf_mod_inv``,
+    ``pc_a``, etc.) are constant globals known to every encoding even
+    when they happen to be unused in the actual constraints, so we
+    don't want a derived equation to be filtered out merely because it
+    mentions a UF the formula didn't reach. Whatever UFs the pins do
+    reference are collected separately by :func:`_pin_ufs` and emitted
+    as ``declare-fun``s alongside the set-info commands.
+    """
+    return frozenset(
+        s for s in symbols if not s.symbol_type().is_function_type()
+    )
+
+
+def _pin_ufs(pins: list[FNode]) -> list[FNode]:
+    """Return the UF function symbols referenced by ``pins``."""
+    ufs: set[FNode] = set()
+    for eq in pins:
+        for s in eq.get_free_variables():
+            if s.symbol_type().is_function_type():
+                ufs.add(s)
+    return sorted(ufs, key=lambda s: s.symbol_name())
+
+
 def _derived_pins(
     derived: dict[FNode, FNode], live: frozenset[FNode]
 ) -> list[FNode]:
@@ -36,14 +62,16 @@ def _derived_pins(
     Both ``after_smt.derived`` (derived columns) and
     ``before_conv.convert_eliminations(...)`` already canonicalize their
     values as ``Equals(var, expr)``. We only emit equations all of whose
-    free variables appear in ``live``: anything else references a
-    symbol that the encoder has already eliminated and whose
+    *variable* free symbols appear in ``live``: anything else references
+    a variable the encoder has already eliminated and whose
     ``declare-fun`` will not be in the SMT script the simplifier reads
-    back, so the round-trip parse would fail.
+    back, so the round-trip parse would fail. UF function symbols are
+    excluded from this check (see :func:`_vars_only`).
     """
+    var_live = _vars_only(live)
     out: list[FNode] = []
     for eq in derived.values():
-        if eq.get_free_variables() <= live:
+        if _vars_only(eq.get_free_variables()) <= var_live:
             out.append(eq)
     return out
 
@@ -101,24 +129,32 @@ def _pclookup_pins(
 
 def _skolem_setinfo(
     formula: FNode, conv: SmtConverter, derived: dict[FNode, FNode]
-) -> list:
-    """Produce the full set-info command list for ``convert_to_smt_script``.
+) -> tuple[list, list[FNode]]:
+    """Produce the set-info commands and required UF declarations.
 
-    Combines the ``derived`` / ``elimination`` equations with any
-    pc-lookup pins resolvable from them. Used by both the soundness
-    and completeness encodings to attach the data the simplifier-side
-    skolem orchestrator (:mod:`.simplify.skolem`) consumes. Pins that
-    reference symbols not free in ``formula`` are filtered out: those
-    symbols will not be ``declare-fun``'d in the resulting smt2 file
-    and the parser would fail to resolve them back.
+    Returns ``(setinfo_cmds, extra_decls)``: ``setinfo_cmds`` carries
+    the ``derived`` / ``elimination`` equations and resolved pc-lookup
+    pins for the simplifier-side skolem orchestrator
+    (:mod:`.simplify.skolem`); ``extra_decls`` lists the UF function
+    symbols referenced by those pins so :func:`convert_to_smt_script`
+    can emit ``declare-fun``s for them even when no constraint of the
+    formula happens to reach them (e.g. ``uf_mod_inv`` for derived
+    columns of the form ``v = ite(d=0, 0, 1*uf_mod_inv(d))``).
+
+    Pin equations whose *variable* free symbols are not free in
+    ``formula`` are still filtered out: those variables will not be
+    declared in the smt2 file and the parser would fail to resolve
+    them back.
     """
     live = _collect_all_symbols(formula)
     derived_pins = _derived_pins(derived, live)
     pclookup_pins = _pclookup_pins(conv, derived, live)
-    return (
+    cmds = (
         _eq_pin_setinfo(SETINFO_DERIVED_PREFIX[1:], derived_pins)
         + _eq_pin_setinfo(SETINFO_PCLOOKUP_PREFIX[1:], pclookup_pins)
     )
+    extra_decls = _pin_ufs(derived_pins + pclookup_pins)
+    return cmds, extra_decls
 
 
 def _collect_all_symbols(formula: FNode) -> frozenset[FNode]:
@@ -226,10 +262,12 @@ def verify():
             completeness = encoding(
                 before_smt, after_smt, var2 - globals, input_relation, output_relation
             )
-            extra = _skolem_setinfo(completeness, after_conv, after_smt.derived)
+            extra, extra_decls = _skolem_setinfo(completeness, after_conv, after_smt.derived)
 
             logging.info(f"dumping completeness check to {dump.name}")
-            smtlib = convert_to_smt_script(completeness, status='unsat', extra_setinfo=extra)
+            smtlib = convert_to_smt_script(
+                completeness, status='unsat', extra_setinfo=extra, extra_decls=extra_decls
+            )
             pretty_print_smtlib(smtlib, dump)
             action += ("outputs", outfile)
         
@@ -249,10 +287,12 @@ def verify():
                     output_relation,
                     additional_asserts=[Equals(is_valid_after, Int(1))],
                 )
-                extra = _skolem_setinfo(soundness, before_conv, eliminations)
+                extra, extra_decls = _skolem_setinfo(soundness, before_conv, eliminations)
 
                 logging.info(f"dumping soundness check to {dump.name}")
-                smtlib = convert_to_smt_script(soundness, status='unsat', extra_setinfo=extra)
+                smtlib = convert_to_smt_script(
+                    soundness, status='unsat', extra_setinfo=extra, extra_decls=extra_decls
+                )
                 pretty_print_smtlib(smtlib, dump)
                 action += ("outputs", outfile)
 
@@ -302,10 +342,12 @@ def verify():
                 soundness = encoding(
                     after_smt, before_smt, var1 - globals, input_relation, output_relation
                 )
-                extra = _skolem_setinfo(soundness, before_conv, eliminations)
+                extra, extra_decls = _skolem_setinfo(soundness, before_conv, eliminations)
 
                 logging.info(f"dumping soundness check to {dump.name}")
-                smtlib = convert_to_smt_script(soundness, status='unsat', extra_setinfo=extra)
+                smtlib = convert_to_smt_script(
+                    soundness, status='unsat', extra_setinfo=extra, extra_decls=extra_decls
+                )
                 pretty_print_smtlib(smtlib, dump)
                 action += ("outputs", outfile)
         action += {"result": "success"}

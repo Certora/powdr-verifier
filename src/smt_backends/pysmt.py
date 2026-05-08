@@ -448,8 +448,30 @@ def script_with_sorted_declarefuns(smtlib: script.SmtLibScript) -> script.SmtLib
     smtlib.commands = newcmds
     return smtlib
 
-def convert_to_smt_script(f: FNode, status = None, extra_setinfo: list = None) -> script.SmtLibScript:
+def convert_to_smt_script(f: FNode, status = None, extra_setinfo: list = None, extra_decls: list = None) -> script.SmtLibScript:
     smtlib = script.smtlibscript_from_formula(f, None)
+    if extra_decls:
+        existing = {
+            c.args[0] for c in smtlib.commands if c.name == "declare-fun"
+        }
+        new_cmds = []
+        inserted = False
+        for c in smtlib.commands:
+            if not inserted and c.name != "declare-fun" and c.name != "set-logic":
+                for sym in extra_decls:
+                    if sym not in existing:
+                        new_cmds.append(
+                            script.SmtLibCommand(name="declare-fun", args=[sym])
+                        )
+                inserted = True
+            new_cmds.append(c)
+        if not inserted:
+            for sym in extra_decls:
+                if sym not in existing:
+                    new_cmds.append(
+                        script.SmtLibCommand(name="declare-fun", args=[sym])
+                    )
+        smtlib.commands = new_cmds
     smtlib = script_with_sorted_declarefuns(smtlib)
 
     smtlib.commands[0].args[0] = "ALL"
