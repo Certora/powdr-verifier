@@ -22,15 +22,17 @@ from ..smt.utils import *
 def emit_pin_setinfo(prefix: str, idx: int, equation: FNode) -> script.SmtLibCommand:
     """Build a ``(set-info :{prefix}{idx} <smtlib-equation>)`` command.
 
-    The equation is serialized to SMT-LIB and stored as the attribute
-    value verbatim. pysmt's command printer wraps the string in
-    ``|...|`` (quoted-symbol syntax) on emission and the parser strips
-    the wrapper on read, so the round-trip is transparent as long as
-    the serialized form does not itself contain literal ``|``
-    characters - which it never does for arithmetic / equality terms.
+    The equation is serialized to SMT-LIB without daggification (no
+    ``let`` bindings) and stored as the attribute value verbatim.
+    pysmt's command printer wraps the string in ``|...|`` (quoted-symbol
+    syntax) on emission and the parser strips the wrapper on read, so
+    the round-trip is transparent as long as the serialized form does
+    not itself contain literal ``|`` characters - which it never does
+    for arithmetic / equality terms.
     """
     return script.SmtLibCommand(
-        name="set-info", args=[f":{prefix}{idx}", equation.to_smtlib()]
+        name="set-info",
+        args=[f":{prefix}{idx}", equation.to_smtlib(daggify=False)],
     )
 
 
