@@ -51,13 +51,27 @@ def collect_declared_symbols(smt_script: script.SmtLibScript) -> dict[str, FNode
     return out
 
 
+def _is_program_variable(name: str) -> bool:
+    """Return True for program variables (column names with ``@index`` suffix).
+
+    Bus-interaction encoding variables (e.g. ``memory-0-data0``) must not
+    be matched by name because their numeric indices do not correspond
+    across sides when the number of interactions changes.
+    """
+    return "@" in _strip_prefix(name)
+
+
 def contribute(skolem_map, declared: dict[str, FNode]) -> None:
     """Pin same-name witnesses on ``skolem_map`` for unpinned qvars.
 
     See the module docstring for the full description.
+    Only matches program variables (names containing ``@``), not
+    bus-interaction encoding variables.
     """
     for q in skolem_map.qvars:
         if skolem_map.is_pinned(q):
+            continue
+        if not _is_program_variable(q.symbol_name()):
             continue
         other = declared.get(_strip_prefix(q.symbol_name()))
         if other is None or other == q or other in skolem_map.qvars:
