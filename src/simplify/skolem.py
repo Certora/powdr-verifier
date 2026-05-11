@@ -36,7 +36,7 @@ assertion, removing ``q`` from the universal.
 from ..smt.utils import *
 from ..smt_backends.pysmt import wrap_mod
 
-from . import skolem_derived, skolem_names, skolem_pclookup, skolem_rules
+from . import skolem_derived, skolem_names, skolem_pclookup, skolem_rules, skolem_witness
 
 
 class SkolemMap:
@@ -88,6 +88,7 @@ class _SkolemWalker(IdentityDagWalker):
         declared: dict[str, FNode],
         derived: list[FNode],
         pclookup: list[FNode],
+        witness_candidates: list,
         *args,
         **kwargs,
     ):
@@ -95,6 +96,7 @@ class _SkolemWalker(IdentityDagWalker):
         self.declared = declared
         self.derived = derived
         self.pclookup = pclookup
+        self.witness_candidates = witness_candidates
         self.applied: dict[str, int] = {}
 
     def walk_forall(self, formula, args, **kwargs):
@@ -107,6 +109,7 @@ class _SkolemWalker(IdentityDagWalker):
         skolem_rules.contribute(m, body)
         skolem_derived.contribute(m, self.derived)
         skolem_pclookup.contribute(m, self.pclookup)
+        skolem_witness.contribute(m, body, self.witness_candidates)
         skolem_names.contribute(m, self.declared)
 
         for src in m.sources.values():
@@ -128,8 +131,9 @@ def simplify_skolem(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     declared = skolem_names.collect_declared_symbols(smt_script)
     derived = skolem_derived.collect_pins(smt_script)
     pclookup = skolem_pclookup.collect_pins(smt_script)
+    witness_candidates = skolem_witness.collect_candidates(smt_script)
 
-    w = _SkolemWalker(declared, derived, pclookup, env=get_env())
+    w = _SkolemWalker(declared, derived, pclookup, witness_candidates, env=get_env())
     for cmd in smt_script:
         if cmd.name == "assert":
             cmd.args[0] = keep_comment(w.walk(cmd.args[0]), cmd.args[0])

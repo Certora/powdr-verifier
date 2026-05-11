@@ -23,7 +23,6 @@ from .simplify import (
     simplify_qxor,
     simplify_rewrite,
     simplify_skolem,
-    simplify_witnesses,
     simplify_z3,
 )
 
@@ -59,8 +58,6 @@ def simplify():
                         smt_script = simplify_isolate(smt_script)
                     case "lift":
                         smt_script = simplify_lift_forall(smt_script)
-                    case "witness":
-                        smt_script = simplify_witnesses(smt_script)
                     case "rewrite":
                         smt_script = simplify_rewrite(smt_script)
                     case "demod":
