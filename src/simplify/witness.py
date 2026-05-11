@@ -97,7 +97,9 @@ def _match_collapsed_witness(f: FNode) -> tuple[frozenset[str], str, FNode] | No
         coeff, parts = _split_product(term)
         if coeff == 0:
             continue
-        if coeff == field - 1 and len(parts) == 1 and (name := _symbol_key(parts[0])):
+        if not parts:
+            continue
+        if coeff in (1, field - 1) and len(parts) == 1 and (name := _symbol_key(parts[0])):
             if cmp is not None:
                 return None
             cmp = name
@@ -133,11 +135,14 @@ def _match_expanded_witness(
         coeff, parts = _split_product(term)
         if coeff == 0:
             continue
-        if coeff == field - 1 and len(parts) == 1 and (name := _symbol_key(parts[0])):
-            if cmp is not None:
-                return None
-            cmp = name
+        if not parts:
             continue
+        if coeff in (1, field - 1) and len(parts) == 1 and (name := _symbol_key(parts[0])):
+            if parts[0] not in qvars:
+                if cmp is not None:
+                    return None
+                cmp = name
+                continue
         if coeff != 1 or len(parts) != 2:
             return None
         left, right = parts
