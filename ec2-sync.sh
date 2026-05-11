@@ -18,13 +18,13 @@ download() {
     local local_reports_dir="$4"
 
     mkdir -p "$local_data_dir" "$local_reports_dir"
-    rsync -avP --delete "ec2-powdr:$remote_glob" "$local_data_dir/"
-    rsync -avP --delete "ec2-powdr:$remote_reports" "$local_reports_dir/"
+    rsync -avP --delete "ec2-powdr-rsync:$remote_glob" "$local_data_dir/"
+    rsync -avP --delete "ec2-powdr-rsync:$remote_reports" "$local_reports_dir/"
 }
 
 case "$scenario" in
     upload-reth)
-        rsync -avP --delete "$root_dir/data/reth-selection/" "ec2-powdr:data/reth-selection/"
+        rsync -avP --delete "$root_dir/data/reth-selection/" "ec2-powdr-rsync:data/reth-selection/"
         ;;
     keccak)
         download \
@@ -48,8 +48,11 @@ case "$scenario" in
             "$root_dir/reports/reth-selection"
         ;;
     reports)
+        echo "report guest-keccak"
         python3 "$script_dir/main.py" report "$root_dir/reports/guest-keccak" "$root_dir/report-keccak.html"
+        echo "report guest-pairing-selection"
         python3 "$script_dir/main.py" report "$root_dir/reports/guest-pairing-selection" "$root_dir/report-pairing.html"
+        echo "report reth-selection"
         python3 "$script_dir/main.py" report "$root_dir/reports/reth-selection" "$root_dir/report-reth.html"
         ;;
     *)
