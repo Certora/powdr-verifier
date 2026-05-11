@@ -168,12 +168,8 @@ class PermutationCheckMixin:
             updates = [update_multidim_array(input, keys) for input in inputs]
             oldvals, newvals, stores, conj = zip(*updates)
 
-            conjuncts.append(
-                Implies(
-                    Not(Equals(wrap_mod(data[1]), Int(0))),
-                    And(itertools.chain(*conj))
-                )
-            )
+            for c in itertools.chain(*conj):
+                conjuncts.append(c)
 
             if USE_ITE_ENCODING:
 
@@ -358,18 +354,10 @@ class PermutationCheckMixin:
 
             news = def_vars(id + 1)
             intermediates |= set(news)
+            mul_zero_store = Equals(wrap_mod(data[1]), Int(0))
             for k, s in enumerate(stores):
                 conjuncts.append(
-                    Implies(
-                        Not(Equals(wrap_mod(data[1]), Int(0))),
-                        Equals(news[k], s)
-                    )
-                )
-                conjuncts.append(
-                    Implies(
-                        Equals(wrap_mod(data[1]), Int(0)),
-                        Equals(news[k], inputs[k])
-                    )
+                    Equals(news[k], Ite(mul_zero_store, inputs[k], s))
                 )
             inputs = news
 
