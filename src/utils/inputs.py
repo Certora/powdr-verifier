@@ -15,7 +15,7 @@ def load_files_by_block(basedir: pathlib.Path):
     for file in basedir.glob("apc_candidate_*.json"):
         if m := parse_filename(file):
             block,step,passname = m
-            assert step not in files[block]
+            assert step not in files[block], f"{step} is already there for block {block}"
             files[block][step] = (file, passname)
             if "eliminations" not in files[block]:
                 tmp = basedir / f"apc_candidate_{block}_substitutions.json"
