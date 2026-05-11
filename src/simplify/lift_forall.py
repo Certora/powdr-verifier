@@ -2,6 +2,7 @@ from typing import Iterable
 
 from ..smt.utils import *
 
+
 def _is_potential_lift_pair(d: FNode) -> bool:
     return d.is_not() and (d.arg(0).is_equals() or d.arg(0).is_iff())
 
