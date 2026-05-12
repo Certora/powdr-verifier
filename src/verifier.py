@@ -17,6 +17,163 @@ from .utils.io import load_apc_dump, load_json
 
 BEFORE_PREFIX = "before"
 AFTER_PREFIX = "after"
+#: Prefix for set-info annotations carrying shared bus array equalities.
+#: Written by :func:`_shared_bus_arrays`, read by
+#: :func:`.simplify.array_subst.simplify_array_subst`.
+SETINFO_SHARED_ARRAYS_PREFIX = ":shared-array-"
+
+
+def _shared_bus_arrays(
+    before_conv: SmtConverter, after_conv: SmtConverter
+) -> dict[FNode, FNode]:
+    """Identify memory bus array symbols that are provably equal across sides.
+
+    The memory bus is encoded as a chain of array variables
+    (``memory-0-mult``, ``memory-1-mult``, ..., ``memory-N-mult`` for
+    each field), where each step applies a ``Store`` driven by one bus
+    interaction.  Both the *before* and *after* converters produce their
+    own chain independently, even when many interactions are unchanged
+    by the optimization step.
+
+    This function compares the two interaction lists element-by-element
+    to determine which interactions are structurally identical (modulo
+    the ``before-``/``after-`` name prefix).  Two interactions are
+    identical when their ``mult``, key, and data expressions match after
+    stripping the prefix — meaning the optimization did not alter that
+    particular memory access.
+
+    If the first ``k`` interactions are identical, then the array state
+    at steps 0 through ``k`` is the same on both sides — they start
+    from equal base arrays (equated by ``build_input_output_relation``)
+    and apply the same sequence of stores.  Similarly, if the last ``m``
+    interactions match, the array state converges from the end.
+
+    For each such shared step, every array-typed auxiliary symbol
+    (``memory-{step}-mult``, ``memory-{step}-data0``, etc.) is paired
+    with its counterpart on the other side.  The resulting map
+    ``{before_sym: after_sym}`` is emitted as ``set-info`` annotations
+    that the ``array_subst`` simplifier pass later reads and converts
+    into ``(assert (= before-X after-X))`` assertions.
+
+    Why only array-typed symbols?
+        The intermediate non-array symbols (``-1``, ``-2``, ``-new``
+        suffixed ``Int`` variables from ``update_multidim_array``)
+        were tested but asserting their equality actually hurts solver
+        performance — Z3 handles array equalities far more efficiently
+        via its specialized congruence closure than it handles large
+        numbers of ``Int`` equality assertions.
+
+    Returns
+    -------
+    dict[FNode, FNode]
+        Map from before-side array symbols to their after-side
+        counterparts.  Empty if no interactions match.
+    """
+    before_enc = before_conv.bus_interaction_encoder.memory
+    after_enc = after_conv.bus_interaction_encoder.memory
+
+    bi = before_enc._interactions
+    ai = after_enc._interactions
+    if len(bi) != len(ai) or len(bi) == 0:
+        return {}
+
+    def strip_prefix(name: str) -> str:
+        for p in (BEFORE_PREFIX + "-", AFTER_PREFIX + "-"):
+            if name.startswith(p):
+                return name[len(p):]
+        return name
+
+    def canonicalize(f: FNode) -> FNode:
+        """Replace all ``before-X`` / ``after-X`` symbols with ``X``."""
+        subs = {}
+        for v in f.get_free_variables():
+            canon = strip_prefix(v.symbol_name())
+            subs[v] = Symbol(canon, v.get_type())
+        return f.substitute(subs)
+
+    def flatten_args(args):
+        """Flatten nested lists in interaction args to a flat list of FNodes."""
+        result = []
+        for a in args:
+            if isinstance(a, list):
+                result.extend(a)
+            else:
+                result.append(a)
+        return result
+
+    def interactions_equal(b, a) -> bool:
+        """Check structural equality of two bus interactions modulo prefix."""
+        if canonicalize(b.mult) != canonicalize(a.mult):
+            return False
+        bf = [canonicalize(x) for x in flatten_args(b.args)]
+        af = [canonicalize(x) for x in flatten_args(a.args)]
+        return bf == af
+
+    # Find the longest common prefix of identical interactions.
+    n = len(bi)
+    prefix_same = 0
+    for i in range(n):
+        if not interactions_equal(bi[i], ai[i]):
+            break
+        prefix_same += 1
+
+    # Find the longest common suffix (non-overlapping with the prefix).
+    suffix_same = 0
+    for i in range(1, n + 1):
+        if n - i < prefix_same:
+            break
+        if not interactions_equal(bi[-i], ai[-i]):
+            break
+        suffix_same += 1
+
+    # Build the set of array-chain step indices whose state is shared.
+    # If interactions 0..k-1 are identical, steps 0..k are shared
+    # (step 0 is the initial state, step k is the state after k stores).
+    # Similarly from the suffix end.
+    shared_steps: set[int] = set()
+    for i in range(prefix_same + 1):
+        shared_steps.add(i)
+    for i in range(n - suffix_same, n + 1):
+        shared_steps.add(i)
+
+    if not shared_steps:
+        return {}
+
+    ba = before_enc.auxiliaries if hasattr(before_enc, 'auxiliaries') else set()
+    aa = after_enc.auxiliaries if hasattr(after_enc, 'auxiliaries') else set()
+
+    # Index before-side array auxiliaries by their unprefixed name.
+    before_by_suffix: dict[str, FNode] = {}
+    for s in ba:
+        if s.get_type().is_array_type():
+            before_by_suffix[strip_prefix(s.symbol_name())] = s
+
+    # Match each after-side array auxiliary to its before-side partner
+    # if the step index falls within the shared range.
+    subs: dict[FNode, FNode] = {}
+    for s in aa:
+        if not s.get_type().is_array_type():
+            continue
+        suffix = strip_prefix(s.symbol_name())
+        partner = before_by_suffix.get(suffix)
+        if partner is None or partner.get_type() != s.get_type():
+            continue
+        # Extract the step index from the name (e.g. "memory-5-mult" → 5).
+        parts = suffix.split("-")
+        if len(parts) >= 2:
+            try:
+                step = int(parts[1])
+            except ValueError:
+                continue
+            if step in shared_steps:
+                subs[partner] = s
+
+    if subs:
+        logging.warning(
+            f"shared bus arrays: {len(subs)} symbols "
+            f"(prefix={prefix_same}, suffix={suffix_same}, total={n})"
+        )
+    return subs
 
 
 def _eq_pin_setinfo(prefix: str, pins: list[FNode]) -> list:
@@ -246,6 +403,10 @@ def verify():
         output_relation = build_input_output_relation(
             "OUTPUT RELATION", outputs1, outputs2
         )
+        # Identify memory bus arrays that are identical on both sides
+        # because the corresponding interactions didn't change.  The map
+        # is emitted as set-info annotations and picked up by array_subst.
+        shared_array_subs = _shared_bus_arrays(before_conv, after_conv)
 
         # obtain variables and globals
         var1 = collect_variables(before_smt)
@@ -263,6 +424,12 @@ def verify():
                 before_smt, after_smt, var2 - globals, input_relation, output_relation
             )
             extra, extra_decls = _skolem_setinfo(completeness, after_conv, after_smt.derived)
+            # For completeness, after-vars are quantified, so the pins
+            # go from after → before (the quantified side → the free side).
+            extra += _eq_pin_setinfo(
+                SETINFO_SHARED_ARRAYS_PREFIX[1:],
+                [Equals(v, k) for k, v in shared_array_subs.items()],
+            )
 
             logging.info(f"dumping completeness check to {dump.name}")
             smtlib = convert_to_smt_script(
@@ -288,6 +455,12 @@ def verify():
                     additional_asserts=[Equals(is_valid_after, Int(1))],
                 )
                 extra, extra_decls = _skolem_setinfo(soundness, before_conv, eliminations)
+                # For soundness, before-vars are quantified, so the pins
+                # go from before → after (the quantified side → the free side).
+                extra += _eq_pin_setinfo(
+                    SETINFO_SHARED_ARRAYS_PREFIX[1:],
+                    [Equals(k, v) for k, v in shared_array_subs.items()],
+                )
 
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(
@@ -343,6 +516,12 @@ def verify():
                     after_smt, before_smt, var1 - globals, input_relation, output_relation
                 )
                 extra, extra_decls = _skolem_setinfo(soundness, before_conv, eliminations)
+                # For soundness, before-vars are quantified, so the pins
+                # go from before → after (the quantified side → the free side).
+                extra += _eq_pin_setinfo(
+                    SETINFO_SHARED_ARRAYS_PREFIX[1:],
+                    [Equals(k, v) for k, v in shared_array_subs.items()],
+                )
 
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(
