@@ -9,6 +9,7 @@ from .utils.io import open_file
 from .simplify import (
     check_isqf,
     simplify_andify,
+    simplify_array_subst,
     simplify_bounds,
     simplify_cvc5,
     simplify_demod,
@@ -48,6 +49,8 @@ def simplify():
             with action.action(t) as subaction:
                 t,*args = t.split("-", 1)
                 match t:
+                    case "array_subst":
+                        smt_script = simplify_array_subst(smt_script)
                     case "andify":
                         smt_script = simplify_andify(smt_script)
                     case "bounds":

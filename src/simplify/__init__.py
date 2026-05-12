@@ -2,6 +2,7 @@ from ..utils.io import load_json
 from ..smt.utils import *
 from ..rewriter import rewrite
 
+from .array_subst import simplify_array_subst
 from .cvc5 import simplify_cvc5
 from .bounds import simplify_bounds
 from .demod import simplify_demod
