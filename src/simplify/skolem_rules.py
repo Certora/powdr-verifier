@@ -386,27 +386,16 @@ def _strip_prefix(name: str) -> str:
     return name
 
 
-def contribute(skolem_map, body: FNode) -> None:
-    """Pin OpenVM ``EqualZeroCheck`` witnesses on ``skolem_map`` from ``body``.
-
-    Walks the disjunctive forall body for every ``diff_val`` qvar of the
-    map, and for each one that has all four ``DiffMarkerConstraint``
-    shapes pins both the ``diff_val`` witness and the four
-    ``diff_marker__i`` witnesses (when they are themselves qvars).
-    Already-pinned qvars on ``skolem_map`` are left untouched.
+def _find_and_build_witnesses(body: FNode, diff_val_vars):
+    """Match ``DiffMarkerConstraint`` patterns for each ``diff_val`` variable
+    and return ``(diff_val_var, matches, cmp_var)`` triples for successful matches.
     """
-    targets = [
-        v for v in skolem_map.qvars
-        if _strip_prefix(v.symbol_name()).startswith("diff_val")
-    ]
-    if not targets:
-        return
-
-    for qvar in targets:
+    results = []
+    for dv in diff_val_vars:
         matches: dict[int, dict] = {}
         cmp_var = None
         for node in _iter_nodes(body):
-            m = _match_constraint(node, qvar)
+            m = _match_constraint(node, dv)
             if m is None:
                 continue
             idx = _diff_marker_index(m["dm"])
@@ -424,9 +413,141 @@ def contribute(skolem_map, body: FNode) -> None:
                     continue
             else:
                 matches[idx] = m
-        if cmp_var is None or set(matches.keys()) != {0, 1, 2, 3}:
-            continue
-        skolem = _build_skolem(matches, cmp_var, ARGS().field_type.value)
-        skolem_map.pin(qvar, skolem, source="rules")
+        if cmp_var is not None and set(matches.keys()) == {0, 1, 2, 3}:
+            results.append((dv, matches, cmp_var))
+    return results
+
+
+def contribute(skolem_map, body: FNode) -> None:
+    """Pin OpenVM ``EqualZeroCheck`` witnesses on ``skolem_map`` from ``body``.
+
+    Walks the disjunctive forall body for every ``diff_val`` qvar of the
+    map, and for each one that has all four ``DiffMarkerConstraint``
+    shapes pins both the ``diff_val`` witness and the four
+    ``diff_marker__i`` witnesses (when they are themselves qvars).
+    Already-pinned qvars on ``skolem_map`` are left untouched.
+    """
+    targets = [
+        v for v in skolem_map.qvars
+        if _strip_prefix(v.symbol_name()).startswith("diff_val")
+    ]
+    if not targets:
+        return
+
+    p = ARGS().field_type.value
+    for dv, matches, cmp_var in _find_and_build_witnesses(body, targets):
+        skolem = _build_skolem(matches, cmp_var, p)
+        skolem_map.pin(dv, skolem, source="rules")
         for dm_var, dm_skolem in _build_marker_skolems(matches):
             skolem_map.pin(dm_var, dm_skolem, source="rules")
+
+
+def _swap_prefix(name: str) -> str | None:
+    """Swap ``before-`` ↔ ``after-`` prefix. Returns ``None`` if neither."""
+    if name.startswith("before-"):
+        return "after-" + name[len("before-"):]
+    if name.startswith("after-"):
+        return "before-" + name[len("after-"):]
+    return None
+
+
+def contribute_free(smt_script, qvars: set[FNode]) -> list[tuple[FNode, FNode]]:
+    """Pin free (non-quantified) ``diff_val`` and ``diff_marker`` variables.
+
+    When the ``rule_based`` optimizer replaces the ``EqualZeroCheck``
+    constraint set, the ``diff_val`` / ``diff_marker`` variables lose
+    their defining constraints on the *after* side but remain referenced
+    in bus interactions.  In the soundness encoding these variables are
+    free (not quantified), so the solver can pick arbitrary values that
+    trivially violate the *before* side.
+
+    The constraints for these free variables do NOT exist in the SMT file
+    (they were removed by the optimizer). Instead, this function:
+
+    1. Finds free ``diff_val``/``diff_marker`` variables (non-quantified).
+    2. Identifies the corresponding quantified counterpart with the
+       opposite prefix (``before-`` ↔ ``after-``).
+    3. Matches DiffMarkerConstraint patterns on the quantified counterpart
+       (which still has its constraints in the forall body).
+    4. Builds witness expressions for the free variables by swapping symbol
+       prefixes in the quantified witness.
+    """
+    declared: dict[str, FNode] = {}
+    for cmd in smt_script:
+        if cmd.name == "declare-fun":
+            sym = cmd.args[0]
+            if sym.is_symbol():
+                declared[sym.symbol_name()] = sym
+
+    free_diff_vals = []
+    for cmd in smt_script:
+        if cmd.name == "declare-fun":
+            sym = cmd.args[0]
+            if not sym.is_symbol():
+                continue
+            stripped = _strip_prefix(sym.symbol_name())
+            if stripped.startswith("diff_val") and sym not in qvars:
+                free_diff_vals.append(sym)
+
+    if not free_diff_vals:
+        return []
+
+    qvar_diff_vals = [v for v in qvars if _strip_prefix(v.symbol_name()).startswith("diff_val")]
+    if not qvar_diff_vals:
+        return []
+
+    forall_body = None
+    for cmd in smt_script:
+        if cmd.name != "assert":
+            continue
+        for node in _iter_nodes(cmd.args[0]):
+            if node.is_forall():
+                forall_body = node.arg(0)
+                break
+        if forall_body is not None:
+            break
+
+    if forall_body is None:
+        return []
+
+    p = ARGS().field_type.value
+    qvar_results = _find_and_build_witnesses(forall_body, qvar_diff_vals)
+
+    stripped_to_qvar_match: dict[str, tuple] = {}
+    for dv, matches, cmp_var in qvar_results:
+        stripped = _strip_prefix(dv.symbol_name())
+        stripped_to_qvar_match[stripped] = (matches, cmp_var)
+
+    pins: list[tuple[FNode, FNode]] = []
+    for free_dv in free_diff_vals:
+        stripped = _strip_prefix(free_dv.symbol_name())
+        entry = stripped_to_qvar_match.get(stripped)
+        if entry is None:
+            continue
+        q_matches, q_cmp = entry
+
+        def swap_sym(sym: FNode) -> FNode:
+            swapped = _swap_prefix(sym.symbol_name())
+            if swapped is None or swapped not in declared:
+                return sym
+            return declared[swapped]
+
+        free_matches: dict[int, dict] = {}
+        for idx, m in q_matches.items():
+            free_matches[idx] = {
+                "dm": swap_sym(m["dm"]),
+                "data": swap_sym(m["data"]),
+                "data_offset": m["data_offset"],
+                "cmp": swap_sym(m["cmp"]),
+            }
+
+        free_cmp = swap_sym(q_cmp)
+        skolem = _build_skolem(free_matches, free_cmp, p)
+        pins.append((free_dv, skolem))
+        for dm_var, dm_skolem in _build_marker_skolems(free_matches):
+            if dm_var not in qvars:
+                pins.append((dm_var, dm_skolem))
+
+    if pins:
+        logging.info(f"skolem rules-free: pinning {len(pins)} free diff_val/diff_marker variables")
+    return pins

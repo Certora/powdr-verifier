@@ -98,12 +98,14 @@ class _SkolemWalker(IdentityDagWalker):
         self.pclookup = pclookup
         self.witness_candidates = witness_candidates
         self.applied: dict[str, int] = {}
+        self.qvar_sets: list[set[FNode]] = []
 
     def walk_forall(self, formula, args, **kwargs):
         body = args[0]
         if not body.is_or():
             return formula
         qvars = list(formula.quantifier_vars())
+        self.qvar_sets.append(set(qvars))
         m = SkolemMap(qvars)
 
         skolem_rules.contribute(m, body)
@@ -137,6 +139,19 @@ def simplify_skolem(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     for cmd in smt_script:
         if cmd.name == "assert":
             cmd.args[0] = keep_comment(w.walk(cmd.args[0]), cmd.args[0])
+
+    all_qvars = set().union(*w.qvar_sets) if w.qvar_sets else set()
+    free_pins = skolem_rules.contribute_free(smt_script, all_qvars)
+    if free_pins:
+        w.applied["rules-free"] = len(free_pins)
+        insert_idx = next(
+            (i for i, cmd in enumerate(smt_script.commands) if cmd.name == "check-sat"),
+            len(smt_script.commands),
+        )
+        for var, expr in free_pins:
+            pin = script.SmtLibCommand(name="assert", args=[Equals(var, expr)])
+            smt_script.commands.insert(insert_idx, pin)
+            insert_idx += 1
 
     if w.applied:
         parts = ", ".join(f"{k}={v}" for k, v in sorted(w.applied.items()))
