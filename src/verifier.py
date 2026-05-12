@@ -23,8 +23,18 @@ AFTER_PREFIX = "after"
 SETINFO_SHARED_ARRAYS_PREFIX = ":shared-array-"
 
 
+def _memory_bus_id(data: dict) -> int | None:
+    """Return the numeric bus ID for ``Memory``, or ``None`` if absent."""
+    bus_ids = data.get("bus_map", {}).get("bus_ids", {})
+    for bid, btype in bus_ids.items():
+        if btype == "Memory":
+            return int(bid)
+    return None
+
+
 def _shared_bus_arrays(
-    before_conv: SmtConverter, after_conv: SmtConverter
+    before_data: dict, after_data: dict,
+    before_conv: SmtConverter, after_conv: SmtConverter,
 ) -> dict[FNode, FNode]:
     """Identify memory bus array symbols that are provably equal across sides.
 
@@ -35,12 +45,12 @@ def _shared_bus_arrays(
     own chain independently, even when many interactions are unchanged
     by the optimization step.
 
-    This function compares the two interaction lists element-by-element
-    to determine which interactions are structurally identical (modulo
-    the ``before-``/``after-`` name prefix).  Two interactions are
-    identical when their ``mult``, key, and data expressions match after
-    stripping the prefix — meaning the optimization did not alter that
-    particular memory access.
+    This function compares the *raw* bus interactions (the JSON
+    expressions before SMT conversion) element-by-element.  Because
+    both sides use the same variable names (``before-``/``after-``
+    prefixes are only added during ``convert_manual``), two raw
+    interactions that are equal as JSON values are guaranteed to
+    represent the same memory access.
 
     If the first ``k`` interactions are identical, then the array state
     at steps 0 through ``k`` is the same on both sides — they start
@@ -69,60 +79,38 @@ def _shared_bus_arrays(
         Map from before-side array symbols to their after-side
         counterparts.  Empty if no interactions match.
     """
-    before_enc = before_conv.bus_interaction_encoder.memory
-    after_enc = after_conv.bus_interaction_encoder.memory
-
-    bi = before_enc._interactions
-    ai = after_enc._interactions
-    if len(bi) != len(ai) or len(bi) == 0:
+    mem_id = _memory_bus_id(before_data)
+    if mem_id is None:
         return {}
 
-    def strip_prefix(name: str) -> str:
-        for p in (BEFORE_PREFIX + "-", AFTER_PREFIX + "-"):
-            if name.startswith(p):
-                return name[len(p):]
-        return name
+    # Extract raw memory bus interactions from the JSON (before SMT conversion).
+    before_mem = [
+        bi for bi in before_data["machine"]["bus_interactions"]
+        if bi["id"] == mem_id
+    ]
+    after_mem = [
+        bi for bi in after_data["machine"]["bus_interactions"]
+        if bi["id"] == mem_id
+    ]
 
-    def canonicalize(f: FNode) -> FNode:
-        """Replace all ``before-X`` / ``after-X`` symbols with ``X``."""
-        subs = {}
-        for v in f.get_free_variables():
-            canon = strip_prefix(v.symbol_name())
-            subs[v] = Symbol(canon, v.get_type())
-        return f.substitute(subs)
+    n = len(before_mem)
+    if n != len(after_mem) or n == 0:
+        return {}
 
-    def flatten_args(args):
-        """Flatten nested lists in interaction args to a flat list of FNodes."""
-        result = []
-        for a in args:
-            if isinstance(a, list):
-                result.extend(a)
-            else:
-                result.append(a)
-        return result
-
-    def interactions_equal(b, a) -> bool:
-        """Check structural equality of two bus interactions modulo prefix."""
-        if canonicalize(b.mult) != canonicalize(a.mult):
-            return False
-        bf = [canonicalize(x) for x in flatten_args(b.args)]
-        af = [canonicalize(x) for x in flatten_args(a.args)]
-        return bf == af
-
-    # Find the longest common prefix of identical interactions.
-    n = len(bi)
+    # Compare raw JSON directly — identical dicts mean identical interactions.
+    # No prefix stripping needed because variable names are unprefixed in the
+    # raw APC dump; the before-/after- prefixes are only added by SmtConverter.
     prefix_same = 0
     for i in range(n):
-        if not interactions_equal(bi[i], ai[i]):
+        if before_mem[i] != after_mem[i]:
             break
         prefix_same += 1
 
-    # Find the longest common suffix (non-overlapping with the prefix).
     suffix_same = 0
     for i in range(1, n + 1):
         if n - i < prefix_same:
             break
-        if not interactions_equal(bi[-i], ai[-i]):
+        if before_mem[-i] != after_mem[-i]:
             break
         suffix_same += 1
 
@@ -138,6 +126,16 @@ def _shared_bus_arrays(
 
     if not shared_steps:
         return {}
+
+    # Now use the encoder's auxiliary symbols to build the equality map.
+    before_enc = before_conv.bus_interaction_encoder.memory
+    after_enc = after_conv.bus_interaction_encoder.memory
+
+    def strip_prefix(name: str) -> str:
+        for p in (BEFORE_PREFIX + "-", AFTER_PREFIX + "-"):
+            if name.startswith(p):
+                return name[len(p):]
+        return name
 
     ba = before_enc.auxiliaries if hasattr(before_enc, 'auxiliaries') else set()
     aa = after_enc.auxiliaries if hasattr(after_enc, 'auxiliaries') else set()
@@ -406,7 +404,7 @@ def verify():
         # Identify memory bus arrays that are identical on both sides
         # because the corresponding interactions didn't change.  The map
         # is emitted as set-info annotations and picked up by array_subst.
-        shared_array_subs = _shared_bus_arrays(before_conv, after_conv)
+        shared_array_subs = _shared_bus_arrays(before, after, before_conv, after_conv)
 
         # obtain variables and globals
         var1 = collect_variables(before_smt)
