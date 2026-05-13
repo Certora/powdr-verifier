@@ -111,6 +111,26 @@ def _split_symbol_times_sum(parts: list[FNode]) -> tuple[FNode, frozenset[str]] 
     return None
 
 
+def _is_uncollapsed_diff_inv_marker_product(term: FNode) -> bool:
+    """True for ``diff_inv_marker * (limb +/- const)`` left unmerged by partial collapse."""
+    coeff, parts = _split_product(term)
+    if coeff != 1 or len(parts) != 2:
+        return False
+    for prod_a, prod_b in (parts, list(reversed(parts))):
+        if not prod_b.is_symbol() or "diff_inv_marker" not in prod_b.symbol_name():
+            continue
+        if prod_a.node_type() != operators.PLUS:
+            continue
+        sum_terms = _flatten(operators.PLUS, prod_a)
+        if len(sum_terms) != 2:
+            continue
+        n_int = sum(1 for t in sum_terms if _int_constant(t) is not None)
+        n_sym = sum(1 for t in sum_terms if t.is_symbol())
+        if n_int == 1 and n_sym == 1:
+            return True
+    return False
+
+
 def _match_collapsed(f: FNode) -> tuple[frozenset[str], str, FNode] | None:
     """Match ``free_var * (a_0 + ... + a_k) + cmp_coeff * cmp [+ const] = 0 (mod p)``."""
     lhs = _unwrap_zero_mod_eq(f)
@@ -133,6 +153,8 @@ def _match_collapsed(f: FNode) -> tuple[frozenset[str], str, FNode] | None:
             continue
         if coeff != 1:
             return None
+        if _is_uncollapsed_diff_inv_marker_product(term):
+            continue
         match = _split_symbol_times_sum(parts)
         if match is None:
             return None
@@ -198,15 +220,36 @@ def contribute(
                     break
                 cmp = name
                 continue
+            if coeff == 1 and len(parts) == 2 and _is_uncollapsed_diff_inv_marker_product(term):
+                continue
             if coeff != 1 or len(parts) != 2:
                 ok = False
                 break
             left, right = parts
-            if left in unpinned and (factor := _symbol_key(right)):
+            factor = None
+            qvar = None
+            if left in unpinned and right in unpinned:
+                ln = left.symbol_name() if left.is_symbol() else ""
+                rn = right.symbol_name() if right.is_symbol() else ""
+                mk_l, mk_r = "diff_inv_marker" in ln, "diff_inv_marker" in rn
+                if mk_r and not mk_l:
+                    qvar, fac_sym = right, left
+                elif mk_l and not mk_r:
+                    qvar, fac_sym = left, right
+                else:
+                    ok = False
+                    break
+                factor = _symbol_key(fac_sym)
+            elif left in unpinned:
                 qvar = left
-            elif right in unpinned and (factor := _symbol_key(left)):
+                factor = _symbol_key(right)
+            elif right in unpinned:
                 qvar = right
+                factor = _symbol_key(left)
             else:
+                ok = False
+                break
+            if factor is None or qvar is None:
                 ok = False
                 break
             factors.add(factor)
