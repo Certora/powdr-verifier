@@ -36,11 +36,19 @@ witness in terms of ``b`` and registers it with the :class:`SkolemMap`
 
 For every ``diff_val`` qvar this contributor:
 
+0. The skolem walker (:mod:`.skolem`) runs contributors on every ``forall``
+   body, not only top-level ``or``; pins are wrapped as ``(or body pin …)``
+   when the body is not already a disjunction so ``let``-wrapped formulas are
+   still handled.
+
 1. Locates the four ``DiffMarkerConstraint`` shapes in the forall body
    (matched in both pre-rewrite ``(= (mod (* dm (+ (* X sign) dv)) p) 0)``
    and post-rewrite ``(or (= dm 0) (= (mod (+ (* X sign) dv) p) 0))``
-   forms), indexed by the trailing number of the ``diff_marker__N``
-   symbol.
+   forms, including **flattened n-ary** ``or`` nodes with extra disjuncts),
+   keyed by ``(limb, gadget)`` parsed from ``diff_marker__{{limb}}_{{gadget}}``.
+   When those products were rewritten away, falls back to scanning for
+   ``cmp_result_{{g}}``, ``diff_marker__{{i}}_{{g}}``, and ``b__{{i}}_{{row}}``
+   with ``row = 2*(g-1)`` for ``g>=1`` (OpenVM multi less-than rows).
 2. Confirms a single shared ``cmp_result``, requires constr_5 to carry
    the ``a_0 - 1`` offset and constr_6..8 to carry no offset.
 3. Builds the canonical witness for ``diff_val``::
@@ -57,6 +65,11 @@ All emission (``Not(q = wrap_mod(expr))``) is delegated to the
 :class:`SkolemMap`. ``simplify_lift_forall`` later hoists each pin to a
 top-level assertion.
 """
+
+from __future__ import annotations
+
+import logging
+import re
 
 from ..smt.utils import *
 
@@ -259,14 +272,12 @@ def _match_constraint(node: FNode, qvar: FNode):
 
     if not node.is_or():
         return None
-    args = list(node.args())
-    if len(args) != 2:
-        return None
+    args = _flatten(operators.OR, node)
     dm = None
     eq_node = None
     for a in args:
         if not a.is_equals():
-            return None
+            continue
         l, r = a.arg(0), a.arg(1)
         if _int_constant(l) == 0 and r.is_symbol() and "diff_marker" in r.symbol_name():
             if dm is not None:
@@ -278,9 +289,12 @@ def _match_constraint(node: FNode, qvar: FNode):
                 return None
             dm = l
             continue
-        if eq_node is not None:
-            return None
-        eq_node = a
+        inner_try = _unwrap_zero_mod_eq(a)
+        if inner_try is not None and _match_inner_with_qvar(inner_try, qvar) is not None:
+            if eq_node is not None:
+                return None
+            eq_node = a
+            continue
     if dm is None or eq_node is None:
         return None
     inner = _unwrap_zero_mod_eq(eq_node)
@@ -293,19 +307,37 @@ def _match_constraint(node: FNode, qvar: FNode):
     return {"dm": dm, "data": b, "data_offset": off, "cmp": cmp}
 
 
-def _diff_marker_index(sym: FNode) -> int | None:
-    """Extract the limb index ``N`` from a ``...diff_marker__N...`` symbol name."""
+def _diff_marker_limb_and_gadget(sym: FNode) -> tuple[int, int] | None:
+    """Parse ``diff_marker__{limb}_{gadget}`` (OpenVM multi less-than tracks).
+
+    Legacy single-track names ``diff_marker__N`` (no ``_gadget`` suffix) use
+    gadget ``0``. Returns ``(limb, gadget)`` or ``None``.
+    """
+    if not sym.is_symbol():
+        return None
     name = sym.symbol_name()
     i = name.find("diff_marker__")
     if i < 0:
         return None
-    rest = name[i + len("diff_marker__"):]
-    j = 0
-    while j < len(rest) and rest[j].isdigit():
-        j += 1
-    if j == 0:
+    rest = name[i + len("diff_marker__") :]
+    m = re.match(r"(\d+)_(\d+)", rest)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m2 = re.match(r"(\d+)", rest)
+    if m2:
+        return int(m2.group(1)), 0
+    return None
+
+
+def _diff_val_gadget(sym: FNode) -> int | None:
+    """Gadget/track id from ``diff_val_<k>@…`` (``None`` if absent)."""
+    if not sym.is_symbol():
         return None
-    return int(rest[:j])
+    n = _strip_prefix(sym.symbol_name())
+    m = re.search(r"diff_val_(\d+)", n)
+    if not m:
+        return None
+    return int(m.group(1))
 
 
 def _build_skolem(matches: dict[int, dict], cmp: FNode, p: int) -> FNode:
@@ -386,20 +418,85 @@ def _strip_prefix(name: str) -> str:
     return name
 
 
+def _b_row_suffix_for_diff_val_gadget(gadget: int) -> int:
+    """Second index on ``b__{{limb}}_{{row}}`` symbols for OpenVM less-than gadget ``g``.
+
+    Encodings use ``diff_val_1`` / ``cmp_result_1`` / ``diff_marker__*_1`` together
+    with ``b__*_0`` (row ``0``), and ``diff_val_2`` with ``b__*_2``, etc.
+    """
+    if gadget <= 0:
+        return 0
+    return 2 * (gadget - 1)
+
+
+def _openvm_bundle_from_named_limbs(body: FNode, dv: FNode) -> tuple[dict[int, dict], FNode] | None:
+    """Recover limb symbols when ``DiffMarkerConstraint`` products were rewritten away.
+
+    OpenVM / encoder dumps still use consistent names ``b__{{limb}}_{{g}}``,
+    ``diff_marker__{{limb}}_{{g}}``, ``cmp_result_{{g}}`` for gadget ``g``,
+    matching ``diff_val_{{g}}``.  If all nine appear under ``body``, build the
+    same ``matches`` map :func:`_build_skolem` expects.
+    """
+    g = _diff_val_gadget(dv)
+    if g is None:
+        return None
+    p = ARGS().field_type.value
+    row = _b_row_suffix_for_diff_val_gadget(g)
+    cmp_re = re.compile(rf"^cmp_result_{g}@")
+    dm_re = re.compile(rf"^diff_marker__([0-3])_{g}@")
+    b_re = re.compile(rf"^b__([0-3])_{row}@")
+    cmp_sym = None
+    dms: dict[int, FNode] = {}
+    bs: dict[int, FNode] = {}
+    for n in _iter_nodes(body):
+        if not n.is_symbol():
+            continue
+        st = _strip_prefix(n.symbol_name())
+        if cmp_re.match(st):
+            cmp_sym = n
+        m = dm_re.match(st)
+        if m:
+            dms[int(m.group(1))] = n
+        m = b_re.match(st)
+        if m:
+            bs[int(m.group(1))] = n
+    if cmp_sym is None or set(dms.keys()) != {0, 1, 2, 3} or set(bs.keys()) != {0, 1, 2, 3}:
+        return None
+    matches: dict[int, dict] = {}
+    for i in range(4):
+        off = (p - 1) % p if i == 0 else 0
+        matches[i] = {
+            "dm": dms[i],
+            "data": bs[i],
+            "data_offset": off,
+            "cmp": cmp_sym,
+        }
+    return matches, cmp_sym
+
+
 def _find_and_build_witnesses(body: FNode, diff_val_vars):
     """Match ``DiffMarkerConstraint`` patterns for each ``diff_val`` variable
     and return ``(diff_val_var, matches, cmp_var)`` triples for successful matches.
     """
     results = []
     for dv in diff_val_vars:
+        gadget = _diff_val_gadget(dv)
         matches: dict[int, dict] = {}
         cmp_var = None
         for node in _iter_nodes(body):
             m = _match_constraint(node, dv)
             if m is None:
                 continue
-            idx = _diff_marker_index(m["dm"])
-            if idx is None or idx not in (0, 1, 2, 3):
+            lt = _diff_marker_limb_and_gadget(m["dm"])
+            if lt is None:
+                continue
+            idx, mg = lt
+            if idx not in (0, 1, 2, 3):
+                continue
+            if gadget is not None:
+                if mg != gadget:
+                    continue
+            elif mg != 0:
                 continue
             expected_off = (ARGS().field_type.value - 1) % ARGS().field_type.value if idx == 0 else 0
             if m["data_offset"] != expected_off:
@@ -415,6 +512,10 @@ def _find_and_build_witnesses(body: FNode, diff_val_vars):
                 matches[idx] = m
         if cmp_var is not None and set(matches.keys()) == {0, 1, 2, 3}:
             results.append((dv, matches, cmp_var))
+            continue
+        named = _openvm_bundle_from_named_limbs(body, dv)
+        if named is not None:
+            results.append((dv, named[0], named[1]))
     return results
 
 
@@ -435,7 +536,14 @@ def contribute(skolem_map, body: FNode) -> None:
         return
 
     p = ARGS().field_type.value
-    for dv, matches, cmp_var in _find_and_build_witnesses(body, targets):
+    results = _find_and_build_witnesses(body, targets)
+    if not results:
+        logging.debug(
+            "skolem rules: forall has diff_val qvar(s) but no complete 4-limb "
+            "DiffMarkerConstraint match (post-rewrite Or may be non-binary or "
+            "inner (+ (* limb sign) diff_val) shape changed); not pinning via rules"
+        )
+    for dv, matches, cmp_var in results:
         skolem = _build_skolem(matches, cmp_var, p)
         skolem_map.pin(dv, skolem, source="rules")
         for dm_var, dm_skolem in _build_marker_skolems(matches):

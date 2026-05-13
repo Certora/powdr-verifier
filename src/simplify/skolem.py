@@ -102,8 +102,6 @@ class _SkolemWalker(IdentityDagWalker):
 
     def walk_forall(self, formula, args, **kwargs):
         body = args[0]
-        if not body.is_or():
-            return formula
         qvars = list(formula.quantifier_vars())
         self.qvar_sets.append(set(qvars))
         m = SkolemMap(qvars)
@@ -120,14 +118,18 @@ class _SkolemWalker(IdentityDagWalker):
         new_disjuncts = m.emit_disjuncts()
         if not new_disjuncts:
             return formula
-        return ForAll(qvars, Or(*body.args(), *new_disjuncts))
+        if body.is_or():
+            return ForAll(qvars, Or(*body.args(), *new_disjuncts))
+        return ForAll(qvars, Or(body, *new_disjuncts))
 
 
 def simplify_skolem(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     """Append skolem-map disjuncts to every disjunctive ``forall`` body.
 
-    See the module docstring for the full reasoning. The pass is a no-op
-    on forall nodes whose body is not a disjunction (run after ``nnf``).
+    See the module docstring for the full reasoning. Forall bodies that are
+    not a top-level ``Or`` (e.g. wrapped in ``let``) still run contributors
+    over the full subtree; any pins are appended as extra ``Or`` disjuncts
+    around the whole body (run after ``nnf``).
     Must run before ``simplify_lift_forall``.
     """
     declared = skolem_names.collect_declared_symbols(smt_script)
