@@ -55,10 +55,27 @@ def basic_stats() -> str:
         LIMIT 5
         """
     )
+    fastest_isqf_not_qf = query(
+        """
+        SELECT v.input1, v.input2, v.running_time, v.size_bytes
+        FROM verification_steps v
+        WHERE v.running_time IS NOT NULL
+          AND EXISTS (
+              SELECT 1
+              FROM substeps s
+              WHERE s.verification_step_id = v.id
+                AND s.name = 'isqf'
+                AND s.status = 'not-qf'
+          )
+        ORDER BY v.running_time ASC
+        LIMIT 5
+        """
+    )
     selected_jobs = [
         *[("wrong", *row) for row in fastest_unexpected_sat],
         *[("unknown", *row) for row in fastest_unknown],
         *[("timeout", *row) for row in smallest_timed_out],
+        *[("not-qf", *row) for row in fastest_isqf_not_qf],
     ]
     selected_jobs.sort(
         key=lambda r: float(r[3]) if r[3] is not None else float("-inf"),
@@ -153,6 +170,8 @@ def _badge_kind(kind: str) -> str:
         css = "text-bg-danger"
     elif kind == "unknown":
         css = "text-bg-warning"
+    elif kind == "not-qf":
+        css = "text-bg-info"
     else:
         css = "text-bg-dark"
     return f'<span class="badge {css}">{html.escape(kind)}</span>'
