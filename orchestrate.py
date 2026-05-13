@@ -22,7 +22,7 @@ from src.report.dumpers import ActionDumper, set_report_dir
 
 DATA_DIR = Path.cwd() / "data"
 POWDR_DIR = Path.cwd() / "powdr"
-VERIFIER_DIR = Path.cwd() / "verifier"
+VERIFIER_DIR = Path(__file__).resolve().parent
 set_report_dir(Path.cwd() / "reports")
 
 if not DATA_DIR.exists():
