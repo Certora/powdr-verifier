@@ -53,6 +53,8 @@ class SkolemMap:
         """Pin ``q`` to ``expr``. Returns ``True`` if newly pinned."""
         if q not in self.qvars:
             return False
+        if q.get_type().is_array_type():
+            return False
         if q in self.pins:
             return False
         self.pins[q] = expr

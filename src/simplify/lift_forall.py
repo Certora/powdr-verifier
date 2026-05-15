@@ -15,6 +15,8 @@ def _match_lift_pair(d: FNode, qvars: frozenset[FNode]) -> tuple[FNode, FNode] |
             continue
         if vside not in qvars:
             continue
+        if vside.get_type().is_array_type():
+            continue
         if expr.get_free_variables() & qvars:
             continue
         return vside, eq

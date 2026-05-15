@@ -4,65 +4,76 @@ import z3
 
 from .utils import _string_to_script
 
-def simplify_z3(smt_script: script.SmtLibScript, args = []) -> script.SmtLibScript:
 
-    match args:
-        case []:
-            tactic = z3.Repeat(
-                z3.Then(
-                    "propagate-values",
-                    "elim-term-ite",
-                    "propagate-ineqs",
-                    "solve-eqs",
-                    "ctx-simplify",
-                )
-            )
-        case [t]:
-            tactic = z3.Tactic(t)
-        case [*t]:
-            tactic = z3.Then(*t)
+def _has_quantifier(formula: FNode) -> bool:
+  def walk(n: FNode) -> bool:
+    if n.is_quantifier():
+      return True
+    return any(walk(a) for a in n.args())
 
-    s = tactic.solver()
-    conv = Z3Converter(get_env(), s.ctx)
+  return walk(formula)
 
-    output = []
-    used_vars = set()
 
-    in_suffix = False
-    for cmd in smt_script:
-        if in_suffix:
-            output.append(cmd)
-            continue
-        match cmd.name:
-            case "set-info" | "set-logic" | "set-option" | "get-model" | "get-unsat-core" | "echo":
-                output.append(cmd)
-            case "declare-fun":
-                #output.append(cmd)
-                #decls[cmd.args[0].symbol_name()] = conv.walk_symbol(cmd.args[0])
-                pass
-            case "assert":
-                s.add(conv.convert(cmd.args[0]))
-            case "check-sat":
-                s.check()
-                cmds = _string_to_script(s.sexpr()).commands
-                for c in cmds:
-                    if c.name != "declare-fun":
-                        used_vars.update(c.args[0].get_free_variables())
-                output.extend(cmds)
-                output.append(cmd)
-                in_suffix = True
-            case _:
-                assert False, f"unexpected command: {cmd.name}"
-    
+def simplify_z3(smt_script: script.SmtLibScript, args=[]) -> script.SmtLibScript:
+  match args:
+    case []:
+      tactic = z3.Repeat(
+        z3.Then(
+          "propagate-values",
+          "elim-term-ite",
+          "propagate-ineqs",
+          "solve-eqs",
+          "ctx-simplify",
+        )
+      )
+    case [t]:
+      tactic = z3.Tactic(t)
+    case [*t]:
+      tactic = z3.Then(*t)
 
-    
-    res = script.SmtLibScript()
-    for o in output:
-        if o.name == "declare-fun":
-            if o.args[0] not in used_vars:
-                continue
-        if o.name == "assert":
-            if o.args[0].is_true():
-                continue
-        res.commands.append(o)
-    return res
+  s = tactic.solver()
+  conv = Z3Converter(get_env(), s.ctx)
+
+  prefix: list = []
+  assert_slots: list[tuple[str, script.SmtLibCommand]] = []
+  suffix: list = []
+  in_suffix = False
+  output: list = []
+
+  for cmd in smt_script:
+    if in_suffix:
+      suffix.append(cmd)
+      continue
+    match cmd.name:
+      case "set-info" | "set-logic" | "set-option" | "declare-fun" | "get-model" | "get-unsat-core" | "echo":
+        prefix.append(cmd)
+      case "assert":
+        if _has_quantifier(cmd.args[0]):
+          assert_slots.append(("quant", cmd))
+        else:
+          assert_slots.append(("ground", cmd))
+          s.add(conv.convert(cmd.args[0]))
+      case "check-sat":
+        s.check()
+        processed = _string_to_script(s.sexpr()).commands
+        ground_out: list[script.SmtLibCommand] = []
+        for c in processed:
+          if c.name == "assert" and not c.args[0].is_true():
+            ground_out.append(c)
+        output = list(prefix)
+        gi = 0
+        for kind, orig in assert_slots:
+          if kind == "quant":
+            output.append(orig)
+          else:
+            output.append(ground_out[gi])
+            gi += 1
+        output.extend(ground_out[gi:])
+        output.append(cmd)
+        in_suffix = True
+      case _:
+        assert False, f"unexpected command: {cmd.name}"
+
+  res = script.SmtLibScript()
+  res.commands = output + suffix
+  return res
