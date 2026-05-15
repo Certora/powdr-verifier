@@ -98,7 +98,7 @@ class XOrQuantifierSubstituter(substituter.Substituter):
     def walk_quantifier(self, formula, args, **kwargs):
         qvars = list(formula.quantifier_vars())
         qvarset = frozenset(qvars)
-        body = self.substitute(formula.arg(0))
+        body = args[0]
         local_terms = {
             term
             for term in _collect_xor_terms(body)

@@ -124,11 +124,11 @@ def verify():
                     output_relation,
                     additional_asserts=[Equals(is_valid_after, Int(1))],
                 )
+                map_sources = {**eliminations, **after_smt.derived, **before_smt.derived}
                 info = combine_setinfo(
-                    skolem_setinfo(soundness, eliminations),
+                    skolem_setinfo(soundness, map_sources),
                     shared_arrays_setinfo(shared_array_subs),
                 )
-
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(
                     soundness, status='unsat', extra_setinfo=info.cmds, extra_decls=info.decls
@@ -182,8 +182,9 @@ def verify():
                 soundness = encoding(
                     after_smt, before_smt, var1 - globals, input_relation, output_relation
                 )
+                map_sources = {**eliminations, **after_smt.derived, **before_smt.derived}
                 info = combine_setinfo(
-                    skolem_setinfo(soundness, eliminations),
+                    skolem_setinfo(soundness, map_sources),
                     shared_arrays_setinfo(shared_array_subs),
                 )
 

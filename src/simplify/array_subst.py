@@ -147,7 +147,7 @@ def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript
                     subs[rb] = ra
                     drop_formulas.add(id(eq))
 
-    dead_syms = set()
+    dead_syms: set[FNode] = set()
     if subs:
         for sym in list(subs.keys()):
             s = sym
@@ -155,6 +155,12 @@ def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript
                 dead_syms.add(s)
                 s = subs[s]
 
+    def _resolve(sym: FNode) -> FNode:
+        while sym in subs:
+            sym = subs[sym]
+        return sym
+
+    if subs:
         walker = _ArraySubstWalker(subs, env=get_env())
 
         def _rewrite_formula(f: FNode) -> FNode | None:
@@ -192,18 +198,20 @@ def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript
     # internally.
 
     if pin_assertions:
-        all_declared_set = set(all_declared.values())
+        alive = {sym for sym in all_declared.values() if sym not in dead_syms}
         check_sat_idx = next(
             (i for i, c in enumerate(smt_script.commands) if c.name == "check-sat"),
             len(smt_script.commands),
         )
         added = 0
         for eq in pin_assertions:
-            if eq.get_free_variables() <= all_declared_set:
-                cmd = script.SmtLibCommand(name="assert", args=[eq])
-                smt_script.commands.insert(check_sat_idx, cmd)
-                check_sat_idx += 1
-                added += 1
+            a, b = _resolve(eq.arg(0)), _resolve(eq.arg(1))
+            if a == b or a not in alive or b not in alive:
+                continue
+            cmd = script.SmtLibCommand(name="assert", args=[Equals(a, b)])
+            smt_script.commands.insert(check_sat_idx, cmd)
+            check_sat_idx += 1
+            added += 1
         logging.info(f"array-subst: added {added} shared assertions")
 
     if dead_syms:

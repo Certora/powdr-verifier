@@ -1,4 +1,44 @@
+from io import StringIO
+
 import z3
+from pysmt.shortcuts import And, Equals, ForAll, Int, Not, Symbol
+from pysmt.typing import INT
+
+from src.simplify.array_subst import simplify_array_subst
+from src.simplify.z3 import _is_shared_array_pin, simplify_z3
+from src.smt.utils import get_env, script
+
+
+def test_is_shared_array_pin():
+    before = Symbol("before-memory-0-mult", INT)
+    after = Symbol("after-memory-0-mult", INT)
+    assert _is_shared_array_pin(Equals(before, after))
+    assert not _is_shared_array_pin(Equals(before, Int(0)))
+
+
+def test_z3_propagate_preserves_shared_array_pins():
+    before = Symbol("before-memory-0-data0", INT)
+    after = Symbol("after-memory-0-data0", INT)
+    x = Symbol("before-a__0_0@1", INT)
+    smt_script = script.SmtLibScript()
+    smt_script.commands = [
+        script.SmtLibCommand("declare-fun", [before, INT]),
+        script.SmtLibCommand("declare-fun", [after, INT]),
+        script.SmtLibCommand("declare-fun", [x, INT]),
+        script.SmtLibCommand("assert", [Equals(x, Int(0))]),
+        script.SmtLibCommand("assert", [Equals(before, after)]),
+        script.SmtLibCommand("check-sat", []),
+    ]
+    out = simplify_z3(smt_script, ["propagate-values"])
+    pin_cmds = [
+        cmd
+        for cmd in out.commands
+        if cmd.name == "assert" and cmd.args[0].is_equals()
+        and _is_shared_array_pin(cmd.args[0])
+    ]
+    assert len(pin_cmds) == 1
+    assert pin_cmds[0].args[0] == Equals(before, after)
+
 
 def test_z3_solve_eqs():
     a = z3.Int('a')
