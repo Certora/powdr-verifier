@@ -1,6 +1,6 @@
 """Derived / elimination skolem contributor.
 
-Mirrors :mod:`.skolem_pclookup` and :mod:`.skolem_names`: not a
+Mirrors :mod:`.skolem_names`: not a
 standalone simplifier pass, just the :func:`contribute` function used
 by :mod:`.skolem` to add derived-column / elimination pins to a shared
 :class:`~.skolem.SkolemMap`.

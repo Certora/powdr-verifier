@@ -1,7 +1,7 @@
 """Shared helpers for the skolem-map simplifier.
 
 Pure utilities used by :mod:`.skolem` and the per-contributor modules
-(:mod:`.skolem_derived`, :mod:`.skolem_pclookup`, :mod:`.skolem_names`,
+(:mod:`.skolem_derived`, :mod:`.skolem_names`,
 :mod:`.skolem_rules`):
 
 * :func:`emit_pin_setinfo` - verifier-side serialization of a single

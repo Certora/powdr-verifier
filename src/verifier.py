@@ -20,7 +20,7 @@ def encoding(before, after, qvars, input_relation, output_relation, additional_a
 
     The forall body is the negation of (after.constraints AND
     input_relation AND output_relation); the ``simplify_skolem`` pass
-    later attaches per-qvar witnesses (rules / derived / pclookup /
+    later attaches per-qvar witnesses (rules / derived /
     same-name) as ``Not(q = expr)`` disjuncts which ``simplify_lift_forall``
     hoists out as top-level assertions.
     """
@@ -97,7 +97,7 @@ def verify():
                 before_smt, after_smt, var2 - globals, input_relation, output_relation
             )
             info = combine_setinfo(
-                skolem_setinfo(completeness, after_conv, after_smt.derived),
+                skolem_setinfo(completeness, after_smt.derived),
                 shared_arrays_setinfo(shared_array_subs, reverse=True),
             )
 
@@ -125,7 +125,7 @@ def verify():
                     additional_asserts=[Equals(is_valid_after, Int(1))],
                 )
                 info = combine_setinfo(
-                    skolem_setinfo(soundness, before_conv, eliminations),
+                    skolem_setinfo(soundness, eliminations),
                     shared_arrays_setinfo(shared_array_subs),
                 )
 
@@ -183,7 +183,7 @@ def verify():
                     after_smt, before_smt, var1 - globals, input_relation, output_relation
                 )
                 info = combine_setinfo(
-                    skolem_setinfo(soundness, before_conv, eliminations),
+                    skolem_setinfo(soundness, eliminations),
                     shared_arrays_setinfo(shared_array_subs),
                 )
 

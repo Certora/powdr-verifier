@@ -17,16 +17,12 @@ Each *contributor* lives in its own module:
   1. :mod:`.skolem_rules`    - OpenVM ``EqualZeroCheck``.
   2. :mod:`.skolem_derived`  - eliminations / derived-column pins
      (verifier emits ``:skolem-derived-N`` set-info entries).
-  3. :mod:`.skolem_pclookup` - pc-lookup pre-resolved pins (verifier
-     emits ``:skolem-pclookup-N`` set-info entries; resolution has to
-     happen at encode time because it uses the encoder's incremental
-     constraint solver).
-  4. :mod:`.skolem_names`    - same-name fallback.
+  3. :mod:`.skolem_names`    - same-name fallback.
 
 For every ``forall`` whose body is an ``Or`` (post-NNF) we build a
 fresh :class:`SkolemMap` over its qvars and run the contributors in
-the order above (most-specific to least-specific so the first three
-win over the same-name fallback; within a contributor, the first pin
+the order above (most-specific to least-specific so derived wins over
+the same-name fallback; within a contributor, the first pin
 for a qvar is kept). Every pinned qvar is appended to the body as
 ``Not(q = wrap_mod(expr))`` (or ``Not(q = expr)`` for non-int types);
 ``simplify_lift_forall`` later hoists each disjunct to a top-level
@@ -36,7 +32,7 @@ assertion, removing ``q`` from the universal.
 from ..smt.utils import *
 from ..smt_backends.pysmt import wrap_mod
 
-from . import skolem_derived, skolem_names, skolem_pclookup, skolem_rules, skolem_witness
+from . import skolem_derived, skolem_names, skolem_rules, skolem_witness
 
 
 class SkolemMap:
@@ -87,7 +83,6 @@ class _SkolemWalker(IdentityDagWalker):
         self,
         declared: dict[str, FNode],
         derived: list[FNode],
-        pclookup: list[FNode],
         witness_candidates: list,
         *args,
         **kwargs,
@@ -95,7 +90,6 @@ class _SkolemWalker(IdentityDagWalker):
         super().__init__(*args, **kwargs)
         self.declared = declared
         self.derived = derived
-        self.pclookup = pclookup
         self.witness_candidates = witness_candidates
         self.applied: dict[str, int] = {}
         self.qvar_sets: list[set[FNode]] = []
@@ -108,7 +102,6 @@ class _SkolemWalker(IdentityDagWalker):
 
         skolem_rules.contribute(m, body)
         skolem_derived.contribute(m, self.derived)
-        skolem_pclookup.contribute(m, self.pclookup)
         skolem_witness.contribute(m, body, self.witness_candidates)
         skolem_names.contribute(m, self.declared)
 
@@ -134,10 +127,9 @@ def simplify_skolem(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     """
     declared = skolem_names.collect_declared_symbols(smt_script)
     derived = skolem_derived.collect_pins(smt_script)
-    pclookup = skolem_pclookup.collect_pins(smt_script)
     witness_candidates = skolem_witness.collect_candidates(smt_script)
 
-    w = _SkolemWalker(declared, derived, pclookup, witness_candidates, env=get_env())
+    w = _SkolemWalker(declared, derived, witness_candidates, env=get_env())
     for cmd in smt_script:
         if cmd.name == "assert":
             cmd.args[0] = keep_comment(w.walk(cmd.args[0]), cmd.args[0])
