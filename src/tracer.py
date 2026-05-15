@@ -12,8 +12,9 @@ def trace():
 
     filename = ARGS().input
     input = load_apc_dump(filename)
-    out_core = filename.parent / f"trace-{filename.stem}.core.smt2"
-    out_sanity = filename.parent / f"trace-{filename.stem}.sanity.smt2"
+    out_dir = ARGS().output.parent if ARGS().output is not None else filename.parent
+    out_core = out_dir / f"trace-{filename.stem}.core.smt2"
+    out_sanity = out_dir / f"trace-{filename.stem}.sanity.smt2"
 
     with Action("tracer") as action:
         action += {"outputs": [out_core, out_sanity]}

@@ -25,6 +25,7 @@ from .plots import (
     verified_over_time,
 )
 from .action import Action
+from ..paths import DATA_DIR
 from ..utils.args import ARGS
 from ..utils.io import load_json
 from ..utils.inputs import load_files_by_block, load_verification_steps
@@ -35,7 +36,7 @@ def _title_attr(s: str) -> str:
 
 
 def report_data_dir(report_dir: Path) -> Path:
-    return (Path(__file__).parent.parent.parent.parent / "data" / report_dir.name).resolve()
+    return (DATA_DIR / report_dir.name).resolve()
 
 
 @dataclasses.dataclass

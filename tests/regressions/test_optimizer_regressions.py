@@ -10,6 +10,7 @@ import pytest
 
 WORKSPACE = Path(__file__).resolve().parents[3]
 VERIFIER = WORKSPACE / "verifier"
+POWDR_DUMPS = VERIFIER / "powdr-dumps"
 MAIN = VERIFIER / "main.py"
 PYTHON = VERIFIER / ".venv" / "bin" / "python"
 TACTIC = "nnf:isolate:lift:witness:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:pretty"
@@ -85,7 +86,7 @@ def run_checked(command: list[str | Path], timeout: int = 180) -> None:
 
 @pytest.mark.parametrize("case", CASES, ids=[case.id for case in CASES])
 def test_optimizer_regression(case: RegressionCase):
-    data_dir = WORKSPACE / "data" / case.dataset
+    data_dir = POWDR_DUMPS / case.dataset
     if not data_dir.exists():
         pytest.skip(f"missing benchmark data: {data_dir}")
 
@@ -148,7 +149,7 @@ REPLAY_CASES = [
 
 @pytest.mark.parametrize("case", REPLAY_CASES, ids=[case.id for case in REPLAY_CASES])
 def test_orchestrate_powdr_opt_replay_matches_pipeline(case: ReplayCase):
-    data_dir = WORKSPACE / "data" / case.dataset
+    data_dir = POWDR_DUMPS / case.dataset
     if not data_dir.exists():
         pytest.skip(f"missing benchmark data: {data_dir}")
 

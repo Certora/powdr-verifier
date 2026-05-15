@@ -8,6 +8,7 @@ if [ "$#" -ne 1 ]; then
 fi
 
 scenario="$1"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 cd ~/
 
@@ -19,24 +20,24 @@ source .venv/bin/activate
 
 case "$scenario" in
     keccak)
-        rm -rf data/guest-keccak/ reports/guest-keccak/
-        python3 verifier/orchestrate.py powdr-guest guest-keccak
-        python3 verifier/orchestrate.py -j28 verify guest-keccak : :
+        rm -rf "$script_dir/powdr-dumps/guest-keccak/" "$script_dir/reports/guest-keccak/"
+        python3 "$script_dir/orchestrate.py" powdr-guest guest-keccak
+        python3 "$script_dir/orchestrate.py" -j28 verify guest-keccak : :
         ;;
     pairing)
         rm -rf \
-            data/guest-pairing/ \
-            reports/guest-pairing/ \
-            data/guest-pairing-selection/ \
-            reports/guest-pairing-selection/
-        python3 verifier/orchestrate.py powdr-guest guest-pairing
-        python3 verifier/select_blocks.py data/guest-pairing
-        python3 verifier/orchestrate.py -j28 verify guest-pairing-selection : :
+            "$script_dir/powdr-dumps/guest-pairing/" \
+            "$script_dir/reports/guest-pairing/" \
+            "$script_dir/powdr-dumps/guest-pairing-selection/" \
+            "$script_dir/reports/guest-pairing-selection/"
+        python3 "$script_dir/orchestrate.py" powdr-guest guest-pairing
+        python3 "$script_dir/select_blocks.py" "$script_dir/powdr-dumps/guest-pairing"
+        python3 "$script_dir/orchestrate.py" -j28 verify guest-pairing-selection : :
         ;;
     reth)
-        find data/reth-selection/ -name '*.smt2' -delete
-        rm -rf reports/reth-selection/
-        python3 verifier/orchestrate.py -j28 verify reth-selection : :
+        find "$script_dir/data/reth-selection/" -name '*.smt2' -delete
+        rm -rf "$script_dir/reports/reth-selection/"
+        python3 "$script_dir/orchestrate.py" -j28 verify reth-selection : :
         ;;
     *)
         echo "unknown scenario: $scenario" >&2

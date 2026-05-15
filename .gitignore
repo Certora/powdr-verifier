@@ -1,2 +1,9 @@
 __pycache__/
 docs/
+powdr-dumps/
+data/
+reports/
+reports-cmp-old/
+report-*.html
+benchmark-results.json
+cprofile.prof
