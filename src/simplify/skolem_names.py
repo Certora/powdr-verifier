@@ -10,8 +10,8 @@ For every qvar ``q`` of the current forall, the contributor:
 * Looks up another script-level declared symbol ``q'`` with the same
   stripped name.
 * If ``q'`` exists, ``q`` is not also a qvar of this forall, ``q`` is
-  not already pinned by a more specific contributor (rules / derived /
-  pclookup), and ``q`` and ``q'`` agree on type, pins ``q := q'`` on the
+  not already pinned by a more specific contributor (rules / derived),
+  and ``q`` and ``q'`` agree on type, pins ``q := q'`` on the
   :class:`SkolemMap`.
 
 This replaces ``ModelMapBuilder.__heuristic_same_name`` which used to
