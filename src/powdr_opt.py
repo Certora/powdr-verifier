@@ -1,9 +1,8 @@
 import subprocess
 from pathlib import Path
 
+from .paths import POWDR_DIR
 from .utils.args import ARGS
-
-POWDR_DIR = Path(__file__).resolve().parents[2] / "powdr"
 
 
 def run_powdr_opt() -> None:

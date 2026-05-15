@@ -176,7 +176,7 @@ jobs:
       run: |
         for test in ${{ env.TEST_CASES }}; do
           echo "::group::run verifier on ${test}"
-          python3 verifier/main.py report reports/${test} report_${test}.html || exit 1
+          python3 verifier/main.py report verifier/reports/${test} report_${test}.html || exit 1
           echo "::endgroup::"
         done
     

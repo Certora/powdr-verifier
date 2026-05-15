@@ -19,16 +19,18 @@ from src.utils.utils import s2range
 from src.utils.profiling import Profile
 from src.report.action import Action
 from src.report.dumpers import ActionDumper, set_report_dir
+from src.paths import (
+    POWDR_DIR,
+    POWDR_DUMPS_DIR,
+    REPORTS_DIR,
+    VERIFIER_DIR,
+    data_path_for_dump,
+    ensure_layout,
+)
 
-DATA_DIR = Path.cwd() / "data"
-POWDR_DIR = Path.cwd() / "powdr"
-VERIFIER_DIR = Path(__file__).resolve().parent
-set_report_dir(Path.cwd() / "reports")
-
-if not DATA_DIR.exists():
-    DATA_DIR.mkdir(parents=True)
+ensure_layout()
+set_report_dir(REPORTS_DIR)
 assert POWDR_DIR.exists()
-assert VERIFIER_DIR.exists()
 
 _ARGS = None
 PYTHON = sys.executable
@@ -36,7 +38,7 @@ PYTHON = sys.executable
 def load_files_by_block(args):
     files = defaultdict(dict)
     __FILENAMERE = re.compile("apc_candidate_(\\d+)_(\\d+)(.*)\\.json")
-    for file in (DATA_DIR / args.test).glob("apc_candidate_*.json"):
+    for file in (POWDR_DUMPS_DIR / args.test).glob("apc_candidate_*.json"):
         if ".powdr-opt-" in file.stem:
             continue
         if m := __FILENAMERE.match(file.name):
@@ -46,7 +48,7 @@ def load_files_by_block(args):
                 assert step not in files[block]
                 files[block][step] = file
                 if "eliminations" not in files[block]:
-                    tmp = DATA_DIR / args.test / f"apc_candidate_{block}_substitutions.json"
+                    tmp = POWDR_DUMPS_DIR / args.test / f"apc_candidate_{block}_substitutions.json"
                     if tmp.exists():
                         files[block]["eliminations"] = tmp
     
@@ -177,7 +179,7 @@ def with_patch(func):
 
 @with_patch
 def run_powdr(test, dirsuffix = ""):
-    dir = DATA_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True) / f"{test}{dirsuffix}"
+    dir = POWDR_DUMPS_DIR.relative_to(POWDR_DIR / "openvm", walk_up=True) / f"{test}{dirsuffix}"
     cmd = [
         f"APC_EXPORT_PATH={dir}",
         "APC_EXPORT_LEVEL=3",
@@ -188,7 +190,7 @@ def run_powdr(test, dirsuffix = ""):
 
 @with_patch
 def run_powdr_guest(test, dirsuffix = ""):
-    dir = DATA_DIR.relative_to(POWDR_DIR, walk_up=True) / f"{test}{dirsuffix}"
+    dir = POWDR_DUMPS_DIR.relative_to(POWDR_DIR, walk_up=True) / f"{test}{dirsuffix}"
     cmd = [
         f"APC_EXPORT_PATH={dir}",
         "APC_EXPORT_LEVEL=3",
@@ -201,7 +203,8 @@ def run_trace(*files):
     for f in files:
         logging.warning(f"running tracer on {f.relative_to(Path.cwd())}")
         with ActionDumper("trace", _ARGS.test, f) as dump:
-            res_trace = __run_main("trace", f, f.parent / f"trace-{f.stem}.smt2", parse_output=True)
+            trace_smt2 = data_path_for_dump(f, f"trace-{f.stem}.smt2")
+            res_trace = __run_main("trace", f, trace_smt2, parse_output=True)
             dump += res_trace
             for file in sorted(res_trace.outputs):
                 with dump.action("check") as check:
@@ -218,7 +221,7 @@ def run_diff(*pairs):
 
 def run_evaluate(first, *files):
     for f in files:
-        model = f.parent / f"trace-{f.stem}.model"
+        model = data_path_for_dump(f, f"trace-{f.stem}.model")
         if not model.exists():
             logging.warning(f"can not eval {f} because there is no model")
             continue
@@ -231,7 +234,7 @@ def run_evaluate(first, *files):
 
 def run_eval(*files):
     for f in files:
-        model = f.parent / f"trace-{f.stem}.model"
+        model = data_path_for_dump(f, f"trace-{f.stem}.model")
         if not model.exists():
             logging.warning(f"can not eval {f} because there is no model")
             continue
@@ -266,7 +269,7 @@ def run_verify_opt(files: dict, pairs):
 def run_verify(a, b):
     with ActionDumper("verify", _ARGS.test, a, b) as a_verify:
         logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
-        first = a.parent / f"verify-{a.stem}-{b.stem}.smt2"
+        first = data_path_for_dump(a, f"verify-{a.stem}-{b.stem}.smt2")
         res_verify = __run_main("verify", a, b, first, parse_output=True)
         res_verify.name = "verify-encode"
         a_verify += res_verify
@@ -288,12 +291,12 @@ if __name__ == '__main__':
     match args.command:
         case 'powdr':
             if args.clean:
-                shutil.rmtree(DATA_DIR / args.test)
+                shutil.rmtree(POWDR_DUMPS_DIR / args.test, ignore_errors=True)
             run_powdr(args.test)
             exit(0)
         case 'powdr-guest':
             if args.clean:
-                shutil.rmtree(DATA_DIR / args.test)
+                shutil.rmtree(POWDR_DUMPS_DIR / args.test, ignore_errors=True)
             run_powdr_guest(args.test)
             exit(0)
     
