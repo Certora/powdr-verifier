@@ -20,7 +20,7 @@ def rewrite_choice(node: Expr) -> Expr:
         case e, c:
             factors = factor(e)
             if isinstance(factors, Mul):
-                factors = [a for a in factors.args if not a.is_Integer]
+                factors = list(factors.args)
                 if len(factors) > 1:
                     return Or(*[Eq(Mod(normalize(f), c), 0) for f in factors])
     return None
