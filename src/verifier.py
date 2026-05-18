@@ -85,16 +85,21 @@ def verify():
         var1 = collect_variables(before_smt)
         var2 = collect_variables(after_smt)
         globals = before_smt.globals | after_smt.globals
-        auxiliaries = frozenset.union(frozenset(), *(
-            before_conv.bus_interaction_encoder.get_auxiliaries()
-            | after_conv.bus_interaction_encoder.get_auxiliaries()
-        ).values())
+        auxiliaries = frozenset.union(
+            frozenset(),
+            *before_conv.bus_interaction_encoder.get_auxiliaries().values(),
+            *after_conv.bus_interaction_encoder.get_auxiliaries().values(),
+        )
 
         outfile = ARGS().output.with_suffix(".completeness.smt2")
         with open(outfile, "w") as dump:
             dump.write(";; completeness check\n")
             completeness = encoding(
-                before_smt, after_smt, var2 - globals, input_relation, output_relation
+                before_smt,
+                after_smt,
+                var2 - globals,
+                input_relation,
+                output_relation,
             )
             info = combine_setinfo(
                 skolem_setinfo(completeness, after_smt.derived),
@@ -180,7 +185,11 @@ def verify():
             with open(outfile, "w") as dump:
                 dump.write(";; soundness check\n")
                 soundness = encoding(
-                    after_smt, before_smt, var1 - globals, input_relation, output_relation
+                    after_smt,
+                    before_smt,
+                    var1 - globals,
+                    input_relation,
+                    output_relation,
                 )
                 map_sources = {**eliminations, **after_smt.derived, **before_smt.derived}
                 info = combine_setinfo(
