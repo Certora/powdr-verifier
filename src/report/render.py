@@ -25,7 +25,7 @@ from .plots import (
     verified_over_time,
 )
 from .action import Action
-from ..paths import DATA_DIR
+from ..paths import DATA_DIR, POWDR_DUMPS_DIR
 from ..utils.args import ARGS
 from ..utils.io import load_json
 from ..utils.inputs import load_files_by_block, load_verification_steps
@@ -210,7 +210,7 @@ def to_tree_node(data: Action) -> TreeNode:
     )
 
 def collect(basedir: Path):
-    inputdir = report_data_dir(basedir)
+    inputdir = (POWDR_DUMPS_DIR / basedir.name).resolve()
     data = []
     for file in sorted(basedir.glob("**/*.json")):
         try:
@@ -225,7 +225,7 @@ def collect(basedir: Path):
         if node.name == "verify":
             assert len(node.inputs) == 2
             i1, i2 = node.inputs
-            assert (i1, i2) in results
+            assert (i1, i2) in results, f"Verification step not found for inputs {i1} and {i2}"
             node.block, node.passname = results[(i1, i2)]
             results[(i1, i2)] = node
             step_id = insert_verification_row(i1, i2, node)
