@@ -1,12 +1,7 @@
-from io import StringIO
-
 import z3
-from pysmt.shortcuts import And, Equals, ForAll, Int, Not, Symbol
-from pysmt.typing import INT
 
-from src.simplify.array_subst import simplify_array_subst
+from src.smt.utils import *
 from src.simplify.z3 import _is_shared_array_pin, simplify_z3
-from src.smt.utils import get_env, script
 
 
 def test_is_shared_array_pin():
@@ -14,6 +9,49 @@ def test_is_shared_array_pin():
     after = Symbol("after-memory-0-mult", INT)
     assert _is_shared_array_pin(Equals(before, after))
     assert not _is_shared_array_pin(Equals(before, Int(0)))
+
+
+def _script_with_check_sat(commands):
+    smt_script = script.SmtLibScript()
+    smt_script.commands = list(commands) + [script.SmtLibCommand("check-sat", [])]
+    return smt_script
+
+
+def test_z3_simplify_folds_not_equal_constants():
+    x = Symbol("x", INT)
+    smt_script = _script_with_check_sat(
+        [
+            script.SmtLibCommand("declare-fun", [x, INT]),
+            script.SmtLibCommand(
+                "assert",
+                [Or(Not(Equals(Int(0), Int(0))), Equals(x, Int(1)))],
+            ),
+        ]
+    )
+    out = simplify_z3(smt_script, ["simplify"])
+    assert_cmds = [c for c in out.commands if c.name == "assert"]
+    assert assert_cmds[-1].args[0] == Equals(x, Int(1))
+
+
+def test_z3_simplify_preserves_mod_shape():
+    x = Symbol("x", INT)
+    p = Int(2013265921)
+    inner = Not(Equals(Mod(Times(x, Int(2)), p), Int(0)))
+    smt_script = _script_with_check_sat(
+        [
+            script.SmtLibCommand("declare-fun", [x, INT]),
+            script.SmtLibCommand("assert", [inner]),
+        ]
+    )
+    out = simplify_z3(smt_script, ["simplify"])
+    assert_cmds = [c for c in out.commands if c.name == "assert"]
+    out_f = assert_cmds[-1].args[0]
+    assert out_f.is_not() and out_f.arg(0).is_equals()
+    eq = out_f.arg(0)
+    lhs, rhs = eq.args()
+    assert lhs.is_mod() and rhs.is_int_constant(0)
+    mod_e, mod_m = lhs.args()
+    assert mod_m == p and mod_e.get_free_variables() == {x}
 
 
 def test_z3_propagate_preserves_shared_array_pins():

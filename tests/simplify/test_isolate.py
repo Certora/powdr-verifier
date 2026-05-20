@@ -20,4 +20,9 @@ def test_isolate_adds_liftable_model_for_local_quantified_var():
     out = lifted.commands[-1].args[0]
 
     assert not out.is_forall()
-    assert x not in out.get_free_variables()
+    pins = [
+        c.args[0]
+        for c in lifted.commands
+        if c.name == "assert" and c.args[0].is_equals() and c.args[0].arg(0) == x
+    ]
+    assert pins
