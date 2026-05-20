@@ -12,6 +12,8 @@ def connect_db(uri: Path | str) -> sqlite3.Connection:
     global __DB
     if __DB is not None:
         __DB.close()
+    if isinstance(uri, Path):
+        uri.parent.mkdir(parents=True, exist_ok=True)
     __DB = sqlite3.connect(uri if isinstance(uri, str) else str(uri))
     __DB.execute("PRAGMA foreign_keys = ON")
     return __DB
