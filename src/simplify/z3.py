@@ -92,15 +92,19 @@ def simplify_z3(smt_script: script.SmtLibScript, args=[]) -> script.SmtLibScript
             gi += 1
           else:
             logging.warning(
-              "z3-propagate: fewer Z3 ground asserts than expected; "
+              "z3-replay: fewer Z3 ground asserts than expected; "
               "keeping original for %s",
               orig,
             )
             output.append(orig)
-        if gi != len(ground_out):
-          logging.warning(
-            "z3-propagate: %d extra Z3 ground asserts discarded",
-            len(ground_out) - gi,
+        extra = len(ground_out) - gi
+        while gi < len(ground_out):
+          output.append(ground_out[gi])
+          gi += 1
+        if extra > 0:
+          logging.info(
+              "z3-replay: appended %d extra Z3 ground assert(s) after replay",
+              extra,
           )
         output.append(cmd)
         in_suffix = True
