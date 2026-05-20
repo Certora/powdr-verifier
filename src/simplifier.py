@@ -6,6 +6,7 @@ from .smt_backends.pysmt import pretty_print_smtlib, serialize_smtlib
 from .utils.args import ARGS
 from .utils.io import open_file
 
+from .simplify.witness import simplify_witnesses
 from .simplify import (
     check_isqf,
     simplify_andify,
@@ -49,6 +50,8 @@ def simplify():
             with action.action(t) as subaction:
                 t,*args = t.split("-", 1)
                 match t:
+                    case "witness":
+                        smt_script = simplify_witnesses(smt_script)
                     case "array_subst":
                         smt_script = simplify_array_subst(smt_script)
                     case "andify":
