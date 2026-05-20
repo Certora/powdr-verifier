@@ -139,7 +139,13 @@ def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
     cmdstr = " ".join(map(str, cmd))
     if parse_output:
         try:
-            result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, text=True, timeout=60)
+            result = subprocess.run(
+                cmd,
+                check=True,
+                stdout=subprocess.PIPE,
+                text=True,
+                timeout=60,
+            )
             return load_json(StringIO(result.stdout))
         except subprocess.TimeoutExpired:
             logging.error(f"timed out running {cmdstr}")
@@ -154,20 +160,13 @@ def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
     return None
 
 _DEFAULT_TACTIC = (
-    "nnf:skolem:isolate:lift:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:pretty"
-)
-_SOUNDNESS_TACTIC = (
-    "nnf:skolem:lift:array_subst:z3-propagate-values:isqf:bounds:rewrite:qxor:demod:pretty"
+    "nnf:constfold:skolem:isolate:lift:witness:array_subst:z3-propagate-values:isqf:bounds:rewrite:qxor:gxor:mod_inv:demod:constfold:pretty"
 )
 
 
 def __do_simplify(input, output, tactic=None):
     if tactic is None:
-        tactic = (
-            _SOUNDNESS_TACTIC
-            if ".soundness." in input.name
-            else _DEFAULT_TACTIC
-        )
+        tactic = _DEFAULT_TACTIC
     logging.info(f"simplifying with {tactic} {input.relative_to(Path.cwd())}")
     return __run_main("simplify", input, tactic, output, parse_output=True)
 
