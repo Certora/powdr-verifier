@@ -18,6 +18,7 @@ def rewrite_choice(node: Expr) -> Expr:
     """Rewrite `Mod(f1*...*fn, p) == 0` into a disjunction of `Mod(fi, p) == 0` (best-effort)."""
     match unpack_modeq(node):
         case e, c:
+            assert isprime(c), c
             factors = factor(e)
             if isinstance(factors, Mul):
                 factors = list(factors.args)
