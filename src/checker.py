@@ -19,12 +19,21 @@ def _solver_configs():
     return [
         {
             "name": ARGS().solver,
-            "solver_options": {"timeout": 5000, "smt.random_seed": k, "sat.random_seed": k},
-        } for k in range(3)
+            "solver_options": {
+                "timeout": 5000,
+                "smt.random_seed": k,
+                "sat.random_seed": k,
+            },
+        }
+        for k in range(3)
     ] + [
         {
             "name": ARGS().solver,
-            "solver_options": {"timeout": 45000, "smt.random_seed": 3, "sat.random_seed": 3},
+            "solver_options": {
+                "timeout": 45000,
+                "smt.random_seed": 3,
+                "sat.random_seed": 3,
+            },
         }
     ]
 
