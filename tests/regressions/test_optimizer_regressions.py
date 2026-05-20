@@ -62,7 +62,7 @@ CASES = [
 ]
 
 
-def run(command: list[str | Path], timeout: int = 180) -> dict:
+def run(command: list[str | Path], timeout: int = 60) -> dict:
     completed = subprocess.run(
         [str(part) for part in command],
         cwd=WORKSPACE,
@@ -73,7 +73,7 @@ def run(command: list[str | Path], timeout: int = 180) -> dict:
     assert completed.returncode == 0, completed.stderr + completed.stdout
     return json.loads(completed.stdout)
 
-def run_checked(command: list[str | Path], timeout: int = 180) -> None:
+def run_checked(command: list[str | Path], timeout: int = 60) -> None:
     completed = subprocess.run(
         [str(part) for part in command],
         cwd=WORKSPACE,
@@ -174,7 +174,7 @@ def test_orchestrate_powdr_opt_replay_matches_pipeline(case: ReplayCase):
                 "--base-dump",
                 base,
             ],
-            timeout=300,
+            timeout=60,
         )
 
         with open(replay_output, "r") as replay_file:
