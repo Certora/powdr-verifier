@@ -9,21 +9,12 @@ def _needs_basic_range_axiom(sym: FNode) -> bool:
     return (
         sym.is_symbol()
         and sym.get_type().is_int_type()
-#        and _BOUNDED_INT_VAR_RE.search(sym.symbol_name()) is not None
+        and _BOUNDED_INT_VAR_RE.search(sym.symbol_name()) is not None
     )
 
 
-def _conjoin(fs: list[FNode]) -> FNode | None:
-    if not fs:
-        return None
-    if len(fs) == 1:
-        return fs[0]
-    return And(*fs)
-
-
 class BoundsQuantifierSubstituter(substituter.Substituter):
-    def __init__(self, env=None):
-        substituter.Substituter.__init__(self, env=env)
+    """Walk quantifiers without changing them (injecting range guards inside is unsound)."""
 
     @substituter.handles(
         set(operators.ALL_TYPES) - frozenset([operators.FORALL, operators.EXISTS])
@@ -37,17 +28,6 @@ class BoundsQuantifierSubstituter(substituter.Substituter):
     def walk_quantifier(self, formula, args, **kwargs):
         qvars = list(formula.quantifier_vars())
         body = args[0]
-        bounds = [
-            field_symbol(sym)
-            for sym in qvars
-            if _needs_basic_range_axiom(sym)
-        ]
-        guard = _conjoin(list(without_trues(bounds)))
-        if guard is not None:
-            if formula.is_exists():
-                body = And(guard, body)
-            else:
-                body = Implies(guard, body)
         if formula.is_forall():
             return keep_comment(ForAll(qvars, body), formula)
         return keep_comment(Exists(qvars, body), formula)
