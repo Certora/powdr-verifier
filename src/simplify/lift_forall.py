@@ -15,13 +15,16 @@ def _is_potential_lift_pair(d: FNode) -> bool:
 
 
 def _match_hoistable_eq(eq: FNode, qvars: frozenset[FNode]) -> tuple[FNode, FNode] | None:
-    """Match ``Equals`` as ``q = expr`` hoistable out of ``qvars``.
+    """Match ``Equals`` / bool ``Iff`` as ``q = expr`` hoistable out of ``qvars``.
 
     ``expr`` may mention quantified array symbols (memory bus bases) but must not
     mention other quantified int columns; those are lifted iteratively once earlier
     ints are fixed at top level.
     """
-    if not eq.is_equals():
+    if eq.is_iff():
+        if not (eq.arg(0).get_type().is_bool_type() and eq.arg(1).get_type().is_bool_type()):
+            return None
+    elif not eq.is_equals():
         return None
     left, right = eq.arg(0), eq.arg(1)
     for vside, expr in ((left, right), (right, left)):
@@ -57,7 +60,7 @@ class LiftForallWalker(IdentityDagWalker):
         progressed = True
         while progressed:
             progressed = False
-            for d in list(candidates):
+            for d in sorted(candidates, key=str):
                 m = _match_lift_pair(d, qvars)
                 if m is not None:
                     lifted, eq = m
