@@ -1,4 +1,3 @@
-import logging
 from io import StringIO
 
 from ..smt_backends.pysmt import *
@@ -7,21 +6,10 @@ import z3
 from .utils import _string_to_script
 
 
-def _has_quantifier(formula: FNode) -> bool:
-  def walk(n: FNode) -> bool:
-    if n.is_quantifier():
-      return True
-    return any(walk(a) for a in n.args())
-
-  return walk(formula)
-
-
 def _is_shared_array_pin(formula: FNode) -> bool:
   """Detect ``(= before-memory-X after-memory-X)`` pins from :func:`.array_subst`.
 
-  These are appended just before ``check-sat`` and must not be replayed by
-  positional index from Z3's processed assert list (Z3 may drop, merge, or
-  reorder ground facts and would pair the wrong formulas).
+  Used by tests and call sites that need to recognize these equalities.
   """
   if not formula.is_equals():
     return False
@@ -55,7 +43,6 @@ def simplify_z3(smt_script: script.SmtLibScript, args=[]) -> script.SmtLibScript
   conv = Z3Converter(get_env(), s.ctx)
 
   prefix: list = []
-  assert_slots: list[tuple[str, script.SmtLibCommand]] = []
   suffix: list = []
   in_suffix = False
   output: list = []
@@ -68,45 +55,15 @@ def simplify_z3(smt_script: script.SmtLibScript, args=[]) -> script.SmtLibScript
       case "set-info" | "set-logic" | "set-option" | "declare-fun" | "get-model" | "get-unsat-core" | "echo":
         prefix.append(cmd)
       case "assert":
-        if _has_quantifier(cmd.args[0]):
-          assert_slots.append(("quant", cmd))
-        elif _is_shared_array_pin(cmd.args[0]):
-          assert_slots.append(("pin", cmd))
-        else:
-          assert_slots.append(("ground", cmd))
-          s.add(conv.convert(cmd.args[0]))
+        s.add(conv.convert(cmd.args[0]))
       case "check-sat":
         s.check()
         processed = _string_to_script(s.sexpr()).commands
-        ground_out: list[script.SmtLibCommand] = []
-        for c in processed:
-          if c.name == "assert" and not c.args[0].is_true():
-            ground_out.append(c)
-        output = list(prefix)
-        gi = 0
-        for kind, orig in assert_slots:
-          if kind in ("quant", "pin"):
-            output.append(orig)
-          elif gi < len(ground_out):
-            output.append(ground_out[gi])
-            gi += 1
-          else:
-            logging.warning(
-              "z3-replay: fewer Z3 ground asserts than expected; "
-              "keeping original for %s",
-              orig,
-            )
-            output.append(orig)
-        extra = len(ground_out) - gi
-        while gi < len(ground_out):
-          output.append(ground_out[gi])
-          gi += 1
-        if extra > 0:
-          logging.info(
-              "z3-replay: appended %d extra Z3 ground assert(s) after replay",
-              extra,
-          )
-        output.append(cmd)
+        new_asserts = [
+          c for c in processed
+          if c.name == "assert" and not c.args[0].is_true()
+        ]
+        output = list(prefix) + new_asserts + [cmd]
         in_suffix = True
       case _:
         assert False, f"unexpected command: {cmd.name}"
