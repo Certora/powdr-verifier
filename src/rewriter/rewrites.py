@@ -1,4 +1,6 @@
 import logging
+from sympy import isprime
+
 from ..utils.args import ARGS
 from ..utils.profiling import simple_profile
 from ..smt.utils import *
@@ -45,6 +47,8 @@ def rewrite_choice_simple(node_type: int, args: list[FNode]) -> FNode:
         or modulus.constant_value() != ARGS().field_type.value
     ):
         return None
+    p = ARGS().field_type.value
+    assert isprime(p), f"field modulus must be prime for rewrite_choice_simple, got {p}"
     factors = _flatten_times_factors(expr)
     if factors is None:
         return None
