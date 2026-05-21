@@ -1,3 +1,4 @@
+"""Abstract base for one OpenVM bus: collect interactions, emit constraints and I/O maps."""
 import collections
 from ..smt.utils import *
 

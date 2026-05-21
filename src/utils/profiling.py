@@ -1,3 +1,4 @@
+"""Lightweight wall-time profiling decorator for hot simplification paths."""
 import functools
 import logging
 import sys

@@ -1,3 +1,4 @@
+"""Encoding helpers: wrap formulas as scripts and locate ``is_valid`` symbols."""
 from ..smt.utils import *
 
 def as_script(status: str):

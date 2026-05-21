@@ -1,3 +1,4 @@
+"""Demodulation / interval-aware simplification of top-level asserted constraints."""
 from typing import Iterable
 
 from ..smt.utils import *
@@ -132,6 +133,7 @@ class DeModSubstituter(substituter.Substituter):
         ranges: dict[FNode, IntInterval] = {},
         protected_constraints: frozenset[FNode] = frozenset(),
     ):
+        """``ranges``: learned bounds per symbol; ``protected_constraints`` stay unmodified."""
         substituter.Substituter.__init__(self, env=env)
         self.ranges = ranges
         self.protected_constraints = protected_constraints
@@ -141,6 +143,7 @@ class DeModSubstituter(substituter.Substituter):
         - frozenset([operators.MOD, operators.FORALL, operators.EXISTS])
     )
     def walk_identity(self, formula, args, **kwargs):
+        """Recurse unchanged except skip rewriting for ``protected_constraints``."""
         # Keep witness constraints verbatim so the justification for the learned bounds remains visible.
         if formula in self.protected_constraints:
             return formula
@@ -150,6 +153,7 @@ class DeModSubstituter(substituter.Substituter):
 
     @substituter.handles(frozenset([operators.FORALL, operators.EXISTS]))
     def walk_quantifier(self, formula, args, **kwargs):
+        """Do not apply outer learned bounds to quantified variables."""
         qvars = list(formula.quantifier_vars())
         # Outer top-level bounds do not justify rewriting quantified variables.
         inner = DeModSubstituter(
@@ -163,6 +167,7 @@ class DeModSubstituter(substituter.Substituter):
 
     @substituter.handles(frozenset([operators.MOD]))
     def walk_mod(self, formula, args, **kwargs):
+        """Fold constant mod, or drop ``mod`` when ``expr`` is in-range for ``modulus``."""
         expr, modulus = args
         if (ec := _int_constant(expr)) is not None and (mc := _int_constant(modulus)) is not None and mc != 0:
             return keep_comment(Int(ec % mc), formula)

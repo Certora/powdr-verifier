@@ -1,3 +1,4 @@
+"""Shared PySMT helpers: comments, models, field axioms, SMT-LIB I/O, and profiling."""
 import functools
 import json
 import logging

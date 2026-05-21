@@ -1,3 +1,8 @@
+"""Invoke the powdr workspace ``optimize-dump`` binary on APC JSON dumps.
+
+Runs ``cargo run -p utils --bin optimize-dump`` from ``paths.POWDR_DIR``
+with paths and optimizer pass taken from CLI arguments.
+"""
 import subprocess
 from pathlib import Path
 

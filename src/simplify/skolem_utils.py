@@ -48,6 +48,7 @@ def _collect_forall_qvars(smt_script: script.SmtLibScript) -> dict[str, FNode]:
     out: dict[str, FNode] = {}
 
     def visit(node: FNode):
+        """Record forall-bound symbol names for parser cache population."""
         if node.is_quantifier():
             for q in node.quantifier_vars():
                 if q.is_symbol():

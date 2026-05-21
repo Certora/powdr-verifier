@@ -1,3 +1,4 @@
+"""Trace encoding: satisfiable core formula and unsat sanity obligations."""
 import itertools
 from ..smt.conversion import FormulaWithAxioms, SmtConverter
 from ..smt.utils import *

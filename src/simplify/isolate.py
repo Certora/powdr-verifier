@@ -1,15 +1,18 @@
+"""Substitute solver model values into assertions (definition forms per sort)."""
 import logging
 
 from ..smt.utils import *
 
 
 def _definition_for(var: FNode, value: FNode) -> FNode:
+    """``Iff`` for bools, ``Equals`` otherwise (definition of ``var`` from model value)."""
     if var.get_type().is_bool_type():
         return Iff(var, value)
     return Equals(var, value)
 
 
 def _model_value(model, var: FNode) -> FNode | None:
+    """Look up ``var`` in a PySMT model mapping; ``None`` if absent."""
     for k, v in model:
         if k == var:
             return v
@@ -17,6 +20,7 @@ def _model_value(model, var: FNode) -> FNode | None:
 
 
 def _find_isolated_value(var: FNode, disjuncts: list[FNode]) -> FNode | None:
+    """If ``Not(And(disjuncts))`` is unsat, return ``var``'s value in a model; else ``None``."""
     try:
         with Solver(logic=QF_UFNIA, solver_options={"timeout": 500}) as solver:
             solver.add_assertion(And(Not(d) for d in disjuncts))
@@ -29,7 +33,10 @@ def _find_isolated_value(var: FNode, disjuncts: list[FNode]) -> FNode | None:
 
 
 class IsolateWalker(IdentityDagWalker):
+    """Add ``Not(definition)`` disjuncts when a qvar is uniquely determined on a subset of disjuncts."""
+
     def walk_forall(self, formula, args, **kwargs):
+        """For each qvar, if some disjuncts mention only that qvar, negate its forced assignment."""
         body = args[0]
         if not body.is_or():
             return formula
@@ -52,6 +59,7 @@ class IsolateWalker(IdentityDagWalker):
 
 
 def simplify_isolate(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+    """Strengthen ``forall`` bodies using cheap QF_UFNIA checks for isolated quantified variables."""
     w = IsolateWalker(env=get_env())
     for cmd in smt_script:
         if cmd.name == "assert":

@@ -1,3 +1,4 @@
+"""Generate static HTML reports from recorded verification steps in SQLite."""
 import dataclasses
 import html
 import tempfile

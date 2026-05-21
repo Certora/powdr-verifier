@@ -1,3 +1,9 @@
+"""Experimental alias analysis over memory-encoding boolean variables.
+
+Enumerates models of the encoded formula plus pairwise memory ``select``
+flags, blocking each model until unsat, to surface which alias relations
+are consistent with the constraints.
+"""
 import json
 
 from .rewriter import rewrite

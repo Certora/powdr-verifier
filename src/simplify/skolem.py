@@ -45,6 +45,7 @@ class SkolemMap:
     """
 
     def __init__(self, qvars):
+        """``qvars``: quantified variables of the current ``forall``."""
         self.qvars: frozenset[FNode] = frozenset(qvars)
         self.pins: dict[FNode, FNode] = {}
         self.sources: dict[FNode, str] = {}
@@ -62,6 +63,7 @@ class SkolemMap:
         return True
 
     def is_pinned(self, q: FNode) -> bool:
+        """Return whether ``q`` already has a witness in ``pins``."""
         return q in self.pins
 
     def emit_disjuncts(self) -> list[FNode]:
@@ -89,6 +91,7 @@ class _SkolemWalker(IdentityDagWalker):
         *args,
         **kwargs,
     ):
+        """Walker state: global declarations, derived pins, collapsed-witness candidates."""
         super().__init__(*args, **kwargs)
         self.declared = declared
         self.derived = derived
@@ -97,6 +100,7 @@ class _SkolemWalker(IdentityDagWalker):
         self.qvar_sets: list[set[FNode]] = []
 
     def walk_forall(self, formula, args, **kwargs):
+        """Run contributors, append ``emit_disjuncts`` results to the ``forall`` body."""
         body = args[0]
         qvars = list(formula.quantifier_vars())
         self.qvar_sets.append(set(qvars))

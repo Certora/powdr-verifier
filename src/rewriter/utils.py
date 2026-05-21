@@ -1,3 +1,4 @@
+"""Small SymPy pattern helpers shared by ``rewrites_sympy``."""
 from sympy import Integer, Wild, Eq, Mod, Expr
 from typing import Optional
 

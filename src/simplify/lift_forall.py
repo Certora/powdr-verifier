@@ -1,3 +1,4 @@
+"""Hoist quantifier bodies: extract ``Not(And(…))`` disjuncts to top-level assertions."""
 from ..smt.utils import *
 
 
@@ -11,6 +12,7 @@ def _int_qvar_deps(expr: FNode, qvars: frozenset[FNode]) -> frozenset[FNode]:
 
 
 def _is_potential_lift_pair(d: FNode) -> bool:
+    """True if ``d`` is ``Not`` of an equality or boolean ``Iff`` (candidate for hoisting)."""
     return d.is_not() and (d.arg(0).is_equals() or d.arg(0).is_iff())
 
 
@@ -44,11 +46,15 @@ def _match_lift_pair(d: FNode, qvars: frozenset[FNode]) -> tuple[FNode, FNode] |
 
 
 class LiftForallWalker(IdentityDagWalker):
+    """Peel pinned equalities out of ``forall`` bodies into ``self.lifted``."""
+
     def __init__(self, *args, **kwargs):
+        """``lifted`` maps each qvar to the full equality node asserted at top level later."""
         super().__init__(*args, **kwargs)
         self.lifted = {}
 
     def walk_forall(self, formula, args, **kwargs):
+        """Iteratively extract hoistable ``Not(eq)`` disjuncts and shrink the quantifier prefix."""
         body = args[0]
         if not body.is_or():
             return formula
@@ -81,6 +87,7 @@ class LiftForallWalker(IdentityDagWalker):
 
 
 def simplify_lift_forall(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+    """Hoist ``self.lifted`` pins as top-level asserts and insert missing ``declare-fun``s."""
     w = LiftForallWalker(env=get_env())
     prefix = []
     suffix = []

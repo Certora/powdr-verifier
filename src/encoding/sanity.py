@@ -1,3 +1,4 @@
+"""Structural sanity constraints for traces (derived, multiplicities, stateful pairs)."""
 from collections import defaultdict
 import itertools
 from ..smt.conversion import FormulaWithAxioms, SmtConverter

@@ -1,7 +1,7 @@
+"""OpenVM bus interaction encoding: dispatcher, enums, and per-bus sub-encoders."""
 from enum import Enum
-import itertools
 import logging
-from typing import Any
+from typing import Any, Iterable
 
 from .single_interaction_encoder import SingleInteractionEncoder
 from . import openvm_bitwise_lookup

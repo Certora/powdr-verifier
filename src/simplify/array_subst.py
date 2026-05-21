@@ -54,6 +54,7 @@ SETINFO_CMD_PREFIX = ":shared-array-"
 
 
 def _free_symbols_in_asserts(smt_script: script.SmtLibScript) -> set[FNode]:
+    """Union of free variables appearing in every ``assert`` command."""
     out: set[FNode] = set()
     for cmd in smt_script.commands:
         if cmd.name == "assert":
@@ -65,11 +66,13 @@ class _ArraySubstWalker(IdentityDagWalker):
     """Replace array symbols; match by ``symbol_name`` to the canonical ``declare-fun`` node."""
 
     def __init__(self, subs: dict[FNode, FNode], all_declared: dict[str, FNode], *args, **kwargs):
+        """``subs``: UF-style chain of array renames; ``all_declared``: name → canonical symbol."""
         super().__init__(*args, **kwargs)
         self.subs = subs
         self.all_declared = all_declared
 
     def walk_symbol(self, formula, args, **kwargs):
+        """Follow ``subs`` to a representative, keyed by canonical ``declare-fun`` symbol."""
         canon = self.all_declared.get(formula.symbol_name(), formula)
         cur = canon
         while cur in self.subs:
@@ -152,6 +155,7 @@ def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript
     drop_formulas: set[int] = set()
 
     def _resolve(sym: FNode) -> FNode:
+        """Follow array rename map ``subs`` to a root representative."""
         while sym in subs:
             sym = subs[sym]
         return sym
@@ -182,12 +186,6 @@ def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript
                 dead_syms.add(s)
                 s = subs[s]
 
-    def _resolve(sym: FNode) -> FNode:
-        while sym in subs:
-            sym = subs[sym]
-        return sym
-
-    if subs:
         walker = _ArraySubstWalker(subs, all_declared, env=get_env())
 
         def _rewrite_formula(f: FNode) -> FNode | None:

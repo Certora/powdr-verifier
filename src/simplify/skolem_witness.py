@@ -30,6 +30,7 @@ from ..smt.utils import *
 
 
 def _strip_prefix(name: str) -> str:
+    """Strip ``before-`` / ``after-`` prefix from a symbol name."""
     for prefix in ("before-", "after-"):
         if name.startswith(prefix):
             return name[len(prefix):]
@@ -37,12 +38,14 @@ def _strip_prefix(name: str) -> str:
 
 
 def _symbol_key(f: FNode) -> str | None:
+    """Stripped symbol name for ``f``, or ``None`` if not a symbol."""
     if not f.is_symbol():
         return None
     return _strip_prefix(f.symbol_name())
 
 
 def _int_constant(f: FNode) -> int | None:
+    """Integer constant value, or ``None``."""
     if not f.get_type().is_int_type():
         return None
     if not f.is_int_constant():
@@ -51,12 +54,14 @@ def _int_constant(f: FNode) -> int | None:
 
 
 def _flatten(op, f: FNode) -> list[FNode]:
+    """Flatten nested ``op`` nodes to a list of leaves."""
     if f.node_type() == op:
         return [x for a in f.args() for x in _flatten(op, a)]
     return [f]
 
 
 def _split_product(f: FNode) -> tuple[int, list[FNode]]:
+    """Split ``Times`` tree into ``(coeff mod p, factors)``."""
     p = ARGS().field_type.value
     coeff = 1
     factors = []
@@ -69,6 +74,7 @@ def _split_product(f: FNode) -> tuple[int, list[FNode]]:
 
 
 def _unwrap_zero_mod_eq(f: FNode) -> FNode | None:
+    """Extract inner expression from ``(= (mod … p) 0)`` or plain equality LHS."""
     if not f.is_equals():
         return None
     a, b = f.arg(0), f.arg(1)
@@ -87,12 +93,14 @@ def _unwrap_zero_mod_eq(f: FNode) -> FNode | None:
 
 
 def _iter_nodes(f: FNode):
+    """Depth-first preorder over ``f``."""
     yield f
     for a in f.args():
         yield from _iter_nodes(a)
 
 
 def _split_symbol_times_sum(parts: list[FNode]) -> tuple[FNode, frozenset[str]] | None:
+    """Detect ``sym * (sum of symbols)`` suitable for witness factorization."""
     if len(parts) != 2:
         return None
     for sym, sum_expr in (parts, reversed(parts)):

@@ -1,3 +1,4 @@
+"""PySMT integration: solvers, parsers, SMT-LIB pretty-print, and comment-preserving substitution."""
 import contextlib
 from datetime import datetime
 from io import StringIO

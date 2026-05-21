@@ -1,3 +1,4 @@
+"""Equality-focused PySMT rewrites using local rules and SymPy modulo reasoning."""
 import sympy
 
 from .conversion import to_sympy, to_smt

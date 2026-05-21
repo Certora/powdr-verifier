@@ -1,3 +1,4 @@
+"""Bidirectional PySMT ``FNode`` ↔ SymPy ``Expr`` conversion for the rewriter."""
 import sympy
 
 from ..smt.utils import *

@@ -1,3 +1,4 @@
+"""Cross-encoding variable collection and input/output equality constraints."""
 from .conversion import FormulaWithAxioms
 from .utils import *
 

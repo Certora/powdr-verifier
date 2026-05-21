@@ -1,3 +1,4 @@
+"""Bitwise lookup bus: truth table via uninterpreted ``UF_XOR`` and multiplicity axioms."""
 import logging
 from typing import Any, Optional
 

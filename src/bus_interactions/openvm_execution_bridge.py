@@ -1,3 +1,4 @@
+"""Execution bridge bus: PC wiring with timestamp and permutation checks."""
 from .permutation_check import PermutationCheckMixin, TimestampCheckMixin
 from .single_interaction_encoder import SingleInteractionEncoder
 

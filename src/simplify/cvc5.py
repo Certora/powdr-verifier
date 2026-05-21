@@ -1,3 +1,4 @@
+"""External ``cvc5`` subprocess preprocessing hook for SMT-LIB scripts (debug/experiment)."""
 import subprocess
 import logging
 from pathlib import Path
@@ -6,6 +7,7 @@ from .utils import convert_script_to_string
 CVC5_BIN = Path("~/stuff/cvc5/build/bin/cvc5").expanduser()
 
 def _extract_script(output: str) -> str | None:
+    """Slice cvc5 stdout between ``assertions::pre-theory-preprocess`` trace markers."""
     start_tag = ";; post-asserts start"
     end_tag = ";; post-asserts end"
     start_tag = ";; assertions::pre-theory-preprocess start"

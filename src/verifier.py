@@ -1,3 +1,9 @@
+"""APC equivalence verification: encode completeness and soundness as SMT-LIB.
+
+Loads before/after APC dumps, builds input/output relations and shared-bus
+array metadata, emits annotated scripts for external solvers, and records
+outputs via ``Action`` telemetry objects.
+"""
 import logging
 
 from .encoding.utils import get_is_valid

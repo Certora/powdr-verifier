@@ -1,3 +1,4 @@
+"""Plotly figures and HTML fragments for report dashboards (ECDFs, timelines, heatmaps)."""
 import functools
 import html
 from pathlib import Path

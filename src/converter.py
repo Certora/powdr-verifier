@@ -1,3 +1,8 @@
+"""Human-readable rendering of APC dumps: variables, bus interactions, constraints.
+
+Optional partial evaluation under a JSON model uses the same interpreters as
+the main SMT encoding for consistent bus semantics.
+"""
 from io import StringIO
 import logging
 from typing import Any, Optional, TextIO
@@ -157,7 +162,8 @@ def convert_to_text(out: TextIO, input: dict, model: Optional[dict[str, Any]] = 
 
 
 def convert_and_print():
+    """Load ``ARGS().input``, format via ``convert_to_text``, print to stdout."""
     input = load_apc_dump(ARGS().input)
     out = StringIO()
-    convert_to_text(None, out, input)
+    convert_to_text(out, input)
     print(out.getvalue())

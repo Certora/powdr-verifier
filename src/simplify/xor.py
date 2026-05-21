@@ -1,3 +1,4 @@
+"""XOR term handling: either axioms over ``UF_XOR`` or native bit-vector encoding."""
 from typing import Iterable
 
 from ..bus_interactions.openvm_bitwise_lookup import OpenVMBitwiseLookupEncoder
@@ -7,6 +8,7 @@ UF_XOR = OpenVMBitwiseLookupEncoder.UF_XOR
 
 
 def _collect_xor_terms(formula: FNode) -> set[FNode]:
+    """Collect every ``UF_XOR`` application under ``formula`` (skip quantifier bodies for descent)."""
     terms = set()
     seen = set()
     stack = [formula]
@@ -23,6 +25,7 @@ def _collect_xor_terms(formula: FNode) -> set[FNode]:
 
 
 def _qxor_axioms(_terms: Iterable[FNode] = ()) -> tuple[FNode, ...]:
+    """Universal algebraic axioms for ``UF_XOR`` (identity, nilpotence, cancellation)."""
     x = Symbol("__qxor_x", INT)
     y = Symbol("__qxor_y", INT)
     return (
@@ -41,6 +44,7 @@ def _qxor_axioms(_terms: Iterable[FNode] = ()) -> tuple[FNode, ...]:
 
 
 def _gxor_axioms(terms: Iterable[FNode]) -> Iterable[FNode]:
+    """Per-term ``UF_XOR(x,y)`` lemmas for 8-bit-style bounds (used with ``simplify_gxor``)."""
     for term in terms:
         x, y = term.args()
         if x == y:
@@ -69,7 +73,10 @@ def _gxor_axioms(terms: Iterable[FNode]) -> Iterable[FNode]:
 
 
 class XOrQuantifierSubstituter(substituter.Substituter):
+    """Simplify ``UF_XOR`` under quantifiers and attach ``axiom_builder`` facts local to each scope."""
+
     def __init__(self, axiom_builder, env=None):
+        """``axiom_builder(terms)`` yields extra conjuncts for XOR terms mentioning bound variables."""
         substituter.Substituter.__init__(self, env=env)
         self.axiom_builder = axiom_builder
 
@@ -78,12 +85,14 @@ class XOrQuantifierSubstituter(substituter.Substituter):
         - frozenset([operators.FORALL, operators.EXISTS, operators.FUNCTION])
     )
     def walk_identity(self, formula, args, **kwargs):
+        """Default recursion for non-function, non-quantifier nodes."""
         return keep_comment(
             substituter.Substituter.super(self, formula, args=args, **kwargs), formula
         )
 
     @substituter.handles(frozenset([operators.FUNCTION]))
     def walk_function(self, formula, args, **kwargs):
+        """Constant-fold ``UF_XOR`` at zero / equal arguments."""
         if formula.function_name() == UF_XOR:
             x, y = args
             if x.is_zero():
@@ -96,6 +105,7 @@ class XOrQuantifierSubstituter(substituter.Substituter):
 
     @substituter.handles(frozenset([operators.FORALL, operators.EXISTS]))
     def walk_quantifier(self, formula, args, **kwargs):
+        """Conjoin quantifier-local XOR axioms for terms that mention bound variables."""
         qvars = list(formula.quantifier_vars())
         qvarset = frozenset(qvars)
         body = args[0]
@@ -114,6 +124,7 @@ class XOrQuantifierSubstituter(substituter.Substituter):
 
 
 def _simplify_xor(smt_script: script.SmtLibScript, axiom_builder) -> script.SmtLibScript:
+    """Shared implementation for ``simplify_qxor`` / ``simplify_gxor``."""
     injector = XOrQuantifierSubstituter(axiom_builder)
     output = []
     for cmd in smt_script:
@@ -133,8 +144,10 @@ def _simplify_xor(smt_script: script.SmtLibScript, axiom_builder) -> script.SmtL
 
 
 def simplify_qxor(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+    """Inject global and local ``_qxor_axioms`` for ``UF_XOR``."""
     return _simplify_xor(smt_script, _qxor_axioms)
 
 
 def simplify_gxor(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+    """Inject ``_gxor_axioms`` for each distinct ``UF_XOR`` term."""
     return _simplify_xor(smt_script, _gxor_axioms)

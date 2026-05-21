@@ -1,3 +1,4 @@
+"""JSON APC dump to PySMT: ``SmtConverter`` and ``FormulaWithAxioms`` bundle."""
 import collections
 import itertools
 import logging
@@ -15,6 +16,12 @@ FormulaWithAxioms = collections.namedtuple(
     "FormulaWithAxioms",
     ["constraints", "axioms", "derived", "globals"],
 )
+FormulaWithAxioms.__doc__ = """Structured PySMT bundle produced by ``SmtConverter``.
+
+``constraints`` and ``axioms`` are lists of ``FNode``; ``derived`` maps column
+symbols to defining formulas; ``globals`` collects symbols treated as rigid
+across quantifier prefixes.
+"""
 
 
 def _check_is_valid(self: Solver, f: FNode) -> bool:

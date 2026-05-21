@@ -1,3 +1,4 @@
+"""SMT-LIB script driver wiring ``IntervalReasoner`` into simplify tactics."""
 from __future__ import annotations
 
 import logging
@@ -9,10 +10,12 @@ from .reasoner import IntervalReasoner, logger as interval_logger
 
 
 def _has_bottom_domain(reasoner: IntervalReasoner) -> bool:
+    """True if any variable's abstract domain became empty after propagation."""
     return any(dom.is_bottom() for dom in reasoner.env.values())
 
 
 def _is_simple_atomic_bound(f: FNode) -> bool:
+    """True for ``<|<=|=`` between one int constant and one int symbol."""
     if not (f.is_le() or f.is_lt() or f.is_equals()):
         return False
     a, b = f.args()

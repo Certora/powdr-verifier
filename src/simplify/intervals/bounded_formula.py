@@ -1,3 +1,4 @@
+"""Lift PySMT formulas to interval-aware ``BoundedFormula`` views for analysis."""
 from __future__ import annotations
 
 import logging
@@ -11,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def _fmt_formula(f: FNode, max_len: int = 200) -> str:
+    """Truncate ``str(f)`` for debug logs."""
     s = str(f)
     if len(s) <= max_len:
         return s
@@ -32,6 +34,7 @@ class BoundedFormula:
     subformulas: list[BoundedFormula]
 
     def __init__(self, formula: FNode) -> None:
+        """Build leaf or boolean-op tree with ``IntVarDomains.top()``."""
         self.formula = formula
         self.domains = IntVarDomains.top()
         self.subformulas = (

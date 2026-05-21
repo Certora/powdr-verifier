@@ -1,3 +1,4 @@
+"""Low-level shape predicates on PySMT nodes for interval extraction (affine, mod, etc.)."""
 from __future__ import annotations
 
 from typing import Dict, Optional
@@ -9,6 +10,7 @@ from .domain import IntDomain, IntInterval
 
 
 def _is_int_const(n: FNode) -> Optional[int]:
+    """Safe int constant extraction (avoids ``is_int_constant()`` on arbitrary nodes)."""
     # Do not call is_int_constant() on arbitrary nodes: pySMT can raise on array values.
     if n.node_type() == operators.INT_CONSTANT:
         return int(n.constant_value())
@@ -16,12 +18,14 @@ def _is_int_const(n: FNode) -> Optional[int]:
 
 
 def _is_bool_const(n: FNode) -> Optional[bool]:
+    """Return bool constant value or ``None``."""
     if n.node_type() == operators.BOOL_CONSTANT:
         return bool(n.constant_value())
     return None
 
 
 def _is_mod_p(n: FNode, p: int) -> Optional[FNode]:
+    """If ``n`` is ``(mod e p)`` with constant modulus ``p``, return ``e``."""
     if not n.is_mod():
         return None
     a, m = n.args()
@@ -34,6 +38,7 @@ def _affine(e: FNode) -> Optional[tuple[int, Dict[FNode, int]]]:
     """Parse e as const + sum(coeff_i * sym_i), else return None."""
 
     def add_maps(a: Dict[FNode, int], b: Dict[FNode, int], k: int = 1) -> Dict[FNode, int]:
+        """Pointwise ``a + k*b`` on coefficient maps, dropping zero coefficients."""
         out = dict(a)
         for s, c in b.items():
             out[s] = out.get(s, 0) + k * c
@@ -85,6 +90,7 @@ def _affine(e: FNode) -> Optional[tuple[int, Dict[FNode, int]]]:
 
 
 def _ceil_div(a: int, b: int) -> int:
+    """Ceiling of ``a/b`` for ``b > 0``."""
     assert b > 0
     return -((-a) // b)
 
@@ -101,6 +107,7 @@ def _unique_multiple_in_interval(iv: IntInterval, p: int) -> Optional[int]:
 
 
 def _unique_multiple_in_domain(dom: IntDomain, p: int) -> Optional[int]:
+    """Unique multiple of ``p`` in abstract domain ``dom``, if any and unique on the hull."""
     hull = dom.hull()
     uniq = _unique_multiple_in_interval(hull, p)
     if uniq is None:

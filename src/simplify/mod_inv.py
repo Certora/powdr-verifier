@@ -101,6 +101,7 @@ def _match_mod_inv_definition(formula: FNode):
 
 
 def _structurally_equal(a: FNode, b: FNode) -> bool:
+    """Cheap structural equality via serialized SMT-LIB text."""
     return a.serialize() == b.serialize()
 
 
@@ -114,6 +115,7 @@ class _FallbackModInvRewriter(substituter.Substituter):
     """
 
     def __init__(self, env=None):
+        """Prepare fresh-symbol allocator and side-effect constraint list."""
         super().__init__(env=env)
         self._fresh_counter = 0
         self._replacement_by_term = {}
@@ -121,11 +123,13 @@ class _FallbackModInvRewriter(substituter.Substituter):
         self.constraints = []
 
     def _fresh_symbol(self) -> FNode:
+        """Allocate ``__mod_inv_N`` for a fallback replacement."""
         sym = Symbol(f"__mod_inv_{self._fresh_counter}", INT)
         self._fresh_counter += 1
         return sym
 
     def rewrite(self, formula: FNode) -> FNode:
+        """Iteratively replace ``uf_mod_inv`` leaves with fresh vars and inverse axioms."""
         memo: dict[FNode, FNode] = {}
         stack = [(formula, False)]
         while stack:
