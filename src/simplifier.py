@@ -14,6 +14,7 @@ from .simplify import (
     simplify_bounds,
     simplify_cvc5,
     simplify_demod,
+    simplify_evaluate,
     simplify_gxor,
     simplify_intervals,
     simplify_intervals2,
@@ -74,6 +75,8 @@ def simplify():
                         smt_script = simplify_gxor(smt_script)
                     case "mod_inv":
                         smt_script = simplify_mod_inv(smt_script)
+                    case "evaluator":
+                        smt_script = simplify_evaluate(smt_script)
                     case "skolem":
                         smt_script = simplify_skolem(smt_script)
                     case "intervals":
