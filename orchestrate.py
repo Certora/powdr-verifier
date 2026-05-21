@@ -160,7 +160,7 @@ def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
     return None
 
 _DEFAULT_TACTIC = (
-    "nnf:evaluator:skolem:isolate:lift:witness:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:pretty"
+    "nnf:evaluator:skolem:isolate:lift:witness:array_subst:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:pretty"
 )
 
 

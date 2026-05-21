@@ -152,4 +152,16 @@ def simplify_skolem(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     if w.applied:
         parts = ", ".join(f"{k}={v}" for k, v in sorted(w.applied.items()))
         logging.info(f"skolem: applied {parts}")
+
+    prefix = skolem_derived.SETINFO_PREFIX
+    smt_script.commands = [
+        cmd
+        for cmd in smt_script.commands
+        if not (
+            cmd.name == "set-info"
+            and len(cmd.args) >= 1
+            and isinstance(cmd.args[0], str)
+            and cmd.args[0].startswith(prefix)
+        )
+    ]
     return smt_script

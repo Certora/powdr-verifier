@@ -50,17 +50,31 @@ from ..smt.utils import *
 from .skolem_utils import load_setinfo_pins
 
 SETINFO_PREFIX = "shared-array-"
+SETINFO_CMD_PREFIX = ":shared-array-"
+
+
+def _free_symbols_in_asserts(smt_script: script.SmtLibScript) -> set[FNode]:
+    out: set[FNode] = set()
+    for cmd in smt_script.commands:
+        if cmd.name == "assert":
+            out |= cmd.args[0].get_free_variables()
+    return out
 
 
 class _ArraySubstWalker(IdentityDagWalker):
-    """Replace symbols according to a substitution map."""
+    """Replace array symbols; match by ``symbol_name`` to the canonical ``declare-fun`` node."""
 
-    def __init__(self, subs: dict[FNode, FNode], *args, **kwargs):
+    def __init__(self, subs: dict[FNode, FNode], all_declared: dict[str, FNode], *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.subs = subs
+        self.all_declared = all_declared
 
     def walk_symbol(self, formula, args, **kwargs):
-        return self.subs.get(formula, formula)
+        canon = self.all_declared.get(formula.symbol_name(), formula)
+        cur = canon
+        while cur in self.subs:
+            cur = self.subs[cur]
+        return cur
 
 
 def _extract_equalities(f: FNode):
@@ -83,13 +97,19 @@ def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript
        globally replaced by the other, its ``declare-fun`` is dropped,
        and the equality assertion is removed.  A union-find keeps the
        mapping consistent when multiple equalities chain together.
+       Symbols are matched by ``symbol_name`` to the canonical
+       ``declare-fun`` node so every occurrence rewrites even when the
+       parser produced duplicate ``Symbol`` objects for the same name.
 
     2. **Shared-array assertion injection**: equalities read from
        ``set-info :shared-array-N`` annotations are turned into
        ``(assert (= before-X after-X))`` commands inserted just before
-       ``check-sat``.  Only equalities whose free variables are all
-       declared in the current script are emitted (the ``lift`` pass
-       may have dropped some symbols).
+       ``check-sat``.  A pin is emitted only when both sides are plain
+       symbols whose names still have a ``declare-fun`` in the script
+       (after phase~2), and each name occurs free in some existing
+       ``assert`` (name-based, so parser/cache symbol identity cannot
+       resurrect eliminated arrays).  Matching ``set-info`` rows are
+       then removed from the script.
     """
 
     # --- Collect declarations ---
@@ -141,11 +161,18 @@ def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript
             continue
         for eq in _extract_equalities(cmd.args[0]):
             a, b = eq.arg(0), eq.arg(1)
-            if a in array_declared and b in array_declared:
-                ra, rb = _resolve(a), _resolve(b)
-                if ra != rb:
-                    subs[rb] = ra
-                    drop_formulas.add(id(eq))
+            if not (a.is_symbol() and b.is_symbol()):
+                continue
+            a = all_declared.get(a.symbol_name())
+            b = all_declared.get(b.symbol_name())
+            if a is None or b is None:
+                continue
+            if a not in array_declared or b not in array_declared:
+                continue
+            ra, rb = _resolve(a), _resolve(b)
+            if ra != rb:
+                subs[rb] = ra
+                drop_formulas.add(id(eq))
 
     dead_syms: set[FNode] = set()
     if subs:
@@ -161,7 +188,7 @@ def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript
         return sym
 
     if subs:
-        walker = _ArraySubstWalker(subs, env=get_env())
+        walker = _ArraySubstWalker(subs, all_declared, env=get_env())
 
         def _rewrite_formula(f: FNode) -> FNode | None:
             """Apply the substitution to ``f``, dropping consumed equalities."""
@@ -191,6 +218,16 @@ def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript
             new_commands.append(cmd)
         smt_script.commands = new_commands
 
+    referenced = _free_symbols_in_asserts(smt_script)
+    referenced_names = {s.symbol_name() for s in referenced if s.is_symbol()}
+    declared_by_name: dict[str, FNode] = {}
+    for cmd in smt_script.commands:
+        if cmd.name != "declare-fun":
+            continue
+        s = cmd.args[0]
+        if s.is_symbol():
+            declared_by_name[s.symbol_name()] = s
+
     # --- Phase 3: inject shared-array assertions ---
     # These are NOT substituted (see module docstring for rationale).
     # Instead they are emitted as ``(assert ...)`` just before
@@ -198,7 +235,6 @@ def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript
     # internally.
 
     if pin_assertions:
-        alive = {sym for sym in all_declared.values() if sym not in dead_syms}
         check_sat_idx = next(
             (i for i, c in enumerate(smt_script.commands) if c.name == "check-sat"),
             len(smt_script.commands),
@@ -206,9 +242,16 @@ def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript
         added = 0
         for eq in pin_assertions:
             a, b = _resolve(eq.arg(0)), _resolve(eq.arg(1))
-            if a == b or a not in alive or b not in alive:
+            if a == b or not (a.is_symbol() and b.is_symbol()):
                 continue
-            cmd = script.SmtLibCommand(name="assert", args=[Equals(a, b)])
+            an, bn = a.symbol_name(), b.symbol_name()
+            if an not in referenced_names or bn not in referenced_names:
+                continue
+            a_c = declared_by_name.get(an)
+            b_c = declared_by_name.get(bn)
+            if a_c is None or b_c is None:
+                continue
+            cmd = script.SmtLibCommand(name="assert", args=[Equals(a_c, b_c)])
             smt_script.commands.insert(check_sat_idx, cmd)
             check_sat_idx += 1
             added += 1
@@ -216,5 +259,16 @@ def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript
 
     if dead_syms:
         logging.info(f"array-subst: eliminated {len(dead_syms)} array symbols")
+
+    smt_script.commands = [
+        cmd
+        for cmd in smt_script.commands
+        if not (
+            cmd.name == "set-info"
+            and len(cmd.args) >= 1
+            and isinstance(cmd.args[0], str)
+            and cmd.args[0].startswith(SETINFO_CMD_PREFIX)
+        )
+    ]
 
     return smt_script
