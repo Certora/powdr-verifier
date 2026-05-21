@@ -47,6 +47,16 @@ def simplify_model(smt_script: script.SmtLibScript) -> script.SmtLibScript:
             )
     return smt_script
 
+
+def simplify_evaluate(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+    for cmd in smt_script:
+        if cmd.name == "assert":
+            cmd.args[0] = keep_comment(
+                partial_evaluate(cmd.args[0], {}, {}),
+                cmd.args[0],
+            )
+    return smt_script
+
     
 def simplify_rewrite(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     """Rewrite each assertion independently with our internal rewriter."""
