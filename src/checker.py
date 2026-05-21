@@ -1,3 +1,9 @@
+"""Run an SMT-LIB script through PySMT with retries, timeouts, and optional model dump.
+
+Parses ``(set-info :status ...)`` as the expected solver outcome, tries a
+small grid of random seeds and timeouts, and queries ``:reason-unknown``
+when the result is inconclusive.
+"""
 from .report.action import Action
 from .smt.utils import *
 from .utils.args import ARGS
@@ -5,6 +11,7 @@ from .utils.profiling import simple_profile
 
 
 def _get_reason_unknown(solver):
+    """Return SMT-LIB ``:reason-unknown`` text if the subprocess exposes stdio, else ``None``."""
     if not hasattr(solver, "solver_stdin") or not hasattr(solver, "solver_stdout"):
         return None
     try:
@@ -16,6 +23,7 @@ def _get_reason_unknown(solver):
 
 
 def _solver_configs():
+    """Yield a short list of fast attempts plus one long-timeout fallback configuration."""
     return [
         {
             "name": ARGS().solver,
@@ -39,6 +47,7 @@ def _solver_configs():
 
 
 def _solver_config_label(config):
+    """Human-readable label for logging (solver name plus sorted option key/values)."""
     options = ", ".join(
         f"{name}={value}" for name, value in sorted(config["solver_options"].items())
     )
@@ -46,6 +55,7 @@ def _solver_config_label(config):
 
 
 def _display_path(path):
+    """Prefer a path relative to ``cwd`` for logs; fall back to absolute if not under cwd."""
     resolved = path.resolve()
     try:
         return resolved.relative_to(Path.cwd())
@@ -54,6 +64,7 @@ def _display_path(path):
 
 
 def _run_solver_config(smt_script, config):
+    """Execute ``smt_script`` until ``check-sat``, recording sat/unsat/unknown and optional model."""
     with Action("check-attempt") as action:
         action += {
             "solver": config["name"],

@@ -1,3 +1,4 @@
+"""PC lookup bus: opcode and operand constraints keyed by program counter."""
 from typing import Any
 
 from .single_interaction_encoder import SingleInteractionEncoder

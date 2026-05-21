@@ -1,3 +1,4 @@
+"""PySMT-side rewrite rules for equalities and modular products (field arithmetic)."""
 import logging
 from sympy import isprime
 

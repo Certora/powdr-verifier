@@ -1,3 +1,4 @@
+"""JSON/APC loading, stdin/stdout path handling, and structured dumps for reports."""
 import logging
 import json
 from pathlib import Path

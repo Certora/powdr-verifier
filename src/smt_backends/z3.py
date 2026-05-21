@@ -1,3 +1,4 @@
+"""Thin Z3-native term helpers used where PySMT is bypassed (legacy experiments)."""
 from typing import Optional
 
 from z3 import *

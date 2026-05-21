@@ -1,3 +1,8 @@
+"""Evaluate encoded constraints, axioms, and derived columns under a JSON model.
+
+Prints any subformula that does not simplify to ``true`` under
+``partial_evaluate`` with bus interpreters from the converter.
+"""
 import json
 import logging
 

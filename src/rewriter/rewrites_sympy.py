@@ -1,3 +1,4 @@
+"""SymPy-only rewrites for modular equalities (no PySMT imports in rule bodies)."""
 from sympy import *
 
 from ..utils.args import ARGS

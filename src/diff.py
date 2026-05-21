@@ -1,3 +1,8 @@
+"""Compare two APC dumps side-by-side via ``meld`` (JSON or text rendering).
+
+Temporary formatted files are written next to the inputs then removed after
+the viewer exits.
+"""
 import json
 import logging
 import subprocess

@@ -1,3 +1,4 @@
+"""``Action`` subclasses that persist JSON summaries under a configurable report root."""
 import os
 from pathlib import Path
 

@@ -1,3 +1,9 @@
+"""Terminal visualization of timestamped bus interactions and multiset state.
+
+Loads an APC dump and a model, walks encoders that expose timestamps, and
+prints a step-by-step trace with running ``bus_contents`` for debugging
+permutation / multiplicity reasoning.
+"""
 from collections import defaultdict
 from dataclasses import dataclass
 import dataclasses

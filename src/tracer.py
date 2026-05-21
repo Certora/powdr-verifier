@@ -1,3 +1,8 @@
+"""Encode a single APC block as trace satisfiability and sanity-check scripts.
+
+Writes ``*.core.smt2`` (constraints + axioms as ``sat``) and ``*.sanity.smt2``
+(unsat obligations encoding structural well-formedness checks).
+"""
 from .encoding import *
 from .report.dumpers import Action
 from .utils.args import ARGS

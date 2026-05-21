@@ -1,3 +1,4 @@
+"""Tuple range checker: bound pairs ``(x, y)`` against configured ``MAX_0`` / ``MAX_1``."""
 from .single_interaction_encoder import SingleInteractionEncoder
 
 from ..smt.utils import *

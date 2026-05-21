@@ -1,3 +1,4 @@
+"""Instruction-indexed view of a single basic block from an APC ``block`` payload."""
 class BasicBlock:
     """Represents a basic block of a program."""
 

@@ -1,3 +1,4 @@
+"""Glue and small passes used by ``simplifier``: model substitution, QF check, rewrite."""
 from ..utils.io import load_json
 from ..smt.utils import *
 from ..rewriter import rewrite
@@ -18,6 +19,7 @@ from .mod_inv import simplify_mod_inv
 from .skolem import simplify_skolem
 
 def simplify_model(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+    """Substitute concrete values from ``ARGS().with_model`` into asserted formulas (including ForAll)."""
     assert ARGS().with_model is not None
     model = load_json(ARGS().with_model)
     substitutions = {}
@@ -29,6 +31,7 @@ def simplify_model(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     
     subs = substituter.MGSubstituter(get_env())
     def __walk_forall(formula, args, **kwargs):
+        """Custom ``ForAll`` walk: substitute model values only into the inner matrix."""
         tmp = substituter.MGSubstituter(get_env())
         qvars = [pysmt.walkers.IdentityDagWalker.walk_symbol(subs, v, args, **kwargs)
                      for v in formula.quantifier_vars()]
@@ -49,6 +52,7 @@ def simplify_model(smt_script: script.SmtLibScript) -> script.SmtLibScript:
 
 
 def simplify_evaluate(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+    """Partially evaluate each assertion under an empty model (constant folding only)."""
     for cmd in smt_script:
         if cmd.name == "assert":
             cmd.args[0] = keep_comment(
@@ -66,6 +70,7 @@ def simplify_rewrite(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     return smt_script
 
 def check_isqf(smt_script: script.SmtLibScript) -> bool:
+    """Return whether every asserted formula is quantifier-free per the environment QF oracle."""
     oracle = get_env().qfo
     for cmd in smt_script:
         if cmd.name == "assert":

@@ -1,3 +1,4 @@
+"""Mixins and formulas for multiset permutation invariants and timestamp monotonicity."""
 from itertools import batched, pairwise
 import itertools
 

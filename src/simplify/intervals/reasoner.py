@@ -1,3 +1,4 @@
+"""Constraint-driven propagation of per-variable integer intervals (two variants)."""
 from __future__ import annotations
 
 import logging
@@ -18,18 +19,21 @@ logger = logging.getLogger(__name__)
 
 
 def _fmt_interval(iv: IntInterval) -> str:
+    """Human-readable ``[lo,hi]`` for logging."""
     lo = "-inf" if iv.lo is None else str(iv.lo)
     hi = "+inf" if iv.hi is None else str(iv.hi)
     return f"[{lo},{hi}]"
 
 
 def _fmt_domain(dom: IntDomain) -> str:
+    """Serialize ``IntDomain`` as union of interval strings."""
     if dom.is_bottom():
         return "<empty>"
     return " | ".join(_fmt_interval(iv) for iv in dom.parts)
 
 
 def _fmt_formula(f: FNode, max_len: int = 200) -> str:
+    """Truncate ``str(f)`` for debug logs."""
     s = str(f)
     if len(s) <= max_len:
         return s
@@ -59,6 +63,7 @@ class IntervalReasoner:
         *,
         log_interval_shrinks: bool = False,
     ):
+        """``modulus``/``p``: field prime; default from ``ARGS().field_type``."""
         if modulus is None and p is not None:
             modulus = p
         self.p = int(ARGS().field_type.value if modulus is None else modulus)
@@ -68,13 +73,16 @@ class IntervalReasoner:
         self.log_interval_shrinks = log_interval_shrinks
 
     def _should_log_shrinks(self) -> bool:
+        """True when interval shrink logging is enabled."""
         return self.log_interval_shrinks or logger.isEnabledFor(logging.INFO)
 
     def _default(self, sym: FNode) -> IntDomain:
+        """Initial domain for a symbol before any constraints."""
         # Start from full integer domain. Field bounds are learned from constraints.
         return IntDomain.top()
 
     def get_domain(self, sym: FNode) -> IntDomain:
+        """Return current ``IntDomain`` for ``sym``, or ``top`` if unseen."""
         if sym in self.env:
             return self.env[sym]
         if sym.is_symbol() and sym.get_type().is_int_type():

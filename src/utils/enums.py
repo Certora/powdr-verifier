@@ -1,3 +1,4 @@
+"""Enumerations for bus backends, field modulus, and XOR encoding strategy."""
 from enum import Enum
 from pickle import DEFAULT_PROTOCOL
 

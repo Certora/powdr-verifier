@@ -1,3 +1,8 @@
+"""Skolem witness pins and declarations for quantified verification formulas.
+
+Builds ``SetInfo`` fragments that pair quantified variables with witness
+expressions and declares any uninterpreted functions referenced by pins.
+"""
 from . import SetInfo
 from ..simplify.skolem_derived import SETINFO_PREFIX as SETINFO_DERIVED_PREFIX
 from ..simplify.skolem_utils import emit_pin_setinfo

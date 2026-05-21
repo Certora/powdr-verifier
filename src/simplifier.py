@@ -1,3 +1,8 @@
+"""SMT-LIB simplification pipeline driven by colon-separated tactic names.
+
+Each tactic mutates or inspects a parsed script in place; optional per-step
+dumps and pretty-printing are controlled via CLI flags in ``utils.args``.
+"""
 import logging
 
 from .report.action import Action

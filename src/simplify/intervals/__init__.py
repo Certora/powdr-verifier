@@ -1,3 +1,4 @@
+"""Public surface for integer interval reasoning passes on SMT-LIB scripts."""
 from .domain import INF, IntDomain, IntInterval
 from .reasoner import IntervalReasoner
 from .script import simplify_intervals, simplify_intervals2

@@ -1,3 +1,4 @@
+"""Single-variable range checker: constrain ``x < 2**bits`` for small bit widths."""
 from typing import Any
 
 from .single_interaction_encoder import SingleInteractionEncoder

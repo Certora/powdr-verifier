@@ -1,3 +1,7 @@
+"""Workspace layout: verifier root, powdr sibling, and standard data/report dirs.
+
+Helpers create dump and data subdirectories used by tests and batch runs.
+"""
 from pathlib import Path
 
 VERIFIER_DIR = Path(__file__).resolve().parent.parent

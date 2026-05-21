@@ -1,3 +1,4 @@
+"""Metadata merged into SMT-LIB scripts: ``set-info`` pins and extra declarations."""
 from dataclasses import dataclass, field
 
 

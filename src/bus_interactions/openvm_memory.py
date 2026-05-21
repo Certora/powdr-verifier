@@ -1,3 +1,4 @@
+"""Memory bus: array-valued state chain with stores, reads, and permutation semantics."""
 import itertools
 import logging
 from typing import Any

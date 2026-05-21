@@ -1,3 +1,4 @@
+"""Global CLI namespace, subcommands, and accessors used across verifier entrypoints."""
 import argparse
 import logging
 from pathlib import Path

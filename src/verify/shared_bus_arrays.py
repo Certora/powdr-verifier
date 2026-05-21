@@ -1,3 +1,8 @@
+"""Shared memory-bus array alignment between before/after APC encodings.
+
+Computes structurally identical interaction prefixes/suffixes and emits
+``set-info :shared-array-*`` pairs consumed by ``simplify.array_subst``.
+"""
 import logging
 
 from . import SetInfo

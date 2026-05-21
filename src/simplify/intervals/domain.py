@@ -1,3 +1,4 @@
+"""Integer intervals, abstract domains, and meet/join operations for the interval reasoner."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ INF = None  # unbounded side marker
 
 @dataclass(frozen=True)
 class IntInterval:
+    """Integer interval with optional open bounds; ``INF`` means unbounded on that side."""
+
     lo: Optional[int]
     hi: Optional[int]
 
@@ -100,14 +103,17 @@ class IntInterval:
 
 
 def _lo_key(v: Optional[int]) -> float:
+    """Sort key for interval lower bounds (``-inf`` for ``None``)."""
     return float("-inf") if v is None else float(v)
 
 
 def _hi_key(v: Optional[int]) -> float:
+    """Sort key for interval upper bounds (``+inf`` for ``None``)."""
     return float("inf") if v is None else float(v)
 
 
 def _mergeable(a: IntInterval, b: IntInterval) -> bool:
+    """True if ``a`` and ``b`` overlap or touch so they can be merged into one interval."""
     if a.is_bottom() or b.is_bottom():
         return False
     if a.hi is None or b.lo is None:
@@ -116,6 +122,7 @@ def _mergeable(a: IntInterval, b: IntInterval) -> bool:
 
 
 def _merge_interval(a: IntInterval, b: IntInterval) -> IntInterval:
+    """Convex hull of two mergeable intervals."""
     lo = a.lo if _lo_key(a.lo) <= _lo_key(b.lo) else b.lo
     if a.hi is None or b.hi is None:
         hi = None
@@ -125,6 +132,7 @@ def _merge_interval(a: IntInterval, b: IntInterval) -> IntInterval:
 
 
 def _normalize_intervals(intervals: Iterable[IntInterval]) -> tuple[IntInterval, ...]:
+    """Drop bottoms, sort, merge adjacent/overlapping parts into minimal disjoint union."""
     items = [iv for iv in intervals if not iv.is_bottom()]
     if not items:
         return ()
@@ -141,6 +149,8 @@ def _normalize_intervals(intervals: Iterable[IntInterval]) -> tuple[IntInterval,
 
 @dataclass(frozen=True)
 class IntDomain:
+    """Disjunctive normal form of ``IntInterval`` parts (union of disjoint intervals)."""
+
     parts: tuple[IntInterval, ...]
 
     def __post_init__(self) -> None:
@@ -267,12 +277,14 @@ class IntDomain:
 
 
 def _fmt_int_interval(iv: IntInterval) -> str:
+    """Bracket notation for ``IntInterval`` (used in ``IntVarDomains`` stringification)."""
     lo = "-inf" if iv.lo is None else str(iv.lo)
     hi = "+inf" if iv.hi is None else str(iv.hi)
     return f"[{lo},{hi}]"
 
 
 def _fmt_int_domain(dom: IntDomain) -> str:
+    """Union-of-intervals string for ``IntDomain``."""
     if dom.is_bottom():
         return "<empty>"
     if dom.is_top():
