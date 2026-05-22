@@ -132,10 +132,10 @@ def parse_args():
     return _ARGS
 
 
-def __run_main(command, *args, parse_output: bool = False) -> Optional[Any]:
+def __run_main(command, *args, parse_output: bool = False, extra_args=None) -> Optional[Any]:
     """Run ``main.py`` as a subprocess. With ``parse_output=True``, capture stdout and return ``load_json`` of it."""
-    
-    cmd = [PYTHON, VERIFIER_DIR / "main.py", *_ARGS._additional_args, *_ARGS._main_args, command, *args, *_ARGS._sub_args]
+    extra = list(extra_args or [])
+    cmd = [PYTHON, VERIFIER_DIR / "main.py", *_ARGS._additional_args, *_ARGS._main_args, command, *args, *extra, *_ARGS._sub_args]
     cmdstr = " ".join(map(str, cmd))
     if parse_output:
         try:
@@ -168,7 +168,14 @@ def __do_simplify(input, output, tactic=None):
     if tactic is None:
         tactic = _DEFAULT_TACTIC
     logging.info(f"simplifying with {tactic} {input.relative_to(Path.cwd())}")
-    return __run_main("simplify", input, tactic, output, parse_output=True)
+    return __run_main(
+        "simplify",
+        input,
+        tactic,
+        output,
+        parse_output=True,
+        extra_args=["--timeout", "60"],
+    )
 
 def with_patch(func):
     @functools.wraps(func)

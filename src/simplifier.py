@@ -1,9 +1,14 @@
 """SMT-LIB simplification pipeline driven by colon-separated tactic names.
 
 Each tactic mutates or inspects a parsed script in place; optional per-step
-dumps and pretty-printing are controlled via CLI flags in ``utils.args``.
+dumps are controlled via ``--dump-steps``; final serialization uses ``--pretty``
+(or the ``pretty`` tactic, which sets that flag on ``ARGS()``).
 """
+import copy
 import logging
+import signal
+import time
+from typing import Callable, TypeVar
 
 from .report.action import Action
 from .smt.utils import *
@@ -35,6 +40,92 @@ from .simplify import (
     simplify_z3,
 )
 
+_T = TypeVar("_T")
+
+
+class _PassTimeout(Exception):
+    pass
+
+
+def _run_with_itimer(seconds: float, fn: Callable[[], _T]) -> tuple[bool, _T | None]:
+    """Run ``fn`` under a real-time itimer. Returns ``(timed_out, value)``."""
+
+    def _on_alarm(_signum, _frame):
+        raise _PassTimeout()
+
+    prev = signal.signal(signal.SIGALRM, _on_alarm)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, float(seconds))
+        return False, fn()
+    except _PassTimeout:
+        return True, None
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, prev)
+
+
+def _apply_tactic_pass(
+    base: str,
+    dash_suffix: list[str],
+    smt_script: script.SmtLibScript,
+    subaction,
+) -> script.SmtLibScript:
+    match base:
+        case "witness":
+            return simplify_witnesses(smt_script)
+        case "array_subst":
+            return simplify_array_subst(smt_script)
+        case "andify":
+            return simplify_andify(smt_script)
+        case "bounds":
+            return simplify_bounds(smt_script)
+        case "nnf":
+            return simplify_nnf(smt_script)
+        case "isolate":
+            return simplify_isolate(smt_script)
+        case "lift":
+            return simplify_lift_forall(smt_script)
+        case "rewrite":
+            return simplify_rewrite(smt_script)
+        case "demod":
+            return simplify_demod(smt_script)
+        case "qxor":
+            return simplify_qxor(smt_script)
+        case "gxor":
+            return simplify_gxor(smt_script)
+        case "mod_inv":
+            return simplify_mod_inv(smt_script)
+        case "evaluator":
+            return simplify_evaluate(smt_script)
+        case "skolem":
+            return simplify_skolem(smt_script)
+        case "intervals":
+            return simplify_intervals(smt_script)
+        case "intervals2":
+            return simplify_intervals2(smt_script)
+        case "cvc5":
+            return simplify_cvc5(smt_script)
+        case "z3":
+            return simplify_z3(smt_script, dash_suffix)
+        case "model":
+            return simplify_model(smt_script)
+        case "isqf":
+            subaction += {"expected": "qf"}
+            if not check_isqf(smt_script):
+                logging.warning("formula is not quantifier-free")
+                subaction += {"result": "not-qf"}
+            else:
+                subaction += {"result": "qf"}
+            return smt_script
+        case "domain_probe":
+            return simplify_domain_probe(smt_script)
+        case "pretty" | "p":
+            ARGS().pretty = True
+            return smt_script
+        case _:
+            logging.error(f"ignoring unknown tactic: {base}")
+            return smt_script
+
 
 def simplify():
     """Read SMT2, run selected simplification passes, and write to output (or overwrite input)."""
@@ -50,71 +141,59 @@ def simplify():
                 logging.info(f"loading from {f.name}")
                 smt_script = parser.get_script(f)
 
-        dump_pretty = False
-        for i, t in enumerate(ARGS().tactic.split(":"), start=1):
-            raw_tactic = t
-            logging.info(f"simplifying with {t}")
-            with action.action(t) as subaction:
-                t,*args = t.split("-", 1)
-                match t:
-                    case "witness":
-                        smt_script = simplify_witnesses(smt_script)
-                    case "array_subst":
-                        smt_script = simplify_array_subst(smt_script)
-                    case "andify":
-                        smt_script = simplify_andify(smt_script)
-                    case "bounds":
-                        smt_script = simplify_bounds(smt_script)
-                    case "nnf":
-                        smt_script = simplify_nnf(smt_script)
-                    case "isolate":
-                        smt_script = simplify_isolate(smt_script)
-                    case "lift":
-                        smt_script = simplify_lift_forall(smt_script)
-                    case "rewrite":
-                        smt_script = simplify_rewrite(smt_script)
-                    case "demod":
-                        smt_script = simplify_demod(smt_script)
-                    case "qxor":
-                        smt_script = simplify_qxor(smt_script)
-                    case "gxor":
-                        smt_script = simplify_gxor(smt_script)
-                    case "mod_inv":
-                        smt_script = simplify_mod_inv(smt_script)
-                    case "evaluator":
-                        smt_script = simplify_evaluate(smt_script)
-                    case "skolem":
-                        smt_script = simplify_skolem(smt_script)
-                    case "intervals":
-                        smt_script = simplify_intervals(smt_script)
-                    case "intervals2":
-                        smt_script = simplify_intervals2(smt_script)
-                    case "cvc5":
-                        smt_script = simplify_cvc5(smt_script)
-                    case "z3":
-                        smt_script = simplify_z3(smt_script, args)
-                    case "model":
-                        smt_script = simplify_model(smt_script)
-                    case "isqf":
-                        subaction += { "expected": "qf" }
-                        if not check_isqf(smt_script):
-                            logging.warning("formula is not quantifier-free")
-                            subaction += { "result": "not-qf" }
-                        else:
-                            subaction += { "result": "qf" }
-                    case "domain_probe":
-                        smt_script = simplify_domain_probe(smt_script)
-                    case "pretty" | "p":
-                        dump_pretty = True
-                    case _:
-                        logging.error(f"ignoring unknown tactic: {t}")
+        tactics = ARGS().tactic.split(":")
+        total = len(tactics)
+        deadline = time.monotonic() + float(ARGS().timeout)
+
+        for step_index, raw_tactic in enumerate(tactics):
+            step_no = step_index + 1
+            passes_remaining = total - step_index
+            remaining = deadline - time.monotonic()
+            slice_budget = (
+                min(2.0 * remaining / passes_remaining, remaining - 1.0)
+                if passes_remaining > 0
+                else 0.0
+            )
+
+            base, *dash_suffix = raw_tactic.split("-", 1)
+
+            logging.info(f"simplifying with {raw_tactic}")
+            with action.action(raw_tactic) as subaction:
+                no_budget = remaining <= 0 or slice_budget <= 0
+                if no_budget:
+                    logging.warning(
+                        "skipping simplifier pass %s (no time budget: remaining=%s passes_left=%s)",
+                        raw_tactic,
+                        remaining,
+                        passes_remaining,
+                    )
+                    subaction += {"result": "skipped", "reason": "no-budget"}
+                    continue
+
+                backup_script = copy.deepcopy(smt_script)
+                backup_pretty = ARGS().pretty
+
+                def run_step():
+                    return _apply_tactic_pass(base, dash_suffix, smt_script, subaction)
+
+                timed_out, step_script = _run_with_itimer(slice_budget, run_step)
+
+                if timed_out:
+                    smt_script = backup_script
+                    ARGS().pretty = backup_pretty
+                    logging.warning("simplifier pass %s hit timeout, skipping", raw_tactic)
+                    subaction += {"result": "timeout"}
+                else:
+                    assert step_script is not None
+                    smt_script = step_script
+
             if ARGS().dump_steps:
                 output = ARGS().output
                 stem = output.name[:-len(output.suffix)] if output.suffix else output.name
-                dump_file = output.with_name(f"{stem}.{i:02d}.{raw_tactic}.smt2")
+                dump_file = output.with_name(f"{stem}.{step_no:02d}.{raw_tactic}.smt2")
                 with open_file(dump_file, "w") as out:
                     logging.info(f"dumping intermediate formula to {out.name}")
-                    if dump_pretty:
+                    if ARGS().pretty:
                         pretty_print_smtlib(smt_script, out)
                     else:
                         serialize_smtlib(smt_script, out)
@@ -122,7 +201,7 @@ def simplify():
         with action.action("dump"):
             with open_file(ARGS().output, "w") as out:
                 logging.info(f"dumping formula to {out.name}")
-                if dump_pretty:
+                if ARGS().pretty:
                     pretty_print_smtlib(smt_script, out)
                 else:
                     serialize_smtlib(smt_script, out)
