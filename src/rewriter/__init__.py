@@ -81,8 +81,9 @@ class RelationRewriter(substituter.Substituter):
             except sympy.SympifyError:
                 res = formula
             except Exception as e:
-                logger.error(f"error rewriting {formula}: {e}")
-                raise e
+                logger.debug("error rewriting formula: %s", formula)
+                logger.error("error rewriting: %s", e)
+                raise
             if res != formula:
                 logger.debug(f"rewrote sympy {formula} --> {res}")
                 return keep_comment(res, formula)
