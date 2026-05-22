@@ -71,14 +71,14 @@ def _match_mod_inv_definition(formula: FNode):
 
     # ite: (ite (= T 0) 0 <product>)
     cond, then_br, else_br = ite.arg(0), ite.arg(1), ite.arg(2)
-    if not (then_br.is_int_constant() and then_br.constant_value() == 0):
+    if then_br.node_type() != operators.INT_CONSTANT or int(then_br.constant_value()) != 0:
         return None
     if not cond.is_equals():
         return None
     ca, cb = cond.arg(0), cond.arg(1)
-    if cb.is_int_constant() and cb.constant_value() == 0:
+    if cb.node_type() == operators.INT_CONSTANT and int(cb.constant_value()) == 0:
         t_raw = ca
-    elif ca.is_int_constant() and ca.constant_value() == 0:
+    elif ca.node_type() == operators.INT_CONSTANT and int(ca.constant_value()) == 0:
         t_raw = cb
     else:
         return None
