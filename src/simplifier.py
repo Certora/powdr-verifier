@@ -170,7 +170,12 @@ def simplify():
                     subaction += {"result": "skipped", "reason": "no-budget"}
                     continue
 
-                backup_script = copy.deepcopy(smt_script)
+                backup_script = script.SmtLibScript()
+                if smt_script.annotations is not None:
+                    backup_script.annotations = copy.copy(smt_script.annotations)
+                backup_script.commands = [
+                    cmd._replace(args=list(cmd.args)) for cmd in smt_script.commands
+                ]
                 backup_pretty = ARGS().pretty
 
                 def run_step():
