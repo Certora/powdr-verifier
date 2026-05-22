@@ -187,6 +187,7 @@ def simplify_mod_inv(smt_script: script.SmtLibScript) -> script.SmtLibScript:
         for cmd in smt_script
         if cmd.name == "declare-fun"
     }
+    rewriter = _FallbackModInvRewriter()
     output = []
     for cmd in smt_script:
         if cmd.name != "assert":
@@ -213,7 +214,6 @@ def simplify_mod_inv(smt_script: script.SmtLibScript) -> script.SmtLibScript:
             continue
 
         # --- Strategy 2: per-term fallback ---
-        rewriter = _FallbackModInvRewriter()
         cmd.args[0] = rewriter.rewrite(cmd.args[0])
         for sym in rewriter.new_symbols:
             if sym.symbol_name() in declared:
