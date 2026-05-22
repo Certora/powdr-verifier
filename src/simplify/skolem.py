@@ -52,6 +52,8 @@ class SkolemMap:
 
     def pin(self, q: FNode, expr: FNode, *, source: str) -> bool:
         """Pin ``q`` to ``expr``. Returns ``True`` if newly pinned."""
+        if not hasattr(expr, "node_type"):
+            return False
         if q not in self.qvars:
             return False
         if q.get_type().is_array_type():

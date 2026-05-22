@@ -14,6 +14,7 @@ Pure utilities used by :mod:`.skolem` and the per-contributor modules
 
 import functools
 import io
+import re
 
 from pysmt.smtlib.parser import Tokenizer
 
@@ -62,6 +63,38 @@ def _collect_forall_qvars(smt_script: script.SmtLibScript) -> dict[str, FNode]:
     return out
 
 
+def _declare_types_from_script(smt_script: script.SmtLibScript) -> dict[str, object]:
+    out: dict[str, object] = {}
+    for cmd in smt_script:
+        if cmd.name != "declare-fun" or len(cmd.args) < 2:
+            continue
+        sym = cmd.args[0]
+        if not sym.is_symbol():
+            continue
+        out[sym.symbol_name()] = sym.symbol_type()
+    return out
+
+
+_PIN_SKIP = frozenset(
+    "ite not and or xor true false Int Bool Real mod div abs "
+    "select store distinct => implies forall exists let as const".split()
+)
+
+
+def _prebind_pin_identifiers(
+    parser: SmtLibParser, value: str, declare_types: dict[str, object]
+) -> None:
+    for m in re.finditer(r"[a-zA-Z_][a-zA-Z0-9_@.-]*", value):
+        tok = m.group(0)
+        if tok in _PIN_SKIP or parser.cache.get(tok) is not None:
+            continue
+        ty = declare_types.get(tok)
+        if ty is not None:
+            parser.cache.bind(tok, Symbol(tok, ty))
+        elif "@" in tok:
+            parser.cache.bind(tok, Symbol(tok, INT))
+
+
 def _build_parser_with_cache(smt_script: script.SmtLibScript) -> SmtLibParser:
     """Make a parser whose symbol cache mirrors the script's symbols.
 
@@ -91,7 +124,12 @@ def _build_parser_with_cache(smt_script: script.SmtLibScript) -> SmtLibParser:
     return parser
 
 
-def _parse_equation(parser: SmtLibParser, value: str) -> FNode | None:
+def _parse_equation(
+    parser: SmtLibParser,
+    value: str,
+    *,
+    declare_types: dict[str, object] | None = None,
+) -> FNode | None:
     """Parse a set-info value back into an ``FNode`` equation.
 
     The value is the raw SMT-LIB serialization; pysmt has already
@@ -104,6 +142,8 @@ def _parse_equation(parser: SmtLibParser, value: str) -> FNode | None:
     if not value:
         return None
     try:
+        if declare_types is not None:
+            _prebind_pin_identifiers(parser, value, declare_types)
         tok = Tokenizer(io.StringIO(value + " "), interactive=False)
         return parser.get_expression(tok)
     except Exception as e:
@@ -118,7 +158,7 @@ def load_setinfo_pins(
 
     Entries whose value cannot be parsed are skipped with a warning.
     """
-    parser = _build_parser_with_cache(smt_script)
+    declare_types = _declare_types_from_script(smt_script)
     out: list[FNode] = []
     for cmd in smt_script:
         if cmd.name != "set-info":
@@ -126,7 +166,11 @@ def load_setinfo_pins(
         keyword = cmd.args[0]
         if not keyword.startswith(f":{prefix}"):
             continue
-        eq = _parse_equation(parser, cmd.args[1])
+        parser = _build_parser_with_cache(smt_script)
+        raw = cmd.args[1]
+        if not isinstance(raw, str):
+            continue
+        eq = _parse_equation(parser, raw, declare_types=declare_types)
         if eq is not None:
             out.append(eq)
     return out
