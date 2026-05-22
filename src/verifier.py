@@ -18,7 +18,7 @@ from .verify.shared_bus_arrays import (
     BEFORE_PREFIX, AFTER_PREFIX,
     shared_bus_arrays, shared_arrays_setinfo,
 )
-from .verify.skolem_pins import skolem_setinfo
+from .verify.skolem_pins import _core_program_variables, derived_columns_skolem_setinfo
 
 
 def encoding(before, after, qvars, input_relation, output_relation, additional_asserts=[]):
@@ -108,7 +108,11 @@ def verify():
                 output_relation,
             )
             info = combine_setinfo(
-                skolem_setinfo(completeness, after_smt.derived),
+                derived_columns_skolem_setinfo(
+                    completeness,
+                    after_smt.derived,
+                    after_core=_core_program_variables(after_smt),
+                ),
                 shared_arrays_setinfo(shared_array_subs, reverse=True),
             )
 
@@ -137,7 +141,12 @@ def verify():
                 )
                 map_sources = {**eliminations, **after_smt.derived, **before_smt.derived}
                 info = combine_setinfo(
-                    skolem_setinfo(soundness, map_sources),
+                    derived_columns_skolem_setinfo(
+                        soundness,
+                        map_sources,
+                        after_core=_core_program_variables(after_smt),
+                        before_core=_core_program_variables(before_smt),
+                    ),
                     shared_arrays_setinfo(shared_array_subs),
                 )
                 logging.info(f"dumping soundness check to {dump.name}")
@@ -199,7 +208,12 @@ def verify():
                 )
                 map_sources = {**eliminations, **after_smt.derived, **before_smt.derived}
                 info = combine_setinfo(
-                    skolem_setinfo(soundness, map_sources),
+                    derived_columns_skolem_setinfo(
+                        soundness,
+                        map_sources,
+                        after_core=_core_program_variables(after_smt),
+                        before_core=_core_program_variables(before_smt),
+                    ),
                     shared_arrays_setinfo(shared_array_subs),
                 )
 
