@@ -39,11 +39,16 @@ UF_MOD_INV = SmtConverter.UF_MOD_INV
 def _match_mod_inv_definition(formula: FNode):
     """Match the Skolem-derived ``uf_mod_inv`` definition pattern.
 
-    Looks for::
+    Accepts both shapes the encoder may emit::
 
-        (= V (mod (ite (= T 0) 0 (* C (uf_mod_inv T))) P))
+        (= V (mod (ite (= T       0) 0 (* C (uf_mod_inv T))) P))         ; outer-mod
+        (= V (ite      (= (mod T P) 0) 0 (* C (uf_mod_inv (mod T P)))))  ; inner-mod
+        ; (and any consistent combination — mods may appear on T inside the
+        ; condition, inside ``uf_mod_inv``, or wrap the whole ite)
 
-    where ``uf_mod_inv`` can appear in any position within the product.
+    All ``(mod _ P)`` wrappers must use the same modulus ``P``. ``C`` is
+    returned as-is (any further ``(mod _ P)`` on coefficients is left for the
+    emission step, which already wraps the final RHS in ``(mod c p)``).
 
     Returns ``(V, T, C, P)`` on success, else ``None``.
     """
@@ -54,11 +59,13 @@ def _match_mod_inv_definition(formula: FNode):
     if not lhs.is_symbol():
         return None
 
-    # rhs: (mod <ite> P)
-    if rhs.node_type() != operators.MOD:
-        return None
-    p = rhs.arg(1)
-    ite = rhs.arg(0)
+    # Optional outer (mod _ P) wrapper around the ite.
+    p = None
+    if rhs.node_type() == operators.MOD:
+        p = rhs.arg(1)
+        ite = rhs.arg(0)
+    else:
+        ite = rhs
     if not ite.is_ite():
         return None
 
@@ -70,33 +77,66 @@ def _match_mod_inv_definition(formula: FNode):
         return None
     ca, cb = cond.arg(0), cond.arg(1)
     if cb.is_int_constant() and cb.constant_value() == 0:
-        t_var = ca
+        t_raw = ca
     elif ca.is_int_constant() and ca.constant_value() == 0:
-        t_var = cb
+        t_raw = cb
     else:
         return None
 
-    # product: (* ... (uf_mod_inv T) ...)
-    if else_br.node_type() != operators.TIMES:
-        return None
-    factors = list(else_br.args())
-    inv_idx = None
-    for i, f in enumerate(factors):
-        if f.is_function_application() and f.function_name() == UF_MOD_INV:
-            inv_idx = i
-            break
-    if inv_idx is None:
+    # T may itself be (mod T_inner P); strip and reconcile P.
+    if t_raw.node_type() == operators.MOD:
+        if p is None:
+            p = t_raw.arg(1)
+        elif not _structurally_equal(p, t_raw.arg(1)):
+            return None
+        t_var = t_raw.arg(0)
+    else:
+        t_var = t_raw
+
+    # else_br is either a product (* ... (uf_mod_inv <arg>) ...) or a bare
+    # (uf_mod_inv <arg>) when C=1 and the surrounding Times got folded away.
+    if else_br.is_function_application() and else_br.function_name() == UF_MOD_INV:
+        factors = [else_br]
+        inv_idx = 0
+    elif else_br.node_type() == operators.TIMES:
+        factors = list(else_br.args())
+        inv_idx = None
+        for i, f in enumerate(factors):
+            if f.is_function_application() and f.function_name() == UF_MOD_INV:
+                inv_idx = i
+                break
+        if inv_idx is None:
+            return None
+    else:
         return None
 
-    # Verify that uf_mod_inv is applied to the same term as the ITE condition.
+    # uf_mod_inv's argument may be wrapped (mod T_inner P); strip and reconcile.
     inv_node = factors[inv_idx]
-    inv_of = inv_node.arg(0)
+    inv_of_raw = inv_node.arg(0)
+    if inv_of_raw.node_type() == operators.MOD:
+        if p is None:
+            p = inv_of_raw.arg(1)
+        elif not _structurally_equal(p, inv_of_raw.arg(1)):
+            return None
+        inv_of = inv_of_raw.arg(0)
+    else:
+        inv_of = inv_of_raw
+
     if not _structurally_equal(inv_of, t_var):
+        return None
+
+    # We must have found the modulus somewhere along the way.
+    if p is None:
         return None
 
     # Remaining factors form the coefficient C in V = C / T.
     others = [f for i, f in enumerate(factors) if i != inv_idx]
-    c = others[0] if len(others) == 1 else Times(*others)
+    if not others:
+        c = Int(1)
+    elif len(others) == 1:
+        c = others[0]
+    else:
+        c = Times(*others)
     return (lhs, t_var, c, p)
 
 
