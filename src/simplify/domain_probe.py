@@ -127,7 +127,7 @@ def _probe(solver: Solver, assumption: FNode) -> Optional[bool]:
     try:
         return solver.solve()
     except SolverReturnedUnknownResultError:
-        logger.warning("domain_probe: probe %s -> unknown (skipped)", assumption)
+        logger.info("domain_probe: probe %s -> unknown (skipped)", assumption)
         return None
     finally:
         solver.pop()
@@ -153,7 +153,7 @@ def simplify_domain_probe(smt_script: script.SmtLibScript) -> script.SmtLibScrip
     all_pairs = _candidate_pairs(base_reasoner, or_map)
     ranked_all = _rank_candidates(all_pairs, base_reasoner, or_syms)
 
-    logger.warning(
+    logger.info(
         "domain_probe: start (%d base asserts, %d ranked candidate(s), "
         "max %d pair(s), solver timeout %sms)",
         len(assertions),
@@ -163,12 +163,12 @@ def simplify_domain_probe(smt_script: script.SmtLibScript) -> script.SmtLibScrip
     )
 
     if not ranked_all:
-        logger.warning("domain_probe: no candidates (non-singleton domains), done")
+        logger.info("domain_probe: no candidates (non-singleton domains), done")
         return smt_script
 
     pairs = ranked_all[:_MAX_PAIRS]
     if len(ranked_all) > len(pairs):
-        logger.warning(
+        logger.info(
             "domain_probe: probing %d of %d ranked candidate pair(s)",
             len(pairs),
             len(ranked_all),
@@ -178,7 +178,7 @@ def simplify_domain_probe(smt_script: script.SmtLibScript) -> script.SmtLibScrip
         f"{sym} in {{{','.join(map(str, vals))}}}"
         for sym, vals in pairs
     )
-    logger.warning("domain_probe: %d pair(s): %s", len(pairs), cand)
+    logger.info("domain_probe: %d pair(s): %s", len(pairs), cand)
 
     try:
         with Solver(logic=QF_UFNIA, solver_options=_SOLVER_OPTS) as solver:
@@ -191,7 +191,7 @@ def simplify_domain_probe(smt_script: script.SmtLibScript) -> script.SmtLibScrip
                     eq = Equals(sym, Int(v))
                     r = _probe(solver, eq)
                     tag = {True: "sat", False: "unsat", None: "unknown"}[r]
-                    logger.warning(
+                    logger.info(
                         "domain_probe: probe (= %s %s) -> %s",
                         sym,
                         v,
@@ -202,7 +202,7 @@ def simplify_domain_probe(smt_script: script.SmtLibScript) -> script.SmtLibScrip
                         if not any(ne == x for x in batch + accumulated):
                             batch.append(ne)
                             solver.add_assertion(ne)
-                            logger.warning(
+                            logger.info(
                                 "domain_probe: exclude -> assert %s",
                                 ne,
                             )
@@ -210,7 +210,7 @@ def simplify_domain_probe(smt_script: script.SmtLibScript) -> script.SmtLibScrip
                         if not any(eq == x for x in batch + accumulated):
                             batch.append(eq)
                             solver.add_assertion(eq)
-                            logger.warning(
+                            logger.info(
                                 "domain_probe: pin -> assert %s",
                                 eq,
                             )
@@ -223,16 +223,16 @@ def simplify_domain_probe(smt_script: script.SmtLibScript) -> script.SmtLibScrip
                     insert_at += 1
                     accumulated.append(f)
                 total_added += len(batch)
-                logger.warning(
+                logger.info(
                     "domain_probe: inserted %d assert(s)",
                     len(batch),
                 )
             else:
-                logger.warning("domain_probe: no new facts")
+                logger.info("domain_probe: no new facts")
     except Exception as e:
-        logger.warning("domain_probe: solver error, stopping: %s", e)
+        logger.info("domain_probe: solver error, stopping: %s", e)
 
-    logger.warning(
+    logger.info(
         "domain_probe: done (%d new assert(s) in script)",
         total_added,
     )
