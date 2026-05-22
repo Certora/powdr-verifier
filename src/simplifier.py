@@ -12,6 +12,7 @@ from .utils.args import ARGS
 from .utils.io import open_file
 
 from .simplify.witness import simplify_witnesses
+from .simplify.domain_probe import simplify_domain_probe
 from .simplify import (
     check_isqf,
     simplify_andify,
@@ -101,6 +102,8 @@ def simplify():
                             subaction += { "result": "not-qf" }
                         else:
                             subaction += { "result": "qf" }
+                    case "domain_probe":
+                        smt_script = simplify_domain_probe(smt_script)
                     case "pretty" | "p":
                         dump_pretty = True
                     case _:
