@@ -482,7 +482,7 @@ def convert_to_smt_script(f: FNode, status = None, extra_setinfo: list = None, e
 
     smtlib.commands.insert(0, script.SmtLibCommand(name='set-info', args=[':source', f'generated {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}']))
     # add model production and model retrieval
-    smtlib.commands.insert(2, script.SmtLibCommand(name='set-option', args=[':produce-models', 'true']))
+    #smtlib.commands.insert(2, script.SmtLibCommand(name='set-option', args=[':produce-models', 'true']))
     #smtlib.commands.insert(3, script.SmtLibCommand(name='set-option', args=[':produce-unsat-cores', 'true']))
     if status is not None:
         smtlib.commands.insert(4, script.SmtLibCommand(name='set-info', args=[':status', status]))
@@ -495,7 +495,7 @@ def convert_to_smt_script(f: FNode, status = None, extra_setinfo: list = None, e
     #smtlib.commands.insert(5, script.SmtLibCommand(name='set-option', args=[':sat.euf', 'true']))
     # get model and unsat cores
     #smtlib.add_command(script.SmtLibCommand(name='get-info', args=[':reason-unknown']))
-    smtlib.add_command(script.SmtLibCommand(name='get-model', args=[]))
+    #smtlib.add_command(script.SmtLibCommand(name='get-model', args=[]))
     #smtlib.add_command(script.SmtLibCommand(name='get-unsat-core', args=[]))
     return smtlib
 
