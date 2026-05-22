@@ -1,7 +1,13 @@
 import z3
 
 from src.smt.utils import *
-from src.simplify.z3 import _is_shared_array_pin, simplify_z3
+from src.simplify.utils import _string_to_script
+from src.simplify.z3 import (
+    _declared_symbol_names,
+    _declares_from_z3_not_in_prefix,
+    _is_shared_array_pin,
+    simplify_z3,
+)
 
 
 def test_is_shared_array_pin():
@@ -15,6 +21,23 @@ def _script_with_check_sat(commands):
     smt_script = script.SmtLibScript()
     smt_script.commands = list(commands) + [script.SmtLibCommand("check-sat", [])]
     return smt_script
+
+
+def test_declares_from_z3_not_in_prefix():
+    x = Symbol("x", INT)
+    aux = Symbol("mod!0", INT)
+    processed = _string_to_script(
+        "(set-logic ALL)\n"
+        "(declare-fun x () Int)\n"
+        "(declare-fun mod!0 () Int)\n"
+        "(assert (= mod!0 0))\n"
+        "(assert (= x 1))\n"
+    ).commands
+    prefix_names = _declared_symbol_names(
+        [script.SmtLibCommand("declare-fun", [x, INT])]
+    )
+    extra = _declares_from_z3_not_in_prefix(processed, prefix_names)
+    assert [c.args[0].symbol_name() for c in extra] == ["mod!0"]
 
 
 def test_z3_simplify_folds_not_equal_constants():
