@@ -127,6 +127,42 @@ def _apply_tactic_pass(
             return smt_script
 
 
+def _ensure_declarations_for_asserts(smt_script: script.SmtLibScript) -> None:
+    """Declare any symbol free in an assert but absent from declare-fun (parser else yields str)."""
+    fvo = get_env().fvo
+    declared: set[str] = set()
+    for cmd in smt_script.commands:
+        if cmd.name == "declare-fun":
+            declared.add(cmd.args[0].symbol_name())
+    missing: dict[str, FNode] = {}
+    for cmd in smt_script.commands:
+        if cmd.name != "assert":
+            continue
+        for sym in fvo.get_free_variables(cmd.args[0]):
+            if not sym.is_symbol():
+                continue
+            n = sym.symbol_name()
+            if n not in declared:
+                missing.setdefault(n, sym)
+    if not missing:
+        return
+    try:
+        first_assert = next(
+            i for i, c in enumerate(smt_script.commands) if c.name == "assert"
+        )
+    except StopIteration:
+        return
+    decls = [
+        script.SmtLibCommand(name="declare-fun", args=[missing[k]])
+        for k in sorted(missing)
+    ]
+    smt_script.commands = (
+        smt_script.commands[:first_assert]
+        + decls
+        + smt_script.commands[first_assert:]
+    )
+
+
 def simplify():
     """Read SMT2, run selected simplification passes, and write to output (or overwrite input)."""
 
@@ -203,6 +239,7 @@ def simplify():
                     else:
                         serialize_smtlib(smt_script, out)
 
+        _ensure_declarations_for_asserts(smt_script)
         with action.action("dump"):
             with open_file(ARGS().output, "w") as out:
                 logging.info(f"dumping formula to {out.name}")
