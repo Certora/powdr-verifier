@@ -174,7 +174,7 @@ def __do_simplify(input, output, tactic=None):
         tactic,
         output,
         parse_output=True,
-        extra_args=["--timeout", "60"],
+        extra_args=["--timeout", "55"],
     )
 
 def with_patch(func):
