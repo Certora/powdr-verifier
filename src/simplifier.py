@@ -162,7 +162,7 @@ def simplify():
                 no_budget = remaining <= 0 or slice_budget <= 0
                 if no_budget:
                     logging.warning(
-                        "skipping simplifier pass %s (no time budget: remaining=%s passes_left=%s)",
+                        "skipping simplifier pass %s (no time budget: remaining=%.2fs passes_left=%s)",
                         raw_tactic,
                         remaining,
                         passes_remaining,
