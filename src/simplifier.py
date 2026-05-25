@@ -189,7 +189,7 @@ def simplify():
             logging.info(f"simplifying with {raw_tactic}")
             with action.action(raw_tactic) as subaction:
                 if remaining <= 0:
-                    logging.warning("skipping simplifier pass %s (no time budget)", raw_tactic)
+                    logging.info("skipping simplifier pass %s (no time budget)", raw_tactic)
                     subaction += {"result": "skipped", "reason": "no-budget"}
                     continue
 
