@@ -178,31 +178,18 @@ def simplify():
                 smt_script = parser.get_script(f)
 
         tactics = ARGS().tactic.split(":")
-        total = len(tactics)
         deadline = time.monotonic() + float(ARGS().timeout)
 
         for step_index, raw_tactic in enumerate(tactics):
             step_no = step_index + 1
-            passes_remaining = total - step_index
-            remaining = deadline - time.monotonic()
-            slice_budget = (
-                min(2.0 * remaining / passes_remaining, remaining - 1.0)
-                if passes_remaining > 0
-                else 0.0
-            )
+            remaining = deadline - time.monotonic() - 2
 
             base, *dash_suffix = raw_tactic.split("-", 1)
 
             logging.info(f"simplifying with {raw_tactic}")
             with action.action(raw_tactic) as subaction:
-                no_budget = remaining <= 0 or slice_budget <= 0
-                if no_budget:
-                    logging.warning(
-                        "skipping simplifier pass %s (no time budget: remaining=%.2fs passes_left=%s)",
-                        raw_tactic,
-                        remaining,
-                        passes_remaining,
-                    )
+                if remaining <= 0:
+                    logging.warning("skipping simplifier pass %s (no time budget)", raw_tactic)
                     subaction += {"result": "skipped", "reason": "no-budget"}
                     continue
 
@@ -217,7 +204,7 @@ def simplify():
                 def run_step():
                     return _apply_tactic_pass(base, dash_suffix, smt_script, subaction)
 
-                timed_out, step_script = _run_with_itimer(slice_budget, run_step)
+                timed_out, step_script = _run_with_itimer(remaining, run_step)
 
                 if timed_out:
                     smt_script = backup_script
