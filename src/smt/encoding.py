@@ -13,18 +13,27 @@ def collect_variables(data: FormulaWithAxioms) -> frozenset[FNode]:
 
 
 def build_input_output_relation(name: str, a: dict, b: dict) -> FNode:
-    """Build a conjunction equating shared input/output symbols between two encodings."""
-    keys = a.keys() & b.keys()
+    """Build a conjunction equating input/output symbols between two encodings.
+
+    Iterates every bus key declared on either side; for each key present in
+    both dicts, emit pairwise equalities between the two symbol lists.
+    """
+    keys = sorted(a.keys() | b.keys(), key=str)
+
     def equals(x: FNode, y: FNode) -> FNode:
         if x.get_type().is_int_type() and y.get_type().is_int_type():
             return Equals(wrap_mod(Minus(x, y)), Int(0))
         else:
             return Equals(x, y)
-    return And(
-        *[
+
+    parts = []
+    for k in keys:
+        va, vb = a.get(k), b.get(k)
+        if va is None or vb is None:
+            continue
+        parts.append(
             with_comment(
-                And(equals(x, y) for x, y in zip(a[k], b[k])), f"{name} for {k}"
+                And(equals(x, y) for x, y in zip(va, vb)), f"{name} for {k}"
             )
-            for k in keys
-        ],
-    )
+        )
+    return And(*parts) if parts else TRUE()

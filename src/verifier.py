@@ -18,7 +18,7 @@ from .verify.shared_bus_arrays import (
     BEFORE_PREFIX, AFTER_PREFIX,
     shared_bus_arrays, shared_arrays_setinfo,
 )
-from .verify.skolem_pins import _core_program_variables, derived_columns_skolem_setinfo
+from .verify.skolem_pins import derived_columns_skolem_setinfo
 
 
 def encoding(before, after, qvars, input_relation, output_relation, additional_asserts=[]):
@@ -111,7 +111,6 @@ def verify():
                 derived_columns_skolem_setinfo(
                     completeness,
                     after_smt.derived,
-                    after_core=_core_program_variables(after_smt),
                 ),
                 shared_arrays_setinfo(shared_array_subs, reverse=True),
             )
@@ -144,8 +143,6 @@ def verify():
                     derived_columns_skolem_setinfo(
                         soundness,
                         map_sources,
-                        after_core=_core_program_variables(after_smt),
-                        before_core=_core_program_variables(before_smt),
                     ),
                     shared_arrays_setinfo(shared_array_subs),
                 )
@@ -211,8 +208,6 @@ def verify():
                     derived_columns_skolem_setinfo(
                         soundness,
                         map_sources,
-                        after_core=_core_program_variables(after_smt),
-                        before_core=_core_program_variables(before_smt),
                     ),
                     shared_arrays_setinfo(shared_array_subs),
                 )
