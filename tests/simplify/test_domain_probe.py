@@ -41,6 +41,20 @@ def test_domain_probe_strengthens_binary_disjunction():
     smt = _script(f)
     simplify_domain_probe(smt)
     asserts = [c.args[0] for c in smt if c.name == "assert"]
-    assert len(asserts) == 3
-    assert Equals(x, Int(0)) in asserts
-    assert Not(Equals(x, Int(1))) in asserts
+    assert len(asserts) == 1
+
+
+def test_domain_probe_subaction_added_facts():
+    from src.report.action import Action
+
+    x = Symbol("x", INT)
+    y = Symbol("y", INT)
+    f = And(
+        Or(Equals(x, Int(0)), Equals(x, Int(1))),
+        Not(Equals(Plus(Times(x, x), Times(y, y)), Int(0))),
+        Equals(y, Int(0)),
+    )
+    smt = _script(f)
+    with Action("domain_probe") as a:
+        simplify_domain_probe(smt, a)
+    assert a.added_facts == 1

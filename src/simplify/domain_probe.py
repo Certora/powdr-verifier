@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from pysmt.exceptions import SolverReturnedUnknownResultError
 
 from ..smt.utils import *
+
+if TYPE_CHECKING:
+    from ..report.action import Action
 from .intervals.domain import IntDomain, IntInterval
 from .intervals.reasoner import IntervalReasoner
 
@@ -15,7 +18,12 @@ logger = logging.getLogger(__name__)
 
 _MAX_VALUES = 3
 _MAX_PAIRS = 20
-_SOLVER_OPTS = {"timeout": 500}
+_SOLVER_OPTS = {"rlimit": 1000000}
+
+# TODO: hacky filter for specific variables
+
+def _assertions_mentioning(sym: FNode, assertions: list[FNode]) -> list[FNode]:
+    return [a for a in assertions if sym in a.get_free_variables()]
 
 
 def _finite_values(dom: IntDomain, max_n: int) -> Optional[list[int]]:
@@ -133,87 +141,89 @@ def _probe(solver: Solver, assumption: FNode) -> Optional[bool]:
         solver.pop()
 
 
-def simplify_domain_probe(smt_script: script.SmtLibScript) -> script.SmtLibScript:
-    assertions = [cmd.args[0] for cmd in smt_script if cmd.name == "assert"]
-    if not assertions:
-        return smt_script
-
-    insert_at = next(
-        (i for i, c in enumerate(smt_script.commands) if c.name == "check-sat"),
-        len(smt_script.commands),
-    )
-
-    accumulated: list[FNode] = []
+def simplify_domain_probe(
+    smt_script: script.SmtLibScript,
+    subaction: Optional["Action"] = None,
+) -> script.SmtLibScript:
     total_added = 0
+    try:
+        assertions = [cmd.args[0] for cmd in smt_script if cmd.name == "assert"]
+        if not assertions:
+            return smt_script
 
-    base_reasoner = IntervalReasoner()
-    base_reasoner.assume_all(assertions)
-    or_map = _collect_or_map(assertions)
-    or_syms = {s for s in or_map if s.is_symbol() and s.get_type().is_int_type()}
-    all_pairs = _candidate_pairs(base_reasoner, or_map)
-    ranked_all = _rank_candidates(all_pairs, base_reasoner, or_syms)
-
-    logger.info(
-        "domain_probe: start (%d base asserts, %d ranked candidate(s), "
-        "max %d pair(s), solver timeout %sms)",
-        len(assertions),
-        len(ranked_all),
-        _MAX_PAIRS,
-        _SOLVER_OPTS["timeout"],
-    )
-
-    if not ranked_all:
-        logger.info("domain_probe: no candidates (non-singleton domains), done")
-        return smt_script
-
-    pairs = ranked_all[:_MAX_PAIRS]
-    if len(ranked_all) > len(pairs):
-        logger.info(
-            "domain_probe: probing %d of %d ranked candidate pair(s)",
-            len(pairs),
-            len(ranked_all),
+        insert_at = next(
+            (i for i, c in enumerate(smt_script.commands) if c.name == "check-sat"),
+            len(smt_script.commands),
         )
 
-    cand = ", ".join(
-        f"{sym} in {{{','.join(map(str, vals))}}}"
-        for sym, vals in pairs
-    )
-    logger.info("domain_probe: %d pair(s): %s", len(pairs), cand)
+        accumulated: list[FNode] = []
 
-    try:
-        with Solver(logic=QF_UFNIA, solver_options=_SOLVER_OPTS) as solver:
-            for f in assertions:
-                solver.add_assertion(f)
+        base_reasoner = IntervalReasoner()
+        base_reasoner.assume_all(assertions)
+        or_map = _collect_or_map(assertions)
+        or_syms = {s for s in or_map if s.is_symbol() and s.get_type().is_int_type()}
+        all_pairs = _candidate_pairs(base_reasoner, or_map)
+        ranked_all = _rank_candidates(all_pairs, base_reasoner, or_syms)
 
+        logger.info(
+            "domain_probe: start (%d base asserts, %d ranked candidate(s), "
+            "max %d pair(s), solver rlimit %s)",
+            len(assertions),
+            len(ranked_all),
+            _MAX_PAIRS,
+            _SOLVER_OPTS["rlimit"],
+        )
+
+        if not ranked_all:
+            logger.info("domain_probe: no candidates (non-singleton domains), done")
+            return smt_script
+
+        pairs = ranked_all[:_MAX_PAIRS]
+        if len(ranked_all) > len(pairs):
+            logger.info(
+                "domain_probe: probing %d of %d ranked candidate pair(s)",
+                len(pairs),
+                len(ranked_all),
+            )
+
+        cand = ", ".join(
+            f"{sym} in {{{','.join(map(str, vals))}}}"
+            for sym, vals in pairs
+        )
+        logger.info("domain_probe: %d pair(s): %s", len(pairs), cand)
+
+        try:
             batch: list[FNode] = []
             for sym, vals in pairs:
-                for v in vals:
-                    eq = Equals(sym, Int(v))
-                    r = _probe(solver, eq)
-                    tag = {True: "sat", False: "unsat", None: "unknown"}[r]
-                    logger.info(
-                        "domain_probe: probe (= %s %s) -> %s",
-                        sym,
-                        v,
-                        tag,
-                    )
-                    if r is False:
-                        ne = Not(eq)
-                        if not any(ne == x for x in batch + accumulated):
-                            batch.append(ne)
-                            solver.add_assertion(ne)
-                            logger.info(
-                                "domain_probe: exclude -> assert %s",
-                                ne,
-                            )
-                    elif r is True:
-                        if not any(eq == x for x in batch + accumulated):
-                            batch.append(eq)
-                            solver.add_assertion(eq)
-                            logger.info(
-                                "domain_probe: pin -> assert %s",
-                                eq,
-                            )
+                rel = _assertions_mentioning(sym, assertions)
+                logger.info(
+                    "domain_probe: symbol %s: %d relevant of %d assert(s)",
+                    sym,
+                    len(rel),
+                    len(assertions),
+                )
+                with Solver(logic=QF_UFNIA, solver_options=_SOLVER_OPTS) as solver:
+                    for f in rel:
+                        solver.add_assertion(f)
+                    for v in vals:
+                        eq = Equals(sym, Int(v))
+                        r = _probe(solver, eq)
+                        tag = {True: "sat", False: "unsat", None: "unknown"}[r]
+                        logger.info(
+                            "domain_probe: probe (= %s %s) -> %s",
+                            sym,
+                            v,
+                            tag,
+                        )
+                        if r is False:
+                            ne = Not(eq)
+                            if not any(ne == x for x in batch + accumulated):
+                                batch.append(ne)
+                                solver.add_assertion(ne)
+                                logger.info(
+                                    "domain_probe: exclude -> assert %s",
+                                    ne,
+                                )
             if batch:
                 for f in batch:
                     smt_script.commands.insert(
@@ -229,12 +239,15 @@ def simplify_domain_probe(smt_script: script.SmtLibScript) -> script.SmtLibScrip
                 )
             else:
                 logger.info("domain_probe: no new facts")
-    except Exception as e:
-        logger.info("domain_probe: solver error, stopping: %s", e)
+        except Exception as e:
+            logger.info("domain_probe: solver error, stopping: %s", e)
 
-    logger.info(
-        "domain_probe: done (%d new assert(s) in script)",
-        total_added,
-    )
+        logger.info(
+            "domain_probe: done (%d new assert(s) in script)",
+            total_added,
+        )
 
-    return smt_script
+        return smt_script
+    finally:
+        if subaction is not None:
+            subaction += {"added_facts": total_added}
