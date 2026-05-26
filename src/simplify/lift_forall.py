@@ -2,13 +2,9 @@
 from ..smt.utils import *
 
 
-def _int_qvar_deps(expr: FNode, qvars: frozenset[FNode]) -> frozenset[FNode]:
-    """Quantified int symbols mentioned by ``expr`` (array qvars are allowed)."""
-    return frozenset(
-        v
-        for v in expr.get_free_variables() & qvars
-        if v.get_type().is_int_type()
-    )
+def _qvar_deps(expr: FNode, qvars: frozenset[FNode]) -> frozenset[FNode]:
+    """Quantified symbols mentioned by ``expr``."""
+    return expr.get_free_variables() & qvars
 
 
 def _is_potential_lift_pair(d: FNode) -> bool:
@@ -17,12 +13,7 @@ def _is_potential_lift_pair(d: FNode) -> bool:
 
 
 def _match_hoistable_eq(eq: FNode, qvars: frozenset[FNode]) -> tuple[FNode, FNode] | None:
-    """Match ``Equals`` / bool ``Iff`` as ``q = expr`` hoistable out of ``qvars``.
-
-    ``expr`` may mention quantified array symbols (memory bus bases) but must not
-    mention other quantified int columns; those are lifted iteratively once earlier
-    ints are fixed at top level.
-    """
+    """Match ``Equals`` / bool ``Iff`` as ``q = expr`` hoistable out of ``qvars``."""
     if eq.is_iff():
         if not (eq.arg(0).get_type().is_bool_type() and eq.arg(1).get_type().is_bool_type()):
             return None
@@ -34,7 +25,7 @@ def _match_hoistable_eq(eq: FNode, qvars: frozenset[FNode]) -> tuple[FNode, FNod
             continue
         if vside not in qvars:
             continue
-        if _int_qvar_deps(expr, qvars):
+        if _qvar_deps(expr, qvars):
             continue
         return vside, eq
     return None
@@ -52,10 +43,14 @@ class LiftForallWalker(IdentityDagWalker):
         """``lifted`` maps each qvar to the full equality node asserted at top level later."""
         super().__init__(*args, **kwargs)
         self.lifted = {}
+    
+    def walk_exists(self, formula, args, **kwargs):
+        return formula
 
     def walk_forall(self, formula, args, **kwargs):
         """Iteratively extract hoistable ``Not(eq)`` disjuncts and shrink the quantifier prefix."""
-        body = args[0]
+        # do not recurs, use original body instead
+        body = formula.arg(0)
         if not body.is_or():
             return formula
 
