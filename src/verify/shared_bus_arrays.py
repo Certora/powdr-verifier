@@ -147,7 +147,7 @@ def shared_bus_arrays(
                 subs[partner] = s
 
     if subs:
-        logging.warning(
+        logging.info(
             f"shared bus arrays: {len(subs)} symbols "
             f"(prefix={prefix_same}, suffix={suffix_same}, total={n})"
         )
