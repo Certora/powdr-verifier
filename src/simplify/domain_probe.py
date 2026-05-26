@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 _MAX_VALUES = 3
 _MAX_PAIRS = 20
-_SOLVER_OPTS = {"timeout": 1000}
+_SOLVER_OPTS = {"timeout": 500}
 
 
 def _finite_values(dom: IntDomain, max_n: int) -> Optional[list[int]]:
