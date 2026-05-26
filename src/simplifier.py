@@ -118,7 +118,7 @@ def _apply_tactic_pass(
                 subaction += {"result": "qf"}
             return smt_script
         case "domain_probe":
-            return simplify_domain_probe(smt_script)
+            return simplify_domain_probe(smt_script, subaction)
         case "pretty" | "p":
             ARGS().pretty = True
             return smt_script
