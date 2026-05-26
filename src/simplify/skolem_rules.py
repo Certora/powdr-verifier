@@ -357,7 +357,17 @@ def _build_skolem(matches: dict[int, dict], cmp: FNode, p: int) -> FNode:
     inside the ``b1 != 0`` ``Ite``, and so on.
     ``-x`` is encoded as ``(p-1) * x`` to stay in the unsigned residue ring.
     """
-    sign = wrap_mod(Plus(Int(p - 1), Times(Int(2), cmp)))
+    # NB: do not pre-wrap ``sign`` in ``wrap_mod``. Each consumer of
+    # ``sign`` (``neg_x_sign`` and the row-0 offset branch below) applies
+    # its own outer ``wrap_mod``, and the ``SkolemMap.emit_disjuncts`` step
+    # wraps once more. An additional inner ``wrap_mod`` on ``sign`` only
+    # nests the modulus deeper without changing semantics, and prevents
+    # z3 from propagating the pinned equality through the witness during
+    # ``z3-propagate-values``. See
+    # `apc_candidate_2104744_007_trivial_simp-…_008.soundness.rewrite` for
+    # a benchmark that times out > 30s with the inner ``wrap_mod`` and
+    # closes UNSAT in ~1s without it (16/16 seeds).
+    sign = Plus(Int(p - 1), Times(Int(2), cmp))
 
     def neg_x_sign(x: FNode) -> FNode:
         return wrap_mod(Times(Int(p - 1), x, sign))
