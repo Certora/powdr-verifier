@@ -4,6 +4,8 @@ import html
 from pathlib import Path
 import pandas
 import plotly.express
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from .database import query, query_single_value
 
@@ -459,6 +461,103 @@ def pass_solved_percentage_ecdf() -> str:
     )
     fig.update_layout(barmode="group")
     fig.update_xaxes(tickangle=-35)
+    return _fig_html(fig)
+
+
+def simplifier_pass_stats_bar() -> str:
+    time_rows = query(
+        """
+        SELECT s.name, s.running_time
+        FROM substeps s
+        JOIN substeps p ON s.parent = p.id AND p.name = 'simplifier'
+        WHERE s.name NOT IN ('load', 'dump')
+          AND (s.result IS NULL OR s.result NOT IN ('skipped', 'timeout'))
+          AND s.running_time IS NOT NULL
+        """
+    )
+    count_rows = query(
+        """
+        SELECT s.name,
+               SUM(CASE WHEN s.result = 'timeout' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN s.result = 'skipped' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN s.result IS NULL OR s.result NOT IN ('skipped', 'timeout')
+                        THEN 1 ELSE 0 END)
+        FROM substeps s
+        JOIN substeps p ON s.parent = p.id AND p.name = 'simplifier'
+        WHERE s.name NOT IN ('load', 'dump')
+        GROUP BY s.name
+        """
+    )
+    if not count_rows and not time_rows:
+        return ""
+    by_name: dict[str, dict[str, int]] = {}
+    for name, n_to, n_sk, n_ok in count_rows:
+        by_name[str(name)] = {"timeouts": int(n_to), "skipped": int(n_sk), "n_ok": int(n_ok)}
+    for name, _rt in time_rows:
+        by_name.setdefault(str(name), {"timeouts": 0, "skipped": 0, "n_ok": 0})
+    from orchestrate import _DEFAULT_TACTIC
+
+    rank: dict[str, int] = {}
+    for i, raw in enumerate(_DEFAULT_TACTIC.split(":")):
+        rank.setdefault(raw, i)
+    tail = len(rank) + 1
+    ordered = sorted(by_name, key=lambda n: (rank.get(n, tail), n))
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        horizontal_spacing=0.06,
+        column_widths=[0.55, 0.45],
+        subplot_titles=("Wall time (completed runs)", "Timeouts / skipped"),
+    )
+    if time_rows:
+        tdf = pandas.DataFrame(time_rows, columns=["name", "running_time"])
+        tdf["name"] = tdf["name"].astype(str)
+        fig.add_trace(
+            go.Box(
+                x=tdf["name"],
+                y=tdf["running_time"],
+                name="time (s)",
+                marker_color="#636EFA",
+                showlegend=False,
+            ),
+            row=1,
+            col=1,
+        )
+    timeouts = [by_name[n]["timeouts"] for n in ordered]
+    skipped = [by_name[n]["skipped"] for n in ordered]
+    fig.add_trace(
+        go.Bar(
+            x=ordered,
+            y=timeouts,
+            name="timeouts",
+            marker_color="#EF553B",
+            offsetgroup=0,
+            legendgroup="c",
+        ),
+        row=1,
+        col=2,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=ordered,
+            y=skipped,
+            name="skipped",
+            marker_color="#FFA15A",
+            offsetgroup=1,
+            legendgroup="c",
+        ),
+        row=1,
+        col=2,
+    )
+    fig.update_layout(
+        title="Simplifier passes: time distribution vs timeout/skip counts",
+        barmode="group",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    fig.update_xaxes(categoryorder="array", categoryarray=ordered, tickangle=-35, row=1, col=1)
+    fig.update_xaxes(categoryorder="array", categoryarray=ordered, tickangle=-35, row=1, col=2)
+    fig.update_yaxes(title_text="time (s)", autorange=True, rangemode="normal", row=1, col=1)
+    fig.update_yaxes(title_text="count", rangemode="tozero", row=1, col=2)
     return _fig_html(fig)
 
 
