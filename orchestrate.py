@@ -32,6 +32,11 @@ ensure_layout()
 set_report_dir(REPORTS_DIR)
 assert POWDR_DIR.exists()
 
+TIMEOUT_ENCODING_SEC = 60.0
+TIMEOUT_SIMPLIFY_SEC = 120.0
+TIMEOUT_CHECK_SEC = 60.0
+TIMEOUT_DEFAULT_SEC = 60.0
+
 _ARGS = None
 PYTHON = sys.executable
 
@@ -132,7 +137,13 @@ def parse_args():
     return _ARGS
 
 
-def __run_main(command, *args, parse_output: bool = False, extra_args=None) -> Optional[Any]:
+def __run_main(
+    command,
+    *args,
+    parse_output: bool = False,
+    extra_args=None,
+    timeout: float = TIMEOUT_DEFAULT_SEC,
+) -> Optional[Any]:
     """Run ``main.py`` as a subprocess. With ``parse_output=True``, capture stdout and return ``load_json`` of it."""
     extra = list(extra_args or [])
     cmd = [PYTHON, VERIFIER_DIR / "main.py", *_ARGS._additional_args, *_ARGS._main_args, command, *args, *extra, *_ARGS._sub_args]
@@ -144,7 +155,7 @@ def __run_main(command, *args, parse_output: bool = False, extra_args=None) -> O
                 check=True,
                 stdout=subprocess.PIPE,
                 text=True,
-                timeout=60,
+                timeout=timeout,
             )
             return load_json(StringIO(result.stdout))
         except subprocess.TimeoutExpired:
@@ -154,7 +165,7 @@ def __run_main(command, *args, parse_output: bool = False, extra_args=None) -> O
             logging.error(f"failed to parse output of {cmdstr}:\n{result.stdout}")
             return Action(command, result="invalid-json")
     try:
-        subprocess.run(cmd, check=True, timeout=60)
+        subprocess.run(cmd, check=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         logging.error(f"timed out running {cmdstr}")
     return None
@@ -174,7 +185,8 @@ def __do_simplify(input, output, tactic=None):
         tactic,
         output,
         parse_output=True,
-        extra_args=["--timeout", "55"],
+        extra_args=["--timeout", str(TIMEOUT_SIMPLIFY_SEC - 5)],
+        timeout=TIMEOUT_SIMPLIFY_SEC,
     )
 
 def with_patch(func):
@@ -232,7 +244,14 @@ def run_trace(*files):
                     res_simp = __do_simplify(file, file.with_suffix(".rewrite.smt2"))
                     check += res_simp
                     for rewritten in res_simp.outputs:
-                        check += __run_main("check", rewritten, "--dump-model", rewritten.with_suffix(".model"), parse_output=True)
+                        check += __run_main(
+                            "check",
+                            rewritten,
+                            "--dump-model",
+                            rewritten.with_suffix(".model"),
+                            parse_output=True,
+                            timeout=TIMEOUT_CHECK_SEC,
+                        )
 
 def run_diff(*pairs):
     for a,b in pairs:
@@ -290,7 +309,7 @@ def run_verify(a, b):
     with ActionDumper("verify", _ARGS.test, a, b) as a_verify:
         logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
         first = data_path_for_dump(a, f"verify-{a.stem}-{b.stem}.smt2")
-        res_verify = __run_main("verify", a, b, first, parse_output=True)
+        res_verify = __run_main("verify", a, b, first, parse_output=True, timeout=TIMEOUT_ENCODING_SEC)
         res_verify.name = "verify-encode"
         a_verify += res_verify
         for file in sorted(res_verify.outputs):
@@ -302,7 +321,8 @@ def run_verify(a, b):
                         "check",
                         rewritten,
                         "--dump-model", file.with_suffix(".model"),
-                        parse_output=True
+                        parse_output=True,
+                        timeout=TIMEOUT_CHECK_SEC,
                     )
 
 if __name__ == '__main__':
