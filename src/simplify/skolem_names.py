@@ -51,15 +51,35 @@ def collect_declared_symbols(smt_script: script.SmtLibScript) -> dict[str, FNode
     return out
 
 
-def _is_program_variable(name: str) -> bool:
-    """Return True for program variables (column names with ``@index`` suffix)."""
-    return "@" in _strip_prefix(name)
-
-
 def contribute(skolem_map, declared: dict[str, FNode]) -> None:
-    """Pin same-name witnesses on ``skolem_map`` for unpinned qvars.
+    """Pin same-name witnesses on ``skolem_map`` for every unpinned qvar
+    that has a typed same-name match at script scope.
 
     See the module docstring for the full description.
+
+    Soundness note
+    --------------
+    Adding ``q := other`` here is a Skolem witness for the existential
+    inside the surrounding ``∀ q. body(q)``. After ``simplify_lift_forall``
+    collapses the universal to ``body(other)`` the result is strictly
+    weaker than the original ∀-formula. That is:
+
+    * sound for **unsat-proving** (an unsat result on the pinned formula
+      implies unsat on the original), and
+    * incomplete: if ``other`` is the "wrong" witness for some assignment
+      of the formula's free variables, the simplifier returns **sat**.
+
+    For the verifier's equivalence-proving use case the trade-off is the
+    right one: dissolving the quantifier unlocks downstream simplifications
+    (``z3-propagate-values``, ``flatten_outer_array``, ``bounds``, …) that
+    are otherwise blocked behind universal scopes. A spurious sat
+    surfaces as a tool-reported counterexample which the user can verify
+    or reject against the actual circuit traces.
+
+    Previously this contributor was restricted to "program-variable"
+    names (those carrying an ``@index`` suffix), which excluded memory
+    state qvars like ``after-memory-N-hadinput``. The restriction is
+    removed — any qvar with a typed same-name match is now pinned.
     """
     for q in skolem_map.qvars:
         if skolem_map.is_pinned(q):
@@ -68,7 +88,5 @@ def contribute(skolem_map, declared: dict[str, FNode]) -> None:
         if other is None or other == q or other in skolem_map.qvars:
             continue
         if q.get_type() != other.get_type():
-            continue
-        if not _is_program_variable(q.symbol_name()):
             continue
         skolem_map.pin(q, other, source="names")
