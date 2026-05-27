@@ -177,7 +177,7 @@ class DeModSubstituter(substituter.Substituter):
         """Fold constant mod, push mod through ``ite``, or drop ``mod`` when in-range."""
         expr, modulus = args
         if (ec := _int_constant(expr)) is not None and (mc := _int_constant(modulus)) is not None and mc != 0:
-            self._bump("mod_constant_fold")
+            self._bump("const_eval")
             return keep_comment(Int(ec % mc), formula)
         if expr.is_ite():
             cond, thn, els = expr.args()
@@ -186,6 +186,7 @@ class DeModSubstituter(substituter.Substituter):
                 protected_constraints=self.protected_constraints,
                 stats=self._stats,
             )
+            self._bump("into_ite")
             return keep_comment(
                 Ite(
                     cond,
@@ -198,7 +199,7 @@ class DeModSubstituter(substituter.Substituter):
         if expr.is_symbol() and (m := _int_constant(modulus)) is not None:
             interval = self.ranges.get(expr)
             if interval is not None and interval.within_0_p(m):
-                self._bump("mod_elided_in_range")
+                self._bump("elim_by_range")
                 return keep_comment(expr, formula)
         return keep_comment(Mod(expr, modulus), formula)
 
@@ -218,8 +219,8 @@ def simplify_demod(smt_script: script.SmtLibScript, subaction=None) -> script.Sm
             cmd.args[0] = demod.substitute(cmd.args[0])
     if subaction is not None:
         subaction += {
-            "tracked_range_symbols": len(ranges),
-            "protected_witness_facts": len(protected_constraints),
+            "range_symbols": len(ranges),
+            "protected_range_constraints": len(protected_constraints),
             **stats,
         }
     return smt_script

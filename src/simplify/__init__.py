@@ -56,15 +56,21 @@ def simplify_model(smt_script: script.SmtLibScript, subaction=None) -> script.Sm
 
 def simplify_evaluate(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Partially evaluate each assertion under an empty model (constant folding only)."""
+    total = changed = 0
     for cmd in smt_script:
         if cmd.name == "assert":
+            total += 1
+            old = cmd.args[0]
             cmd.args[0] = keep_comment(
-                partial_evaluate(cmd.args[0], {}, {}),
-                cmd.args[0],
+                partial_evaluate(old, {}, {}),
+                old,
             )
+            changed += (cmd.args[0] != old)
+    if subaction is not None:
+        subaction += {"asserts_total": total, "asserts_changed": changed}
     return smt_script
 
-    
+
 def simplify_rewrite(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Rewrite each assertion independently with our internal rewriter."""
     changed = 0
