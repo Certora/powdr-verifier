@@ -11,6 +11,7 @@ pysmt-install --z3 --confirm-agreement
 
 mkdir -p ~/bin/
 python3 verifier/download_z3.py z3-4.16.0 ~/bin/
+python3 verifier/download_z3.py Nightly ~/bin/
 chmod +x ~/bin/*
 
 sudo apt install build-essential

@@ -242,6 +242,18 @@ solvers = [
         'options': ['-smt2', '-in'],
         'logics': logics.SMTLIB2_LOGICS,
         'min-version': ('Z3 version ([0-9.]+)', '4.12.2'),
+    },
+    {
+        'name': 'z3-local',
+        'path': Path('~/stuff/z3/build/z3').expanduser(),
+        'options': ['-smt2', '-in'],
+        'logics': logics.SMTLIB2_LOGICS,
+    },
+    {
+        'name': 'z3-nightly',
+        'path': Path('~/bin/z3-nightly').expanduser(),
+        'options': ['-smt2', '-in'],
+        'logics': logics.SMTLIB2_LOGICS,
     }
 ]
 
