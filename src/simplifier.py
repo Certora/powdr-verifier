@@ -25,6 +25,7 @@ from .simplify import (
     simplify_cvc5,
     simplify_demod,
     simplify_evaluate,
+    simplify_flatten_outer_array,
     simplify_gxor,
     simplify_intervals,
     simplify_intervals2,
@@ -73,6 +74,8 @@ def _apply_tactic_pass(
             return simplify_witnesses(smt_script, subaction)
         case "array_subst":
             return simplify_array_subst(smt_script, subaction)
+        case "flatten_outer_array":
+            return simplify_flatten_outer_array(smt_script, subaction)
         case "bounds":
             return simplify_bounds(smt_script, subaction)
         case "nnf":
