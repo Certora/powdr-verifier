@@ -19,10 +19,12 @@ def _extract_script(output: str) -> str | None:
     return output[start + len(start_tag) : end].strip()
 
 @convert_script_to_string
-def simplify_cvc5(smt: str) -> str:
+def simplify_cvc5(smt: str, subaction=None) -> str:
     """Roundtrip through external solver preprocessing."""
 
     if not CVC5_BIN.exists():
+        if subaction is not None:
+            subaction += {"applied": False, "skip": "no_cvc5_binary"}
         return None
 
     proc = subprocess.run(
@@ -41,6 +43,12 @@ def simplify_cvc5(smt: str) -> str:
         )
         logging.warning(proc.stdout)
         logging.warning(proc.stderr)
+        if subaction is not None:
+            subaction += {
+                "applied": False,
+                "skip": "cvc5_nonzero",
+                "returncode": proc.returncode,
+            }
         return None
 
     post_asserts = _extract_script(proc.stdout)
@@ -48,6 +56,14 @@ def simplify_cvc5(smt: str) -> str:
         logging.warning(
             "external solver pass skipped: could not find post-asserts block in cvc5 output"
         )
+        if subaction is not None:
+            subaction += {"applied": False, "skip": "no_post_asserts_block"}
         return None
 
+    if subaction is not None:
+        subaction += {
+            "applied": True,
+            "bytes_in": len(smt),
+            "bytes_out": len(post_asserts),
+        }
     return post_asserts

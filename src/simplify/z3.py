@@ -43,7 +43,7 @@ def _is_shared_array_pin(formula: FNode) -> bool:
     return ln.removeprefix("before-") == rn.removeprefix("after-")
 
 
-def simplify_z3(smt_script: script.SmtLibScript, args=[]) -> script.SmtLibScript:
+def simplify_z3(smt_script: script.SmtLibScript, args=[], subaction=None) -> script.SmtLibScript:
     """Feed asserts to a Z3 ``Tactic`` solver until ``check-sat``, then splice back simplified asserts.
 
     ``args`` empty: default ``Repeat(Then(propagate-values, …, ctx-simplify))``.
@@ -72,6 +72,7 @@ def simplify_z3(smt_script: script.SmtLibScript, args=[]) -> script.SmtLibScript
     suffix: list = []
     in_suffix = False
     output: list = []
+    z3_asserts_in = 0
 
     for cmd in smt_script:
         if in_suffix:
@@ -81,9 +82,10 @@ def simplify_z3(smt_script: script.SmtLibScript, args=[]) -> script.SmtLibScript
             case "set-info" | "set-logic" | "set-option" | "declare-fun" | "get-model" | "get-unsat-core" | "echo":
                 prefix.append(cmd)
             case "assert":
+                z3_asserts_in += 1
                 s.add(conv.convert(cmd.args[0]))
             case "check-sat":
-                s.check()
+                z3_check = s.check()
                 processed = _string_to_script(s.sexpr()).commands
                 prefix_names = _declared_symbol_names(prefix)
                 extra_decls = _declares_from_z3_not_in_prefix(
@@ -95,6 +97,14 @@ def simplify_z3(smt_script: script.SmtLibScript, args=[]) -> script.SmtLibScript
                 ]
                 output = list(prefix) + extra_decls + new_asserts + [cmd]
                 in_suffix = True
+                if subaction is not None:
+                    subaction += {
+                        "z3_check": str(z3_check),
+                        "asserts_in": z3_asserts_in,
+                        "asserts_out": len(new_asserts),
+                        "extra_declarations": len(extra_decls),
+                        "tactic_args": list(args) if args else None,
+                    }
             case _:
                 assert False, f"unexpected command: {cmd.name}"
 

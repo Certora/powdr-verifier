@@ -40,7 +40,7 @@ class BoundsQuantifierSubstituter(substituter.Substituter):
         return keep_comment(Exists(qvars, body), formula)
 
 
-def simplify_bounds(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+def simplify_bounds(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """After a preserving walk, prepend ``field_symbol`` asserts for bounded ``@…`` int columns."""
     injector = BoundsQuantifierSubstituter(env=get_env())
     bounded_symbols = set()
@@ -57,6 +57,8 @@ def simplify_bounds(smt_script: script.SmtLibScript) -> script.SmtLibScript:
         rewritten.append(cmd)
 
     if not bounded_symbols:
+        if subaction is not None:
+            subaction += {"bounded_symbols": 0, "range_asserts_added": 0}
         return smt_script
 
     bound_asserts = [
@@ -73,4 +75,9 @@ def simplify_bounds(smt_script: script.SmtLibScript) -> script.SmtLibScript:
         output.append(cmd)
 
     smt_script.commands = output
+    if subaction is not None:
+        subaction += {
+            "bounded_symbols": len(bounded_symbols),
+            "range_asserts_added": len(bound_asserts),
+        }
     return smt_script

@@ -20,7 +20,6 @@ from .simplify.witness import simplify_witnesses
 from .simplify.domain_probe import simplify_domain_probe
 from .simplify import (
     check_isqf,
-    simplify_andify,
     simplify_array_subst,
     simplify_bounds,
     simplify_cvc5,
@@ -72,43 +71,41 @@ def _apply_tactic_pass(
 ) -> script.SmtLibScript:
     match base:
         case "witness":
-            return simplify_witnesses(smt_script)
+            return simplify_witnesses(smt_script, subaction)
         case "array_subst":
-            return simplify_array_subst(smt_script)
-        case "andify":
-            return simplify_andify(smt_script)
+            return simplify_array_subst(smt_script, subaction)
         case "bounds":
-            return simplify_bounds(smt_script)
+            return simplify_bounds(smt_script, subaction)
         case "nnf":
-            return simplify_nnf(smt_script)
+            return simplify_nnf(smt_script, subaction)
         case "isolate":
-            return simplify_isolate(smt_script)
+            return simplify_isolate(smt_script, subaction)
         case "lift":
-            return simplify_lift_forall(smt_script)
+            return simplify_lift_forall(smt_script, subaction)
         case "rewrite":
-            return simplify_rewrite(smt_script)
+            return simplify_rewrite(smt_script, subaction)
         case "demod":
-            return simplify_demod(smt_script)
+            return simplify_demod(smt_script, subaction)
         case "qxor":
-            return simplify_qxor(smt_script)
+            return simplify_qxor(smt_script, subaction)
         case "gxor":
-            return simplify_gxor(smt_script)
+            return simplify_gxor(smt_script, subaction)
         case "mod_inv":
-            return simplify_mod_inv(smt_script)
+            return simplify_mod_inv(smt_script, subaction)
         case "evaluator":
-            return simplify_evaluate(smt_script)
+            return simplify_evaluate(smt_script, subaction)
         case "skolem":
-            return simplify_skolem(smt_script)
+            return simplify_skolem(smt_script, subaction)
         case "intervals":
-            return simplify_intervals(smt_script)
+            return simplify_intervals(smt_script, subaction)
         case "intervals2":
-            return simplify_intervals2(smt_script)
+            return simplify_intervals2(smt_script, subaction)
         case "cvc5":
-            return simplify_cvc5(smt_script)
+            return simplify_cvc5(smt_script, subaction)
         case "z3":
-            return simplify_z3(smt_script, dash_suffix)
+            return simplify_z3(smt_script, dash_suffix, subaction)
         case "model":
-            return simplify_model(smt_script)
+            return simplify_model(smt_script, subaction)
         case "isqf":
             subaction += {"expected": "qf"}
             if not check_isqf(smt_script):

@@ -62,10 +62,19 @@ class NNFConverter(substituter.Substituter):
                 return self.mgr.Or(lst)
 
 
-def simplify_nnf(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+def simplify_nnf(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Run ``NNFConverter`` on every asserted formula in the script."""
     conv = NNFConverter()
+    changed = 0
+    total = 0
     for cmd in smt_script:
         if cmd.name == "assert":
-            cmd.args[0] = conv.substitute(cmd.args[0])
+            total += 1
+            old = cmd.args[0]
+            new = conv.substitute(old)
+            cmd.args[0] = new
+            if not new.equals(old):
+                changed += 1
+    if subaction is not None:
+        subaction += {"asserts": total, "asserts_changed": changed}
     return smt_script

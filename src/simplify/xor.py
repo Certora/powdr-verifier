@@ -123,31 +123,38 @@ class XOrQuantifierSubstituter(substituter.Substituter):
         return keep_comment(Exists(qvars, body), formula)
 
 
-def _simplify_xor(smt_script: script.SmtLibScript, axiom_builder) -> script.SmtLibScript:
+def _simplify_xor(smt_script: script.SmtLibScript, axiom_builder, subaction=None) -> script.SmtLibScript:
     """Shared implementation for ``simplify_qxor`` / ``simplify_gxor``."""
     injector = XOrQuantifierSubstituter(axiom_builder)
     output = []
+    top_axiom_asserts = 0
     for cmd in smt_script:
         if cmd.name == "assert":
             cmd.args[0] = injector.substitute(cmd.args[0])
             output.append(cmd)
             terms = _collect_xor_terms(cmd.args[0])
             if terms:
+                axioms = list(without_trues(axiom_builder(terms)))
+                top_axiom_asserts += len(axioms)
                 output.extend(
                     script.SmtLibCommand(name="assert", args=[axiom])
-                    for axiom in without_trues(axiom_builder(terms))
+                    for axiom in axioms
                 )
         else:
             output.append(cmd)
     smt_script.commands = output
+    if subaction is not None:
+        subaction += {
+            "top_level_xor_axiom_asserts": top_axiom_asserts,
+        }
     return smt_script
 
 
-def simplify_qxor(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+def simplify_qxor(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Inject global and local ``_qxor_axioms`` for ``UF_XOR``."""
-    return _simplify_xor(smt_script, _qxor_axioms)
+    return _simplify_xor(smt_script, _qxor_axioms, subaction)
 
 
-def simplify_gxor(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+def simplify_gxor(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Inject ``_gxor_axioms`` for each distinct ``UF_XOR`` term."""
-    return _simplify_xor(smt_script, _gxor_axioms)
+    return _simplify_xor(smt_script, _gxor_axioms, subaction)

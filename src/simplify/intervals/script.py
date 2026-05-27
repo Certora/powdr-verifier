@@ -22,10 +22,12 @@ def _is_simple_atomic_bound(f: FNode) -> bool:
     return (a.is_int_constant() and b.is_symbol()) or (b.is_int_constant() and a.is_symbol())
 
 
-def simplify_intervals(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+def simplify_intervals(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Run disjunctive interval propagation on all assertions."""
     assertions = [cmd.args[0] for cmd in smt_script if cmd.name == "assert"]
     if not assertions:
+        if subaction is not None:
+            subaction += {"asserts": 0, "inconsistent": False, "tightened_symbols": 0}
         return smt_script
 
     if interval_logger.isEnabledFor(logging.INFO):
@@ -71,10 +73,16 @@ def simplify_intervals(smt_script: script.SmtLibScript) -> script.SmtLibScript:
         ):
             cmd.args[0] = reasoner.inject_root_bounds(cmd.args[0], only_tightened=True)
 
+    if subaction is not None:
+        subaction += {
+            "asserts": len(assertions),
+            "inconsistent": inconsistent,
+            "tightened_symbols": len(reasoner.tightened_symbols),
+        }
     return smt_script
 
 
-def simplify_intervals2(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+def simplify_intervals2(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Interval-style propagation using ``BoundedFormula.refine_recursive`` (alternative to ``simplify_intervals``).
 
     All assertions are conjoined, refined on a single ``BoundedFormula`` tree, then the
@@ -103,7 +111,10 @@ def simplify_intervals2(smt_script: script.SmtLibScript) -> script.SmtLibScript:
             case _:
                 assert False, f"unexpected command: {cmd.name}"
     
+    n_asserts_in = len(assertions)
     if not assertions:
+        if subaction is not None:
+            subaction += {"asserts_in": 0, "asserts_out": 0, "inconsistent": False}
         return smt_script
 
     if interval_logger.isEnabledFor(logging.INFO):
@@ -132,4 +143,11 @@ def simplify_intervals2(smt_script: script.SmtLibScript) -> script.SmtLibScript:
 
     res = script.SmtLibScript()
     res.commands = prefix + assertions + suffix
+    if subaction is not None:
+        out_asserts = sum(1 for c in res.commands if c.name == "assert")
+        subaction += {
+            "asserts_in": n_asserts_in,
+            "asserts_out": out_asserts,
+            "inconsistent": inconsistent,
+        }
     return res

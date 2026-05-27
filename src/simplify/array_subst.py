@@ -90,7 +90,7 @@ def _extract_equalities(f: FNode):
                 yield conj
 
 
-def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+def simplify_array_subst(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Assert shared bus equalities and substitute away redundant array declarations.
 
     Two independent transformations run in sequence:
@@ -232,6 +232,7 @@ def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript
     # ``check-sat`` so Z3's congruence closure can propagate them
     # internally.
 
+    shared_bus_asserts_injected = 0
     if pin_assertions:
         check_sat_idx = next(
             (i for i, c in enumerate(smt_script.commands) if c.name == "check-sat"),
@@ -253,6 +254,7 @@ def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript
             smt_script.commands.insert(check_sat_idx, cmd)
             check_sat_idx += 1
             added += 1
+        shared_bus_asserts_injected = added
         logging.info(f"array-subst: added {added} shared assertions")
 
     if dead_syms:
@@ -268,5 +270,14 @@ def simplify_array_subst(smt_script: script.SmtLibScript) -> script.SmtLibScript
             and cmd.args[0].startswith(SETINFO_CMD_PREFIX)
         )
     ]
+
+    if subaction is not None:
+        subaction += {
+            "setinfo_shared_array_pins": len(pins),
+            "resolved_pin_equalities": len(pin_assertions),
+            "array_rename_edges": len(subs),
+            "shared_bus_asserts_injected": shared_bus_asserts_injected,
+            "dead_array_symbols": len(dead_syms),
+        }
 
     return smt_script

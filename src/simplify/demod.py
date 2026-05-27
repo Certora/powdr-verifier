@@ -132,11 +132,17 @@ class DeModSubstituter(substituter.Substituter):
         env=None,
         ranges: dict[FNode, IntInterval] = {},
         protected_constraints: frozenset[FNode] = frozenset(),
+        stats: dict[str, int] | None = None,
     ):
         """``ranges``: learned bounds per symbol; ``protected_constraints`` stay unmodified."""
         substituter.Substituter.__init__(self, env=env)
         self.ranges = ranges
         self.protected_constraints = protected_constraints
+        self._stats = stats
+
+    def _bump(self, key: str) -> None:
+        if self._stats is not None:
+            self._stats[key] = self._stats.get(key, 0) + 1
 
     @substituter.handles(
         set(operators.ALL_TYPES)
@@ -159,6 +165,7 @@ class DeModSubstituter(substituter.Substituter):
         inner = DeModSubstituter(
             ranges={sym: interval for sym, interval in self.ranges.items() if sym not in qvars},
             protected_constraints=self.protected_constraints,
+            stats=self._stats,
         )
         body = inner.substitute(formula.arg(0))
         if formula.is_forall():
@@ -170,12 +177,14 @@ class DeModSubstituter(substituter.Substituter):
         """Fold constant mod, push mod through ``ite``, or drop ``mod`` when in-range."""
         expr, modulus = args
         if (ec := _int_constant(expr)) is not None and (mc := _int_constant(modulus)) is not None and mc != 0:
+            self._bump("mod_constant_fold")
             return keep_comment(Int(ec % mc), formula)
         if expr.is_ite():
             cond, thn, els = expr.args()
             inner = DeModSubstituter(
                 ranges=self.ranges,
                 protected_constraints=self.protected_constraints,
+                stats=self._stats,
             )
             return keep_comment(
                 Ite(
@@ -189,16 +198,28 @@ class DeModSubstituter(substituter.Substituter):
         if expr.is_symbol() and (m := _int_constant(modulus)) is not None:
             interval = self.ranges.get(expr)
             if interval is not None and interval.within_0_p(m):
+                self._bump("mod_elided_in_range")
                 return keep_comment(expr, formula)
         return keep_comment(Mod(expr, modulus), formula)
 
 
-def simplify_demod(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+def simplify_demod(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Run the lightweight de-mod pass over all assertions in an SMT-LIB script."""
     constraints = [cmd.args[0] for cmd in smt_script if cmd.name == "assert"]
     ranges, protected_constraints = extract_symbol_ranges(constraints)
-    demod = DeModSubstituter(ranges=ranges, protected_constraints=protected_constraints)
+    stats: dict[str, int] = {}
+    demod = DeModSubstituter(
+        ranges=ranges,
+        protected_constraints=protected_constraints,
+        stats=stats,
+    )
     for cmd in smt_script:
         if cmd.name == "assert":
             cmd.args[0] = demod.substitute(cmd.args[0])
+    if subaction is not None:
+        subaction += {
+            "tracked_range_symbols": len(ranges),
+            "protected_witness_facts": len(protected_constraints),
+            **stats,
+        }
     return smt_script

@@ -200,7 +200,7 @@ class WitnessSubstituter(IdentityDagWalker):
         return ForAll(qvars, body)
 
 
-def simplify_witnesses(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+def simplify_witnesses(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Two-phase: collect collapsed witnesses from asserts, then rewrite matching ``forall`` bodies."""
     candidates = []
     for cmd in smt_script:
@@ -210,10 +210,15 @@ def simplify_witnesses(smt_script: script.SmtLibScript) -> script.SmtLibScript:
             match = _match_collapsed_witness(node)
             if match is not None:
                 candidates.append(match)
+    n_cand = len(candidates)
     if not candidates:
+        if subaction is not None:
+            subaction += {"witness_candidates": 0}
         return smt_script
     w = WitnessSubstituter(candidates, env=get_env())
     for cmd in smt_script:
         if cmd.name == "assert":
             cmd.args[0] = keep_comment(w.walk(cmd.args[0]), cmd.args[0])
+    if subaction is not None:
+        subaction += {"witness_candidates": n_cand}
     return smt_script
