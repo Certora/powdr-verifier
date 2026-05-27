@@ -28,7 +28,6 @@ from .simplify import (
     simplify_gxor,
     simplify_intervals,
     simplify_intervals2,
-    simplify_isolate,
     simplify_lift_forall,
     simplify_mod_inv,
     simplify_model,
@@ -78,8 +77,6 @@ def _apply_tactic_pass(
             return simplify_bounds(smt_script, subaction)
         case "nnf":
             return simplify_nnf(smt_script, subaction)
-        case "isolate":
-            return simplify_isolate(smt_script, subaction)
         case "lift":
             return simplify_lift_forall(smt_script, subaction)
         case "rewrite":

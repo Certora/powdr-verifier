@@ -17,13 +17,15 @@ Each *contributor* lives in its own module:
   1. :mod:`.skolem_rules`    - OpenVM ``EqualZeroCheck``.
   2. :mod:`.skolem_derived`  - eliminations / derived-column pins
      (verifier emits ``:skolem-derived-N`` set-info entries).
-  3. :mod:`.skolem_names`    - same-name fallback.
+  3. :mod:`.skolem_witness` - collapsed free-var witness patterns.
+  4. :mod:`.skolem_names`    - same-name fallback.
+  5. :mod:`.skolem_isolate`  - field-bounded isolation probes (QF_UFNIA).
 
 For every ``forall`` whose body is an ``Or`` (post-NNF) we build a
 fresh :class:`SkolemMap` over its qvars and run the contributors in
 the order above (most-specific to least-specific so derived wins over
-the same-name fallback; within a contributor, the first pin
-for a qvar is kept). Every pinned qvar is appended to the body as
+the same-name fallback; isolation runs last; within a contributor, the
+first pin for a qvar is kept). Every pinned qvar is appended to the body as
 ``Not(q = wrap_mod(expr))`` (or ``Not(q = expr)`` for non-int types);
 ``simplify_lift_forall`` later hoists each disjunct to a top-level
 assertion, removing ``q`` from the universal.
@@ -32,7 +34,7 @@ assertion, removing ``q`` from the universal.
 from ..smt.utils import *
 from ..smt_backends.pysmt import wrap_mod
 
-from . import skolem_derived, skolem_names, skolem_rules, skolem_witness
+from . import skolem_derived, skolem_isolate, skolem_names, skolem_rules, skolem_witness
 
 
 class SkolemMap:
@@ -41,7 +43,8 @@ class SkolemMap:
     Tracks ``{qvar -> witness expr}`` plus a tag identifying which
     contributor pinned each qvar (used for logging / debugging only).
     The first contributor wins; later :meth:`pin` calls for the same
-    qvar are silently dropped.
+    qvar are silently dropped. A successful :meth:`pin` logs a warning
+    (contributor name, qvar, witness).
     """
 
     def __init__(self, qvars):
@@ -62,6 +65,7 @@ class SkolemMap:
             return False
         self.pins[q] = expr
         self.sources[q] = source
+        logging.info("skolem %r pinned %s := %s", source, q, expr)
         return True
 
     def is_pinned(self, q: FNode) -> bool:
@@ -112,6 +116,7 @@ class _SkolemWalker(IdentityDagWalker):
         skolem_derived.contribute(m, self.derived)
         skolem_witness.contribute(m, body, self.witness_candidates)
         skolem_names.contribute(m, self.declared)
+        skolem_isolate.contribute(m, body)
 
         for src in m.sources.values():
             self.applied[src] = self.applied.get(src, 0) + 1
@@ -151,6 +156,7 @@ def simplify_skolem(smt_script: script.SmtLibScript, subaction=None) -> script.S
             len(smt_script.commands),
         )
         for var, expr in free_pins:
+            logging.info("skolem %r pinned %s := %s", "rules-free", var, expr)
             pin = script.SmtLibCommand(name="assert", args=[Equals(var, expr)])
             smt_script.commands.insert(insert_idx, pin)
             insert_idx += 1
