@@ -60,11 +60,11 @@ def download_and_extract_asset(url: str, target: Path):
 def download_release_asset(*releases: dict):
     for release in releases:
         name = release['tag_name']
-        if name in ['Nightly']:
-            continue
+        if name == 'Nightly':
+            name = 'z3-nightly'
         for asset in release['assets']:
             if re_asset.match(asset['name']) is not None:
-                download_and_extract_asset(asset['browser_download_url'], args.target / release['tag_name'])
+                download_and_extract_asset(asset['browser_download_url'], args.target / name)
                 break
 
 
