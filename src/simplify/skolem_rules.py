@@ -657,5 +657,8 @@ def contribute_free(smt_script, qvars: set[FNode]) -> list[tuple[FNode, FNode]]:
                 pins.append((dm_var, dm_skolem))
 
     if pins:
-        logging.info(f"skolem rules-free: pinning {len(pins)} free diff_val/diff_marker variables")
+        logging.debug(
+            "skolem rules-free: built %d free diff_val/diff_marker pin(s)",
+            len(pins),
+        )
     return pins

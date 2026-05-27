@@ -13,7 +13,7 @@ VERIFIER = WORKSPACE / "verifier"
 POWDR_DUMPS = VERIFIER / "powdr-dumps"
 MAIN = VERIFIER / "main.py"
 PYTHON = VERIFIER / ".venv" / "bin" / "python"
-TACTIC = "nnf:isolate:lift:witness:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:domain_probe:pretty"
+TACTIC = "nnf:skolem:lift:witness:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:domain_probe:pretty"
 
 
 @dataclass(frozen=True)
