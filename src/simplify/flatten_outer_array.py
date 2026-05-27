@@ -27,6 +27,15 @@ recursive ``proj_k`` and every outer-typed equality expands to an
 ``(Array Int (Array Int X))``-typed terms in the formula and the
 outer-level select-over-store axiom enumeration disappears entirely.
 
+The pass is wrapped in a fixpoint loop, but in the current
+configuration (outer-only) it terminates after one round. Inner
+1-level arrays are left alone — extending the pass to flatten those
+too is desirable for further speedup (their indices are also a small
+constant set, ``{2, 4, 8, 32}``) but requires per-equivalence-class K
+aggregation rather than the global-K we use here; the global-K choice
+over-flattens unrelated inner arrays into a shared index space,
+producing fresh unconstrained scalars in equalities. Future work.
+
 Soundness rests on three properties:
 
 1. **Constant outer indices only.** The pass walks every node and
@@ -46,8 +55,7 @@ Soundness rests on three properties:
    ``(and (= A__k1 B__k1) … (= A__kn B__kn))`` — equal only at the
    observed indices. This is *equivalent* on the original formula
    because there are no other observable indices: the precondition
-   guarantees every access uses an index in ``K``. (If the formula
-   had a ``(select X 99)`` with ``99 ∉ K``, the bail-out triggers.)
+   guarantees every access uses an index in ``K``.
 
 Pipeline placement
 ------------------
@@ -65,9 +73,21 @@ from ..smt.utils import *
 
 
 def _is_outer_array_type(t) -> bool:
-    """True if `t` is `(Array Int (Array Int X))` for any X."""
-    return (t.is_array_type()
-            and t.elem_type.is_array_type())
+    """True if `t` is a 2-level array ``(Array Int (Array Int X))``.
+
+    We only consider arrays whose element type is itself an array. Inner
+    arrays are left alone because a per-array K computed by globally
+    unioning observed constant indices over-flattens: two unrelated inner
+    arrays end up with each other's indices in their K, producing fresh
+    unconstrained scalars in equalities that didn't have those indices in
+    the original formula. Outer arrays don't have this problem because the
+    outer-index set is uniform across the file in practice.
+
+    A future safe extension to inner arrays would require per-equivalence-
+    class K aggregation (only arrays equated to each other share a K),
+    which we don't have yet.
+    """
+    return t.is_array_type() and t.elem_type.is_array_type()
 
 
 def _collect_outer_decls(smt_script) -> dict[str, FNode]:
@@ -153,6 +173,13 @@ def _scan_uses(
     return indices_used, referenced, ineligible
 
 
+def _eq(mgr, a: FNode, b: FNode) -> FNode:
+    """Equals for non-Bool, Iff for Bool. pysmt forbids Equals on Bool."""
+    if a.get_type().is_bool_type():
+        return mgr.Iff(a, b)
+    return mgr.Equals(a, b)
+
+
 class _FlattenWalker(IdentityDagWalker):
     """Rewrite outer-array operations by projection to per-k inner arrays."""
 
@@ -206,7 +233,11 @@ class _FlattenWalker(IdentityDagWalker):
         return self.mgr.Select(arr, idx)
 
     def walk_equals(self, formula, args, **kwargs):
-        """Outer-typed ``(= A B)`` → ``(and (= A__k B__k) for k ∈ K)``."""
+        """Outer-typed ``(= A B)`` → ``(and (eq A__k B__k) for k ∈ K)``.
+
+        ``eq`` is ``Iff`` when the projected element type is Bool, else
+        ``Equals`` (pysmt forbids ``Equals`` on Booleans).
+        """
         a, b = args
         if _is_outer_array_type(a.get_type()):
             # Determine the keys from whichever side is a flattened symbol.
@@ -218,9 +249,10 @@ class _FlattenWalker(IdentityDagWalker):
             if not keys:
                 # Neither side is a declared (flattenable) name — leave alone.
                 return self.mgr.Equals(a, b)
-            conjuncts = [self.mgr.Equals(self._project(a, k),
-                                         self._project(b, k))
-                         for k in keys]
+            conjuncts = [
+                _eq(self.mgr, self._project(a, k), self._project(b, k))
+                for k in keys
+            ]
             if len(conjuncts) == 1:
                 return conjuncts[0]
             return self.mgr.And(*conjuncts)
@@ -231,15 +263,61 @@ def simplify_flatten_outer_array(
     smt_script: script.SmtLibScript,
     subaction=None,
 ) -> script.SmtLibScript:
-    """Flatten outer-array layer for vars with constant-only outer accesses.
+    """Repeatedly flatten array decls with constant-only accesses.
 
-    See module docstring for the transformation and soundness argument.
+    Runs ``_flatten_one_round`` to a fixpoint (bounded iteration count
+    so we don't loop forever on pathological inputs). Each round
+    handles arrays whose accesses are all literal-constant indices;
+    after flattening an outer ``(Array Int (Array Int X))`` into per-k
+    ``(Array Int X)`` inner arrays, the next round may flatten the
+    inner arrays into scalars (and so on).
+
+    See module docstring for the per-round transformation and
+    soundness argument.
+    """
+    total_flattened = 0
+    total_new = 0
+    total_rewrites = 0
+    total_ineligible = 0
+    rounds = 0
+    MAX_ROUNDS = 8
+    while rounds < MAX_ROUNDS:
+        round_sub = None  # don't pollute subaction with per-round counts
+        round_stats = _flatten_one_round(smt_script)
+        if round_stats["flattened"] == 0:
+            break
+        total_flattened += round_stats["flattened"]
+        total_new += round_stats["new_inner_arrays"]
+        total_rewrites += round_stats["asserts_rewritten"]
+        total_ineligible = round_stats["ineligible"]  # last round's view
+        rounds += 1
+    logging.info(
+        f"flatten_outer_array: total {total_flattened} arrays flattened into "
+        f"{total_new} per-index decls across {rounds} round(s) "
+        f"({total_rewrites} asserts rewritten; "
+        f"{total_ineligible} ineligible at final round)"
+    )
+    if subaction is not None:
+        subaction += {
+            "rounds": rounds,
+            "flattened_total": total_flattened,
+            "new_inner_arrays_total": total_new,
+            "asserts_rewritten_total": total_rewrites,
+            "ineligible_at_final_round": total_ineligible,
+        }
+    return smt_script
+
+
+def _flatten_one_round(smt_script: script.SmtLibScript) -> dict:
+    """Run one round of flattening. Returns counts as a dict.
+
+    A "round" picks all flatten-eligible top-level array decls, performs
+    the per-k split + rewrite once, and returns. The outer driver
+    iterates this until no decl is flatten-eligible.
     """
     outer_decls = _collect_outer_decls(smt_script)
     if not outer_decls:
-        if subaction is not None:
-            subaction += {"outer_arrays": 0, "flattened": 0}
-        return smt_script
+        return {"flattened": 0, "new_inner_arrays": 0, "asserts_rewritten": 0, "ineligible": 0}
 
     indices_used, referenced, ineligible = _scan_uses(
         smt_script, set(outer_decls.keys()))
@@ -263,13 +341,8 @@ def simplify_flatten_outer_array(
     eligible: dict[str, set[int]] = {name: global_k for name in eligible_names}
 
     if not eligible or not global_k:
-        if subaction is not None:
-            subaction += {
-                "outer_arrays": len(outer_decls),
-                "ineligible_var_index_or_other_use": len(ineligible),
-                "flattened": 0,
-            }
-        return smt_script
+        return {"flattened": 0, "new_inner_arrays": 0,
+                "asserts_rewritten": 0, "ineligible": len(ineligible)}
 
     # Build per-k inner-array declarations.
     projections: dict[str, dict[int, FNode]] = {}
@@ -331,18 +404,9 @@ def simplify_flatten_outer_array(
 
     smt_script.commands = new_commands
 
-    logging.info(
-        f"flatten_outer_array: flattened {len(eligible)} outer arrays into "
-        f"{len(new_inner_syms)} inner arrays "
-        f"(rewrote {rewritten_asserts} asserts); "
-        f"{len(ineligible)} ineligible"
-    )
-    if subaction is not None:
-        subaction += {
-            "outer_arrays": len(outer_decls),
-            "ineligible_var_index_or_other_use": len(ineligible),
-            "flattened": len(eligible),
-            "new_inner_arrays": len(new_inner_syms),
-            "asserts_rewritten": rewritten_asserts,
-        }
-    return smt_script
+    return {
+        "flattened": len(eligible),
+        "new_inner_arrays": len(new_inner_syms),
+        "asserts_rewritten": rewritten_asserts,
+        "ineligible": len(ineligible),
+    }
