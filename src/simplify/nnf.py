@@ -73,7 +73,7 @@ def simplify_nnf(smt_script: script.SmtLibScript, subaction=None) -> script.SmtL
             old = cmd.args[0]
             new = conv.substitute(old)
             cmd.args[0] = new
-            if not new.equals(old):
+            if new != old:
                 changed += 1
     if subaction is not None:
         subaction += {"asserts": total, "asserts_changed": changed}

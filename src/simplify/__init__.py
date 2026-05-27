@@ -75,7 +75,7 @@ def simplify_rewrite(smt_script: script.SmtLibScript, subaction=None) -> script.
             old = cmd.args[0]
             new = keep_comment(rewrite(old), old)
             cmd.args[0] = new
-            if not new.equals(old):
+            if new != old:
                 changed += 1
     if subaction is not None:
         subaction += {"asserts": total, "asserts_changed": changed}
