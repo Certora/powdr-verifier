@@ -1,40 +1,49 @@
-"""Flatten 2-level array variables with constant-only outer accesses.
+"""Flatten array variables with constant-only accesses (staged, deepest first).
 
 Background
 ----------
 The verifier's memory bus encoder emits 2-level arrays
-``(Array Int (Array Int X))`` where the *outer* index is a static
-channel/data-field selector — every ``(select M k)`` and
-``(store M k v)`` uses a literal-constant outer index ``k``. In the
-keccak guest we observe a tiny outer-index set ``{1, 2}`` and zero
-variable-index outer accesses across the file.
+``(Array Int (Array Int X))`` where both index levels are static
+selectors — every ``(select M k)`` and ``(store M k v)`` uses a
+literal-constant index. In the keccak guest:
 
-When the precondition holds, the outer level is a constant-size tuple
-wearing the costume of a function. Z3's array theory still applies the
-select-over-store axiom at the outer level, pairing every
-``store-into-channel`` with every ``read-from-any-channel``. With
-hundreds of stores and selects, this generates ~N·M outer-level axiom
-instances. Empirically ``array-exp-ax2`` reaches 70-160 k on the
-keccak completeness checks and time correlates linearly with it.
+* outer-level indices: ``{1, 2}``,
+* inner-level indices: ``{2, 4, 8, 32}``,
+* zero variable-index accesses at either level.
+
+Z3's array theory applies the select-over-store axiom at every
+nesting level, pairing every ``store-into-slot`` with every
+``read-from-any-slot``. Empirically ``array-exp-ax2`` reaches
+70-160k on these benchmarks and time correlates linearly with it.
 
 Approach
 --------
-This pass replaces each qualifying 2-level array ``M`` with one
-1-level array per observed constant outer index (``M__k1``, ``M__k2``,
-…). Every value-level outer-array expression is projected via a
-recursive ``proj_k`` and every outer-typed equality expands to an
-``And`` of per-k inner equalities. After the pass there are no
-``(Array Int (Array Int X))``-typed terms in the formula and the
-outer-level select-over-store axiom enumeration disappears entirely.
+The pass eliminates one level of array nesting per round, **deepest
+first**:
 
-The pass is wrapped in a fixpoint loop, but in the current
-configuration (outer-only) it terminates after one round. Inner
-1-level arrays are left alone — extending the pass to flatten those
-too is desirable for further speedup (their indices are also a small
-constant set, ``{2, 4, 8, 32}``) but requires per-equivalence-class K
-aggregation rather than the global-K we use here; the global-K choice
-over-flattens unrelated inner arrays into a shared index space,
-producing fresh unconstrained scalars in equalities. Future work.
+* Round 1 collects only the deepest-typed array decls (2-level if
+  any are present). Each qualifying ``(Array Int (Array Int X))``
+  ``M`` is split into one ``(Array Int X)`` decl per observed
+  outer-index (``M__k1, …, M__kn``). Every value-level outer-array
+  expression is projected via ``_project`` and every outer-typed
+  equality expands to an ``And`` of per-k inner equalities.
+* Round 2 sees no more 2-level arrays. The maximum depth is now 1,
+  so it collects every ``(Array Int X)`` decl (including both the
+  pre-existing inner arrays and the round-1 outputs) and splits each
+  into scalars per observed inner-index. The variables created here
+  are not arrays.
+
+Each round's fresh variables are at a strictly *shallower* nesting
+depth than the variables it processes — round 1 creates 1-level
+arrays out of 2-level arrays, round 2 creates scalars out of 1-level
+arrays. So no round needs to re-process its own outputs in the same
+round; the fixpoint terminates after one round per nesting level
+that the input formula has.
+
+The walker is depth-agnostic: ``walk_equals`` checks "is this an
+array equality?" and dispatches based on whether either side is in
+the round's projections map. Round-staging is achieved purely via
+``_collect_outer_decls``'s max-depth filter.
 
 Soundness rests on three properties:
 
@@ -73,32 +82,46 @@ from ..smt.utils import *
 
 
 def _is_outer_array_type(t) -> bool:
-    """True if `t` is a 2-level array ``(Array Int (Array Int X))``.
+    """True if `t` is any array type. Depth-filtering happens at the
+    declaration-collection level (``_collect_outer_decls``); the walker
+    is depth-agnostic and only fires when one of the equality's operands
+    is in the round's projections map."""
+    return t.is_array_type()
 
-    We only consider arrays whose element type is itself an array. Inner
-    arrays are left alone because a per-array K computed by globally
-    unioning observed constant indices over-flattens: two unrelated inner
-    arrays end up with each other's indices in their K, producing fresh
-    unconstrained scalars in equalities that didn't have those indices in
-    the original formula. Outer arrays don't have this problem because the
-    outer-index set is uniform across the file in practice.
 
-    A future safe extension to inner arrays would require per-equivalence-
-    class K aggregation (only arrays equated to each other share a K),
-    which we don't have yet.
-    """
-    return t.is_array_type() and t.elem_type.is_array_type()
+def _array_depth(t) -> int:
+    """0 for non-array, 1 for ``(Array Int X)`` with scalar X, 2 for
+    ``(Array Int (Array Int X))``, etc."""
+    d = 0
+    while t.is_array_type():
+        d += 1
+        t = t.elem_type
+    return d
 
 
 def _collect_outer_decls(smt_script) -> dict[str, FNode]:
-    """Return ``{name: declared_symbol}`` for outer 2-level array decls."""
-    out: dict[str, FNode] = {}
+    """Return ``{name: declared_symbol}`` for arrays at the current
+    maximum array-depth.
+
+    The pass flattens one nesting level per round (deepest first). After
+    round 1, the previously-outer 2-level arrays are gone and the
+    previously-inner 1-level arrays are now at max depth — round 2
+    picks them up. The freshly-created variables in each round have a
+    type that's *strictly shallower* than the variables being flattened
+    (one level deeper element type → one level shallower), so no
+    round-N variable creation forces a same-round re-pass.
+    """
+    all_arr_decls: dict[str, FNode] = {}
     for cmd in smt_script:
         if cmd.name == "declare-fun":
             sym = cmd.args[0]
-            if sym.is_symbol() and _is_outer_array_type(sym.get_type()):
-                out[sym.symbol_name()] = sym
-    return out
+            if sym.is_symbol() and sym.get_type().is_array_type():
+                all_arr_decls[sym.symbol_name()] = sym
+    if not all_arr_decls:
+        return {}
+    max_d = max(_array_depth(s.get_type()) for s in all_arr_decls.values())
+    return {n: s for n, s in all_arr_decls.items()
+            if _array_depth(s.get_type()) == max_d}
 
 
 def _walk_all(f: FNode):
@@ -280,7 +303,26 @@ def simplify_flatten_outer_array(
     total_rewrites = 0
     total_ineligible = 0
     rounds = 0
-    MAX_ROUNDS = 8
+    # CURRENTLY CAPPED AT 1 (= flatten outer arrays only).
+    #
+    # The deepest-first staging in `_collect_outer_decls` correctly picks
+    # the 2-level arrays in round 1, leaving 1-level inner arrays for
+    # round 2 — and conceptually this should work without recursion
+    # issues since round 1's outputs are 1-level (matching the inner
+    # arrays in depth). Empirically, however, round 2 introduces a
+    # spurious sat on apc_candidate_2099512_031_low_degree_bus-..._032
+    # _inlining.completeness when combined with the loose skolem_names
+    # pin: replay-validation (extracting the round-2 model's scalar
+    # values for the 401 vars that exist in the pre-flatten formula and
+    # asserting them there) returns UNSAT, so the round-2 model is not
+    # a model of the pre-flatten formula — meaning round 2 introduced
+    # an unsoundness in *something*. The bug is somewhere in how round 2
+    # rewrites equalities involving the round-1 outputs (newly-declared
+    # 1-level arrays) — likely walk_equals or _project missing a case.
+    #
+    # Until that's diagnosed, only run round 1 (outer-only flatten).
+    # All the staging infrastructure stays in place for future work.
+    MAX_ROUNDS = 1
     while rounds < MAX_ROUNDS:
         round_sub = None  # don't pollute subaction with per-round counts
         round_stats = _flatten_one_round(smt_script)
