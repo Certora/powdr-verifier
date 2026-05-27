@@ -18,11 +18,14 @@ def _string_to_script(smt2_string: str) -> script.SmtLibScript:
 def convert_script_to_string(f):
     """Decorator: pass script as string to ``f``; replace script with parsed result (or unchanged if ``None``)."""
 
-    def wrapped(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+    def wrapped(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
         """Call underlying ``f`` with serialized input; optional ``original_script`` kw if declared."""
         kwargs = {}
-        if inspect.signature(f).parameters.get("original_script") is not None:
+        sig = inspect.signature(f)
+        if sig.parameters.get("original_script") is not None:
             kwargs["original_script"] = smt_script
+        if sig.parameters.get("subaction") is not None:
+            kwargs["subaction"] = subaction
         res = f(_script_to_string(smt_script), **kwargs)
         if res is None:
             return smt_script

@@ -9,7 +9,6 @@ from .bounds import simplify_bounds
 from .demod import simplify_demod
 from .intervals import simplify_intervals
 from .z3 import simplify_z3
-from .andify import simplify_andify
 from .isolate import simplify_isolate
 from .nnf import simplify_nnf
 from .lift_forall import simplify_lift_forall
@@ -18,7 +17,7 @@ from .xor import simplify_gxor, simplify_qxor
 from .mod_inv import simplify_mod_inv
 from .skolem import simplify_skolem
 
-def simplify_model(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+def simplify_model(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Substitute concrete values from ``ARGS().with_model`` into asserted formulas (including ForAll)."""
     assert ARGS().with_model is not None
     model = load_json(ARGS().with_model)
@@ -42,31 +41,50 @@ def simplify_model(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     subs.walk_forall = __walk_forall
     subs.functions[operators.FORALL] = __walk_forall
 
+    changed = 0
     for cmd in smt_script:
         if cmd.name == "assert":
-            cmd.args[0] = keep_comment(
-                subs.substitute(cmd.args[0], substitutions),
-                cmd.args[0]
-            )
+            old = cmd.args[0]
+            new = keep_comment(subs.substitute(old, substitutions), old)
+            cmd.args[0] = new
+            if new != old:
+                changed += 1
+    if subaction is not None:
+        subaction += {"model_bindings": len(substitutions), "asserts_changed": changed}
     return smt_script
 
 
-def simplify_evaluate(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+def simplify_evaluate(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Partially evaluate each assertion under an empty model (constant folding only)."""
+    total = changed = 0
     for cmd in smt_script:
         if cmd.name == "assert":
+            total += 1
+            old = cmd.args[0]
             cmd.args[0] = keep_comment(
-                partial_evaluate(cmd.args[0], {}, {}),
-                cmd.args[0],
+                partial_evaluate(old, {}, {}),
+                old,
             )
+            changed += (cmd.args[0] != old)
+    if subaction is not None:
+        subaction += {"asserts_total": total, "asserts_changed": changed}
     return smt_script
 
-    
-def simplify_rewrite(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+
+def simplify_rewrite(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Rewrite each assertion independently with our internal rewriter."""
+    changed = 0
+    total = 0
     for cmd in smt_script:
         if cmd.name == "assert":
-            cmd.args[0] = rewrite(cmd.args[0])
+            total += 1
+            old = cmd.args[0]
+            new = keep_comment(rewrite(old), old)
+            cmd.args[0] = new
+            if new != old:
+                changed += 1
+    if subaction is not None:
+        subaction += {"asserts": total, "asserts_changed": changed}
     return smt_script
 
 def check_isqf(smt_script: script.SmtLibScript) -> bool:

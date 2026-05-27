@@ -146,8 +146,10 @@ def simplify_domain_probe(
     subaction: Optional["Action"] = None,
 ) -> script.SmtLibScript:
     total_added = 0
+    extra: dict = {}
     try:
         assertions = [cmd.args[0] for cmd in smt_script if cmd.name == "assert"]
+        extra["base_asserts"] = len(assertions)
         if not assertions:
             return smt_script
 
@@ -164,6 +166,7 @@ def simplify_domain_probe(
         or_syms = {s for s in or_map if s.is_symbol() and s.get_type().is_int_type()}
         all_pairs = _candidate_pairs(base_reasoner, or_map)
         ranked_all = _rank_candidates(all_pairs, base_reasoner, or_syms)
+        extra["ranked_candidate_pairs"] = len(ranked_all)
 
         logger.info(
             "domain_probe: start (%d base asserts, %d ranked candidate(s), "
@@ -176,9 +179,11 @@ def simplify_domain_probe(
 
         if not ranked_all:
             logger.info("domain_probe: no candidates (non-singleton domains), done")
+            extra["pairs_probed"] = 0
             return smt_script
 
         pairs = ranked_all[:_MAX_PAIRS]
+        extra["pairs_probed"] = len(pairs)
         if len(ranked_all) > len(pairs):
             logger.info(
                 "domain_probe: probing %d of %d ranked candidate pair(s)",
@@ -250,4 +255,4 @@ def simplify_domain_probe(
         return smt_script
     finally:
         if subaction is not None:
-            subaction += {"added_facts": total_added}
+            subaction += {"added_facts": total_added, **extra}

@@ -124,7 +124,7 @@ class _SkolemWalker(IdentityDagWalker):
         return ForAll(qvars, Or(body, *new_disjuncts))
 
 
-def simplify_skolem(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+def simplify_skolem(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Append skolem-map disjuncts to every disjunctive ``forall`` body.
 
     See the module docstring for the full reasoning. Forall bodies that are
@@ -158,6 +158,11 @@ def simplify_skolem(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     if w.applied:
         parts = ", ".join(f"{k}={v}" for k, v in sorted(w.applied.items()))
         logging.info(f"skolem: applied {parts}")
+    if subaction is not None:
+        subaction += {
+            "pins_by_source": dict(w.applied),
+            "free_value_asserts": len(free_pins),
+        }
     prefix = skolem_derived.SETINFO_PREFIX
     smt_script.commands = [
         cmd

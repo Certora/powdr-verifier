@@ -35,6 +35,10 @@ def _find_isolated_value(var: FNode, disjuncts: list[FNode]) -> FNode | None:
 class IsolateWalker(IdentityDagWalker):
     """Add ``Not(definition)`` disjuncts when a qvar is uniquely determined on a subset of disjuncts."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.isolation_disjuncts = 0
+
     def walk_forall(self, formula, args, **kwargs):
         """For each qvar, if some disjuncts mention only that qvar, negate its forced assignment."""
         body = args[0]
@@ -55,13 +59,16 @@ class IsolateWalker(IdentityDagWalker):
 
         if not new_disjuncts:
             return formula
+        self.isolation_disjuncts += len(new_disjuncts)
         return ForAll(formula.quantifier_vars(), Or(*body.args(), *new_disjuncts))
 
 
-def simplify_isolate(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+def simplify_isolate(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Strengthen ``forall`` bodies using cheap QF_UFNIA checks for isolated quantified variables."""
     w = IsolateWalker(env=get_env())
     for cmd in smt_script:
         if cmd.name == "assert":
             cmd.args[0] = keep_comment(w.walk(cmd.args[0]), cmd.args[0])
+    if subaction is not None:
+        subaction += {"isolation_disjuncts_added": w.isolation_disjuncts}
     return smt_script

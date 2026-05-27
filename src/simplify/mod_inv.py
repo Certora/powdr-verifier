@@ -208,7 +208,7 @@ class _FallbackModInvRewriter(substituter.Substituter):
         return memo[formula]
 
 
-def simplify_mod_inv(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+def simplify_mod_inv(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Rewrite all ``uf_mod_inv`` applications into interpreted constraints.
 
     Two strategies are tried per assertion, in order:
@@ -227,7 +227,10 @@ def simplify_mod_inv(smt_script: script.SmtLibScript) -> script.SmtLibScript:
         for cmd in smt_script
         if cmd.name == "declare-fun"
     }
-    rewriter = _FallbackModInvRewriter()
+    definition_folds = 0
+    fallback_asserts = 0
+    fallback_constraints = 0
+    fallback_fresh_symbols = 0
     output = []
     for cmd in smt_script:
         if cmd.name != "assert":
@@ -237,6 +240,7 @@ def simplify_mod_inv(smt_script: script.SmtLibScript) -> script.SmtLibScript:
         # --- Strategy 1: definition-level fold ---
         m = _match_mod_inv_definition(cmd.args[0])
         if m is not None:
+            definition_folds += 1
             var, t, c, p = m
             # T = 0 => V = 0  (zero-divisor case)
             output.append(script.SmtLibCommand(
@@ -254,7 +258,11 @@ def simplify_mod_inv(smt_script: script.SmtLibScript) -> script.SmtLibScript:
             continue
 
         # --- Strategy 2: per-term fallback ---
+        rewriter = _FallbackModInvRewriter()
+        fallback_asserts += 1
         cmd.args[0] = rewriter.rewrite(cmd.args[0])
+        fallback_constraints += len(rewriter.constraints)
+        fallback_fresh_symbols += len(rewriter.new_symbols)
         for sym in rewriter.new_symbols:
             if sym.symbol_name() in declared:
                 continue
@@ -266,4 +274,11 @@ def simplify_mod_inv(smt_script: script.SmtLibScript) -> script.SmtLibScript:
             for constraint in rewriter.constraints
         )
     smt_script.commands = output
+    if subaction is not None:
+        subaction += {
+            "definition_folds": definition_folds,
+            "fallback_asserts": fallback_asserts,
+            "fallback_inverse_constraints": fallback_constraints,
+            "fallback_fresh_symbols": fallback_fresh_symbols,
+        }
     return smt_script

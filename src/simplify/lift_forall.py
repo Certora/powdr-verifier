@@ -81,7 +81,7 @@ class LiftForallWalker(IdentityDagWalker):
         return ForAll(qvars_remaining, body_out)
 
 
-def simplify_lift_forall(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+def simplify_lift_forall(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Hoist ``self.lifted`` pins as top-level asserts and insert missing ``declare-fun``s."""
     w = LiftForallWalker(env=get_env())
     prefix = []
@@ -123,5 +123,14 @@ def simplify_lift_forall(smt_script: script.SmtLibScript) -> script.SmtLibScript
         script.SmtLibCommand(name="assert", args=[eq]) for eq in w.lifted.values()
     ]
     smt_script.commands = prefix + declares + suffix
+
+    if subaction is not None:
+        n_decl = sum(1 for c in declares if c.name == "declare-fun")
+        n_pin = sum(1 for c in declares if c.name == "assert")
+        subaction += {
+            "pins_lifted": len(w.lifted),
+            "new_declarations": n_decl,
+            "hoisted_pin_asserts": n_pin,
+        }
 
     return smt_script
