@@ -17,72 +17,6 @@ def _model_value(model, var: FNode) -> FNode | None:
     return None
 
 
-def _extract_polarized(
-    node: FNode, negated: bool, qvar: FNode, qvars: frozenset[FNode]
-) -> list[tuple[FNode, bool]] | None:
-    """Collect (subformula, polarity) atoms mentioning only ``qvar`` among ``qvars``.
-
-    ``polarity`` is False if ``subformula`` must hold (as-is) when ``node`` holds under
-    the current negation stack, True if ``Not(subformula)`` must hold.
-
-    Returns ``None`` when decomposition is aborted (unsafe to slice), e.g. ``Not(And(…))``.
-    """
-    if node.is_not():
-        ch = node.arg(0)
-        if ch.is_and():
-            return None
-        return _extract_polarized(ch, not negated, qvar, qvars)
-    if node.is_and():
-        acc: list[tuple[FNode, bool]] = []
-        for c in node.args():
-            part = _extract_polarized(c, negated, qvar, qvars)
-            if part is None:
-                return None
-            acc.extend(part)
-        return acc
-    if node.is_or():
-        if qvar not in node.get_free_variables():
-            return []
-        fv_q = node.get_free_variables() & qvars
-        if fv_q - {qvar}:
-            return None
-        return [(node, negated)]
-    if qvar not in node.get_free_variables():
-        return []
-    fv_q = node.get_free_variables() & qvars
-    if fv_q - {qvar}:
-        return None
-    return [(node, negated)]
-
-
-def _must_hold_when_disjunct_holds(phi: FNode, negated: bool) -> FNode:
-    return Not(phi) if negated else phi
-
-
-def _implied_cube_for_disjunct(
-    disj: FNode, qvar: FNode, qvars: frozenset[FNode]
-) -> FNode | None:
-    """Return ``cube`` with ``disj => cube`` (only ``qvar`` among ``qvars`` in ``cube``), or ``None``."""
-    ext = _extract_polarized(disj, False, qvar, qvars)
-    if ext is None or not ext:
-        return None
-    parts = [_must_hold_when_disjunct_holds(p, n) for p, n in ext]
-    return parts[0] if len(parts) == 1 else And(*parts)
-
-
-def _falsify_replacement(disj: FNode, qvar: FNode, qvars: frozenset[FNode]) -> FNode | None:
-    """Formula ``F`` with ``F => Not(disj)`` (strong enough to use instead of ``Not(disj)`` in probes)."""
-    cube = _implied_cube_for_disjunct(disj, qvar, qvars)
-    if cube is not None:
-        return Not(cube)
-    fv = disj.get_free_variables()
-    if qvar not in fv:
-        return None
-    if (fv & qvars) - {qvar}:
-        return None
-    return Not(disj)
-
-
 def _field_bounds_for_int_qvars(
     falsify_parts: list[FNode], qvars: frozenset[FNode]
 ) -> list[FNode]:
@@ -116,7 +50,45 @@ def _find_isolated_value(
 
 
 def contribute(skolem_map, body: FNode) -> None:
-    """Pin unpinned int/bool qvars discovered by isolation probes on the forall body."""
+    """Pin unpinned int/bool qvars discovered by isolation probes on the forall body.
+
+    Soundness invariant (matching the pre-refactor ``isolate.py``): a qvar
+    is only considered when every disjunct mentioning it has ``qvar`` as
+    its *only* free variable — neither other qvars nor outer free vars.
+    Under that precondition the q-mentioning disjuncts are pure functions
+    of ``qvar``, so any value falsifying them all is a uniform witness
+    across every assignment of the rest of the formula. Pinning to such a
+    witness preserves unsat:
+
+        F unsat means ∀x, other_q. ∃q. ¬⋁_i D_i(q) ∧ ¬E(other_q, x).
+
+    Since the ``D_i`` only depend on ``q``, the existential ``∃q. ¬⋁_i
+    D_i(q)`` decouples from ``other_q, x``, and any specific witness
+    ``w`` for it works uniformly. Pinning ``q := w`` does not lose unsat.
+
+    The relaxations that have been tried (and undone here):
+
+    * Allowing outer free variables in q-mentioning disjuncts is unsound:
+      the ``D_i`` then become ``D_i(q, x)``, the "bad q" depends on ``x``,
+      and the probe's one-shot model gives a witness valid only for the
+      specific ``x*`` the solver picked.
+
+    * Allowing *other qvars* in q-mentioning disjuncts is similarly
+      unsound: a disjunct ``D(q, other_q)`` couples ``q`` to ``other_q``;
+      pinning ``q := v_q`` from a model that picks ``other_q = w_o`` only
+      establishes the body at ``(v_q, w_o)``, not at ``(v_q, w_o')`` for
+      the ``w_o'`` that other constraints elsewhere in the formula force
+      on ``other_q``. Verified empirically: an "other-qvars-OK" version
+      pinned ``after-memory-N-isinput := False`` on
+      ``apc_candidate_2099512_031_low_degree_bus-…_032_inlining.
+      completeness`` (via the ``(= isinput (not hadinput-2))`` disjunct
+      that mentions both qvars) even though the rest of the formula
+      forced ``hadinput-2 = False`` and hence ``isinput = True``,
+      producing spurious sat.
+
+    See ``test_isolate_does_not_pin_with_outer_free_var`` and
+    ``test_isolate_does_not_pin_with_other_qvar_in_disjunct``.
+    """
     if not body.is_or():
         return
     qvars = skolem_map.qvars
@@ -126,15 +98,14 @@ def contribute(skolem_map, body: FNode) -> None:
             continue
         if skolem_map.is_pinned(qvar):
             continue
-        falsify_parts: list[FNode] = []
-        for d in body.args():
-            if qvar not in d.get_free_variables():
-                continue
-            rep = _falsify_replacement(d, qvar, qvars)
-            if rep is not None:
-                falsify_parts.append(rep)
-        if not falsify_parts:
+        containing = [d for d in body.args() if qvar in d.get_free_variables()]
+        if not containing:
             continue
+        # Strict soundness gate (matches old isolate.py): every q-mentioning
+        # disjunct must mention qvar AND NOTHING ELSE.
+        if any(d.get_free_variables() - {qvar} for d in containing):
+            continue
+        falsify_parts = [Not(d) for d in containing]
         value = _find_isolated_value(qvar, qvars, falsify_parts)
         if value is not None:
             skolem_map.pin(qvar, value, source="isolate")
