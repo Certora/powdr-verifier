@@ -31,14 +31,15 @@ def _solver_configs():
                 "timeout": 5000,
                 "smt.random_seed": k,
                 "sat.random_seed": k,
+                "smt.array.weak": "false" if k % 2 == 0 else "true",
             },
         }
-        for k in range(3)
+        for k in range(4)
     ] + [
         {
             "name": ARGS().solver,
             "solver_options": {
-                "timeout": 45000,
+                "timeout": 40000,
                 "smt.random_seed": 3,
                 "sat.random_seed": 3,
             },
