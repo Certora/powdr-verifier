@@ -4,6 +4,8 @@ Parses ``(set-info :status ...)`` as the expected solver outcome, tries a
 small grid of random seeds and timeouts, and queries ``:reason-unknown``
 when the result is inconclusive.
 """
+import re
+
 from .report.action import Action
 from .smt.utils import *
 from .utils.args import ARGS
@@ -11,13 +13,17 @@ from .utils.profiling import simple_profile
 
 
 def _get_reason_unknown(solver):
-    """Return SMT-LIB ``:reason-unknown`` text if the subprocess exposes stdio, else ``None``."""
+    """Return the reason string from ``(get-info :reason-unknown)``, or ``None``."""
     if not hasattr(solver, "solver_stdin") or not hasattr(solver, "solver_stdout"):
         return None
     try:
         solver.solver_stdin.write("(get-info :reason-unknown)\n")
         solver.solver_stdin.flush()
-        return solver.solver_stdout.readline().strip() or None
+        line = solver.solver_stdout.readline().strip()
+        if not line:
+            return None
+        m = re.fullmatch(r'\(\s*:reason-unknown\s+"([^"]*)"\s*\)', line)
+        return m.group(1) if m else line
     except Exception:
         return None
 
@@ -59,7 +65,7 @@ def _display_path(path):
     """Prefer a path relative to ``cwd`` for logs; fall back to absolute if not under cwd."""
     resolved = path.resolve()
     try:
-        return resolved.relative_to(Path.cwd())
+        return resolved.relative_to(resolved.parent.parent)
     except ValueError:
         return resolved
 
@@ -96,10 +102,10 @@ def _run_solver_config(smt_script, config):
                                     action += {"result": "unknown"}
                             break
                 except SolverReturnedUnknownResultError:
-                    action += {"result": "error-unknown"}
                     if reason := _get_reason_unknown(s):
-                        action += {"reason_unknown": reason}
-                        logging.warning(f"reason-unknown: {reason}")
+                        action += {"result": f"unknown-{reason}"}
+                    else:
+                        action += {"result": "unknown"}
         except BrokenPipeError:
             action += {"result": "error-broken-pipe"}
         return action
@@ -123,7 +129,7 @@ def check():
         last_attempt = None
         for config in _solver_configs():
             label = _solver_config_label(config)
-            logging.warning(f"checking {_display_path(ARGS().input)} with {label}")
+            logging.warning(f"check {_display_path(ARGS().input)} with {label}")
             attempt = _run_solver_config(smt_script, config)
             action += attempt
             last_attempt = attempt
@@ -138,7 +144,7 @@ def check():
                             json.dump(attempt.model, f, indent=4)
                 break
 
-            logging.warning(f"{label} returned {attempt.result}, trying next config")
+            logging.warning(f"check {_display_path(ARGS().input)} with {label} returned {attempt.result}, trying next config")
 
         if action.result is None and last_attempt is not None:
             action += {"result": last_attempt.result}
