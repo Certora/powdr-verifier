@@ -8,7 +8,7 @@ import logging
 
 from .encoding.utils import get_is_valid
 from .report.action import Action
-from .smt.encoding import build_input_output_relation, collect_variables
+from .smt.encoding import collect_variables
 from .smt.conversion import SmtConverter
 from .smt.utils import *
 from .utils.basic_block import BasicBlock
@@ -78,13 +78,11 @@ def verify():
         if ARGS().eliminations is not None:
             eliminations = before_conv.convert_eliminations(load_json(ARGS().eliminations))
 
-        inputs1 = before_conv.bus_interaction_encoder.get_inputs()
-        inputs2 = after_conv.bus_interaction_encoder.get_inputs()
-        outputs1 = before_conv.bus_interaction_encoder.get_outputs()
-        outputs2 = after_conv.bus_interaction_encoder.get_outputs()
-        input_relation = build_input_output_relation("INPUT RELATION", inputs1, inputs2)
-        output_relation = build_input_output_relation(
-            "OUTPUT RELATION", outputs1, outputs2
+        input_relation = before_conv.bus_interaction_encoder.build_io_relation(
+            after_conv.bus_interaction_encoder, "input"
+        )
+        output_relation = before_conv.bus_interaction_encoder.build_io_relation(
+            after_conv.bus_interaction_encoder, "output"
         )
         shared_array_subs = shared_bus_arrays(before, after, before_conv, after_conv)
 

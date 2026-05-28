@@ -412,10 +412,12 @@ class PermutationCheckMixin:
         self,
         interactions: list,
         is_memory: bool = True
-    ) -> FNode:
-        """Encodes a permutation check in the spirit of busat"""
+    ) -> tuple[list[FNode], list[FNode], list[FNode]]:
+        """Encodes a permutation check in the spirit of busat."""
         conjuncts = []
         n = len(interactions)
+        if n == 0:
+            return [], [], []
         # provide match variables for all pairs i <= j
         is_inputs: dict[int, Any] = {
             i: self._symbol(f"{self.NAME}_isinput_{i}", BOOL)
@@ -656,9 +658,11 @@ class PermutationCheckMixin:
                 )
             )
 
-        return boolean_propagate(conjuncts)
-
-
+        return (
+            boolean_propagate(conjuncts),
+            [is_inputs[i] for i in range(n)],
+            [is_outputs[i] for i in range(n)],
+        )
 
     @simple_profile
     def busat_permutation_check(

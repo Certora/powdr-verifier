@@ -3,7 +3,11 @@ import itertools
 import logging
 from typing import Any
 
-from .permutation_check import PermutationCheckMixin, TimestampCheckMixin
+from .permutation_check import (
+    PermutationCheckMixin,
+    TimestampCheckMixin,
+    keyed_io_relation,
+)
 
 from .single_interaction_encoder import BusInteraction, SingleInteractionEncoder
 

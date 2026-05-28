@@ -33,7 +33,7 @@ overhead:
 
 2. **Existing top-level array equalities**: When the encoding already
    contains ``(assert (= A B))`` for two array-typed symbols (e.g.
-   the base and final arrays equated by ``build_input_output_relation``),
+   the base and final arrays equated by ``build_io_relation``),
    this pass *does* substitute ``B → A`` throughout and removes ``B``'s
    declaration and the equality assertion.  These are always present
    and safe to eliminate syntactically because they are bare equalities,
@@ -146,7 +146,7 @@ def simplify_array_subst(smt_script: script.SmtLibScript, subaction=None) -> scr
             pin_assertions.append(Equals(a_sym, b_sym))
 
     # --- Phase 2: substitute existing array-array equalities ---
-    # These come from ``build_input_output_relation`` in the encoding
+    # These come from ``build_io_relation`` in the encoding
     # (the base/final arrays of each memory bus).  They are safe to
     # substitute syntactically because they are simple renamings with
     # no store chains attached.
