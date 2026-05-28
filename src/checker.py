@@ -31,7 +31,7 @@ def _solver_configs():
                 "timeout": 5000,
                 "smt.random_seed": k,
                 "sat.random_seed": k,
-                "smt.array.weak": k % 2 == 0,
+                "smt.array.weak": "false" if k % 2 == 0 else "true",
             },
         }
         for k in range(4)
