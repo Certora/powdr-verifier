@@ -36,6 +36,9 @@ from .simplify import (
     simplify_qxor,
     simplify_rewrite,
     simplify_skolem,
+    simplify_solve_eqs,
+    simplify_solve_store_eqs,
+    simplify_rewrite_store_eqs,
     simplify_z3,
 )
 
@@ -76,6 +79,12 @@ def _apply_tactic_pass(
             return simplify_array_subst(smt_script, subaction)
         case "flatten_outer_array":
             return simplify_flatten_outer_array(smt_script, subaction)
+        case "solve_eqs":
+            return simplify_solve_eqs(smt_script, subaction)
+        case "solve_store_eqs":
+            return simplify_solve_store_eqs(smt_script, subaction)
+        case "rewrite_store_eqs":
+            return simplify_rewrite_store_eqs(smt_script, subaction)
         case "bounds":
             return simplify_bounds(smt_script, subaction)
         case "nnf":
