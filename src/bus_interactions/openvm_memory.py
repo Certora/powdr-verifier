@@ -218,6 +218,17 @@ class OpenVMMemoryEncoder(
                         is_memory=True,
                     )
                 )
+            case "plain":
+                permutation_axioms = self.plain_permutation_check(
+                    interactions=[
+                        BusInteraction(mult, [a, p, *args, t])
+                        for mult, (a, p, args, t) in self._interactions
+                    ],
+                )
+                inputs = []
+                outputs = []
+                intermediates = []
+                isinputs = []
             case _:
                 raise ValueError(f"Invalid memory encoding: {ARGS().memory_encoding}")
         self.inputs = inputs

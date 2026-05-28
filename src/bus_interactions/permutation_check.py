@@ -2,7 +2,47 @@
 from itertools import batched, pairwise
 import itertools
 
+from z3 import is_false
+
 from ..smt.utils import *
+
+
+def boolean_propagate(conjuncts: list[FNode]) -> list[FNode]:
+    literals: list[FNode] = []
+    remaining = [keep_comment(f.simplify(), f) for f in conjuncts]
+    substitutions: dict[FNode, FNode] = {}
+
+    def record_literal(lit: FNode) -> bool:
+        if lit.is_symbol(BOOL):
+            sym, val = lit, TRUE()
+        elif lit.is_not() and lit.arg(0).is_symbol(BOOL):
+            sym, val = lit.arg(0), FALSE()
+        else:
+            return False
+        if sym in substitutions:
+            return False
+        substitutions[sym] = val
+        literals.append(lit)
+        return True
+
+    while True:
+        new_binding = False
+        next_remaining: list[FNode] = []
+        for f in remaining:
+            f = keep_comment(f.simplify(), f)
+            if record_literal(f):
+                new_binding = True
+            elif not f.is_true():
+                next_remaining.append(f)
+        remaining = (
+            [keep_comment(g.substitute(substitutions), g) for g in next_remaining]
+            if substitutions
+            else next_remaining
+        )
+        if not new_binding:
+            break
+
+    return literals + remaining
 
 
 class TimestampCheckMixin:
@@ -366,6 +406,258 @@ class PermutationCheckMixin:
         outputs = actual_inputs[1:] # remove hadinput variables
         inputs = inputs[1:] # remove hadinput variables
         return conjuncts, outputs, intermediates, inputs, isinputs
+    
+    @simple_profile
+    def plain_permutation_check(
+        self,
+        interactions: list,
+        is_memory: bool = True
+    ) -> FNode:
+        """Encodes a permutation check in the spirit of busat"""
+        conjuncts = []
+        n = len(interactions)
+        # provide match variables for all pairs i <= j
+        is_inputs: dict[int, Any] = {
+            i: self._symbol(f"{self.NAME}_isinput_{i}", BOOL)
+            for i in range(n)
+        }
+        is_outputs: dict[int, Any] = {
+            i: self._symbol(f"{self.NAME}_isoutput_{i}", BOOL)
+            for i in range(n)
+        }
+        is_disableds: dict[int, Any] = {
+            i: self._symbol(f"{self.NAME}_isdisabled_{i}", BOOL)
+            for i in range(n)
+        }
+        match_vars: dict[tuple[int, int], Any] = {
+            (i, j): self._symbol(f"{self.NAME}_match_{i}_{j}", BOOL)
+            for i in range(n)
+            for j in range(i, n)
+        }
+        
+        # utility functions
+        def m(i: int, j: int) -> FNode:
+            if i > j:
+                return m(j, i)
+            return match_vars[(i, j)]
+        def mult(i: int) -> FNode:
+            return interactions[i].mult
+        def args(i: int) -> list[FNode]:
+            return interactions[i].args
+        def is_input(i: int) -> FNode:
+            return is_inputs[i]
+        def is_output(i: int) -> FNode:
+            return is_outputs[i]
+        def is_disabled(i: int) -> FNode:
+            return is_disableds[i]
+        
+        # multiplicity range constraints
+        for i in range(n):
+            conjuncts.append(
+                with_comment(
+                    Or(
+                        Equals(wrap_mod(Plus(mult(i), Int(-1))), Int(0)),
+                        Equals(wrap_mod(Plus(mult(i), Int(0))), Int(0)),
+                        Equals(wrap_mod(Plus(mult(i), Int(1))), Int(0))
+                    ),
+                    f"multiplicity {i} in {-1, 0, 1}"
+                )
+            )
+
+        # a bunch of facts about self-matches
+        for i in range(n):
+            # self-match: not m_i_i => not disabled, input or output, mult != 0
+            conjuncts.append(
+                with_comment(
+                    Implies(
+                        Not(m(i, i)),
+                        And(
+                            Not(is_disabled(i)),
+                            Not(is_input(i)),
+                            Not(is_output(i)),
+                            Not(Equals(wrap_mod(mult(i)), Int(0))),
+                        )
+                    ),
+                    f"no self-match {i}: neither disabled, input, nor output"
+                )
+            )
+            # self-match: m_i_i => disabled, input or output
+            conjuncts.append(
+                with_comment(
+                    Implies(
+                        m(i, i),
+                        Or(
+                            And(
+                                is_disabled(i),
+                                Not(is_input(i)),
+                                Not(is_output(i)),
+                                Equals(wrap_mod(mult(i)), Int(0)),
+                            ),
+                            And(
+                                Not(is_disabled(i)),
+                                is_input(i),
+                                Not(is_output(i)),
+                                Equals(wrap_mod(Plus(mult(i), Int(1))), Int(0)),
+                            ),
+                            And(
+                                Not(is_disabled(i)),
+                                Not(is_input(i)),
+                                is_output(i),
+                                Equals(wrap_mod(Minus(mult(i), Int(1))), Int(0)),
+                            ),
+                        )
+                    ),
+                    f"self-match {i}: disabled, input or output"
+                )
+            )
+            # self-match: disabled => mult == 0
+            conjuncts.append(
+                with_comment(
+                    Implies(is_disabled(i), Equals(wrap_mod(mult(i)), Int(0))),
+                    f"self-match {i}: disabled => mult == 0"
+                )
+            )
+        
+        for i in range(n):
+            for j in range(i + 1, n):
+                # pairwise match: mul_i + mul_j == 0 and mul_i != 0 and mul_j != 0
+                conjuncts.append(
+                    with_comment(
+                        Implies(
+                            m(i, j),
+                            And(
+                                Equals(wrap_mod(Plus(mult(i), mult(j))), Int(0)),
+                                Not(Equals(wrap_mod(mult(i)), Int(0))),
+                                Not(Equals(wrap_mod(mult(j)), Int(0)))
+                            )
+                        ),
+                        f"match {i} and {j}: {mult(i)} + {mult(j)} == 0"
+                    )
+                )
+                #if i == 1 and j == 4:
+                #    continue
+                # pairwise match: data_i == data_j
+                conjuncts.append(
+                    with_comment(
+                        Implies(
+                            m(i, j),
+                            And(
+                                Equals(wrap_mod(Minus(*z)), Int(0)) for z in zip(args(i), args(j), strict=True)
+                            )
+                        ),
+                        f"match {i} and {j}: equal data"
+                    )
+                )
+
+        # every interaction has exactly one match
+        for i in range(n):
+            conjuncts.append(
+                with_comment(
+                    ExactlyOne(*[m(i, j) for j in range(n)]),
+                    f"interaction {i} has exactly one match"
+                )
+            )
+
+        # no two inputs or two outputs have the same address space and pointer
+        for i in range(n):
+            for j in range(i + 1, n):
+                conjuncts.append(
+                    with_comment(
+                        Implies(
+                            Or(
+                                And(is_input(i), is_input(j)),
+                                And(is_output(i), is_output(j)),
+                            ),
+                            Or(
+                                Not(Equals(args(i)[0], args(j)[0])),
+                                Not(Equals(args(i)[1], args(j)[1])),
+                            )
+                        ),
+                        f"inputs or outputs {i} and {j} have different address spaces or pointers"
+                    )
+                )
+        
+        # from hereon, the conjuncts are tuned to the actual inputs and might break on weird inputs
+        # at least, they encode properties that are not immediately obvious from the specs
+
+        # we know stuff about even-indexed and odd-indexed interactions
+        for i in range(n):
+            if i % 2 == 0:
+                # outputs can only be odd-indexed
+                conjuncts.append(
+                    with_comment(
+                        Not(is_output(i)),
+                        f"outputs can not be even-indexed"
+                    )
+                )
+                # even-indexed has multiplicity -1 or 0
+                conjuncts.append(
+                    with_comment(
+                        Or(
+                            Equals(wrap_mod(Plus(mult(i), Int(1))), Int(0)),
+                            Equals(wrap_mod(Plus(mult(i), Int(0))), Int(0)),
+                        ),
+                        f"even-indexed has multiplicity -1 or 0"
+                    )
+                )
+            else:
+                # inputs can only be even-indexed
+                conjuncts.append(
+                    with_comment(
+                        Not(is_input(i)),
+                        f"inputs can not be odd-indexed"
+                    )
+                )
+                # odd-indexed has multiplicity 1 or 0
+                conjuncts.append(
+                    with_comment(
+                        Or(
+                            Equals(wrap_mod(Plus(mult(i), Int(-1))), Int(0)),
+                            Equals(wrap_mod(Plus(mult(i), Int(0))), Int(0)),
+                        ),
+                        f"odd-indexed has multiplicity 1 or 0"
+                    )
+                )
+        
+        # never match even-even or odd-odd, unless they are self-matches
+        for i in range(n):
+            for j in range(i + 1, n):
+                if i % 2 == j % 2:
+                    conjuncts.append(
+                        with_comment(
+                            Not(m(i, j)),
+                            f"no even-even or odd-odd matches"
+                        )
+                    )
+
+        # inputs and outputs have each distinct timestamps
+        for i in range(n):
+            for j in range(i + 1, n):
+                conjuncts.append(
+                    with_comment(
+                        Implies(
+                            Or(
+                                And(is_input(i), is_input(j)),
+                                And(is_output(i), is_output(j)),
+                            ),
+                            Not(Equals(args(i)[-1], args(j)[-1])),
+                        ),
+                        f"inputs or outputs {i} and {j} have different timestamps"
+                    )
+                )
+        
+        # each pair of interactions have increasing timestamps
+        for i in range(0, n, 2):
+            j = i + 1
+            conjuncts.append(
+                with_comment(
+                    LT(args(i)[-1], args(j)[-1]),
+                    f"timestamps {i} and {j} are increasing"
+                )
+            )
+
+        return boolean_propagate(conjuncts)
+
 
 
     @simple_profile
