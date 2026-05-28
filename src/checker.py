@@ -40,8 +40,8 @@ def _solver_configs():
             "name": ARGS().solver,
             "solver_options": {
                 "timeout": 40000,
-                "smt.random_seed": 3,
-                "sat.random_seed": 3,
+                "smt.random_seed": 4,
+                "sat.random_seed": 4,
             },
         }
     ]
