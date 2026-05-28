@@ -19,7 +19,7 @@ class SingleInteractionEncoder:
     * then call `encode_pointwise` for each interaction
     * then call `encode_all`
     * then call `get_axioms`
-    * then call `get_globals`, `get_inputs`, `get_outputs`, `get_auxiliaries`
+    * then call `get_globals`, `build_io_relation`, `get_auxiliaries`
     """
 
     _interactions: list[BusInteraction]
@@ -80,15 +80,23 @@ class SingleInteractionEncoder:
         """Return interpreters for the UFs used by the encoder."""
         return getattr(self, "interpreters", {})
 
-    def get_inputs(self) -> dict:
-        """Return per-bus input symbols (if the encoder exposes them)."""
-        s = getattr(self, "inputs", frozenset())
-        return {self.NAME: s} if len(s) > 0 else {}
+    def _io_equals(self, x: FNode, y: FNode) -> FNode:
+        if x.get_type().is_int_type() and y.get_type().is_int_type():
+            return Equals(wrap_mod(Minus(x, y)), Int(0))
+        return Equals(x, y)
 
-    def get_outputs(self) -> dict:
-        """Return per-bus output symbols (if the encoder exposes them)."""
-        s = getattr(self, "outputs", frozenset())
-        return {self.NAME: s} if len(s) > 0 else {}
+    def build_io_relation(self, other: "SingleInteractionEncoder", kind: str) -> FNode | None:
+        """Equate this encoder's I/O summary with `other` (default: symbol-wise equality)."""
+        attr = "inputs" if kind == "input" else "outputs"
+        label = f"{kind.upper()} RELATION"
+        a = getattr(self, attr, ())
+        b = getattr(other, attr, ())
+        if not a or not b:
+            return None
+        return with_comment(
+            And(self._io_equals(x, y) for x, y in zip(a, b, strict=True)),
+            f"{label} for {self.NAME}",
+        )
 
     def get_auxiliaries(self) -> dict:
         """Return auxiliary symbols introduced by this encoder (defaults to empty)."""

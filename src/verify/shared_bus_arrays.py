@@ -47,7 +47,7 @@ def shared_bus_arrays(
 
     If the first ``k`` interactions are identical, then the array state
     at steps 0 through ``k`` is the same on both sides — they start
-    from equal base arrays (equated by ``build_input_output_relation``)
+    from equal base arrays (equated by ``build_io_relation``)
     and apply the same sequence of stores.  Similarly, if the last ``m``
     interactions match, the array state converges from the end.
 

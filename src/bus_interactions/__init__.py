@@ -62,13 +62,18 @@ class InteractionEncoder:
         simplifier, or just a concrete evaluator."""
         return merge_dicts(self.encoders, lambda encoder: encoder.get_interpreters())
 
-    def get_inputs(self) -> dict:
-        """Return a dict describing per-bus input symbols used by the encoding."""
-        return merge_dicts(self.encoders, lambda encoder: encoder.get_inputs())
-
-    def get_outputs(self) -> dict:
-        """Return a dict describing per-bus output symbols produced by the encoding."""
-        return merge_dicts(self.encoders, lambda encoder: encoder.get_outputs())
+    def build_io_relation(self, other: "InteractionEncoder", kind: str) -> FNode:
+        """Combine per-bus I/O relations between this encoder bundle and `other`."""
+        other_by_name = {encoder.NAME: encoder for encoder in other.encoders}
+        parts = []
+        for encoder in self.encoders:
+            other_enc = other_by_name.get(encoder.NAME)
+            if other_enc is None:
+                continue
+            rel = encoder.build_io_relation(other_enc, kind)
+            if rel is not None:
+                parts.append(rel)
+        return And(*parts) if parts else TRUE()
 
     def get_auxiliaries(self) -> frozenset[FNode]:
         """Return a dict describing per-mus auxiliary symbols introduced by the encoding."""
