@@ -8,13 +8,19 @@ For **plain** encoding: the permutation encoding uses boolean (and int)
 auxiliaries per interaction index instead of array chains; the same
 prefix/suffix interaction alignment pairs those symbols analogously.
 """
+from __future__ import annotations
+
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 
+from pysmt.exceptions import SolverReturnedUnknownResultError
+
 from . import SetInfo
+from ..bus_interactions.single_interaction_encoder import BusInteraction
 from ..simplify.skolem_utils import emit_pin_setinfo
 from ..smt.conversion import SmtConverter
-from ..smt.utils import FNode, Equals, BOOL
+from ..smt.utils import *
 from ..utils.args import ARGS
 
 BEFORE_PREFIX = "before"
@@ -50,10 +56,74 @@ class MemoryBusPartialAlignment:
     before_to_after: dict[int, int]
 
 
+def _constraints_referencing(
+    constraints: Iterable[FNode], symbols: frozenset[FNode]
+) -> list[FNode]:
+    return [c for c in constraints if c.get_free_variables() & symbols]
+
+
+def _flat_memory_encoder_row(row: BusInteraction) -> tuple[FNode, list[FNode]]:
+    mult, rest = row.mult, row.args
+    a, p, data, ts = rest
+    return mult, [a, p, *data, ts]
+
+
+def _memory_encoder_interaction_equiv_formula(row_b: BusInteraction, row_a: BusInteraction) -> FNode | None:
+    mb, flat_b = _flat_memory_encoder_row(row_b)
+    ma, flat_a = _flat_memory_encoder_row(row_a)
+    if len(flat_b) != len(flat_a):
+        return None
+    return And(Equals(mb, ma), *[Equals(x, y) for x, y in zip(flat_b, flat_a)])
+
+
+def _memory_interaction_indices_equivalent(
+    before_conv: SmtConverter,
+    after_conv: SmtConverter,
+    ib: int,
+    ia: int,
+    before_constraints: Iterable[FNode],
+    after_constraints: Iterable[FNode],
+) -> bool:
+    row_b = before_conv.bus_interaction_encoder.memory._interactions[ib]
+    row_a = after_conv.bus_interaction_encoder.memory._interactions[ia]
+    eq = _memory_encoder_interaction_equiv_formula(row_b, row_a).simplify()
+    if eq is None:
+        return False
+    if eq.is_true():
+        return True
+
+    opts = {":timeout": 3000}
+    name = ARGS().solver
+
+    def try_valid(formula: FNode) -> bool | None:
+        with Solver(logic=QF_UFNIA, name=name, solver_options=opts) as s:
+            try:
+                return bool(s.is_valid(formula))
+            except SolverReturnedUnknownResultError:
+                return None
+
+    if try_valid(eq) is True:
+        return True
+
+    syms = frozenset(eq.get_free_variables())
+    rel = _constraints_referencing(before_constraints, syms) + _constraints_referencing(
+        after_constraints, syms
+    )
+    if not rel:
+        return False
+    return try_valid(Implies(And(*rel), eq)) is True
+
+
 def analyze_memory_bus_partial_alignment(
-    before_data: dict, after_data: dict
+    before_data: dict,
+    after_data: dict,
+    before_conv: SmtConverter,
+    after_conv: SmtConverter,
+    *,
+    before_constraints: Iterable[FNode],
+    after_constraints: Iterable[FNode],
 ) -> MemoryBusPartialAlignment | None:
-    """Infer aligned interaction indices between two APC dumps (same Memory bus id)."""
+    """Infer aligned Memory interaction indices; JSON equality first, else SMT equivalence."""
     mem_id = _memory_bus_id(before_data)
     if mem_id is None or _memory_bus_id(after_data) != mem_id:
         return None
@@ -71,9 +141,19 @@ def analyze_memory_bus_partial_alignment(
     if nb == 0 or na == 0:
         return None
 
+    bc = tuple(before_constraints)
+    ac = tuple(after_constraints)
+
+    def eqv(ib: int, ia: int) -> bool:
+        if before_mem[ib] == after_mem[ia]:
+            return True
+        return _memory_interaction_indices_equivalent(
+            before_conv, after_conv, ib, ia, bc, ac
+        )
+
     before_to_after: dict[int, int] = {}
     i = 0
-    while i < min(nb, na) and before_mem[i] == after_mem[i]:
+    while i < min(nb, na) and eqv(i, i):
         before_to_after[i] = i
         i += 1
     t = 0
@@ -82,7 +162,7 @@ def analyze_memory_bus_partial_alignment(
         ia = na - 1 - t
         if ib < i or ia < i:
             break
-        if before_mem[ib] != after_mem[ia]:
+        if not eqv(ib, ia):
             break
         before_to_after[ib] = ia
         t += 1
@@ -197,6 +277,8 @@ def emit_memory_equalities(
     before_conv: SmtConverter,
     after_conv: SmtConverter,
     *,
+    before_constraints: Iterable[FNode],
+    after_constraints: Iterable[FNode],
     reverse: bool = False,
 ) -> SetInfo:
     """Pair before/after memory symbols on shared prefix/suffix; emit ``set-info`` pins.
@@ -207,10 +289,20 @@ def emit_memory_equalities(
 
     Encoding follows ``ARGS().memory_encoding`` (``array``, ``plain``, or empty for others).
 
+    ``before_constraints`` / ``after_constraints`` (typically APC ``constraints``)
+    refine SMT equivalence when JSON differs from trivial inequality.
+
     Pins use the ``:shared-array-*`` key prefix for historical reasons; ``array_subst``
     injects them as top-level equalities regardless of sort.
     """
-    alignment = analyze_memory_bus_partial_alignment(before_data, after_data)
+    alignment = analyze_memory_bus_partial_alignment(
+        before_data,
+        after_data,
+        before_conv,
+        after_conv,
+        before_constraints=before_constraints,
+        after_constraints=after_constraints,
+    )
     if alignment is None:
         return SetInfo()
     match ARGS().memory_encoding:
