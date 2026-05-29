@@ -750,6 +750,14 @@ class PermutationCheckMixin:
                     f"timestamps {i} and {j} are increasing"
                 )
             )
+        
+        # first is an input, last is an output
+        conjuncts.append(
+            with_comment(
+                And(is_input(0), is_output(n - 1)),
+                f"first is an input, last is an output"
+            )
+        )
 
         return (
             boolean_propagate(conjuncts),
