@@ -106,7 +106,13 @@ def verify():
                     after_smt.derived,
                 ),
                 emit_memory_equalities(
-                    before, after, before_conv, after_conv, reverse=True
+                    before,
+                    after,
+                    before_conv,
+                    after_conv,
+                    before_constraints=before_smt.constraints,
+                    after_constraints=after_smt.constraints,
+                    reverse=True,
                 ),
             )
 
@@ -139,7 +145,14 @@ def verify():
                         soundness,
                         map_sources,
                     ),
-                    emit_memory_equalities(before, after, before_conv, after_conv),
+                    emit_memory_equalities(
+                        before,
+                        after,
+                        before_conv,
+                        after_conv,
+                        before_constraints=before_smt.constraints,
+                        after_constraints=after_smt.constraints,
+                    ),
                 )
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(
@@ -204,7 +217,14 @@ def verify():
                         soundness,
                         map_sources,
                     ),
-                    emit_memory_equalities(before, after, before_conv, after_conv),
+                    emit_memory_equalities(
+                        before,
+                        after,
+                        before_conv,
+                        after_conv,
+                        before_constraints=before_smt.constraints,
+                        after_constraints=after_smt.constraints,
+                    ),
                 )
 
                 logging.info(f"dumping soundness check to {dump.name}")
