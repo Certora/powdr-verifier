@@ -2,9 +2,98 @@
 from itertools import batched, pairwise
 import itertools
 
-from z3 import is_false
-
 from ..smt.utils import *
+
+
+def keyed_io_relation(
+    name: str,
+    interactions_a: list,
+    interactions_b: list,
+    is_a: list[FNode],
+    is_b: list[FNode],
+) -> FNode:
+    """Relate two sets of memory-bus I/O across independent encodings.
+
+    Used in completeness/soundness checks to require that the *before* and
+    *after* APC dumps expose the same inputs (or outputs), without fixing which
+    interaction index carries which record. Internal permutation/balancing on each
+    side is handled separately by ``plain_permutation_check``.
+
+    Each interaction is a ``BusInteraction`` whose ``args`` are
+    ``[address_space, pointer, *data, timestamp]``. The *key*
+    ``(address_space, pointer)`` identifies a memory cell; ``data`` and
+    ``timestamp`` are the payload. The encoding assumes that among interactions
+    marked as I/O on one side, keys are pairwise distinct (enforced by the plain
+    permutation axioms).
+
+    Arguments:
+        name: Comment prefix for generated conjuncts (e.g. ``"INPUT RELATION"``).
+        interactions_a: Interactions from the left/before encoder, same order as
+            when that side's permutation check was built.
+        interactions_b: Interactions from the right/after encoder.
+        is_a: For each index ``i`` into ``interactions_a``, a boolean formula that
+            is true exactly when that interaction counts as the chosen I/O kind
+            (input or output) on side A.
+        is_b: Same for side B, aligned with ``interactions_b``.
+
+    Returns a conjunction of three constraint families (see inline comments below).
+    """
+    n, m = len(interactions_a), len(interactions_b)
+    parts: list[FNode] = []
+
+    logging.error(f"keyed_io_relation: {name}, {is_a}, {is_b}")
+
+    def key_eq(i: int, j: int) -> FNode:
+        """``(address_space, pointer)`` agree at indices ``i`` (A) and ``j`` (B)."""
+        return And(
+            field_eq(interactions_a[i].args[0], interactions_b[j].args[0]),
+            field_eq(interactions_a[i].args[1], interactions_b[j].args[1]),
+        )
+
+    def full_eq(i: int, j: int) -> FNode:
+        """All args (key, data, timestamp) agree at indices ``i`` and ``j``."""
+        return And(
+            *[
+                field_eq(a, b)
+                for a, b in zip(interactions_a[i].args, interactions_b[j].args, strict=True)
+            ]
+        )
+
+    # Same key and both marked I/O => identical record (bytes, timestamp, keys).
+    for i in range(n):
+        for j in range(m):
+            parts.append(
+                with_comment(
+                    Implies(And(is_a[i], is_b[j], key_eq(i, j)), full_eq(i, j)),
+                    f"{name}: key match => full eq ({i},{j})",
+                )
+            )
+
+    # Every I/O record on A has some I/O record on B at the same key.
+    for i in range(n):
+        parts.append(
+            with_comment(
+                Implies(
+                    is_a[i],
+                    Or([And(is_b[j], key_eq(i, j)) for j in range(m)]) if m else FALSE(),
+                ),
+                f"{name}: left record {i} has counterpart",
+            )
+        )
+
+    # Every I/O record on B has some I/O record on A at the same key.
+    for j in range(m):
+        parts.append(
+            with_comment(
+                Implies(
+                    is_b[j],
+                    Or([And(is_a[i], key_eq(i, j)) for i in range(n)]) if n else FALSE(),
+                ),
+                f"{name}: right record {j} has counterpart",
+            )
+        )
+
+    return And(*parts) if parts else TRUE()
 
 
 def boolean_propagate(conjuncts: list[FNode]) -> list[FNode]:
@@ -436,16 +525,18 @@ class PermutationCheckMixin:
             for i in range(n)
             for j in range(i, n)
         }
-        
-        # utility functions
+
         def m(i: int, j: int) -> FNode:
             if i > j:
                 return m(j, i)
             return match_vars[(i, j)]
+
         def mult(i: int) -> FNode:
             return interactions[i].mult
+
         def args(i: int) -> list[FNode]:
             return interactions[i].args
+
         def is_input(i: int) -> FNode:
             return is_inputs[i]
         def is_output(i: int) -> FNode:
@@ -519,7 +610,7 @@ class PermutationCheckMixin:
                     f"self-match {i}: disabled => mult == 0"
                 )
             )
-        
+
         for i in range(n):
             for j in range(i + 1, n):
                 # pairwise match: mul_i + mul_j == 0 and mul_i != 0 and mul_j != 0
