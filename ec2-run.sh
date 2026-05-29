@@ -3,7 +3,7 @@
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
-    echo "usage: $0 <keccak|pairing|reth>" >&2
+    echo "usage: $0 <keccak|keccak-selection|pairing|reth>" >&2
     exit 1
 fi
 
@@ -25,6 +25,20 @@ case "$scenario" in
         rm -rf "$script_dir/reports/guest-keccak/"
         python3 "$script_dir/orchestrate.py" powdr-guest guest-keccak
         python3 "$script_dir/orchestrate.py" -j28 verify guest-keccak : :
+        ;;
+    keccak-selection)
+        rm -rf \
+            "$script_dir/powdr-dumps/guest-keccak/" \
+            "$script_dir/data/guest-keccak/" \
+            "$script_dir/reports/guest-keccak/" \
+            "$script_dir/powdr-dumps/guest-keccak-selection/" \
+            "$script_dir/data/guest-keccak-selection/" \
+            "$script_dir/reports/guest-keccak-selection/"
+        python3 "$script_dir/orchestrate.py" powdr-guest guest-keccak
+        python3 "$script_dir/select_blocks.py" \
+            --block-ids "2099672,2106172,2106456,2104744,2104104,2101000,2104636,2105036,2106476,2099556" \
+            "$script_dir/powdr-dumps/guest-keccak"
+        python3 "$script_dir/orchestrate.py" -j28 verify guest-keccak-selection : :
         ;;
     pairing)
         rm -rf \

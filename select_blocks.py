@@ -6,6 +6,15 @@ import shutil
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--block-ids",
+        default=None,
+        metavar="ID,ID,...",
+        help=(
+            "Comma-separated APC block ids to copy; if set, skips reduction-ratio ranking "
+            "(default mode copies top 50 blocks by reduction ratio)."
+        ),
+    )
     parser.add_argument("input_dir", type=Path)
     return parser.parse_args()
 
@@ -38,12 +47,27 @@ def main() -> None:
     if not input_file.is_file():
         raise SystemExit(f"missing file: {input_file}")
 
-    with input_file.open() as f:
-        data = json.load(f)
-
-    apcs = data["apcs"]
-    selected_apcs = sorted(apcs, key=reduction_ratio, reverse=True)[:50]
-    selected_ids = [block_start_pc(apc) for apc in selected_apcs]
+    if args.block_ids is not None:
+        raw_ids: list[int] = []
+        for part in args.block_ids.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            raw_ids.append(int(part))
+        seen_ids: set[int] = set()
+        selected_ids = []
+        for i in raw_ids:
+            if i not in seen_ids:
+                seen_ids.add(i)
+                selected_ids.append(i)
+        if not selected_ids:
+            raise SystemExit("empty --block-ids (no integers parsed)")
+    else:
+        with input_file.open() as f:
+            data = json.load(f)
+        apcs = data["apcs"]
+        selected_apcs = sorted(apcs, key=reduction_ratio, reverse=True)[:50]
+        selected_ids = [block_start_pc(apc) for apc in selected_apcs]
     output_dir = input_dir.parent / f"{input_dir.name}-selection"
     if output_dir.exists():
         shutil.rmtree(output_dir)
@@ -55,7 +79,10 @@ def main() -> None:
             shutil.copy2(path, output_dir / path.name)
             copied_files += 1
 
-    print(f"selected {len(selected_apcs)} blocks")
+    if args.block_ids is not None:
+        print(f"selected {len(selected_ids)} blocks by id")
+    else:
+        print(f"selected {len(selected_apcs)} blocks")
     print(f"created {output_dir}")
     print(f"copied {copied_files} files")
 
