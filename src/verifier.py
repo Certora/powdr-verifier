@@ -14,10 +14,7 @@ from .smt.utils import *
 from .utils.basic_block import BasicBlock
 from .utils.io import load_apc_dump, load_json
 from .verify import combine_setinfo
-from .verify.shared_bus_arrays import (
-    BEFORE_PREFIX, AFTER_PREFIX,
-    shared_bus_arrays, shared_arrays_setinfo,
-)
+from .verify.memory_bus_alignment import BEFORE_PREFIX, AFTER_PREFIX, emit_memory_equalities
 from .verify.skolem_pins import derived_columns_skolem_setinfo
 
 
@@ -84,8 +81,6 @@ def verify():
         output_relation = before_conv.bus_interaction_encoder.build_io_relation(
             after_conv.bus_interaction_encoder, "output"
         )
-        shared_array_subs = shared_bus_arrays(before, after, before_conv, after_conv)
-
         var1 = collect_variables(before_smt)
         var2 = collect_variables(after_smt)
         globals = before_smt.globals | after_smt.globals
@@ -110,7 +105,9 @@ def verify():
                     completeness,
                     after_smt.derived,
                 ),
-                shared_arrays_setinfo(shared_array_subs, reverse=True),
+                emit_memory_equalities(
+                    before, after, before_conv, after_conv, reverse=True
+                ),
             )
 
             logging.info(f"dumping completeness check to {dump.name}")
@@ -142,7 +139,7 @@ def verify():
                         soundness,
                         map_sources,
                     ),
-                    shared_arrays_setinfo(shared_array_subs),
+                    emit_memory_equalities(before, after, before_conv, after_conv),
                 )
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(
@@ -207,7 +204,7 @@ def verify():
                         soundness,
                         map_sources,
                     ),
-                    shared_arrays_setinfo(shared_array_subs),
+                    emit_memory_equalities(before, after, before_conv, after_conv),
                 )
 
                 logging.info(f"dumping soundness check to {dump.name}")
