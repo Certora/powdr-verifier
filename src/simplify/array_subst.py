@@ -128,7 +128,7 @@ def simplify_array_subst(smt_script: script.SmtLibScript, subaction=None) -> scr
                     array_declared.add(sym)
 
     # --- Phase 1: read shared-array pins ---
-    # These are emitted by _shared_bus_arrays() in verifier.py.
+    # These are emitted by ``emit_memory_equalities`` in ``verify.memory_bus_alignment`` (array + plain).
     # The set-info value is a serialized ``(= before-X after-X)``
     # equation.  We resolve symbol names against the current script's
     # declarations to get the actual FNode objects (the parser may
