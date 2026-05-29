@@ -36,22 +36,26 @@ def _memory_bus_id(data: dict) -> int | None:
     return None
 
 
-@dataclass(frozen=True)
-class MemoryBusPartialAlignment:
-    """Prefix/suffix overlap of Memory bus interaction lists (same length, same bus id)."""
 
-    n: int
-    prefix_same: int
-    suffix_same: int
-    shared_steps: frozenset[int]
+@dataclass
+class MemoryBusPartialAlignment:
+    """Structural overlap of Memory interaction lists (lengths may differ).
+
+    ``before_to_after`` maps aligned before interaction indices to after indices
+    (prefix at equal indices, then matching tails without re-entering the strict-prefix band).
+    """
+
+    n_before: int
+    n_after: int
+    before_to_after: dict[int, int]
 
 
 def analyze_memory_bus_partial_alignment(
     before_data: dict, after_data: dict
 ) -> MemoryBusPartialAlignment | None:
-    """Infer which interaction indices are structurally shared between two APC dumps."""
+    """Infer aligned interaction indices between two APC dumps (same Memory bus id)."""
     mem_id = _memory_bus_id(before_data)
-    if mem_id is None:
+    if mem_id is None or _memory_bus_id(after_data) != mem_id:
         return None
 
     before_mem = [
@@ -63,34 +67,30 @@ def analyze_memory_bus_partial_alignment(
         if bi["id"] == mem_id
     ]
 
-    n = len(before_mem)
-    if n != len(after_mem) or n == 0:
+    nb, na = len(before_mem), len(after_mem)
+    if nb == 0 or na == 0:
         return None
 
-    prefix_same = 0
-    for i in range(n):
-        if before_mem[i] != after_mem[i]:
+    before_to_after: dict[int, int] = {}
+    i = 0
+    while i < min(nb, na) and before_mem[i] == after_mem[i]:
+        before_to_after[i] = i
+        i += 1
+    t = 0
+    while t < min(nb, na):
+        ib = nb - 1 - t
+        ia = na - 1 - t
+        if ib < i or ia < i:
             break
-        prefix_same += 1
-
-    suffix_same = 0
-    for i in range(1, n + 1):
-        if n - i < prefix_same:
+        if before_mem[ib] != after_mem[ia]:
             break
-        if before_mem[-i] != after_mem[-i]:
-            break
-        suffix_same += 1
+        before_to_after[ib] = ia
+        t += 1
 
-    shared_steps: set[int] = set()
-    for i in range(prefix_same + 1):
-        shared_steps.add(i)
-    for i in range(n - suffix_same, n + 1):
-        shared_steps.add(i)
-
-    if not shared_steps:
+    if not before_to_after:
         return None
 
-    return MemoryBusPartialAlignment(n, prefix_same, suffix_same, frozenset(shared_steps))
+    return MemoryBusPartialAlignment(nb, na, before_to_after)
 
 
 # -----------------------------------------------------------------------------
@@ -104,7 +104,8 @@ def _array_encoding_symbol_pairs(
     after_conv: SmtConverter,
 ) -> dict[FNode, FNode]:
     before_enc = before_conv.bus_interaction_encoder.memory
-    after_enc = after_conv.bus_interaction_encoder.memory
+    nm = before_enc.NAME
+    m = alignment.before_to_after
 
     def strip_prefix(name: str) -> str:
         for p in (BEFORE_PREFIX + "-", AFTER_PREFIX + "-"):
@@ -113,47 +114,26 @@ def _array_encoding_symbol_pairs(
         return name
 
     ba = before_enc.auxiliaries if hasattr(before_enc, "auxiliaries") else set()
-    aa = after_enc.auxiliaries if hasattr(after_enc, "auxiliaries") else set()
-
-    before_by_suffix: dict[str, FNode] = {}
-    for s in ba:
-        if s.get_type().is_array_type():
-            before_by_suffix[strip_prefix(s.symbol_name())] = s
-
     subs: dict[FNode, FNode] = {}
-    for s in aa:
+
+    for s in ba:
         if not s.get_type().is_array_type():
             continue
-        suffix = strip_prefix(s.symbol_name())
-        partner = before_by_suffix.get(suffix)
-        if partner is None or partner.get_type() != s.get_type():
+        sn = strip_prefix(s.symbol_name())
+        parts = sn.split("-", 2)
+        if len(parts) < 3 or parts[0] != nm:
             continue
-        parts = suffix.split("-")
-        if len(parts) >= 2:
-            try:
-                step = int(parts[1])
-            except ValueError:
-                continue
-            if step in alignment.shared_steps:
-                subs[partner] = s
+        try:
+            i_b = int(parts[1])
+        except ValueError:
+            continue
+        i_a = m.get(i_b)
+        if i_a is None:
+            continue
+        rest = parts[2]
+        subs[s] = after_conv._symbol(f"{nm}-{i_a}-{rest}", s.get_type())
 
     return subs
-
-
-def _plain_index_pinned(i: int, n: int, prefix_same: int, suffix_same: int) -> bool:
-    if i < prefix_same:
-        return True
-    if i >= n - suffix_same:
-        return True
-    return False
-
-
-def _plain_pair_indices_aligned(i: int, j: int, n: int, prefix_same: int, suffix_same: int) -> bool:
-    if i < prefix_same and j < prefix_same:
-        return True
-    if i >= n - suffix_same and j >= n - suffix_same:
-        return True
-    return False
 
 
 def _plain_encoding_symbol_pairs(
@@ -161,34 +141,47 @@ def _plain_encoding_symbol_pairs(
     before_conv: SmtConverter,
     after_conv: SmtConverter,
 ) -> dict[FNode, FNode]:
-    before_enc = before_conv.bus_interaction_encoder.memory
-    nm = before_enc.NAME
-    n = alignment.n
+    """Pair ``memory_match_{i}_{j}`` across sides for aligned interaction pairs.
+
+    Uses ``alignment.before_to_after``: maximal initial run with ``m[k] == k`` as the
+    shared-prefix before-indices, then tail pairs ``(nb-1-t, na-1-t)`` with ``m[ib]==ia``
+    outside that prefix band on both sides.
+    """
+    m = alignment.before_to_after
+    nb, na = alignment.n_before, alignment.n_after
+    nm = before_conv.bus_interaction_encoder.memory.NAME
+
+    prefix_before: set[int] = set()
+    k = 0
+    while k < min(nb, na) and m.get(k) == k:
+        prefix_before.add(k)
+        k += 1
+    pfx_excl_end = k
+
+    suffix_before: set[int] = set()
+    t = 0
+    while t < min(nb, na):
+        ib, ia = nb - 1 - t, na - 1 - t
+        if ib < pfx_excl_end or ia < pfx_excl_end:
+            break
+        if m.get(ib) != ia:
+            break
+        suffix_before.add(ib)
+        t += 1
+
     subs: dict[FNode, FNode] = {}
-
-    for i in range(n):
-        if not _plain_index_pinned(i, n, alignment.prefix_same, alignment.suffix_same):
-            continue
-        for role, sort in (
-            ("isinput", BOOL),
-            ("isoutput", BOOL),
-            ("isdisabled", BOOL),
-        ):
-            leaf = f"{nm}_{role}_{i}"
-            b_sym = before_conv._symbol(leaf, sort)
-            a_sym = after_conv._symbol(leaf, sort)
-            subs[b_sym] = a_sym
-
-    for i in range(n):
-        for j in range(i, n):
-            if not _plain_pair_indices_aligned(
-                i, j, n, alignment.prefix_same, alignment.suffix_same
-            ):
+    for i_b in range(nb):
+        for j_b in range(i_b, nb):
+            if i_b not in m or j_b not in m:
                 continue
-            leaf = f"{nm}_match_{i}_{j}"
-            b_sym = before_conv._symbol(leaf, BOOL)
-            a_sym = after_conv._symbol(leaf, BOOL)
-            subs[b_sym] = a_sym
+            i_a, j_a = m[i_b], m[j_b]
+            in_prefix = i_b in prefix_before and j_b in prefix_before
+            in_suffix = i_b in suffix_before and j_b in suffix_before
+            if not (in_prefix or in_suffix):
+                continue
+            b_leaf = f"{nm}_match_{i_b}_{j_b}"
+            a_leaf = f"{nm}_match_{i_a}_{j_a}"
+            subs[before_conv._symbol(b_leaf, BOOL)] = after_conv._symbol(a_leaf, BOOL)
 
     return subs
 
@@ -228,12 +221,13 @@ def emit_memory_equalities(
         case _:
             subs = {}
     logging.info(
-        "memory bus pins: encoding=%r reverse=%s n=%d prefix_same=%d suffix_same=%d pair_count=%d",
+        "memory bus pins: encoding=%r reverse=%s n_before=%d n_after=%d "
+        "aligned_steps=%d pair_count=%d",
         ARGS().memory_encoding,
         reverse,
-        alignment.n,
-        alignment.prefix_same,
-        alignment.suffix_same,
+        alignment.n_before,
+        alignment.n_after,
+        len(alignment.before_to_after),
         len(subs),
     )
     prefix = SETINFO_SHARED_ARRAYS_PREFIX[1:]
