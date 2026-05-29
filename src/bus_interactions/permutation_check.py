@@ -41,8 +41,6 @@ def keyed_io_relation(
     n, m = len(interactions_a), len(interactions_b)
     parts: list[FNode] = []
 
-    logging.error(f"keyed_io_relation: {name}, {is_a}, {is_b}")
-
     def key_eq(i: int, j: int) -> FNode:
         """``(address_space, pointer)`` agree at indices ``i`` (A) and ``j`` (B)."""
         return And(
@@ -549,9 +547,9 @@ class PermutationCheckMixin:
             conjuncts.append(
                 with_comment(
                     Or(
-                        Equals(wrap_mod(Plus(mult(i), Int(-1))), Int(0)),
-                        Equals(wrap_mod(Plus(mult(i), Int(0))), Int(0)),
-                        Equals(wrap_mod(Plus(mult(i), Int(1))), Int(0))
+                        field_eq(mult(i), Int(-1)),
+                        field_eq(mult(i), Int(0)),
+                        field_eq(mult(i), Int(1)),
                     ),
                     f"multiplicity {i} in {-1, 0, 1}"
                 )
@@ -559,6 +557,46 @@ class PermutationCheckMixin:
 
         # a bunch of facts about self-matches
         for i in range(n):
+            conjuncts.append(
+                with_comment(
+                    Iff(
+                        m(i, i),
+                        Or(
+                            is_disabled(i),
+                            is_input(i),
+                            is_output(i),
+                        )
+                    ),
+                    f"self-match {i}: disabled, input, or output"
+                )
+            )
+            conjuncts.append(
+                with_comment(
+                    Iff(
+                        is_disabled(i),
+                        And(m(i, i), field_eq(mult(i)))
+                    ),
+                    f"disabled {i}: self-match and mult == 0"
+                )
+            )
+            conjuncts.append(
+                with_comment(
+                    Iff(
+                        is_input(i),
+                        And(m(i, i), field_eq(mult(i), Int(-1)))
+                    ),
+                    f"input {i}: self-match and mult == -1"
+                )
+            )
+            conjuncts.append(
+                with_comment(
+                    Iff(
+                        is_output(i),
+                        And(m(i, i), field_eq(mult(i), Int(1)))
+                    ),
+                    f"output {i}: self-match and mult == 1"
+                )
+            )
             # self-match: not m_i_i => not disabled, input or output, mult != 0
             conjuncts.append(
                 with_comment(
@@ -568,46 +606,10 @@ class PermutationCheckMixin:
                             Not(is_disabled(i)),
                             Not(is_input(i)),
                             Not(is_output(i)),
-                            Not(Equals(wrap_mod(mult(i)), Int(0))),
+                            Not(field_eq(mult(i))),
                         )
                     ),
-                    f"no self-match {i}: neither disabled, input, nor output"
-                )
-            )
-            # self-match: m_i_i => disabled, input or output
-            conjuncts.append(
-                with_comment(
-                    Implies(
-                        m(i, i),
-                        Or(
-                            And(
-                                is_disabled(i),
-                                Not(is_input(i)),
-                                Not(is_output(i)),
-                                Equals(wrap_mod(mult(i)), Int(0)),
-                            ),
-                            And(
-                                Not(is_disabled(i)),
-                                is_input(i),
-                                Not(is_output(i)),
-                                Equals(wrap_mod(Plus(mult(i), Int(1))), Int(0)),
-                            ),
-                            And(
-                                Not(is_disabled(i)),
-                                Not(is_input(i)),
-                                is_output(i),
-                                Equals(wrap_mod(Minus(mult(i), Int(1))), Int(0)),
-                            ),
-                        )
-                    ),
-                    f"self-match {i}: disabled, input or output"
-                )
-            )
-            # self-match: disabled => mult == 0
-            conjuncts.append(
-                with_comment(
-                    Implies(is_disabled(i), Equals(wrap_mod(mult(i)), Int(0))),
-                    f"self-match {i}: disabled => mult == 0"
+                    f"no self-match {i}: neither disabled, input, nor output, mult != 0"
                 )
             )
 
