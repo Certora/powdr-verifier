@@ -278,6 +278,11 @@ def wrap_mod(input: FNode, modulus: Optional[FNode] = None) -> FNode:
         modulus = Int(ARGS().field_type.value)
     return Mod(input, modulus)
 
+
+def field_eq(a: FNode, b: FNode) -> FNode:
+    return Equals(wrap_mod(Minus(a, b)), Int(0))
+
+
 class SMTPrettyPrinter(script.SmtPrinter):
 
     COLLAPSIBLE = operators.CONSTANTS | frozenset([operators.SYMBOL])
