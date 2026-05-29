@@ -92,7 +92,7 @@ def _memory_interaction_indices_equivalent(
     if eq.is_true():
         return True
 
-    opts = {":timeout": 3000}
+    opts = {"rlimit": 100000}
     name = ARGS().solver
 
     def try_valid(formula: FNode) -> bool | None:
