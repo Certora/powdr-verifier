@@ -208,6 +208,7 @@ def simplify():
                 else:
                     assert step_script is not None
                     smt_script = step_script
+                    _ensure_declarations_for_asserts(smt_script)
 
             if ARGS().dump_steps:
                 output = ARGS().output

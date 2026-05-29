@@ -28,6 +28,8 @@ AFTER_PREFIX = "after"
 
 SETINFO_SHARED_ARRAYS_PREFIX = ":shared-array-"
 
+_LOG = logging.getLogger(__name__)
+
 
 # -----------------------------------------------------------------------------
 # 1. Encoding-agnostic analysis: Memory bus traces → partial alignment
@@ -86,10 +88,21 @@ def _memory_interaction_indices_equivalent(
 ) -> bool:
     row_b = before_conv.bus_interaction_encoder.memory._interactions[ib]
     row_a = after_conv.bus_interaction_encoder.memory._interactions[ia]
-    eq = _memory_encoder_interaction_equiv_formula(row_b, row_a).simplify()
-    if eq is None:
+    eq_raw = _memory_encoder_interaction_equiv_formula(row_b, row_a)
+    if eq_raw is None:
+        _LOG.debug(
+            "memory align SMT shape mismatch before_idx=%d after_idx=%d (flat arg lengths differ)",
+            ib,
+            ia,
+        )
         return False
+    eq = eq_raw.simplify()
     if eq.is_true():
+        _LOG.debug(
+            "memory align trivial SMT equality before_idx=%d after_idx=%d",
+            ib,
+            ia,
+        )
         return True
 
     opts = {"rlimit": 100000}
@@ -102,16 +115,56 @@ def _memory_interaction_indices_equivalent(
             except SolverReturnedUnknownResultError:
                 return None
 
-    if try_valid(eq) is True:
+    r0 = try_valid(eq)
+    if r0 is True:
+        _LOG.debug(
+            "memory align SMT valid without context before_idx=%d after_idx=%d solver=%r",
+            ib,
+            ia,
+            name,
+        )
         return True
+    if r0 is None:
+        _LOG.debug(
+            "memory align SMT unknown (bare) before_idx=%d after_idx=%d solver=%r",
+            ib,
+            ia,
+            name,
+        )
 
     syms = frozenset(eq.get_free_variables())
     rel = _constraints_referencing(before_constraints, syms) + _constraints_referencing(
         after_constraints, syms
     )
     if not rel:
+        _LOG.debug(
+            "memory align no relevant constraints for interaction vars before_idx=%d "
+            "after_idx=%d (bare_valid=%s) free_sym_count=%d",
+            ib,
+            ia,
+            r0,
+            len(syms),
+        )
         return False
-    return try_valid(Implies(And(*rel), eq)) is True
+    r1 = try_valid(Implies(And(*rel), eq))
+    if r1 is True:
+        _LOG.debug(
+            "memory align SMT valid with %d constraint(s) before_idx=%d after_idx=%d",
+            len(rel),
+            ib,
+            ia,
+        )
+        return True
+    _LOG.debug(
+        "memory align SMT not proved before_idx=%d after_idx=%d bare=%s contextual=%s "
+        "relevant_constraints=%d",
+        ib,
+        ia,
+        r0,
+        r1,
+        len(rel),
+    )
+    return False
 
 
 def analyze_memory_bus_partial_alignment(
@@ -126,6 +179,12 @@ def analyze_memory_bus_partial_alignment(
     """Infer aligned Memory interaction indices; JSON equality first, else SMT equivalence."""
     mem_id = _memory_bus_id(before_data)
     if mem_id is None or _memory_bus_id(after_data) != mem_id:
+        _LOG.debug(
+            "memory bus alignment skipped: Memory bus id missing or differs between dumps "
+            "(before=%s after=%s)",
+            mem_id,
+            _memory_bus_id(after_data),
+        )
         return None
 
     before_mem = [
@@ -139,17 +198,35 @@ def analyze_memory_bus_partial_alignment(
 
     nb, na = len(before_mem), len(after_mem)
     if nb == 0 or na == 0:
+        _LOG.info(
+            "memory bus alignment skipped: empty Memory interaction list (bus_id=%s "
+            "n_before=%d n_after=%d)",
+            mem_id,
+            nb,
+            na,
+        )
         return None
 
     bc = tuple(before_constraints)
     ac = tuple(after_constraints)
 
+    json_eq = 0
+    smt_ok = 0
+    smt_fail = 0
+
     def eqv(ib: int, ia: int) -> bool:
+        nonlocal json_eq, smt_ok, smt_fail
         if before_mem[ib] == after_mem[ia]:
+            json_eq += 1
             return True
-        return _memory_interaction_indices_equivalent(
+        ok = _memory_interaction_indices_equivalent(
             before_conv, after_conv, ib, ia, bc, ac
         )
+        if ok:
+            smt_ok += 1
+        else:
+            smt_fail += 1
+        return ok
 
     before_to_after: dict[int, int] = {}
     i = 0
@@ -168,7 +245,33 @@ def analyze_memory_bus_partial_alignment(
         t += 1
 
     if not before_to_after:
+        _LOG.info(
+            "memory bus alignment: no aligned pairs (bus_id=%s n_before=%d n_after=%d)",
+            mem_id,
+            nb,
+            na,
+        )
         return None
+
+    pair_preview = before_to_after if len(before_to_after) <= 16 else {
+        **dict(list(before_to_after.items())[:12]),
+        "_truncated": len(before_to_after),
+    }
+    _LOG.info(
+        "memory bus alignment: bus_id=%s n_before=%d n_after=%d aligned_pairs=%d "
+        "pair_checks_json=%d pair_checks_smt_ok=%d pair_checks_smt_fail=%d "
+        "constraint_pool_before=%d after=%d pairs=%s",
+        mem_id,
+        nb,
+        na,
+        len(before_to_after),
+        json_eq,
+        smt_ok,
+        smt_fail,
+        len(bc),
+        len(ac),
+        pair_preview,
+    )
 
     return MemoryBusPartialAlignment(nb, na, before_to_after)
 
@@ -304,6 +407,7 @@ def emit_memory_equalities(
         after_constraints=after_constraints,
     )
     if alignment is None:
+        _LOG.info("memory bus pins skipped (no alignment)")
         return SetInfo()
     match ARGS().memory_encoding:
         case "array":

@@ -66,7 +66,7 @@ def _collect_forall_qvars(smt_script: script.SmtLibScript) -> dict[str, FNode]:
 def _declare_types_from_script(smt_script: script.SmtLibScript) -> dict[str, object]:
     out: dict[str, object] = {}
     for cmd in smt_script:
-        if cmd.name != "declare-fun" or len(cmd.args) < 2:
+        if cmd.name != "declare-fun" or not cmd.args:
             continue
         sym = cmd.args[0]
         if not sym.is_symbol():
@@ -93,6 +93,8 @@ def _prebind_pin_identifiers(
             parser.cache.bind(tok, Symbol(tok, ty))
         elif "@" in tok:
             parser.cache.bind(tok, Symbol(tok, INT))
+        else:
+            parser.cache.bind(tok, Symbol(tok, BOOL))
 
 
 def _build_parser_with_cache(smt_script: script.SmtLibScript) -> SmtLibParser:
