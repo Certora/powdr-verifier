@@ -2,12 +2,13 @@
 
 set -euo pipefail
 
-if [ "$#" -ne 1 ]; then
-    echo "usage: $0 <keccak|keccak-selection|pairing|reth>" >&2
+if [ "$#" -lt 1 ]; then
+    echo "usage: $0 <keccak|keccak-selection|pairing|reth> [verify-args...]" >&2
     exit 1
 fi
 
 scenario="$1"
+shift
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 cd ~/
@@ -24,7 +25,7 @@ case "$scenario" in
         rm -rf "$script_dir/data/guest-keccak/"
         rm -rf "$script_dir/reports/guest-keccak/"
         python3 "$script_dir/orchestrate.py" powdr-guest guest-keccak
-        python3 "$script_dir/orchestrate.py" -j28 verify guest-keccak : :
+        python3 "$script_dir/orchestrate.py" -j28 verify guest-keccak : : "$@"
         ;;
     keccak-selection)
         rm -rf \
@@ -38,7 +39,7 @@ case "$scenario" in
         python3 "$script_dir/select_blocks.py" \
             --block-ids "2099556,2099672,2101000,2104104,2104636,2104744,2105036,2106172,2106456,2106476" \
             "$script_dir/powdr-dumps/guest-keccak"
-        python3 "$script_dir/orchestrate.py" -j28 verify guest-keccak-selection : :
+        python3 "$script_dir/orchestrate.py" -j28 verify guest-keccak-selection : : "$@"
         ;;
     pairing)
         rm -rf \
@@ -50,12 +51,12 @@ case "$scenario" in
             "$script_dir/reports/guest-pairing-selection/"
         python3 "$script_dir/orchestrate.py" powdr-guest guest-pairing
         python3 "$script_dir/select_blocks.py" "$script_dir/powdr-dumps/guest-pairing"
-        python3 "$script_dir/orchestrate.py" -j28 verify guest-pairing-selection : :
+        python3 "$script_dir/orchestrate.py" -j28 verify guest-pairing-selection : : "$@"
         ;;
     reth)
         rm -rf "$script_dir/data/reth-selection/"
         rm -rf "$script_dir/reports/reth-selection/"
-        python3 "$script_dir/orchestrate.py" -j28 verify reth-selection : :
+        python3 "$script_dir/orchestrate.py" -j28 verify reth-selection : : "$@"
         ;;
     *)
         echo "unknown scenario: $scenario" >&2
