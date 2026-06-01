@@ -70,6 +70,12 @@ def _flat_memory_encoder_row(row: BusInteraction) -> tuple[FNode, list[FNode]]:
     return mult, [a, p, *data, ts]
 
 
+def _alignment_validity_logic(formula: FNode):
+    if any(v.symbol_type().is_array_type() for v in formula.get_free_variables()):
+        return ALL
+    return QF_UFNIA
+
+
 def _memory_encoder_interaction_equiv_formula(row_b: BusInteraction, row_a: BusInteraction) -> FNode | None:
     mb, flat_b = _flat_memory_encoder_row(row_b)
     ma, flat_a = _flat_memory_encoder_row(row_a)
@@ -109,7 +115,7 @@ def _memory_interaction_indices_equivalent(
     name = ARGS().solver
 
     def try_valid(formula: FNode) -> bool | None:
-        with Solver(logic=QF_UFNIA, name=name, solver_options=opts) as s:
+        with Solver(logic=_alignment_validity_logic(formula), name=name, solver_options=opts) as s:
             try:
                 return bool(s.is_valid(formula))
             except SolverReturnedUnknownResultError:
