@@ -751,15 +751,18 @@ class PermutationCheckMixin:
                 )
             )
         
+        # usually the first is an input and the last is an output. we have the
+        # special zero-is-model check, though, and so we have to be a bit more
+        # careful.
         conjuncts.append(
             with_comment(
-                is_input(0),
+                Implies(Not(field_eq(mult(0))), is_input(0)),
                 f"first is an input"
             )
         )
         conjuncts.append(
             with_comment(
-                is_output(n - 1),
+                Implies(Not(field_eq(mult(n - 1))), is_output(n - 1)),
                 f"last is an output"
             )
         )
