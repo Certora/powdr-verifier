@@ -8,6 +8,7 @@ import copy
 import logging
 import signal
 import time
+from pathlib import Path
 from typing import Callable, TypeVar
 
 from .report.action import Action
@@ -157,6 +158,68 @@ def _ensure_declarations_for_asserts(smt_script: script.SmtLibScript) -> None:
     )
 
 
+def simplify_smt_script(
+    smt_script: script.SmtLibScript,
+    *,
+    tactic: str,
+    timeout: float,
+    output: Path | None = None,
+    parent_action: Action | None = None,
+) -> script.SmtLibScript:
+    """Run colon-separated tactics on ``smt_script`` (mutated in place)."""
+    parent = parent_action or Action("simplify-programmatic")
+    tactics = tactic.split(":")
+    deadline = time.monotonic() + float(timeout)
+    for step_index, raw_tactic in enumerate(tactics):
+        step_no = step_index + 1
+        remaining = deadline - time.monotonic() - 2
+
+        base, *dash_suffix = raw_tactic.split("-", 1)
+
+        logging.info("simplifying with %s", raw_tactic)
+        with parent.action(raw_tactic) as subaction:
+            if remaining <= 0:
+                logging.info("skipping simplifier pass %s (no time budget)", raw_tactic)
+                subaction += {"result": "skipped", "reason": "no-budget"}
+                continue
+
+            backup_script = script.SmtLibScript()
+            if smt_script.annotations is not None:
+                backup_script.annotations = copy.copy(smt_script.annotations)
+            backup_script.commands = [
+                cmd._replace(args=list(cmd.args)) for cmd in smt_script.commands
+            ]
+            backup_pretty = ARGS().pretty
+
+            def run_step():
+                return _apply_tactic_pass(base, dash_suffix, smt_script, subaction)
+
+            timed_out, step_script = _run_with_itimer(remaining, run_step)
+
+            if timed_out:
+                smt_script = backup_script
+                ARGS().pretty = backup_pretty
+                logging.warning("simplifier pass %s hit timeout, skipping", raw_tactic)
+                subaction += {"result": "timeout"}
+            else:
+                assert step_script is not None
+                smt_script = step_script
+                _ensure_declarations_for_asserts(smt_script)
+
+        if ARGS().dump_steps and output is not None:
+            stem = output.name[: -len(output.suffix)] if output.suffix else output.name
+            dump_file = output.with_name(f"{stem}.{step_no:02d}.{raw_tactic}.smt2")
+            with open_file(dump_file, "w") as out:
+                logging.info("dumping intermediate formula to %s", out.name)
+                if ARGS().pretty:
+                    pretty_print_smtlib(smt_script, out)
+                else:
+                    serialize_smtlib(smt_script, out)
+
+    _ensure_declarations_for_asserts(smt_script)
+    return smt_script
+
+
 def simplify():
     """Read SMT2, run selected simplification passes, and write to output (or overwrite input)."""
 
@@ -171,57 +234,13 @@ def simplify():
                 logging.info(f"loading from {f.name}")
                 smt_script = parser.get_script(f)
 
-        tactics = ARGS().tactic.split(":")
-        deadline = time.monotonic() + float(ARGS().timeout)
-
-        for step_index, raw_tactic in enumerate(tactics):
-            step_no = step_index + 1
-            remaining = deadline - time.monotonic() - 2
-
-            base, *dash_suffix = raw_tactic.split("-", 1)
-
-            logging.info(f"simplifying with {raw_tactic}")
-            with action.action(raw_tactic) as subaction:
-                if remaining <= 0:
-                    logging.info("skipping simplifier pass %s (no time budget)", raw_tactic)
-                    subaction += {"result": "skipped", "reason": "no-budget"}
-                    continue
-
-                backup_script = script.SmtLibScript()
-                if smt_script.annotations is not None:
-                    backup_script.annotations = copy.copy(smt_script.annotations)
-                backup_script.commands = [
-                    cmd._replace(args=list(cmd.args)) for cmd in smt_script.commands
-                ]
-                backup_pretty = ARGS().pretty
-
-                def run_step():
-                    return _apply_tactic_pass(base, dash_suffix, smt_script, subaction)
-
-                timed_out, step_script = _run_with_itimer(remaining, run_step)
-
-                if timed_out:
-                    smt_script = backup_script
-                    ARGS().pretty = backup_pretty
-                    logging.warning("simplifier pass %s hit timeout, skipping", raw_tactic)
-                    subaction += {"result": "timeout"}
-                else:
-                    assert step_script is not None
-                    smt_script = step_script
-                    _ensure_declarations_for_asserts(smt_script)
-
-            if ARGS().dump_steps:
-                output = ARGS().output
-                stem = output.name[:-len(output.suffix)] if output.suffix else output.name
-                dump_file = output.with_name(f"{stem}.{step_no:02d}.{raw_tactic}.smt2")
-                with open_file(dump_file, "w") as out:
-                    logging.info(f"dumping intermediate formula to {out.name}")
-                    if ARGS().pretty:
-                        pretty_print_smtlib(smt_script, out)
-                    else:
-                        serialize_smtlib(smt_script, out)
-
-        _ensure_declarations_for_asserts(smt_script)
+        simplify_smt_script(
+            smt_script,
+            tactic=ARGS().tactic,
+            timeout=float(ARGS().timeout),
+            output=ARGS().output,
+            parent_action=action,
+        )
         with action.action("dump"):
             with open_file(ARGS().output, "w") as out:
                 logging.info(f"dumping formula to {out.name}")
