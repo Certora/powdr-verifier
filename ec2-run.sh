@@ -36,7 +36,7 @@ case "$scenario" in
             "$script_dir/reports/guest-keccak-selection/"
         python3 "$script_dir/orchestrate.py" powdr-guest guest-keccak
         python3 "$script_dir/select_blocks.py" \
-            --block-ids "2099672,2106172,2106456,2104744,2104104,2101000,2104636,2105036,2106476,2099556" \
+            --block-ids "2099556,2099672,2101000,2104104,2104636,2104744,2105036,2106172,2106456,2106476" \
             "$script_dir/powdr-dumps/guest-keccak"
         python3 "$script_dir/orchestrate.py" -j28 verify guest-keccak-selection : :
         ;;
