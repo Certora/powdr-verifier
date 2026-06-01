@@ -146,7 +146,7 @@ class TimestampCheckMixin:
             # for now we assume that zeroness of a.mult and b.mult are equivalent
             res.append(
                 Implies(
-                    Not(Equals(wrap_mod(a.mult), Int(0))), LT(a.args[-1], b.args[-1])
+                    Not(Equals(wrap_mod(a.mult), Int(0))), field_lt(a.args[-1], b.args[-1])
                 )
             )
 
@@ -746,7 +746,7 @@ class PermutationCheckMixin:
             j = i + 1
             conjuncts.append(
                 with_comment(
-                    LT(args(i)[-1], args(j)[-1]),
+                    field_lt(args(i)[-1], args(j)[-1]),
                     f"timestamps {i} and {j} are increasing"
                 )
             )
