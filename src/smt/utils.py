@@ -224,8 +224,11 @@ def simplify_and_check(
         ARGS().pretty = False
     if not hasattr(ARGS(), "dump_steps"):
         ARGS().dump_steps = False
+    if not hasattr(ARGS(), "dump_model"):
+        ARGS().dump_model = None
     prev_pretty = ARGS().pretty
     prev_dump_steps = ARGS().dump_steps
+    prev_dump_model = ARGS().dump_model
     try:
         ARGS().pretty = False
         ARGS().dump_steps = False
@@ -234,14 +237,16 @@ def simplify_and_check(
             tactic=tactic,
             timeout=float(simplify_timeout),
         )
+        ARGS().dump_model = None
+        check_action = Action("simplify-and-check")
+        match check_smt_script(smt, check_action, input_for_log=None):
+            case "unsat":
+                return True
+            case "sat":
+                return False
+            case _:
+                return None
     finally:
         ARGS().pretty = prev_pretty
         ARGS().dump_steps = prev_dump_steps
-    check_action = Action("simplify-and-check")
-    match check_smt_script(smt, check_action, input_for_log=None):
-        case "unsat":
-            return True
-        case "sat":
-            return False
-        case _:
-            return None
+        ARGS().dump_model = prev_dump_model
