@@ -123,9 +123,11 @@ def check_smt_script(
 ) -> str:
     """Run the same solver grid as :func:`check`; return ``sat`` / ``unsat`` / inconclusive."""
     last_attempt = None
+    log_key = _display_path(input_for_log)
+    log = logging.warning if input_for_log is not None else logging.debug
     for config in _solver_configs():
         label = _solver_config_label(config)
-        logging.warning("check %s with %s", _display_path(input_for_log), label)
+        log("check %s with %s", log_key, label)
         attempt = _run_solver_config(smt_script, config)
         action += attempt
         last_attempt = attempt
@@ -139,16 +141,16 @@ def check_smt_script(
                     with open(ARGS().dump_model, "w") as f:
                         json.dump(attempt.model, f, indent=4)
             return attempt.result
-        logging.warning(
+        log(
             "check %s with %s returned %s, trying next config",
             log_key,
             label,
             attempt.result,
         )
     final = last_attempt.result if last_attempt is not None else "unknown"
-    if action is not None and action.result is None:
+    if action.result is None:
         action += {"result": final}
-    if action is not None and action.expected is not None and action.result != action.expected:
+    if action.expected is not None and action.result != action.expected:
         logging.error("expected %s but got %s", action.expected, action.result)
     return final
 
@@ -168,5 +170,5 @@ def check():
                 action += {"expected": cmd.args[1]}
                 break
 
-        check_smt_script(smt_script, action=action, input_for_log=ARGS().input)
+        check_smt_script(smt_script, action, input_for_log=ARGS().input)
         return action
