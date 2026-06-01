@@ -751,11 +751,16 @@ class PermutationCheckMixin:
                 )
             )
         
-        # first is an input, last is an output
         conjuncts.append(
             with_comment(
-                And(is_input(0), is_output(n - 1)),
-                f"first is an input, last is an output"
+                is_input(0),
+                f"first is an input"
+            )
+        )
+        conjuncts.append(
+            with_comment(
+                is_output(n - 1),
+                f"last is an output"
             )
         )
 
