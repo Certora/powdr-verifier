@@ -29,5 +29,5 @@ class OpenVMVariableRangeCheckerEncoder(SingleInteractionEncoder):
 
         return Implies(
             Not(Equals(wrap_mod(mult), Int(0))),
-            And(LE(Int(0), x), LT(x, Int(2**curbits))),
+            LT(x, Int(2**curbits)),
         )
