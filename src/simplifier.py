@@ -234,7 +234,7 @@ def simplify():
                 logging.info(f"loading from {f.name}")
                 smt_script = parser.get_script(f)
 
-        simplify_smt_script(
+        smt_script = simplify_smt_script(
             smt_script,
             tactic=ARGS().tactic,
             timeout=float(ARGS().timeout),
