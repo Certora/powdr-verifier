@@ -206,3 +206,47 @@ def find_unique_solution(s: Solver, f: FNode) -> Optional[dict[str, int]]:
         return None
     except:
         return None
+
+
+def simplify_and_check(
+    formula: FNode,
+    *,
+    simplify_timeout: float,
+    tactic: str,
+) -> bool | None:
+    """``True`` / ``False`` / ``None`` (inconclusive) for PySMT-validity of ``formula``."""
+    from ..checker import check_smt_script
+    from ..report.action import Action
+    from ..simplifier import simplify_smt_script
+
+    smt = convert_to_smt_script(Not(formula))
+    if not hasattr(ARGS(), "pretty"):
+        ARGS().pretty = False
+    if not hasattr(ARGS(), "dump_steps"):
+        ARGS().dump_steps = False
+    if not hasattr(ARGS(), "dump_model"):
+        ARGS().dump_model = None
+    prev_pretty = ARGS().pretty
+    prev_dump_steps = ARGS().dump_steps
+    prev_dump_model = ARGS().dump_model
+    try:
+        ARGS().pretty = False
+        ARGS().dump_steps = False
+        simplify_smt_script(
+            smt,
+            tactic=tactic,
+            timeout=float(simplify_timeout),
+        )
+        ARGS().dump_model = None
+        check_action = Action("simplify-and-check")
+        match check_smt_script(smt, check_action, input_for_log=None):
+            case "unsat":
+                return True
+            case "sat":
+                return False
+            case _:
+                return None
+    finally:
+        ARGS().pretty = prev_pretty
+        ARGS().dump_steps = prev_dump_steps
+        ARGS().dump_model = prev_dump_model

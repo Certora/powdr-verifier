@@ -11,10 +11,8 @@ prefix/suffix interaction alignment pairs those symbols analogously.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-
-from pysmt.exceptions import SolverReturnedUnknownResultError
 
 from . import SetInfo
 from ..bus_interactions.single_interaction_encoder import BusInteraction
@@ -64,16 +62,18 @@ def _constraints_referencing(
     return [c for c in constraints if c.get_free_variables() & symbols]
 
 
+def _flatten_outer_conjunctions(formulas: Iterable[FNode]) -> Iterator[FNode]:
+    for formula in formulas:
+        if formula.is_and():
+            yield from _flatten_outer_conjunctions(formula.args())
+        else:
+            yield formula
+
+
 def _flat_memory_encoder_row(row: BusInteraction) -> tuple[FNode, list[FNode]]:
     mult, rest = row.mult, row.args
     a, p, data, ts = rest
     return mult, [a, p, *data, ts]
-
-
-def _alignment_validity_logic(formula: FNode):
-    if any(v.symbol_type().is_array_type() for v in formula.get_free_variables()):
-        return ALL
-    return QF_UFNIA
 
 
 def _memory_encoder_interaction_equiv_formula(row_b: BusInteraction, row_a: BusInteraction) -> FNode | None:
@@ -111,31 +111,26 @@ def _memory_interaction_indices_equivalent(
         )
         return True
 
-    opts = {"rlimit": 100000}
-    name = ARGS().solver
-
     def try_valid(formula: FNode) -> bool | None:
-        with Solver(logic=_alignment_validity_logic(formula), name=name, solver_options=opts) as s:
-            try:
-                return bool(s.is_valid(formula))
-            except SolverReturnedUnknownResultError:
-                return None
+        return simplify_and_check(
+            formula,
+            simplify_timeout=1.0,
+            tactic="z3-propagate-values:bounds:rewrite:gxor:mod_inv:demod",
+        )
 
     r0 = try_valid(eq)
     if r0 is True:
         _LOG.debug(
-            "memory align SMT valid without context before_idx=%d after_idx=%d solver=%r",
+            "memory align SMT valid without context before_idx=%d after_idx=%d",
             ib,
             ia,
-            name,
         )
         return True
     if r0 is None:
         _LOG.debug(
-            "memory align SMT unknown (bare) before_idx=%d after_idx=%d solver=%r",
+            "memory align SMT unknown (bare) before_idx=%d after_idx=%d",
             ib,
             ia,
-            name,
         )
 
     syms = frozenset(eq.get_free_variables())
@@ -213,8 +208,8 @@ def analyze_memory_bus_partial_alignment(
         )
         return None
 
-    bc = tuple(before_constraints)
-    ac = tuple(after_constraints)
+    bc = tuple(_flatten_outer_conjunctions(before_constraints))
+    ac = tuple(_flatten_outer_conjunctions(after_constraints))
 
     json_eq = 0
     smt_ok = 0
