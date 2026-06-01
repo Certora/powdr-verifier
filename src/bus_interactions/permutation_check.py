@@ -753,8 +753,11 @@ class PermutationCheckMixin:
             j = i + 1
             conjuncts.append(
                 with_comment(
-                    field_lt(args(i)[-1], args(j)[-1]),
-                    f"timestamps {i} and {j} are increasing"
+                    Implies(
+                        Not(field_eq(mult(i))),
+                        field_lt(args(i)[-1], args(j)[-1])
+                    ),
+                    f"timestamps {i} and {j} are increasing ({args(i)[-1]} < {args(j)[-1]})"
                 )
             )
         
