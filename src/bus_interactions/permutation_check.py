@@ -695,6 +695,13 @@ class PermutationCheckMixin:
                         f"even-indexed has multiplicity -1 or 0"
                     )
                 )
+                # consecutive even and odd have multitplicities that sum up to zero
+                conjuncts.append(
+                    with_comment(
+                        field_eq(mult(i), mult(i + 1)),
+                        f"consecutive even and odd have multitplicities that sum up to zero"
+                    )
+                )
             else:
                 # inputs can only be even-indexed
                 conjuncts.append(
