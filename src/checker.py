@@ -31,8 +31,19 @@ def _get_reason_unknown(solver):
         return None
 
 
-def _solver_configs():
-    """Yield a short list of fast attempts plus one long-timeout fallback configuration."""
+def _solver_configs(*, check_timeout: float | None = None):
+    """Solver attempts for ``check-sat``. ``check_timeout`` in seconds; converted to Z3 ``timeout`` (ms)."""
+    if check_timeout is not None:
+        return [
+            {
+                "name": ARGS().solver,
+                "solver_options": {
+                    "timeout": int(check_timeout * 1000),
+                    "smt.random_seed": 0,
+                    "sat.random_seed": 0,
+                },
+            },
+        ]
     return [
         {
             "name": ARGS().solver,
@@ -121,12 +132,13 @@ def check_smt_script(
     action: Action,
     *,
     input_for_log: Path | None = None,
+    check_timeout: float | None = None,
 ) -> str:
     """Run the same solver grid as :func:`check`; return ``sat`` / ``unsat`` / inconclusive."""
     last_attempt = None
     log_key = _display_path(input_for_log)
     log = logging.warning if input_for_log is not None else logging.debug
-    for config in _solver_configs():
+    for config in _solver_configs(check_timeout=check_timeout):
         label = _solver_config_label(config)
         log("check %s with %s", log_key, label)
         attempt = _run_solver_config(smt_script, config)

@@ -93,6 +93,7 @@ def _check_is_valid(
     return simplify_and_check(
         formula,
         simplify_timeout=1.0,
+        check_timeout=1.0,
         tactic="z3-propagate-values:bounds:rewrite:gxor:mod_inv:demod",
         smt_dump_base=smt_dump_base,
     )
