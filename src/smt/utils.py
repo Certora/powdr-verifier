@@ -8,6 +8,7 @@ from types import GeneratorType
 
 from ..smt_backends.pysmt import *
 from ..utils.io import open_file
+from ..utils.profiling import simple_profile
 
 SUPPORTS_COMMENTS = "comment" in FNode.__slots__
 
