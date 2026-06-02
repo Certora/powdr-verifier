@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Iterator
+from itertools import product
 from dataclasses import dataclass
 
 from . import SetInfo
@@ -177,7 +178,10 @@ def analyze_memory_bus_partial_alignment(
     before_constraints: Iterable[FNode],
     after_constraints: Iterable[FNode],
 ) -> MemoryBusPartialAlignment | None:
-    """Infer aligned Memory interaction indices; JSON equality first, else SMT equivalence."""
+    """Infer aligned Memory interaction indices.
+
+    Walks matching diagonal prefix and tail; each pair tries dump JSON equality before SMT.
+    """
     mem_id = _memory_bus_id(before_data)
     if mem_id is None or _memory_bus_id(after_data) != mem_id:
         _LOG.debug(
@@ -189,61 +193,62 @@ def analyze_memory_bus_partial_alignment(
         return None
 
     before_mem = [
-        bi for bi in before_data["machine"]["bus_interactions"]
-        if bi["id"] == mem_id
+        bi for bi in before_data["machine"]["bus_interactions"] if bi["id"] == mem_id
     ]
+    before_mem = { idx: bi for idx, bi in enumerate(before_mem) }
     after_mem = [
-        bi for bi in after_data["machine"]["bus_interactions"]
-        if bi["id"] == mem_id
+        bi for bi in after_data["machine"]["bus_interactions"] if bi["id"] == mem_id
     ]
+    after_mem = { idx: bi for idx, bi in enumerate(after_mem) }
 
+
+    _LOG.info(f"memory bus alignment: before_mem={before_mem} after_mem={after_mem}")
     nb, na = len(before_mem), len(after_mem)
     if nb == 0 or na == 0:
-        _LOG.info(
-            "memory bus alignment skipped: empty Memory interaction list (bus_id=%s "
-            "n_before=%d n_after=%d)",
-            mem_id,
-            nb,
-            na,
-        )
         return None
 
     bc = tuple(_flatten_outer_conjunctions(before_constraints))
     ac = tuple(_flatten_outer_conjunctions(after_constraints))
 
-    json_eq = 0
-    smt_ok = 0
-    smt_fail = 0
-
-    def eqv(ib: int, ia: int) -> bool:
-        nonlocal json_eq, smt_ok, smt_fail
-        if before_mem[ib] == after_mem[ia]:
-            json_eq += 1
-            return True
-        ok = _memory_interaction_indices_equivalent(
-            before_conv, after_conv, ib, ia, bc, ac
-        )
-        if ok:
-            smt_ok += 1
-        else:
-            smt_fail += 1
-        return ok
-
     before_to_after: dict[int, int] = {}
-    i = 0
-    while i < min(nb, na) and eqv(i, i):
-        before_to_after[i] = i
-        i += 1
-    t = 0
-    while t < min(nb, na):
-        ib = nb - 1 - t
-        ia = na - 1 - t
-        if ib < i or ia < i:
-            break
-        if not eqv(ib, ia):
-            break
-        before_to_after[ib] = ia
-        t += 1
+
+    def check_and_drop_pair(kb: int, ka: int) -> None:
+        if before_mem[kb] != after_mem[ka]:
+            return
+        _LOG.debug(f"memory bus alignment: syntactic match {kb} -> {ka}")
+        before_to_after[kb] = ka
+        del before_mem[kb]
+        del after_mem[ka]
+
+    for kb, ka in list(zip(before_mem.keys(), after_mem.keys())):
+        check_and_drop_pair(kb, ka)
+
+    for kb, ka in list(
+        zip(
+            reversed(before_mem.keys()),
+            reversed(after_mem.keys()),
+        )
+    ):
+        check_and_drop_pair(kb, ka)
+
+    for kb, ka in list(
+        product(before_mem.keys(), after_mem.keys())
+    ):
+        if kb not in before_mem or ka not in after_mem:
+            continue
+        check_and_drop_pair(kb, ka)
+
+    for kb, ka in list(
+        product(before_mem.keys(), after_mem.keys())
+    ):
+        if kb not in before_mem or ka not in after_mem:
+            continue
+        if _memory_interaction_indices_equivalent(
+            before_conv, after_conv, kb, ka, bc, ac
+        ):
+            before_to_after[kb] = ka
+            del before_mem[kb]
+            del after_mem[ka]
 
     if not before_to_after:
         _LOG.info(
@@ -259,18 +264,10 @@ def analyze_memory_bus_partial_alignment(
         "_truncated": len(before_to_after),
     }
     _LOG.info(
-        "memory bus alignment: bus_id=%s n_before=%d n_after=%d aligned_pairs=%d "
-        "pair_checks_json=%d pair_checks_smt_ok=%d pair_checks_smt_fail=%d "
-        "constraint_pool_before=%d after=%d pairs=%s",
-        mem_id,
+        "memory bus alignment: n_before=%d n_after=%d aligned_pairs=%d pairs=%s",
         nb,
         na,
         len(before_to_after),
-        json_eq,
-        smt_ok,
-        smt_fail,
-        len(bc),
-        len(ac),
         pair_preview,
     )
 
