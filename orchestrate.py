@@ -312,7 +312,7 @@ def run_verify(a, b):
         res_verify = __run_main("verify", a, b, first, parse_output=True, timeout=TIMEOUT_ENCODING_SEC)
         res_verify.name = "verify-encode"
         a_verify += res_verify
-        for file in sorted(res_verify.outputs):
+        for file in sorted(res_verify.outputs or []):
             with a_verify.action("check", inputs=[file]) as a_check:
                 res_simp = __do_simplify(file, file.with_suffix(".rewrite.smt2"))
                 a_check += res_simp
