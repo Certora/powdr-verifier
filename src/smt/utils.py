@@ -232,6 +232,7 @@ def simplify_and_check(
     formula: FNode,
     *,
     simplify_timeout: float,
+    check_timeout: float,
     tactic: str,
     smt_dump_base: Path | None = None,
 ) -> bool | None:
@@ -268,7 +269,9 @@ def simplify_and_check(
             logging.info("dumped simplify_and_check pre-check SMT2 to %s", dump_path)
         ARGS().dump_model = None
         check_action = Action("simplify-and-check")
-        match check_smt_script(smt, check_action, input_for_log=None):
+        match check_smt_script(
+            smt, check_action, input_for_log=None, check_timeout=check_timeout
+        ):
             case "unsat":
                 return True
             case "sat":
