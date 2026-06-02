@@ -178,7 +178,10 @@ def _iter_memory_alignment_index_pairs_core(
     ak = list(after_indices)
     yield from zip(bk, ak)
     yield from zip(reversed(bk), reversed(ak))
-    yield from product(bk, ak)
+    for b,a in product(bk, ak):
+        if b % 2 != a % 2:
+            continue
+        yield b, a
 
 
 def analyze_memory_bus_partial_alignment(
