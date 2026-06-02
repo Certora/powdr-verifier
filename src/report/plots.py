@@ -19,6 +19,46 @@ def basic_stats() -> str:
         "SELECT COUNT(DISTINCT block) FROM verification_steps WHERE block IS NOT NULL"
     )
     n_steps = query_single_value("SELECT COUNT(*) FROM verification_steps")
+    n_checked = query_single_value(
+        "SELECT COUNT(*) FROM verification_steps WHERE status = 'success'"
+    )
+    n_timeouts = query_single_value(
+        "SELECT COUNT(*) FROM verification_steps WHERE status = 'timeout'"
+    )
+    n_not_qf = query_single_value(
+        """
+        SELECT COUNT(DISTINCT v.id) FROM verification_steps v
+        JOIN substeps s ON s.verification_step_id = v.id
+        WHERE s.name = 'isqf' AND s.status = 'not-qf'
+        """
+    )
+    n_wrongs = query_single_value(
+        """
+        SELECT COUNT(DISTINCT v.id) FROM verification_steps v
+        WHERE EXISTS (
+            SELECT 1 FROM substeps s
+            WHERE s.verification_step_id = v.id
+              AND s.expected IN ('sat', 'unsat')
+              AND s.result IN ('sat', 'unsat')
+              AND s.result != s.expected
+        )
+        """
+    )
+    worst_blocks = query(
+        """
+        SELECT block,
+               COUNT(*) AS n_total,
+               SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS n_ok
+        FROM verification_steps
+        WHERE block IS NOT NULL
+        GROUP BY block
+        HAVING COUNT(*) > 0
+        ORDER BY (COUNT(*) - SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END)) DESC,
+                 COUNT(*) DESC,
+                 block ASC
+        LIMIT 4
+        """
+    )
     n_passes = query_single_value(
         "SELECT COUNT(DISTINCT passname) FROM verification_steps "
         "WHERE passname IS NOT NULL AND passname != ''"
@@ -84,11 +124,24 @@ def basic_stats() -> str:
         key=lambda r: float(r[3]) if r[3] is not None else float("-inf"),
     )
     selected_jobs_list = _render_selected_jobs_list("Jobs of interest", selected_jobs)
+    steps_rows = [
+        ("checked", n_checked or 0),
+        ("timeouts", n_timeouts or 0),
+        ("not-qf", n_not_qf or 0),
+        ("wrongs", n_wrongs or 0),
+    ]
+    blocks_detail: list[tuple[str, object]] = []
+    for row in worst_blocks or []:
+        blk, n_total, n_ok = row[0], int(row[1]), int(row[2])
+        n_fail = n_total - n_ok
+        blocks_detail.append((f"block {blk}", f"{n_fail} failed / {n_total} steps"))
+    if not blocks_detail:
+        blocks_detail.append(("—", "no block data"))
     return f"""
 <section class="container-fluid py-3">
   <div class="row g-2 mb-3">
-    {_render_stat_card("#verification steps", n_steps)}
-    {_render_stat_card("#blocks", n_blocks)}
+    {_render_stat_card_detail("#verification steps", n_steps, steps_rows)}
+    {_render_stat_card_detail("#blocks", n_blocks, blocks_detail)}
     {_render_stat_card("#passes", n_passes)}
   </div>
   <div class="row g-3">
@@ -112,6 +165,27 @@ def _render_stat_card(label: str, value: object) -> str:
         '<div class="card-body py-2 px-3">'
         f'<div class="small text-body-secondary">{html.escape(str(label))}</div>'
         f'<div class="fs-5 fw-semibold">{html.escape(str(value))}</div>'
+        "</div></div></div>"
+    )
+
+
+def _render_stat_card_detail(
+    label: str, headline: object, rows: list[tuple[str, object]]
+) -> str:
+    sub = "".join(
+        '<div class="d-flex justify-content-between small mt-1">'
+        f'<span class="text-body-secondary">{html.escape(k)}</span>'
+        f'<span class="fw-medium">{html.escape(str(v))}</span>'
+        "</div>"
+        for k, v in rows
+    )
+    return (
+        '<div class="col-12 col-md-4">'
+        '<div class="card h-100 shadow-sm">'
+        '<div class="card-body py-2 px-3">'
+        f'<div class="small text-body-secondary">{html.escape(str(label))}</div>'
+        f'<div class="fs-5 fw-semibold">{html.escape(str(headline))}</div>'
+        f'<div class="mt-2 pt-2 border-top">{sub}</div>'
         "</div></div></div>"
     )
 
