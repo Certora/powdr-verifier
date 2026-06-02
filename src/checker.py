@@ -4,6 +4,7 @@ Parses ``(set-info :status ...)`` as the expected solver outcome, tries a
 small grid of random seeds and timeouts, and queries ``:reason-unknown``
 when the result is inconclusive.
 """
+import json
 import logging
 import re
 from pathlib import Path
