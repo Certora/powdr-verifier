@@ -185,7 +185,7 @@ script.SmtLibCommand.serialize = __serialize_command
 
 # now go on with the rest
 
-from pysmt.exceptions import SolverReturnedUnknownResultError
+from pysmt.exceptions import SolverReturnedUnknownResultError, UnknownSolverAnswerError
 from pysmt.logics import Logic
 from pysmt.shortcuts import *
 from pysmt.smtlib import script, printers, solver
@@ -196,6 +196,8 @@ from ..utils.args import ARGS
 def __ensure_leading_colon(name: str) -> str:
     return f":{name.removeprefix(':')}"
 
+from pysmt.decorators import clear_pending_pop
+
 pysmt.smtlib.solver.SmtLibSolver.declare_fun = lambda self, symbol: self._declare_variable(symbol)
 pysmt.smtlib.solver.SmtLibSolver.assert_ = lambda self, formula: self.add_assertion(formula)
 pysmt.smtlib.solver.SmtLibSolver.set_info = lambda self, name, value: \
@@ -203,6 +205,28 @@ pysmt.smtlib.solver.SmtLibSolver.set_info = lambda self, name, value: \
 pysmt.smtlib.solver.SmtLibSolver.set_option = lambda self, name, value: \
     self._send_silent_command(script.SmtLibCommand(name=commands.SET_OPTION, args=[__ensure_leading_colon(name), value]))
 pysmt.smtlib.solver.SmtLibSolver.check_sat = lambda self: self.solve()
+
+
+@clear_pending_pop
+def __smtlib_solve_robust(self, assumptions=None):
+    assert assumptions is None
+    self._send_command(script.SmtLibCommand(commands.CHECK_SAT, []))
+    skip = frozenset({"", "success", "check-assignment"})
+    for _ in range(4096):
+        ans = self._get_answer()
+        if ans in skip:
+            continue
+        if ans == "sat":
+            return True
+        if ans == "unsat":
+            return False
+        if ans == "unknown":
+            raise SolverReturnedUnknownResultError
+        raise UnknownSolverAnswerError("Solver returned: " + ans)
+    raise UnknownSolverAnswerError("Solver: exhausted lines waiting for sat/unsat/unknown")
+
+
+pysmt.smtlib.solver.SmtLibSolver.solve = __smtlib_solve_robust
 
 class SimpleSizeOracle(DagWalker):
     """Simple version of SizeOracle that does not throw a warning."""
