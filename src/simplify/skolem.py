@@ -15,8 +15,8 @@ in :mod:`.skolem_utils`.
 Each *contributor* lives in its own module:
 
   1. :mod:`.skolem_rules`    - OpenVM ``EqualZeroCheck``.
-  2. :mod:`.skolem_derived`  - eliminations / derived-column pins
-     (verifier emits ``:skolem-derived-N`` set-info entries).
+  2. :mod:`.skolem_derived`  - eliminations / derived-column / memory-bus
+     alignment pins (verifier emits ``:skolem-derived-N`` set-info entries).
   3. :mod:`.skolem_witness` - collapsed free-var witness patterns.
   4. :mod:`.skolem_names`    - same-name fallback.
   5. :mod:`.skolem_isolate`  - field-bounded isolation probes (QF_UFNIA).
@@ -26,7 +26,8 @@ fresh :class:`SkolemMap` over its qvars and run the contributors in
 the order above (most-specific to least-specific so derived wins over
 the same-name fallback; isolation runs last; within a contributor, the
 first pin for a qvar is kept). Every pinned qvar is appended to the body as
-``Not(q = wrap_mod(expr))`` (or ``Not(q = expr)`` for non-int types);
+``Not(q = wrap_mod(expr))`` for ints, else ``Not(q = expr)`` (booleans,
+arrays / extensional equality);
 ``simplify_lift_forall`` later hoists each disjunct to a top-level
 assertion, removing ``q`` from the universal.
 """
@@ -44,7 +45,8 @@ class SkolemMap:
     contributor pinned each qvar (used for logging / debugging only).
     The first contributor wins; later :meth:`pin` calls for the same
     qvar are silently dropped. A successful :meth:`pin` logs a warning
-    (contributor name, qvar, witness).
+    (contributor name, qvar, witness). Array-typed qvars are allowed;
+    witnesses use extensional ``=`` like booleans (no ``wrap_mod``).
     """
 
     def __init__(self, qvars):
@@ -58,8 +60,6 @@ class SkolemMap:
         if not hasattr(expr, "node_type"):
             return False
         if q not in self.qvars:
-            return False
-        if q.get_type().is_array_type():
             return False
         if q in self.pins:
             return False
