@@ -731,6 +731,17 @@ class PermutationCheckMixin:
                             f"no even-even or odd-odd matches"
                         )
                     )
+        
+        # never match even-odd, only odd-even
+        for i in range(n):
+            for j in range(i + 1, n):
+                if i % 2 == 0 and j % 2 == 1:
+                    conjuncts.append(
+                        with_comment(
+                            Not(m(i, j)),
+                            f"no even-odd matches, only odd-even"
+                        )
+                    )
 
         # inputs and outputs have each distinct timestamps
         for i in range(n):
