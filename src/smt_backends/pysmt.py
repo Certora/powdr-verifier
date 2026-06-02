@@ -309,7 +309,7 @@ def field_eq(a: FNode, b: FNode = None) -> FNode:
 
 def field_lt(a: FNode, b: FNode) -> FNode:
     return LT(wrap_mod(a), wrap_mod(b))
-    return LT(wrap_mod(Minus(b, a)), Int(10000))
+    return LT(wrap_mod(Minus(b, a)), Int(2**29))
 
 
 class SMTPrettyPrinter(script.SmtPrinter):
