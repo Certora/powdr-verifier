@@ -221,7 +221,7 @@ def analyze_memory_bus_partial_alignment(
     after_mem = { idx: bi for idx, bi in enumerate(after_mem) }
 
 
-    _LOG.info(f"memory bus alignment: before_mem={before_mem} after_mem={after_mem}")
+    _LOG.debug(f"memory bus alignment: before_mem={before_mem} after_mem={after_mem}")
     nb, na = len(before_mem), len(after_mem)
     if nb == 0 or na == 0:
         return None
@@ -240,7 +240,7 @@ def analyze_memory_bus_partial_alignment(
     def check_and_drop_pair(kb: int, ka: int) -> None:
         if before_mem[kb] != after_mem[ka]:
             return
-        _LOG.warning(f"memory bus alignment: syntactic match {kb} -> {ka}")
+        _LOG.debug(f"memory bus alignment: syntactic match {kb} -> {ka}")
         before_to_after[kb] = ka
         del before_mem[kb]
         del after_mem[ka]
@@ -275,7 +275,7 @@ def analyze_memory_bus_partial_alignment(
         if _check_equivalent_bare(
             row_b, row_a, smt_dump_base=smt_dump_base
         ):
-            _LOG.warning("memory bus alignment: bare match %s -> %s", kb, ka)
+            _LOG.debug("memory bus alignment: bare match %s -> %s", kb, ka)
             before_to_after[kb] = ka
             del before_mem[kb]
             del after_mem[ka]
@@ -291,7 +291,7 @@ def analyze_memory_bus_partial_alignment(
             ac_strip,
             smt_dump_base=smt_dump_base,
         ):
-            _LOG.warning("memory bus alignment: contextual match %s -> %s", kb, ka)
+            _LOG.debug("memory bus alignment: contextual match %s -> %s", kb, ka)
             before_to_after[kb] = ka
             del before_mem[kb]
             del after_mem[ka]
