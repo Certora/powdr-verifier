@@ -13,7 +13,6 @@ from .smt.conversion import SmtConverter
 from .smt.utils import *
 from .utils.basic_block import BasicBlock
 from .utils.io import load_apc_dump, load_json
-from .verify import combine_setinfo
 from .verify.memory_bus_alignment import BEFORE_PREFIX, AFTER_PREFIX, emit_memory_equalities
 from .verify.skolem_pins import derived_columns_skolem_setinfo
 
@@ -90,6 +89,21 @@ def verify():
             *after_conv.bus_interaction_encoder.get_auxiliaries().values(),
         )
 
+        map_sources = {**eliminations, **after_smt.derived, **before_smt.derived}
+
+        def pin_metadata(formula: FNode, derived: dict, *, reverse: bool = False):
+            info = derived_columns_skolem_setinfo(formula, derived)
+            info += emit_memory_equalities(
+                before,
+                after,
+                before_conv,
+                after_conv,
+                before_constraints=before_smt.constraints,
+                after_constraints=after_smt.constraints,
+                reverse=reverse,
+            )
+            return info
+
         outfile = ARGS().output.with_suffix(".completeness.smt2")
         with open(outfile, "w") as dump:
             dump.write(";; completeness check\n")
@@ -100,25 +114,11 @@ def verify():
                 input_relation,
                 output_relation,
             )
-            info = combine_setinfo(
-                derived_columns_skolem_setinfo(
-                    completeness,
-                    after_smt.derived,
-                ),
-                emit_memory_equalities(
-                    before,
-                    after,
-                    before_conv,
-                    after_conv,
-                    before_constraints=before_smt.constraints,
-                    after_constraints=after_smt.constraints,
-                    reverse=True,
-                ),
-            )
+            info = pin_metadata(completeness, after_smt.derived, reverse=True)
 
             logging.info(f"dumping completeness check to {dump.name}")
             smtlib = convert_to_smt_script(
-                completeness, status='unsat', extra_setinfo=info.cmds, extra_decls=info.decls
+                completeness, status='unsat', pin_info=info
             )
             pretty_print_smtlib(smtlib, dump)
             action += ("outputs", outfile)
@@ -139,24 +139,10 @@ def verify():
                     output_relation,
                     additional_asserts=[Equals(is_valid_after, Int(1))],
                 )
-                map_sources = {**eliminations, **after_smt.derived, **before_smt.derived}
-                info = combine_setinfo(
-                    derived_columns_skolem_setinfo(
-                        soundness,
-                        map_sources,
-                    ),
-                    emit_memory_equalities(
-                        before,
-                        after,
-                        before_conv,
-                        after_conv,
-                        before_constraints=before_smt.constraints,
-                        after_constraints=after_smt.constraints,
-                    ),
-                )
+                info = pin_metadata(soundness, map_sources)
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(
-                    soundness, status='unsat', extra_setinfo=info.cmds, extra_decls=info.decls
+                    soundness, status='unsat', pin_info=info
                 )
                 pretty_print_smtlib(smtlib, dump)
                 action += ("outputs", outfile)
@@ -211,25 +197,11 @@ def verify():
                     input_relation,
                     output_relation,
                 )
-                map_sources = {**eliminations, **after_smt.derived, **before_smt.derived}
-                info = combine_setinfo(
-                    derived_columns_skolem_setinfo(
-                        soundness,
-                        map_sources,
-                    ),
-                    emit_memory_equalities(
-                        before,
-                        after,
-                        before_conv,
-                        after_conv,
-                        before_constraints=before_smt.constraints,
-                        after_constraints=after_smt.constraints,
-                    ),
-                )
+                info = pin_metadata(soundness, map_sources)
 
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(
-                    soundness, status='unsat', extra_setinfo=info.cmds, extra_decls=info.decls
+                    soundness, status='unsat', pin_info=info
                 )
                 pretty_print_smtlib(smtlib, dump)
                 action += ("outputs", outfile)

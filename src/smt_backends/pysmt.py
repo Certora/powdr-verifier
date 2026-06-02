@@ -474,9 +474,10 @@ def script_with_sorted_declarefuns(smtlib: script.SmtLibScript) -> script.SmtLib
     smtlib.commands = newcmds
     return smtlib
 
-def convert_to_smt_script(f: FNode, status = None, extra_setinfo: list = None, extra_decls: list = None) -> script.SmtLibScript:
+def convert_to_smt_script(f: FNode, status=None, pin_info=None) -> script.SmtLibScript:
     smtlib = script.smtlibscript_from_formula(f, None)
-    if extra_decls:
+    merged_decls = list(pin_info.decls) if pin_info is not None else []
+    if merged_decls:
         existing = {
             c.args[0] for c in smtlib.commands if c.name == "declare-fun"
         }
@@ -484,7 +485,7 @@ def convert_to_smt_script(f: FNode, status = None, extra_setinfo: list = None, e
         inserted = False
         for c in smtlib.commands:
             if not inserted and c.name != "declare-fun" and c.name != "set-logic":
-                for sym in extra_decls:
+                for sym in merged_decls:
                     if sym not in existing:
                         new_cmds.append(
                             script.SmtLibCommand(name="declare-fun", args=[sym])
@@ -492,7 +493,7 @@ def convert_to_smt_script(f: FNode, status = None, extra_setinfo: list = None, e
                 inserted = True
             new_cmds.append(c)
         if not inserted:
-            for sym in extra_decls:
+            for sym in merged_decls:
                 if sym not in existing:
                     new_cmds.append(
                         script.SmtLibCommand(name="declare-fun", args=[sym])
@@ -508,8 +509,15 @@ def convert_to_smt_script(f: FNode, status = None, extra_setinfo: list = None, e
     #smtlib.commands.insert(3, script.SmtLibCommand(name='set-option', args=[':produce-unsat-cores', 'true']))
     if status is not None:
         smtlib.commands.insert(4, script.SmtLibCommand(name='set-info', args=[':status', status]))
-    if extra_setinfo:
-        for i, cmd in enumerate(extra_setinfo):
+    if pin_info is not None and pin_info.equations:
+        from ..simplify.skolem_derived import SETINFO_PREFIX
+        from ..simplify.skolem_utils import emit_pin_setinfo
+
+        prefix = SETINFO_PREFIX[1:]
+        pin_cmds = [
+            emit_pin_setinfo(prefix, i, eq) for i, eq in enumerate(pin_info.equations)
+        ]
+        for i, cmd in enumerate(pin_cmds):
             smtlib.commands.insert(5 + i, cmd)
     #smtlib.commands.insert(2, script.SmtLibCommand(name='set-option', args=[':incremental', 'true']))
     # proof logging
