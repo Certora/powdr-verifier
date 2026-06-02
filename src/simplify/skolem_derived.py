@@ -12,7 +12,8 @@ What this module does
   for completeness, ``before_conv.convert_eliminations(...)`` for
   soundness).
 * :func:`collect_pins`    - load every ``:skolem-derived-N`` value
-  back as an ``FNode`` equation.
+  back as an ``FNode`` equation (column-derived, elimination, and
+  verifier memory-bus alignment pins share this prefix with disjoint indices).
 * :func:`contribute`      - for every loaded equation, pin the qvar
   side on the shared :class:`SkolemMap` if not already pinned.
 """
@@ -33,10 +34,9 @@ def collect_pins(smt_script: script.SmtLibScript) -> list:
 def contribute(skolem_map, derived: list) -> None:
     """Pin every derived equation whose lhs qvar is in the map.
 
-    Each entry is an ``Equals(var, expr)`` (the encoder / eliminations
-    canonicalize it that way). We only pin the side that happens to be
-    a qvar of the current forall; the rest is left for other
-    contributors / lift to handle.
+    Each entry is ``Equals(var, expr)`` or ``Iff(var, expr)``. We only
+    pin the side that happens to be a qvar of the current forall; the rest is
+    left for other contributors / lift to handle.
     """
     for eq in derived:
         split = split_equation(eq)
