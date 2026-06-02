@@ -8,15 +8,14 @@ def _qvar_deps(expr: FNode, qvars: frozenset[FNode]) -> frozenset[FNode]:
 
 
 def _is_potential_lift_pair(d: FNode) -> bool:
-    """True if ``d`` is ``Not`` of an equality or boolean ``Iff`` (candidate for hoisting)."""
+    """True if ``d`` is ``Not`` of ``Equals`` or ``Iff`` (candidate for hoisting)."""
     return d.is_not() and (d.arg(0).is_equals() or d.arg(0).is_iff())
 
 
 def _match_hoistable_eq(eq: FNode, qvars: frozenset[FNode]) -> tuple[FNode, FNode] | None:
-    """Match ``Equals`` / bool ``Iff`` as ``q = expr`` hoistable out of ``qvars``."""
+    """Match ``Equals`` / ``Iff`` as ``q = expr`` hoistable out of ``qvars``."""
     if eq.is_iff():
-        if not (eq.arg(0).get_type().is_bool_type() and eq.arg(1).get_type().is_bool_type()):
-            return None
+        assert eq.arg(0).get_type().is_bool_type() and eq.arg(1).get_type().is_bool_type()
     elif not eq.is_equals():
         return None
     left, right = eq.arg(0), eq.arg(1)
