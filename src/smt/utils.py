@@ -1,11 +1,13 @@
 """Shared PySMT helpers: comments, models, field axioms, SMT-LIB I/O, and profiling."""
 import functools
-import json
+import itertools
 import logging
+from pathlib import Path
 from typing import Any, Iterable
 from types import GeneratorType
 
 from ..smt_backends.pysmt import *
+from ..utils.io import open_file
 from ..utils.profiling import simple_profile
 
 SUPPORTS_COMMENTS = "comment" in FNode.__slots__
@@ -208,11 +210,15 @@ def find_unique_solution(s: Solver, f: FNode) -> Optional[dict[str, int]]:
         return None
 
 
+_simplify_and_check_dump_i = itertools.count()
+
+
 def simplify_and_check(
     formula: FNode,
     *,
     simplify_timeout: float,
     tactic: str,
+    smt_dump_base: Path | None = None,
 ) -> bool | None:
     """``True`` / ``False`` / ``None`` (inconclusive) for PySMT-validity of ``formula``."""
     from ..checker import check_smt_script
@@ -220,6 +226,7 @@ def simplify_and_check(
     from ..simplifier import simplify_smt_script
 
     smt = convert_to_smt_script(Not(formula))
+    dump_path = None
     if not hasattr(ARGS(), "pretty"):
         ARGS().pretty = False
     if not hasattr(ARGS(), "dump_steps"):
@@ -232,11 +239,18 @@ def simplify_and_check(
     try:
         ARGS().pretty = False
         ARGS().dump_steps = False
-        simplify_smt_script(
+        smt = simplify_smt_script(
             smt,
             tactic=tactic,
             timeout=float(simplify_timeout),
         )
+        if smt_dump_base is not None and getattr(ARGS(), "dump_smt", False):
+            n = next(_simplify_and_check_dump_i)
+            dump_path = Path(smt_dump_base).with_suffix(f".memory-align-{n:04d}.smt2")
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            with open_file(dump_path, "w") as f:
+                serialize_smtlib(smt, f)
+            logging.info("dumped simplify_and_check pre-check SMT2 to %s", dump_path)
         ARGS().dump_model = None
         check_action = Action("simplify-and-check")
         match check_smt_script(smt, check_action, input_for_log=None):
