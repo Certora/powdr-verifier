@@ -72,65 +72,74 @@ def _flat_memory_encoder_row(row: BusInteraction) -> tuple[FNode, list[FNode]]:
     return mult, [a, p, *data, ts]
 
 
-def _memory_encoder_interaction_equiv_formula(row_b: BusInteraction, row_a: BusInteraction) -> FNode | None:
+def _strip_prefix(row: BusInteraction, prefix: str) -> BusInteraction:
+    return BusInteraction(
+        strip_prefix_from_vars(row.mult, prefix),
+        tuple(strip_prefix_from_vars(a, prefix) for a in row.args),
+    )
+
+
+def _encode_equiv_formula(row_b: BusInteraction, row_a: BusInteraction) -> FNode | None:
     mb, flat_b = _flat_memory_encoder_row(row_b)
     ma, flat_a = _flat_memory_encoder_row(row_a)
     if len(flat_b) != len(flat_a):
         return None
-    return And(Equals(mb, ma), *[Equals(x, y) for x, y in zip(flat_b, flat_a)])
+    return And(field_eq(mb, ma), *[field_eq(x, y) for x, y in zip(flat_b, flat_a)])
 
 
-def _memory_interaction_indices_equivalent(
-    before_conv: SmtConverter,
-    after_conv: SmtConverter,
-    ib: int,
-    ia: int,
+def _check_is_valid(
+    formula: FNode, *, smt_dump_base: Path | None
+) -> bool | None:
+    return simplify_and_check(
+        formula,
+        simplify_timeout=1.0,
+        tactic="z3-propagate-values:bounds:rewrite:gxor:mod_inv:demod",
+        smt_dump_base=smt_dump_base,
+    )
+
+
+def _check_equivalent_bare(
+    row_b: BusInteraction,
+    row_a: BusInteraction,
+    *,
+    smt_dump_base: Path | None,
+) -> bool | None:
+    """Encoder equality: trivial ``simplify`` to true, else bare SMT check. ``True``/``False``/unknown ``None``."""
+    eq_raw = _encode_equiv_formula(row_b, row_a)
+    if eq_raw is None:
+        _LOG.debug(
+            "memory align SMT shape mismatch (flat arg lengths differ)",
+        )
+        return False
+    eq = eq_raw.simplify()
+    if eq.is_true():
+        _LOG.debug("memory align trivial SMT equality (stripped rows)")
+        return True
+
+    r0 = _check_is_valid(eq, smt_dump_base=smt_dump_base)
+    if r0 is True:
+        _LOG.debug("memory align SMT valid without context")
+        return True
+    if r0 is None:
+        _LOG.debug("memory align SMT unknown (bare)")
+    return r0
+
+
+def _check_equivalent_contextual(
+    row_b: BusInteraction,
+    row_a: BusInteraction,
     before_constraints: Iterable[FNode],
     after_constraints: Iterable[FNode],
     *,
     smt_dump_base: Path | None,
 ) -> bool:
-    row_b = before_conv.bus_interaction_encoder.memory._interactions[ib]
-    row_a = after_conv.bus_interaction_encoder.memory._interactions[ia]
-    eq_raw = _memory_encoder_interaction_equiv_formula(row_b, row_a)
+    """SMT with APC context; rows and constraints use matching stripped symbol names."""
+    eq_raw = _encode_equiv_formula(row_b, row_a)
     if eq_raw is None:
-        _LOG.debug(
-            "memory align SMT shape mismatch before_idx=%d after_idx=%d (flat arg lengths differ)",
-            ib,
-            ia,
-        )
         return False
     eq = eq_raw.simplify()
     if eq.is_true():
-        _LOG.debug(
-            "memory align trivial SMT equality before_idx=%d after_idx=%d",
-            ib,
-            ia,
-        )
         return True
-
-    def try_valid(formula: FNode) -> bool | None:
-        return simplify_and_check(
-            formula,
-            simplify_timeout=1.0,
-            tactic="z3-propagate-values:bounds:rewrite:gxor:mod_inv:demod",
-            smt_dump_base=smt_dump_base,
-        )
-
-    r0 = try_valid(eq)
-    if r0 is True:
-        _LOG.debug(
-            "memory align SMT valid without context before_idx=%d after_idx=%d",
-            ib,
-            ia,
-        )
-        return True
-    if r0 is None:
-        _LOG.debug(
-            "memory align SMT unknown (bare) before_idx=%d after_idx=%d",
-            ib,
-            ia,
-        )
 
     syms = frozenset(eq.get_free_variables())
     rel = _constraints_referencing(before_constraints, syms) + _constraints_referencing(
@@ -138,33 +147,44 @@ def _memory_interaction_indices_equivalent(
     )
     if not rel:
         _LOG.debug(
-            "memory align no relevant constraints for interaction vars before_idx=%d "
-            "after_idx=%d (bare_valid=%s) free_sym_count=%d",
-            ib,
-            ia,
-            r0,
+            "memory align no relevant constraints for interaction vars free_sym_count=%d",
             len(syms),
         )
         return False
-    r1 = try_valid(Implies(And(*rel), eq))
+    r1 = _check_is_valid(Implies(And(*rel), eq), smt_dump_base=smt_dump_base)
     if r1 is True:
         _LOG.debug(
-            "memory align SMT valid with %d constraint(s) before_idx=%d after_idx=%d",
+            "memory align SMT valid with %d constraint(s)",
             len(rel),
-            ib,
-            ia,
         )
         return True
     _LOG.debug(
-        "memory align SMT not proved before_idx=%d after_idx=%d bare=%s contextual=%s "
-        "relevant_constraints=%d",
-        ib,
-        ia,
-        r0,
+        "memory align SMT not proved contextual=%s relevant_constraints=%d",
         r1,
         len(rel),
     )
     return False
+
+
+def uniq(
+    pairs: Iterable,
+) -> Iterator:
+    seen: set = set()
+    for p in pairs:
+        if p not in seen:
+            seen.add(p)
+            yield p
+
+
+def _iter_memory_alignment_index_pairs_core(
+    before_indices: Iterable[int],
+    after_indices: Iterable[int],
+) -> Iterator[tuple[int, int]]:
+    bk = list(before_indices)
+    ak = list(after_indices)
+    yield from zip(bk, ak)
+    yield from zip(reversed(bk), reversed(ak))
+    yield from product(bk, ak)
 
 
 def analyze_memory_bus_partial_alignment(
@@ -201,13 +221,19 @@ def analyze_memory_bus_partial_alignment(
     after_mem = { idx: bi for idx, bi in enumerate(after_mem) }
 
 
-    _LOG.info(f"memory bus alignment: before_mem={before_mem} after_mem={after_mem}")
+    _LOG.debug(f"memory bus alignment: before_mem={before_mem} after_mem={after_mem}")
     nb, na = len(before_mem), len(after_mem)
     if nb == 0 or na == 0:
         return None
 
-    bc = tuple(_flatten_outer_conjunctions(before_constraints))
-    ac = tuple(_flatten_outer_conjunctions(after_constraints))
+    bc_strip = tuple(
+        strip_prefix_from_vars(c, f"{BEFORE_PREFIX}-")
+        for c in _flatten_outer_conjunctions(before_constraints)
+    )
+    ac_strip = tuple(
+        strip_prefix_from_vars(c, f"{AFTER_PREFIX}-")
+        for c in _flatten_outer_conjunctions(after_constraints)
+    )
 
     before_to_after: dict[int, int] = {}
 
@@ -219,32 +245,53 @@ def analyze_memory_bus_partial_alignment(
         del before_mem[kb]
         del after_mem[ka]
 
-    for kb, ka in list(zip(before_mem.keys(), after_mem.keys())):
+    bk0, ak0 = list(before_mem.keys()), list(after_mem.keys())
+    for kb, ka in _iter_memory_alignment_index_pairs_core(bk0, ak0):
+        if kb not in before_mem or ka not in after_mem:
+            continue
         check_and_drop_pair(kb, ka)
 
-    for kb, ka in list(
-        zip(
-            reversed(before_mem.keys()),
-            reversed(after_mem.keys()),
+    bk0 = list(before_mem.keys())
+    ak0 = list(after_mem.keys())
+    before_mem = {
+        idx: _strip_prefix(
+            before_conv.bus_interaction_encoder.memory._interactions[idx],
+            f"{BEFORE_PREFIX}-",
         )
-    ):
-        check_and_drop_pair(kb, ka)
+        for idx in bk0
+    }
+    after_mem = {
+        idx: _strip_prefix(
+            after_conv.bus_interaction_encoder.memory._interactions[idx],
+            f"{AFTER_PREFIX}-",
+        )
+        for idx in ak0
+    }
 
-    for kb, ka in list(
-        product(before_mem.keys(), after_mem.keys())
-    ):
+    for kb, ka in uniq(_iter_memory_alignment_index_pairs_core(bk0, ak0)):
         if kb not in before_mem or ka not in after_mem:
             continue
-        check_and_drop_pair(kb, ka)
-
-    for kb, ka in list(
-        product(before_mem.keys(), after_mem.keys())
-    ):
-        if kb not in before_mem or ka not in after_mem:
-            continue
-        if _memory_interaction_indices_equivalent(
-            before_conv, after_conv, kb, ka, bc, ac, smt_dump_base=smt_dump_base
+        row_b, row_a = before_mem[kb], after_mem[ka]
+        if _check_equivalent_bare(
+            row_b, row_a, smt_dump_base=smt_dump_base
         ):
+            _LOG.debug("memory bus alignment: bare match %s -> %s", kb, ka)
+            before_to_after[kb] = ka
+            del before_mem[kb]
+            del after_mem[ka]
+
+    for kb, ka in uniq(_iter_memory_alignment_index_pairs_core(bk0, ak0)):
+        if kb not in before_mem or ka not in after_mem:
+            continue
+        row_b, row_a = before_mem[kb], after_mem[ka]
+        if _check_equivalent_contextual(
+            row_b,
+            row_a,
+            bc_strip,
+            ac_strip,
+            smt_dump_base=smt_dump_base,
+        ):
+            _LOG.debug("memory bus alignment: contextual match %s -> %s", kb, ka)
             before_to_after[kb] = ka
             del before_mem[kb]
             del after_mem[ka]

@@ -12,6 +12,21 @@ from ..utils.profiling import simple_profile
 
 SUPPORTS_COMMENTS = "comment" in FNode.__slots__
 
+def strip_prefix_from_vars(f: FNode, prefix: str) -> FNode:
+    if f is None:
+        return None
+    if isinstance(f, list):
+        return [strip_prefix_from_vars(x, prefix) for x in f]
+    subs: dict[FNode, FNode] = {}
+    for sym in f.get_free_variables():
+        if not sym.is_symbol():
+            continue
+        n = sym.symbol_name()
+        nn = n[len(prefix) :] if n.startswith(prefix) else n
+        if nn != n:
+            subs[sym] = Symbol(nn, sym.symbol_type())
+    return f.substitute(subs) if subs else f
+
 
 def with_comment(f: FNode, comment: str) -> FNode:
     """Set the comment of f to comment."""
