@@ -11,6 +11,8 @@ from collections.abc import Iterable, Iterator
 from itertools import product
 from dataclasses import dataclass
 
+from pathlib import Path
+
 from . import SetInfo
 from ..bus_interactions.single_interaction_encoder import BusInteraction
 from ..smt.conversion import SmtConverter
@@ -85,6 +87,8 @@ def _memory_interaction_indices_equivalent(
     ia: int,
     before_constraints: Iterable[FNode],
     after_constraints: Iterable[FNode],
+    *,
+    smt_dump_base: Path | None,
 ) -> bool:
     row_b = before_conv.bus_interaction_encoder.memory._interactions[ib]
     row_a = after_conv.bus_interaction_encoder.memory._interactions[ia]
@@ -110,6 +114,7 @@ def _memory_interaction_indices_equivalent(
             formula,
             simplify_timeout=1.0,
             tactic="z3-propagate-values:bounds:rewrite:gxor:mod_inv:demod",
+            smt_dump_base=smt_dump_base,
         )
 
     r0 = try_valid(eq)
@@ -170,6 +175,7 @@ def analyze_memory_bus_partial_alignment(
     *,
     before_constraints: Iterable[FNode],
     after_constraints: Iterable[FNode],
+    smt_dump_base: Path | None = None,
 ) -> MemoryBusPartialAlignment | None:
     """Infer aligned Memory interaction indices.
 
@@ -237,7 +243,7 @@ def analyze_memory_bus_partial_alignment(
         if kb not in before_mem or ka not in after_mem:
             continue
         if _memory_interaction_indices_equivalent(
-            before_conv, after_conv, kb, ka, bc, ac
+            before_conv, after_conv, kb, ka, bc, ac, smt_dump_base=smt_dump_base
         ):
             before_to_after[kb] = ka
             del before_mem[kb]
@@ -374,6 +380,7 @@ def emit_memory_equalities(
     before_constraints: Iterable[FNode],
     after_constraints: Iterable[FNode],
     reverse: bool = False,
+    smt_dump_base: Path | None = None,
 ) -> SetInfo:
     """Pair before/after memory symbols on shared prefix/suffix; record pin equations.
 
@@ -396,6 +403,7 @@ def emit_memory_equalities(
         after_conv,
         before_constraints=before_constraints,
         after_constraints=after_constraints,
+        smt_dump_base=smt_dump_base,
     )
     if alignment is None:
         _LOG.info("memory bus pins skipped (no alignment)")

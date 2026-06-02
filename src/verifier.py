@@ -5,6 +5,7 @@ array metadata, emits annotated scripts for external solvers, and records
 outputs via ``Action`` telemetry objects.
 """
 import logging
+from pathlib import Path
 
 from .encoding.utils import get_is_valid
 from .report.action import Action
@@ -91,7 +92,13 @@ def verify():
 
         map_sources = {**eliminations, **after_smt.derived, **before_smt.derived}
 
-        def pin_metadata(formula: FNode, derived: dict, *, reverse: bool = False):
+        def pin_metadata(
+            formula: FNode,
+            derived: dict,
+            *,
+            reverse: bool = False,
+            smt_outfile: Path | None = None,
+        ):
             info = derived_columns_skolem_setinfo(formula, derived)
             info += emit_memory_equalities(
                 before,
@@ -101,6 +108,7 @@ def verify():
                 before_constraints=before_smt.constraints,
                 after_constraints=after_smt.constraints,
                 reverse=reverse,
+                smt_dump_base=smt_outfile,
             )
             return info
 
@@ -114,7 +122,7 @@ def verify():
                 input_relation,
                 output_relation,
             )
-            info = pin_metadata(completeness, after_smt.derived, reverse=True)
+            info = pin_metadata(completeness, after_smt.derived, reverse=True, smt_outfile=outfile)
 
             logging.info(f"dumping completeness check to {dump.name}")
             smtlib = convert_to_smt_script(
@@ -139,7 +147,7 @@ def verify():
                     output_relation,
                     additional_asserts=[Equals(is_valid_after, Int(1))],
                 )
-                info = pin_metadata(soundness, map_sources)
+                info = pin_metadata(soundness, map_sources, smt_outfile=outfile)
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(
                     soundness, status='unsat', pin_info=info
@@ -197,7 +205,7 @@ def verify():
                     input_relation,
                     output_relation,
                 )
-                info = pin_metadata(soundness, map_sources)
+                info = pin_metadata(soundness, map_sources, smt_outfile=outfile)
 
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(
