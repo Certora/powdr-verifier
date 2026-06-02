@@ -7,6 +7,7 @@ pins quantified sides to free witnesses (then ``lift_forall`` hoists).
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Iterable, Iterator
 from itertools import product
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from pathlib import Path
 
 from . import SetInfo
 from ..bus_interactions.single_interaction_encoder import BusInteraction
+from ..report.action import Action
 from ..smt.conversion import SmtConverter
 from ..smt.utils import *
 from ..utils.args import ARGS
@@ -79,6 +81,12 @@ def _strip_prefix(row: BusInteraction, prefix: str) -> BusInteraction:
     )
 
 
+_MEMORY_ALIGN_CHECK_TACTIC_FULL = (
+    "z3-propagate-values:bounds:rewrite:gxor:mod_inv:demod"
+)
+_MEMORY_ALIGN_CHECK_TACTIC_BARE = "z3-propagate-values:demod"
+
+
 def _encode_equiv_formula(row_b: BusInteraction, row_a: BusInteraction) -> FNode | None:
     mb, flat_b = _flat_memory_encoder_row(row_b)
     ma, flat_a = _flat_memory_encoder_row(row_a)
@@ -87,13 +95,16 @@ def _encode_equiv_formula(row_b: BusInteraction, row_a: BusInteraction) -> FNode
 
 
 def _check_is_valid(
-    formula: FNode, *, smt_dump_base: Path | None
+    formula: FNode,
+    *,
+    smt_dump_base: Path | None,
+    tactic: str = _MEMORY_ALIGN_CHECK_TACTIC_FULL,
 ) -> bool | None:
     return simplify_and_check(
         formula,
         simplify_timeout=1.0,
         check_timeout=1.0,
-        tactic="z3-propagate-values:bounds:rewrite:gxor:mod_inv:demod",
+        tactic=tactic,
         smt_dump_base=smt_dump_base,
     )
 
@@ -111,7 +122,11 @@ def _check_equivalent_bare(
     elif eq.is_false():
         return False
 
-    if _check_is_valid(eq, smt_dump_base=smt_dump_base):
+    if _check_is_valid(
+        eq,
+        smt_dump_base=smt_dump_base,
+        tactic=_MEMORY_ALIGN_CHECK_TACTIC_BARE,
+    ):
         return True
     return None
 
@@ -123,7 +138,7 @@ def _check_equivalent_contextual(
     after_constraints: Iterable[FNode],
     *,
     smt_dump_base: Path | None,
-) -> bool:
+) -> bool | None:
     """SMT with APC context; rows and constraints use matching stripped symbol names."""
     eq = _encode_equiv_formula(row_b, row_a).simplify()
     assert not eq.is_true()
@@ -141,20 +156,8 @@ def _check_equivalent_contextual(
             "memory align no relevant constraints for interaction vars free_sym_count=%d",
             len(syms),
         )
-        return False
-    r1 = _check_is_valid(Implies(And(*rel), eq), smt_dump_base=smt_dump_base)
-    if r1 is True:
-        _LOG.debug(
-            "memory align SMT valid with %d constraint(s)",
-            len(rel),
-        )
-        return True
-    _LOG.debug(
-        "memory align SMT not proved contextual=%s relevant_constraints=%d",
-        r1,
-        len(rel),
-    )
-    return False
+        return None
+    return _check_is_valid(Implies(And(*rel), eq), smt_dump_base=smt_dump_base)
 
 
 def uniq(
@@ -186,6 +189,7 @@ def analyze_memory_bus_partial_alignment(
     *,
     before_constraints: Iterable[FNode],
     after_constraints: Iterable[FNode],
+    parent_action: Action,
     smt_dump_base: Path | None = None,
 ) -> MemoryBusPartialAlignment | None:
     """Infer aligned Memory interaction indices.
@@ -227,19 +231,35 @@ def analyze_memory_bus_partial_alignment(
     )
 
     before_to_after: dict[int, int] = {}
+    counters = {
+        "syntax-checks": 0,
+        "syntax-matches": 0,
+        "syntax-time": 0,
+        "bare-checks": 0,
+        "bare-true": 0,
+        "bare-false": 0,
+        "bare-unknown": 0,
+        "bare-time": 0,
+        "context-checks": 0,
+        "context-true": 0,
+        "context-false": 0,
+        "context-unknown": 0,
+        "context-time": 0,
+    }
 
-    def check_and_drop_pair(kb: int, ka: int) -> None:
+    bk0, ak0 = list(before_mem.keys()), list(after_mem.keys())
+    t0 = time.perf_counter()
+    for kb, ka in _iter_memory_alignment_index_pairs_core(bk0, ak0):
+        if kb not in before_mem or ka not in after_mem:
+            continue
+        counters["syntax-checks"] += 1
         if before_mem[kb] == after_mem[ka]:
+            counters["syntax-matches"] += 1
             _LOG.debug(f"memory bus alignment: syntactic match {kb} -> {ka}")
             before_to_after[kb] = ka
             del before_mem[kb]
             del after_mem[ka]
-
-    bk0, ak0 = list(before_mem.keys()), list(after_mem.keys())
-    for kb, ka in _iter_memory_alignment_index_pairs_core(bk0, ak0):
-        if kb not in before_mem or ka not in after_mem:
-            continue
-        check_and_drop_pair(kb, ka)
+    counters["syntax-time"] = time.perf_counter() - t0
 
     bk0 = list(before_mem.keys())
     ak0 = list(after_mem.keys())
@@ -260,45 +280,50 @@ def analyze_memory_bus_partial_alignment(
 
     excluded = set()
 
+    t0 = time.perf_counter()
     for kb, ka in uniq(_iter_memory_alignment_index_pairs_core(bk0, ak0)):
         if kb not in before_mem or ka not in after_mem:
             continue
         match _check_equivalent_bare(before_mem[kb], after_mem[ka], smt_dump_base=smt_dump_base):
             case True:
+                counters["bare-true"] += 1
                 _LOG.debug("memory bus alignment: bare match %s -> %s", kb, ka)
                 before_to_after[kb] = ka
                 del before_mem[kb]
                 del after_mem[ka]
             case False:
+                counters["bare-false"] += 1
                 _LOG.debug("memory bus alignment: bare mismatch %s -> %s", kb, ka)
                 excluded.add((kb, ka))
             case None:
-                pass
+                counters["bare-unknown"] += 1
+    counters["bare-time"] = time.perf_counter() - t0
 
+    t0 = time.perf_counter()
     for kb, ka in uniq(_iter_memory_alignment_index_pairs_core(bk0, ak0)):
         if kb not in before_mem or ka not in after_mem or (kb, ka) in excluded:
             continue
         row_b, row_a = before_mem[kb], after_mem[ka]
-        if _check_equivalent_contextual(
+        match _check_equivalent_contextual(
             row_b,
             row_a,
             bc_strip,
             ac_strip,
             smt_dump_base=smt_dump_base,
         ):
-            _LOG.debug("memory bus alignment: contextual match %s -> %s", kb, ka)
-            before_to_after[kb] = ka
-            del before_mem[kb]
-            del after_mem[ka]
+            case True:
+                counters["context-true"] += 1
+                _LOG.debug("memory bus alignment: contextual match %s -> %s", kb, ka)
+                before_to_after[kb] = ka
+                del before_mem[kb]
+                del after_mem[ka]
+            case False:
+                counters["context-false"] += 1
+            case None:
+                counters["context-unknown"] += 1
+    counters["context-time"] = time.perf_counter() - t0
 
-    if not before_to_after:
-        _LOG.info(
-            "memory bus alignment: no aligned pairs (bus_id=%s n_before=%d n_after=%d)",
-            mem_id,
-            nb,
-            na,
-        )
-        return None
+    parent_action += counters
 
     pair_preview = before_to_after if len(before_to_after) <= 16 else {
         **dict(list(before_to_after.items())[:12]),
@@ -421,6 +446,7 @@ def emit_memory_equalities(
     *,
     before_constraints: Iterable[FNode],
     after_constraints: Iterable[FNode],
+    parent_action: Action,
     reverse: bool = False,
     smt_dump_base: Path | None = None,
 ) -> SetInfo:
@@ -438,15 +464,19 @@ def emit_memory_equalities(
     Equations are serialized as ``:skolem-derived-*`` set-info when building the
     script (see :class:`SetInfo`).
     """
-    alignment = analyze_memory_bus_partial_alignment(
-        before_data,
-        after_data,
-        before_conv,
-        after_conv,
-        before_constraints=before_constraints,
-        after_constraints=after_constraints,
-        smt_dump_base=smt_dump_base,
-    )
+    with parent_action.action("memory-bus-alignment") as align_a:
+        align_a += {"file": smt_dump_base.name}
+        align_a += {"reverse": reverse}
+        alignment = analyze_memory_bus_partial_alignment(
+            before_data,
+            after_data,
+            before_conv,
+            after_conv,
+            before_constraints=before_constraints,
+            after_constraints=after_constraints,
+            parent_action=align_a,
+            smt_dump_base=smt_dump_base,
+        )
     if alignment is None:
         _LOG.info("memory bus pins skipped (no alignment)")
         return SetInfo()

@@ -110,6 +110,7 @@ def verify():
                 after_constraints=list(after_smt.derived.values()),
                 reverse=reverse,
                 smt_dump_base=smt_outfile,
+                parent_action=action,
             )
             return info
 

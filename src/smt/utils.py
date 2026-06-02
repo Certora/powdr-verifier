@@ -235,6 +235,7 @@ def simplify_and_check(
     check_timeout: float,
     tactic: str,
     smt_dump_base: Path | None = None,
+    parent_action=None,
 ) -> bool | None:
     """``True`` / ``False`` / ``None`` (inconclusive) for PySMT-validity of ``formula``."""
     from ..checker import check_smt_script
@@ -242,7 +243,6 @@ def simplify_and_check(
     from ..simplifier import simplify_smt_script
 
     smt = convert_to_smt_script(Not(formula))
-    dump_path = None
     if not hasattr(ARGS(), "pretty"):
         ARGS().pretty = False
     if not hasattr(ARGS(), "dump_steps"):
@@ -255,29 +255,35 @@ def simplify_and_check(
     try:
         ARGS().pretty = False
         ARGS().dump_steps = False
-        smt = simplify_smt_script(
-            smt,
-            tactic=tactic,
-            timeout=float(simplify_timeout),
+        root_cm = (
+            parent_action.action("simplify-and-check")
+            if parent_action is not None
+            else Action("simplify-and-check")
         )
-        if smt_dump_base is not None and getattr(ARGS(), "dump_smt", False):
-            n = next(_simplify_and_check_dump_i)
-            dump_path = Path(smt_dump_base).with_suffix(f".memory-align-{n:04d}.smt2")
-            dump_path.parent.mkdir(parents=True, exist_ok=True)
-            with open_file(dump_path, "w") as f:
-                serialize_smtlib(smt, f)
-            logging.info("dumped simplify_and_check pre-check SMT2 to %s", dump_path)
-        ARGS().dump_model = None
-        check_action = Action("simplify-and-check")
-        match check_smt_script(
-            smt, check_action, input_for_log=None, check_timeout=check_timeout
-        ):
-            case "unsat":
-                return True
-            case "sat":
-                return False
-            case _:
-                return None
+        with root_cm as check_action:
+            smt = simplify_smt_script(
+                smt,
+                tactic=tactic,
+                timeout=float(simplify_timeout),
+                parent_action=check_action,
+            )
+            if smt_dump_base is not None and getattr(ARGS(), "dump_smt", False):
+                n = next(_simplify_and_check_dump_i)
+                dump_path = Path(smt_dump_base).with_suffix(f".memory-align-{n:04d}.smt2")
+                dump_path.parent.mkdir(parents=True, exist_ok=True)
+                with open_file(dump_path, "w") as f:
+                    serialize_smtlib(smt, f)
+                logging.info("dumped simplify_and_check pre-check SMT2 to %s", dump_path)
+            ARGS().dump_model = None
+            match check_smt_script(
+                smt, check_action, input_for_log=None, check_timeout=check_timeout
+            ):
+                case "unsat":
+                    return True
+                case "sat":
+                    return False
+                case _:
+                    return None
     finally:
         ARGS().pretty = prev_pretty
         ARGS().dump_steps = prev_dump_steps
