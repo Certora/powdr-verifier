@@ -105,8 +105,9 @@ def verify():
                 after,
                 before_conv,
                 after_conv,
-                before_constraints=before_smt.constraints,
-                after_constraints=after_smt.constraints,
+                before_constraints=list(before_smt.derived.values())
+                + list(eliminations.values()),
+                after_constraints=list(after_smt.derived.values()),
                 reverse=reverse,
                 smt_dump_base=smt_outfile,
             )

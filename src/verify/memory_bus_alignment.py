@@ -82,8 +82,7 @@ def _strip_prefix(row: BusInteraction, prefix: str) -> BusInteraction:
 def _encode_equiv_formula(row_b: BusInteraction, row_a: BusInteraction) -> FNode | None:
     mb, flat_b = _flat_memory_encoder_row(row_b)
     ma, flat_a = _flat_memory_encoder_row(row_a)
-    if len(flat_b) != len(flat_a):
-        return None
+    assert len(flat_b) == len(flat_a)
     return And(field_eq(mb, ma), *[field_eq(x, y) for x, y in zip(flat_b, flat_a)])
 
 
@@ -106,24 +105,15 @@ def _check_equivalent_bare(
     smt_dump_base: Path | None,
 ) -> bool | None:
     """Encoder equality: trivial ``simplify`` to true, else bare SMT check. ``True``/``False``/unknown ``None``."""
-    eq_raw = _encode_equiv_formula(row_b, row_a)
-    if eq_raw is None:
-        _LOG.debug(
-            "memory align SMT shape mismatch (flat arg lengths differ)",
-        )
-        return False
-    eq = eq_raw.simplify()
+    eq = _encode_equiv_formula(row_b, row_a).simplify()
     if eq.is_true():
-        _LOG.debug("memory align trivial SMT equality (stripped rows)")
         return True
+    elif eq.is_false():
+        return False
 
-    r0 = _check_is_valid(eq, smt_dump_base=smt_dump_base)
-    if r0 is True:
-        _LOG.debug("memory align SMT valid without context")
+    if _check_is_valid(eq, smt_dump_base=smt_dump_base):
         return True
-    if r0 is None:
-        _LOG.debug("memory align SMT unknown (bare)")
-    return r0
+    return None
 
 
 def _check_equivalent_contextual(
@@ -135,17 +125,18 @@ def _check_equivalent_contextual(
     smt_dump_base: Path | None,
 ) -> bool:
     """SMT with APC context; rows and constraints use matching stripped symbol names."""
-    eq_raw = _encode_equiv_formula(row_b, row_a)
-    if eq_raw is None:
-        return False
-    eq = eq_raw.simplify()
-    if eq.is_true():
-        return True
-
+    eq = _encode_equiv_formula(row_b, row_a).simplify()
+    assert not eq.is_true()
+    
     syms = frozenset(eq.get_free_variables())
-    rel = _constraints_referencing(before_constraints, syms) + _constraints_referencing(
-        after_constraints, syms
-    )
+    if False:
+        rel = _constraints_referencing(before_constraints, syms) + _constraints_referencing(
+            after_constraints, syms
+        )
+    else:
+        # do not do relevance check
+        rel = before_constraints + after_constraints
+    _LOG.warning(f"contextual {eq} -> {len(syms)} -> {len(rel)}")
     if not rel:
         _LOG.debug(
             "memory align no relevant constraints for interaction vars free_sym_count=%d",
@@ -239,12 +230,11 @@ def analyze_memory_bus_partial_alignment(
     before_to_after: dict[int, int] = {}
 
     def check_and_drop_pair(kb: int, ka: int) -> None:
-        if before_mem[kb] != after_mem[ka]:
-            return
-        _LOG.debug(f"memory bus alignment: syntactic match {kb} -> {ka}")
-        before_to_after[kb] = ka
-        del before_mem[kb]
-        del after_mem[ka]
+        if before_mem[kb] == after_mem[ka]:
+            _LOG.debug(f"memory bus alignment: syntactic match {kb} -> {ka}")
+            before_to_after[kb] = ka
+            del before_mem[kb]
+            del after_mem[ka]
 
     bk0, ak0 = list(before_mem.keys()), list(after_mem.keys())
     for kb, ka in _iter_memory_alignment_index_pairs_core(bk0, ak0):
@@ -269,20 +259,25 @@ def analyze_memory_bus_partial_alignment(
         for idx in ak0
     }
 
-    for kb, ka in uniq(_iter_memory_alignment_index_pairs_core(bk0, ak0)):
-        if kb not in before_mem or ka not in after_mem:
-            continue
-        row_b, row_a = before_mem[kb], after_mem[ka]
-        if _check_equivalent_bare(
-            row_b, row_a, smt_dump_base=smt_dump_base
-        ):
-            _LOG.debug("memory bus alignment: bare match %s -> %s", kb, ka)
-            before_to_after[kb] = ka
-            del before_mem[kb]
-            del after_mem[ka]
+    excluded = set()
 
     for kb, ka in uniq(_iter_memory_alignment_index_pairs_core(bk0, ak0)):
         if kb not in before_mem or ka not in after_mem:
+            continue
+        match _check_equivalent_bare(before_mem[kb], after_mem[ka], smt_dump_base=smt_dump_base):
+            case True:
+                _LOG.debug("memory bus alignment: bare match %s -> %s", kb, ka)
+                before_to_after[kb] = ka
+                del before_mem[kb]
+                del after_mem[ka]
+            case False:
+                _LOG.debug("memory bus alignment: bare mismatch %s -> %s", kb, ka)
+                excluded.add((kb, ka))
+            case None:
+                pass
+
+    for kb, ka in uniq(_iter_memory_alignment_index_pairs_core(bk0, ak0)):
+        if kb not in before_mem or ka not in after_mem or (kb, ka) in excluded:
             continue
         row_b, row_a = before_mem[kb], after_mem[ka]
         if _check_equivalent_contextual(
@@ -438,8 +433,8 @@ def emit_memory_equalities(
 
     Encoding follows ``ARGS().memory_encoding`` (``array``, ``plain``, or empty for others).
 
-    ``before_constraints`` / ``after_constraints`` (typically APC ``constraints``)
-    refine SMT equivalence when JSON differs from trivial inequality.
+    ``before_constraints`` / ``after_constraints`` are passed from the verifier:
+    derived-column and elimination ``Equals`` terms (stripped for contextual SMT).
 
     Equations are serialized as ``:skolem-derived-*`` set-info when building the
     script (see :class:`SetInfo`).
