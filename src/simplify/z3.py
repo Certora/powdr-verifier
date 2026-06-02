@@ -30,19 +30,6 @@ def _declares_from_z3_not_in_prefix(
     return out
 
 
-def _is_shared_array_pin(formula: FNode) -> bool:
-    """True if ``formula`` is ``(= before-memory-X after-memory-X)`` from ``array_subst`` pins."""
-    if not formula.is_equals():
-        return False
-    left, right = formula.arg(0), formula.arg(1)
-    if not (left.is_symbol() and right.is_symbol()):
-        return False
-    ln, rn = left.symbol_name(), right.symbol_name()
-    if not (ln.startswith("before-memory-") and rn.startswith("after-memory-")):
-        return False
-    return ln.removeprefix("before-") == rn.removeprefix("after-")
-
-
 def simplify_z3(smt_script: script.SmtLibScript, args=[], subaction=None) -> script.SmtLibScript:
     """Feed asserts to a Z3 ``Tactic`` solver until ``check-sat``, then splice back simplified asserts.
 

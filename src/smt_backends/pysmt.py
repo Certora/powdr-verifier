@@ -439,7 +439,7 @@ def serialize_smtlib(smtlib: script.SmtLibScript, file: TextIO):
     for cmd in smtlib.commands:
         # Do not DAG-share subexpressions across top-level asserts: the printer
         # reuses let binders (``.def_N``) and can emit equalities that reference
-        # the wrong binder when read back (see shared-array pin asserts).
+        # the wrong binder when read back (e.g. skolem pin asserts).
         cmd.serialize(file, printer=None, daggify=cmd.name != "assert")
         file.write("\n")
 

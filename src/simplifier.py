@@ -21,7 +21,6 @@ from .simplify.witness import simplify_witnesses
 from .simplify.domain_probe import simplify_domain_probe
 from .simplify import (
     check_isqf,
-    simplify_array_subst,
     simplify_bounds,
     simplify_cvc5,
     simplify_demod,
@@ -72,8 +71,6 @@ def _apply_tactic_pass(
     match base:
         case "witness":
             return simplify_witnesses(smt_script, subaction)
-        case "array_subst":
-            return simplify_array_subst(smt_script, subaction)
         case "bounds":
             return simplify_bounds(smt_script, subaction)
         case "nnf":

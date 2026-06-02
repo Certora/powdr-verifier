@@ -5,16 +5,8 @@ from src.simplify.utils import _string_to_script
 from src.simplify.z3 import (
     _declared_symbol_names,
     _declares_from_z3_not_in_prefix,
-    _is_shared_array_pin,
     simplify_z3,
 )
-
-
-def test_is_shared_array_pin():
-    before = Symbol("before-memory-0-mult", INT)
-    after = Symbol("after-memory-0-mult", INT)
-    assert _is_shared_array_pin(Equals(before, after))
-    assert not _is_shared_array_pin(Equals(before, Int(0)))
 
 
 def _script_with_check_sat(commands):
@@ -77,28 +69,27 @@ def test_z3_simplify_preserves_mod_shape():
     assert mod_m == p and mod_e.get_free_variables() == {x}
 
 
-def test_z3_propagate_preserves_shared_array_pins():
+def test_z3_propagate_preserves_memory_tie_assert():
     before = Symbol("before-memory-0-data0", INT)
     after = Symbol("after-memory-0-data0", INT)
     x = Symbol("before-a__0_0@1", INT)
+    tie = Equals(before, after)
     smt_script = script.SmtLibScript()
     smt_script.commands = [
         script.SmtLibCommand("declare-fun", [before, INT]),
         script.SmtLibCommand("declare-fun", [after, INT]),
         script.SmtLibCommand("declare-fun", [x, INT]),
         script.SmtLibCommand("assert", [Equals(x, Int(0))]),
-        script.SmtLibCommand("assert", [Equals(before, after)]),
+        script.SmtLibCommand("assert", [tie]),
         script.SmtLibCommand("check-sat", []),
     ]
     out = simplify_z3(smt_script, ["propagate-values"])
     pin_cmds = [
         cmd
         for cmd in out.commands
-        if cmd.name == "assert" and cmd.args[0].is_equals()
-        and _is_shared_array_pin(cmd.args[0])
+        if cmd.name == "assert" and cmd.args[0].is_equals() and cmd.args[0] == tie
     ]
     assert len(pin_cmds) == 1
-    assert pin_cmds[0].args[0] == Equals(before, after)
 
 
 def test_z3_solve_eqs():
@@ -110,21 +101,5 @@ def test_z3_solve_eqs():
     goal = z3.Goal()
     goal.add(f)
     result = tactic(goal)
-    print(f'result: {result}')
-
-    s = z3.Solver()
-    s.add(result[0])
-    print(f'check: {s.check()}')
-    print(f'model: {s.model()}')
-    print(result[0].convert_model(s.model()))
-
-    #import IPython; IPython.embed()
-
-    #s = z3.Solver()
-    #for r in result:
-    #    s.add(r)
-    #s.check()
-    #model = s.model()
-    #print(f'model: {model}')
-
-    #print(goal.convert_model(model))
+    assert len(result) == 1
+    assert isinstance(result[0], z3.Goal)
