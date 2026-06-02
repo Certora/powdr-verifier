@@ -1,12 +1,8 @@
 """Shared memory-bus alignment between before/after APC encodings.
 
-For **array** encoding: intermediate array snapshots at matching interaction
-prefix/suffix are paired and emitted as ``set-info :shared-array-*`` for
-``simplify.array_subst``.
-
-For **plain** encoding: the permutation encoding uses boolean (and int)
-auxiliaries per interaction index instead of array chains; the same
-prefix/suffix interaction alignment pairs those symbols analogously.
+Aligned before/after symbols (array snapshots or plain ``memory_match_*``)
+are emitted as ``set-info :skolem-derived-*`` so ``simplify.skolem_derived``
+pins quantified sides to free witnesses (then ``lift_forall`` hoists).
 """
 from __future__ import annotations
 
@@ -17,15 +13,12 @@ from dataclasses import dataclass
 
 from . import SetInfo
 from ..bus_interactions.single_interaction_encoder import BusInteraction
-from ..simplify.skolem_utils import emit_pin_setinfo
 from ..smt.conversion import SmtConverter
 from ..smt.utils import *
 from ..utils.args import ARGS
 
 BEFORE_PREFIX = "before"
 AFTER_PREFIX = "after"
-
-SETINFO_SHARED_ARRAYS_PREFIX = ":shared-array-"
 
 _LOG = logging.getLogger(__name__)
 
@@ -382,7 +375,7 @@ def emit_memory_equalities(
     after_constraints: Iterable[FNode],
     reverse: bool = False,
 ) -> SetInfo:
-    """Pair before/after memory symbols on shared prefix/suffix; emit ``set-info`` pins.
+    """Pair before/after memory symbols on shared prefix/suffix; record pin equations.
 
     ``subs`` maps ``{before_sym: after_sym}``.  For *completeness*
     (after-vars quantified) pass ``reverse=True`` so pins read ``Equals(after, before)``.
@@ -393,8 +386,8 @@ def emit_memory_equalities(
     ``before_constraints`` / ``after_constraints`` (typically APC ``constraints``)
     refine SMT equivalence when JSON differs from trivial inequality.
 
-    Pins use the ``:shared-array-*`` key prefix for historical reasons; ``array_subst``
-    injects them as top-level equalities regardless of sort.
+    Equations are serialized as ``:skolem-derived-*`` set-info when building the
+    script (see :class:`SetInfo`).
     """
     alignment = analyze_memory_bus_partial_alignment(
         before_data,
@@ -424,10 +417,8 @@ def emit_memory_equalities(
         len(alignment.before_to_after),
         len(subs),
     )
-    prefix = SETINFO_SHARED_ARRAYS_PREFIX[1:]
     if reverse:
         pins = [Equals(v, k) for k, v in subs.items()]
     else:
         pins = [Equals(k, v) for k, v in subs.items()]
-    cmds = [emit_pin_setinfo(prefix, i, eq) for i, eq in enumerate(pins)]
-    return SetInfo(cmds)
+    return SetInfo(equations=pins)
