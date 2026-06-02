@@ -136,7 +136,6 @@ def _check_equivalent_contextual(
     else:
         # do not do relevance check
         rel = before_constraints + after_constraints
-    _LOG.warning(f"contextual {eq} -> {len(syms)} -> {len(rel)}")
     if not rel:
         _LOG.debug(
             "memory align no relevant constraints for interaction vars free_sym_count=%d",
