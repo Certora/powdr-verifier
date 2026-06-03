@@ -677,6 +677,7 @@ class PermutationCheckMixin:
 
         # we know stuff about even-indexed and odd-indexed interactions
         for i in range(n):
+            continue
             if i % 2 == 0:
                 # outputs can only be odd-indexed
                 conjuncts.append(
@@ -723,6 +724,7 @@ class PermutationCheckMixin:
         
         # never match even-even or odd-odd, unless they are self-matches
         for i in range(n):
+            continue
             for j in range(i + 1, n):
                 if i % 2 == j % 2:
                     conjuncts.append(
@@ -734,6 +736,7 @@ class PermutationCheckMixin:
         
         # never match even-odd, only odd-even
         for i in range(n):
+            continue
             for j in range(i + 1, n):
                 if i % 2 == 0 and j % 2 == 1:
                     conjuncts.append(
@@ -761,6 +764,7 @@ class PermutationCheckMixin:
         
         # each pair of interactions have increasing timestamps
         for i in range(0, n, 2):
+            continue
             j = i + 1
             conjuncts.append(
                 with_comment(
