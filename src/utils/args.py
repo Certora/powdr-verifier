@@ -101,6 +101,7 @@ def __build_parser(skip_subparsers=False):
     sub_verify.add_argument("input_before", type=Path)
     sub_verify.add_argument("input_after", type=Path)
     sub_verify.add_argument("output", type=Path)
+    sub_verify.add_argument("--inject", nargs="?", default=None, const="random", metavar="SEED")
 
     sub_check = sub.add_parser("check")
     sub_check.add_argument("input", type=Path)

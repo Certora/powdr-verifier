@@ -5,6 +5,7 @@ array metadata, emits annotated scripts for external solvers, and records
 outputs via ``Action`` telemetry objects.
 """
 import logging
+import secrets
 from pathlib import Path
 
 from .encoding.utils import get_is_valid
@@ -14,6 +15,7 @@ from .smt.conversion import SmtConverter
 from .smt.utils import *
 from .utils.basic_block import BasicBlock
 from .utils.io import load_apc_dump, load_json
+from .verify.bug_injection import apply_injection
 from .verify.memory_bus_alignment import BEFORE_PREFIX, AFTER_PREFIX, emit_memory_equalities
 from .verify.skolem_pins import derived_columns_skolem_setinfo
 
@@ -58,6 +60,10 @@ def verify():
 
     before = load_apc_dump(ARGS().input_before)
     after = load_apc_dump(ARGS().input_after)
+
+    if ARGS().inject is not None:
+        seed = secrets.randbelow(1 << 20) if ARGS().inject == "random" else int(ARGS().inject)
+        apply_injection(seed, before, after)
 
     block = BasicBlock(before["block"])
     assert block == BasicBlock(after["block"]), "The basic block has changed"
