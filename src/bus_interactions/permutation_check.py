@@ -541,7 +541,11 @@ class PermutationCheckMixin:
             return is_outputs[i]
         def is_disabled(i: int) -> FNode:
             return is_disableds[i]
-        
+
+        def bus_arg_constants_distinct(ii: int, jj: int, key: int) -> bool:
+            a, b = args(ii)[key], args(jj)[key]
+            return a.is_int_constant() and b.is_int_constant(a.constant_value() != b[key].constant_value())
+
         # multiplicity range constraints
         for i in range(n):
             conjuncts.append(
@@ -675,74 +679,25 @@ class PermutationCheckMixin:
         # from hereon, the conjuncts are tuned to the actual inputs and might break on weird inputs
         # at least, they encode properties that are not immediately obvious from the specs
 
-        # we know stuff about even-indexed and odd-indexed interactions
         for i in range(n):
-            continue
-            if i % 2 == 0:
-                # outputs can only be odd-indexed
-                conjuncts.append(
-                    with_comment(
-                        Not(is_output(i)),
-                        f"outputs can not be even-indexed"
-                    )
-                )
-                # even-indexed has multiplicity -1 or 0
-                conjuncts.append(
-                    with_comment(
-                        Or(
-                            Equals(wrap_mod(Plus(mult(i), Int(1))), Int(0)),
-                            Equals(wrap_mod(Plus(mult(i), Int(0))), Int(0)),
-                        ),
-                        f"even-indexed has multiplicity -1 or 0"
-                    )
-                )
-                # consecutive even and odd have multitplicities that sum up to zero
-                conjuncts.append(
-                    with_comment(
-                        field_eq(mult(i), mult(i + 1)),
-                        f"consecutive even and odd have multitplicities that sum up to zero"
-                    )
-                )
-            else:
-                # inputs can only be even-indexed
-                conjuncts.append(
-                    with_comment(
-                        Not(is_input(i)),
-                        f"inputs can not be odd-indexed"
-                    )
-                )
-                # odd-indexed has multiplicity 1 or 0
-                conjuncts.append(
-                    with_comment(
-                        Or(
-                            Equals(wrap_mod(Plus(mult(i), Int(-1))), Int(0)),
-                            Equals(wrap_mod(Plus(mult(i), Int(0))), Int(0)),
-                        ),
-                        f"odd-indexed has multiplicity 1 or 0"
-                    )
-                )
-        
-        # never match even-even or odd-odd, unless they are self-matches
-        for i in range(n):
-            continue
-            for j in range(i + 1, n):
-                if i % 2 == j % 2:
+            non_distinct = [
+                t
+                for t in range(i + 1, n)
+                if not (bus_arg_constants_distinct(i, t, 0) or bus_arg_constants_distinct(i, t, 1))
+            ]
+            for jj, j in enumerate(non_distinct):
+                for k in non_distinct[jj + 1 :]:
                     conjuncts.append(
                         with_comment(
-                            Not(m(i, j)),
-                            f"no even-even or odd-odd matches"
-                        )
-                    )
-        
-        # never match even-odd, only odd-even
-        for i in range(n):
-            continue
-            for j in range(i + 1, n):
-                if i % 2 == 0 and j % 2 == 1:
-                    conjuncts.append(
-                        with_comment(
-                            Not(m(i, j)),
-                            f"no even-odd matches, only odd-even"
+                            Implies(
+                                And(
+                                    m(i, k),
+                                    Equals(args(i)[0], args(j)[0]),
+                                    Equals(args(i)[1], args(j)[1]),
+                                ),
+                                field_eq(mult(j)),
+                            ),
+                            f"match {i} and {k}: index {j} between with same key => mult==0",
                         )
                     )
 
@@ -761,20 +716,6 @@ class PermutationCheckMixin:
                         f"inputs or outputs {i} and {j} have different timestamps"
                     )
                 )
-        
-        # each pair of interactions have increasing timestamps
-        for i in range(0, n, 2):
-            continue
-            j = i + 1
-            conjuncts.append(
-                with_comment(
-                    Implies(
-                        Not(field_eq(mult(i))),
-                        field_lt(args(i)[-1], args(j)[-1])
-                    ),
-                    f"timestamps {i} and {j} are increasing ({args(i)[-1]} < {args(j)[-1]})"
-                )
-            )
         
         # usually the first is an input and the last is an output. we have the
         # special zero-is-model check, though, and so we have to be a bit more
