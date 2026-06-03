@@ -200,6 +200,22 @@ from pysmt.decorators import clear_pending_pop
 
 pysmt.smtlib.solver.SmtLibSolver.declare_fun = lambda self, symbol: self._declare_variable(symbol)
 pysmt.smtlib.solver.SmtLibSolver.assert_ = lambda self, formula: self.add_assertion(formula)
+
+
+@clear_pending_pop
+def __smtlib_add_assertion_no_simplify(self, formula, named=None):
+    sorts = self.to.get_types(formula, custom_only=True)
+    for s in sorts:
+        if all(s not in ds for ds in self.declared_sorts):
+            self._declare_sort(s)
+    deps = formula.get_free_variables()
+    for d in deps:
+        if all(d not in dv for dv in self.declared_vars):
+            self._declare_variable(d)
+    self._send_silent_command(script.SmtLibCommand(commands.ASSERT, [formula]))
+
+
+pysmt.smtlib.solver.SmtLibSolver.add_assertion = __smtlib_add_assertion_no_simplify
 pysmt.smtlib.solver.SmtLibSolver.set_info = lambda self, name, value: \
     self._send_silent_command(script.SmtLibCommand(name=commands.SET_INFO, args=[__ensure_leading_colon(name), value]))
 pysmt.smtlib.solver.SmtLibSolver.set_option = lambda self, name, value: \
