@@ -89,6 +89,7 @@ def __build_parser(skip_subparsers=False):
     sub_diff.add_argument("--with-before-model", type=Path)
     sub_diff.add_argument("--with-after-model", type=Path)
     sub_diff.add_argument("--only-simplified", action="store_true")
+    sub_diff.add_argument("--inject", nargs="?", default=None, const="random", metavar="SEED")
 
     sub_text = sub.add_parser("text")
     sub_text.add_argument("input", type=Path)

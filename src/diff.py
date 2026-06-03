@@ -10,12 +10,14 @@ import subprocess
 from . import converter
 from .utils.args import ARGS
 from .utils.io import load_apc_dump, load_json
+from .verify.bug_injection import apply_injection
 
 
 def diff():
     """Format two inputs (as JSON or text) and launch an external diff viewer (`meld`)."""
     before = load_apc_dump(ARGS().input_before)
     after = load_apc_dump(ARGS().input_after)
+    apply_injection(before, after)
 
     match ARGS().format:
         case "json":
