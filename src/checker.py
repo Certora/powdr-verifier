@@ -146,26 +146,28 @@ def check_smt_script(
         last_attempt = attempt
 
         if attempt.result in {"sat", "unsat"}:
-            action += {"result": attempt.result}
-            if attempt.result == "sat":
-                action += {"model": attempt.model}
-                if ARGS().dump_model:
-                    logging.info("dumping model to %s", ARGS().dump_model)
-                    with open(ARGS().dump_model, "w") as f:
-                        json.dump(attempt.model, f, indent=4)
-            return attempt.result
+            break
         log(
             "check %s with %s returned %s, trying next config",
             log_key,
             label,
             attempt.result,
         )
-    final = last_attempt.result if last_attempt is not None else "unknown"
-    if action.result is None:
-        action += {"result": final}
-    if action.expected is not None and action.result != action.expected:
-        logging.error("expected %s but got %s", action.expected, action.result)
-    return final
+    if last_attempt is None:
+        res = "unknown"
+    else:
+        res = last_attempt.result
+    if res == "sat":
+        res = last_attempt.result
+        action += {"model": last_attempt.model}
+        if ARGS().dump_model:
+            logging.info("dumping model to %s", ARGS().dump_model)
+            with open(ARGS().dump_model, "w") as f:
+                json.dump(last_attempt.model, f, indent=4)
+    if action.expected is not None and res != action.expected:
+        logging.error("expected %s but got %s", action.expected, res)
+    action += {"result": res}
+    return res
 
 
 @simple_profile
