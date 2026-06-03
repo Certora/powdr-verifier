@@ -177,6 +177,8 @@ class OpenVMMemoryEncoder(
         timestamp: FNode,
     ) -> FNode:
         """(Currently a stub) Placeholder for per-interaction local memory constraints."""
+        if ARGS().memory_encoding == "none":
+            return TRUE()
         if address_space.is_int_constant() and address_space.constant_value() == 0:
             assert mult.is_int_constant() and mult.constant_value() == 0
         return Implies(
@@ -235,6 +237,12 @@ class OpenVMMemoryEncoder(
                 inputs = []
                 outputs = []
                 intermediates = []
+            case "none":
+                permutation_axioms = []
+                inputs = []
+                outputs = []
+                intermediates = []
+                isinputs = []
             case _:
                 raise ValueError(f"Invalid memory encoding: {ARGS().memory_encoding}")
         self.inputs = inputs
@@ -266,6 +274,8 @@ class OpenVMMemoryEncoder(
         ]
 
     def build_io_relation(self, other: SingleInteractionEncoder, kind: str) -> FNode | None:
+        if ARGS().memory_encoding == "none":
+            return None
         if ARGS().memory_encoding == "plain":
             return keyed_io_relation(
                 f"{kind.upper()} RELATION for {self.NAME}",

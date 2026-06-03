@@ -459,7 +459,7 @@ def emit_memory_equalities(
     (after-vars quantified) pass ``reverse=True`` so pins read ``Equals(after, before)``.
     For *soundness* (before-vars quantified) use ``reverse=False``.
 
-    Encoding follows ``ARGS().memory_encoding`` (``array``, ``plain``, or empty for others).
+    Encoding follows ``ARGS().memory_encoding`` (``array``, ``plain``, ``none``, or empty for others).
 
     ``before_constraints`` / ``after_constraints`` are passed from the verifier:
     derived-column and elimination ``Equals`` terms (stripped for contextual SMT).
@@ -488,6 +488,8 @@ def emit_memory_equalities(
             subs = _array_encoding_symbol_pairs(alignment, before_conv, after_conv)
         case "plain":
             subs = _plain_encoding_symbol_pairs(alignment, before_conv, after_conv)
+        case "none":
+            subs = {}
         case _:
             subs = {}
     logging.info(
