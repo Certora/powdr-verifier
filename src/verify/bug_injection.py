@@ -1,6 +1,7 @@
 import copy
 import logging
 import random
+import secrets
 from typing import Any, Callable
 
 from ..utils.args import ARGS
@@ -288,7 +289,11 @@ _INSTRUCTION_BLOCK_SYNC = frozenset(
 )
 
 
-def apply_injection(seed: int, before: dict[str, Any], after: dict[str, Any]) -> None:
+def apply_injection(before: dict[str, Any], after: dict[str, Any]) -> None:
+    raw = ARGS().inject
+    if raw is None:
+        return
+    seed = secrets.randbelow(1 << 20) if raw == "random" else int(raw)
     rng = random.Random(seed)
     target = before if rng.getrandbits(1) else after
     _load_var_names(target)

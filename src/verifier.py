@@ -4,8 +4,8 @@ Loads before/after APC dumps, builds input/output relations and shared-bus
 array metadata, emits annotated scripts for external solvers, and records
 outputs via ``Action`` telemetry objects.
 """
+import copy
 import logging
-import secrets
 from pathlib import Path
 
 from .encoding.utils import get_is_valid
@@ -61,9 +61,11 @@ def verify():
     before = load_apc_dump(ARGS().input_before)
     after = load_apc_dump(ARGS().input_after)
 
+    old_before = copy.deepcopy(before)
+    old_after = copy.deepcopy(after)
+    apply_injection(before, after)
     if ARGS().inject is not None:
-        seed = secrets.randbelow(1 << 20) if ARGS().inject == "random" else int(ARGS().inject)
-        apply_injection(seed, before, after)
+        assert before != old_before or after != old_after, "injection did not change the dumps"
 
     block = BasicBlock(before["block"])
     assert block == BasicBlock(after["block"]), "The basic block has changed"
