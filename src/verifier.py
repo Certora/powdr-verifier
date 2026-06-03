@@ -61,10 +61,10 @@ def verify():
     before = load_apc_dump(ARGS().input_before)
     after = load_apc_dump(ARGS().input_after)
 
-    old_before = copy.deepcopy(before)
-    old_after = copy.deepcopy(after)
-    apply_injection(before, after)
     if ARGS().inject is not None:
+        old_before = copy.deepcopy(before)
+        old_after = copy.deepcopy(after)
+        apply_injection(before, after)
         assert before != old_before or after != old_after, "injection did not change the dumps"
 
     block = BasicBlock(before["block"])
