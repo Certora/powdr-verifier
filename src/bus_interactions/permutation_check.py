@@ -544,7 +544,7 @@ class PermutationCheckMixin:
 
         def bus_arg_constants_distinct(ii: int, jj: int, key: int) -> bool:
             a, b = args(ii)[key], args(jj)[key]
-            return a.is_int_constant() and b.is_int_constant(a.constant_value() != b[key].constant_value())
+            return a.is_int_constant() and b.is_int_constant(a.constant_value() != b.constant_value())
 
         # multiplicity range constraints
         for i in range(n):
