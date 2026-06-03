@@ -17,7 +17,7 @@ from .utils.basic_block import BasicBlock
 from .utils.io import load_apc_dump, load_json
 from .verify.bug_injection import apply_injection
 from .verify.memory_bus_alignment import BEFORE_PREFIX, AFTER_PREFIX, emit_memory_equalities
-from .verify.skolem_pins import derived_columns_skolem_setinfo
+from .verify.skolem_pins import derived_columns_skolem_setinfo, drop_mirrored_derived
 
 
 def encoding(before, after, qvars, input_relation, output_relation, additional_asserts=[]):
@@ -98,7 +98,16 @@ def verify():
             *after_conv.bus_interaction_encoder.get_auxiliaries().values(),
         )
 
-        map_sources = {**eliminations, **after_smt.derived, **before_smt.derived}
+        # Derived columns defined identically on both sides get no functional
+        # pin; the skolem_names same-name fallback pins them instead (see
+        # drop_mirrored_derived).
+        after_derived_pins = drop_mirrored_derived(
+            after_smt.derived, before_smt.derived, f"{AFTER_PREFIX}-", f"{BEFORE_PREFIX}-"
+        )
+        before_derived_pins = drop_mirrored_derived(
+            before_smt.derived, after_smt.derived, f"{BEFORE_PREFIX}-", f"{AFTER_PREFIX}-"
+        )
+        map_sources = {**eliminations, **after_derived_pins, **before_derived_pins}
 
         def pin_metadata(
             formula: FNode,
@@ -132,7 +141,7 @@ def verify():
                 input_relation,
                 output_relation,
             )
-            info = pin_metadata(completeness, after_smt.derived, reverse=True, smt_outfile=outfile)
+            info = pin_metadata(completeness, after_derived_pins, reverse=True, smt_outfile=outfile)
 
             logging.info(f"dumping completeness check to {dump.name}")
             smtlib = convert_to_smt_script(
