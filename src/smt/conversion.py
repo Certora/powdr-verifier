@@ -264,6 +264,10 @@ class SmtConverter:
             without_trues(self.constraints),
             without_trues(self.bus_interaction_encoder.encode())
         ))
+        if ARGS().memory_encoding == "plain" and not ARGS().skip_range_inference:
+            constraints += self.bus_interaction_encoder.memory.infer_unconditional_ranges(
+                constraints
+            )
         axioms = list(without_trues(self.bus_interaction_encoder.get_axioms()))
         derived = dict(self.derived_columns)
         fwa = FormulaWithAxioms(
