@@ -45,8 +45,7 @@ def _memory_bus_id(data: dict) -> int | None:
 class MemoryBusPartialAlignment:
     """Structural overlap of Memory interaction lists (lengths may differ).
 
-    ``before_to_after`` maps aligned before interaction indices to after indices
-    (prefix at equal indices, then matching tails without re-entering the strict-prefix band).
+    ``before_to_after`` maps aligned before interaction indices to after indices.
     """
 
     n_before: int
@@ -413,7 +412,6 @@ def analyze_memory_bus_partial_alignment(
             if bb in before_to_after:
                 hi_w = min(hi_w, before_to_after[bb] - 1)
                 break
-        assert lo_w <= hi_w
         used_a = set(before_to_after.values())
         return [a for a in range(lo_w, hi_w + 1) if a not in used_a]
 
@@ -578,48 +576,17 @@ def _plain_encoding_symbol_pairs(
     before_conv: SmtConverter,
     after_conv: SmtConverter,
 ) -> dict[FNode, FNode]:
-    """Pair ``memory_match_{i}_{j}`` across sides for aligned interaction pairs.
-
-    Uses ``alignment.before_to_after``: maximal initial run with ``m[k] == k`` as the
-    shared-prefix before-indices, then tail pairs ``(nb-1-t, na-1-t)`` with ``m[ib]==ia``
-    outside that prefix band on both sides.
-    """
+    """Pair ``memory_match_{i}_{j}`` for aligned indices via ``before_to_after``."""
     m = alignment.before_to_after
-    nb, na = alignment.n_before, alignment.n_after
     nm = before_conv.bus_interaction_encoder.memory.NAME
-
-    prefix_before: set[int] = set()
-    k = 0
-    while k < min(nb, na) and m.get(k) == k:
-        prefix_before.add(k)
-        k += 1
-    pfx_excl_end = k
-
-    suffix_before: set[int] = set()
-    t = 0
-    while t < min(nb, na):
-        ib, ia = nb - 1 - t, na - 1 - t
-        if ib < pfx_excl_end or ia < pfx_excl_end:
-            break
-        if m.get(ib) != ia:
-            break
-        suffix_before.add(ib)
-        t += 1
-
     subs: dict[FNode, FNode] = {}
-    for i_b in range(nb):
-        for j_b in range(i_b, nb):
-            if i_b not in m or j_b not in m:
-                continue
-            i_a, j_a = m[i_b], m[j_b]
-            in_prefix = i_b in prefix_before and j_b in prefix_before
-            in_suffix = i_b in suffix_before and j_b in suffix_before
-            if not (in_prefix or in_suffix):
+    for i_b, i_a in m.items():
+        for j_b, j_a in m.items():
+            if i_b > j_b:
                 continue
             b_leaf = f"{nm}_match_{i_b}_{j_b}"
             a_leaf = f"{nm}_match_{i_a}_{j_a}"
             subs[before_conv._symbol(b_leaf, BOOL)] = after_conv._symbol(a_leaf, BOOL)
-
     return subs
 
 
@@ -640,7 +607,7 @@ def emit_memory_equalities(
     reverse: bool = False,
     smt_dump_base: Path | None = None,
 ) -> SetInfo:
-    """Pair before/after memory symbols on shared prefix/suffix; record pin equations.
+    """Pair before/after memory symbols using alignment; record pin equations.
 
     ``subs`` maps ``{before_sym: after_sym}``.  For *completeness*
     (after-vars quantified) pass ``reverse=True`` so pins read ``Equals(after, before)``.
