@@ -169,6 +169,52 @@ def check_smt_script(
     return res
 
 
+def _goal_chunk_scripts(smt_script: list, chunks: int) -> list[list] | None:
+    """Split the goal disjunction into ``chunks`` scripts, or ``None``.
+
+    The goal of an equivalence check is one large ``Or`` (the negated
+    quantified-side constraints). ``base ∧ (D₁ ∨ … ∨ Dₙ)`` is sat iff
+    some ``base ∧ (chunk k)`` is sat, so the chunks can be checked
+    independently: all-unsat ⟺ unsat, any-sat ⟺ sat (with the model
+    carrying over). Each chunk stays far inside the easy regime, where
+    the monolithic goal lets the SAT solver interleave case splits
+    across unrelated constraint families and occasionally wander.
+
+    Disjuncts are sorted by their (side-prefix-stripped) free-variable
+    name sets first, which clusters constraints over the same variable
+    families together, so each chunk's case splits stay within related
+    constraints.
+    """
+
+    def family_key(f):
+        def strip(n):
+            return n.split("-", 1)[1] if n.startswith(("before-", "after-")) else n
+
+        return tuple(sorted({strip(s.symbol_name()) for s in f.get_free_variables()}))
+
+    goal_idx, goal_args = None, None
+    for i, cmd in enumerate(smt_script):
+        if cmd.name != "assert" or not cmd.args[0].is_or():
+            continue
+        if goal_args is None or len(cmd.args[0].args()) > len(goal_args):
+            goal_idx, goal_args = i, cmd.args[0].args()
+    if goal_idx is None or len(goal_args) < 2 * chunks:
+        return None
+    disjuncts = sorted(goal_args, key=family_key)
+    size = (len(disjuncts) + chunks - 1) // chunks
+    out = []
+    for k in range(chunks):
+        part = disjuncts[k * size : (k + 1) * size]
+        if not part:
+            continue
+        chunk_script = list(smt_script)
+        chunk_script[goal_idx] = script.SmtLibCommand(
+            name="assert", args=[Or(*part) if len(part) > 1 else part[0]]
+        )
+        out.append(chunk_script)
+    return out
+
+
 @simple_profile
 def check():
     """Check the smt2 file."""
@@ -184,5 +230,34 @@ def check():
                 action += {"expected": cmd.args[1]}
                 break
 
-        check_smt_script(smt_script, action, input_for_log=ARGS().input)
+        chunk_scripts = (
+            _goal_chunk_scripts(smt_script, ARGS().goal_chunks)
+            if ARGS().goal_chunks > 1
+            else None
+        )
+        if chunk_scripts is None:
+            check_smt_script(smt_script, action, input_for_log=ARGS().input)
+            return action
+
+        logging.info(
+            "checking goal in %d chunks (%s)", len(chunk_scripts), ARGS().input
+        )
+        results = []
+        for k, chunk_script in enumerate(chunk_scripts):
+            with action.action(f"chunk-{k}") as chunk_action:
+                res = check_smt_script(
+                    chunk_script, chunk_action, input_for_log=ARGS().input
+                )
+                results.append(res)
+            if res == "sat":
+                break  # a chunk model is a model of the whole goal
+        if "sat" in results:
+            overall = "sat"
+        elif all(r == "unsat" for r in results):
+            overall = "unsat"
+        else:
+            overall = "unknown"
+        if action.expected is not None and overall != action.expected:
+            logging.error("expected %s but got %s", action.expected, overall)
+        action += {"result": overall, "chunk_results": results}
         return action
