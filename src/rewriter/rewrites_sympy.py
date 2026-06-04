@@ -14,9 +14,46 @@ def normalize(e: Expr) -> Expr:
     return expand(e, modulus=ARGS().field_type.value)
 
 
+def _solved_roots(factors: list, p: int):
+    """``(x, roots)`` when every factor is linear in one symbol (Pow allowed)."""
+    p = int(p)
+    x = None
+    values: set = set()
+    for f in factors:
+        if f.is_Pow and f.exp.is_Integer and f.exp > 0:
+            f = f.base
+        if f.is_Integer:
+            if int(f) % p == 0:
+                return None
+            continue
+        if not f.free_symbols or len(f.free_symbols) != 1:
+            return None
+        sym = next(iter(f.free_symbols))
+        poly = f.as_poly(sym)
+        if poly is None or poly.degree() != 1:
+            return None
+        if x is None:
+            x = sym
+        elif x != sym:
+            return None
+        a, b = (int(v) for v in poly.all_coeffs())
+        if a % p == 0:
+            return None
+        values.add((-b * pow(a, -1, p)) % p)
+    if x is None or not values:
+        return None
+    return x, values
+
+
 @simple_profile
 def rewrite_choice(node: Expr) -> Expr:
-    """Rewrite `Mod(f1*...*fn, p) == 0` into a disjunction of `Mod(fi, p) == 0` (best-effort)."""
+    """Rewrite `Mod(f1*...*fn, p) == 0` into a disjunction of `Mod(fi, p) == 0` (best-effort).
+
+    When every factor is linear in the same single symbol, the
+    congruences are solved to root equalities with the implied interval
+    attached (ranges in addition to the disjunction), mirroring
+    ``rewrite_choice_simple``.
+    """
     match unpack_modeq(node):
         case e, c:
             assert isprime(c), c
@@ -24,6 +61,14 @@ def rewrite_choice(node: Expr) -> Expr:
             if isinstance(factors, Mul):
                 factors = list(factors.args)
                 if len(factors) > 1:
+                    solved = _solved_roots(factors, c)
+                    if solved is not None:
+                        x, values = solved
+                        return And(
+                            Or(*[Eq(x, Integer(v)) for v in sorted(values)]),
+                            Le(Integer(min(values)), x),
+                            Le(x, Integer(max(values))),
+                        )
                     return Or(*[Eq(Mod(normalize(f), c), 0) for f in factors])
     return None
 

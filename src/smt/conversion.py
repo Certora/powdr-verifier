@@ -81,6 +81,76 @@ class SmtConverter:
         """Convert raw constraint expressions to `wrap_mod(expr) == 0` and add them."""
         for id, c in enumerate(data):
             self.__add_constraint(Equals(wrap_mod(c), Int(0)), f"CONSTRAINT #{id}")
+            roots = self._single_var_roots(c)
+            if roots is not None:
+                x, values = roots
+                self.__add_constraint(
+                    And(
+                        Or(*[Equals(x, Int(v)) for v in values]),
+                        LE(Int(min(values)), x),
+                        LE(x, Int(max(values))),
+                    ),
+                    f"ROOTS LIFT for CONSTRAINT #{id}: {x} in {sorted(values)}",
+                )
+
+    @staticmethod
+    def _single_var_roots(c: Any) -> Optional[tuple[FNode, set[int]]]:
+        """Lift ``∏ (aᵢ·x + bᵢ) ≡ 0 (mod p)`` to ``x ∈ {roots}``.
+
+        Circuits state small domains algebraically — ``x (x − 1) ≡ 0``
+        for booleans (EqualZeroCheck results), ``x (x−1) (x−2) ≡ 0`` for
+        ternary flags. Over the prime field a product vanishes iff some
+        factor does, so the constraint pins ``x`` to the factor roots —
+        an exact lemma (no chip-semantics needed), but one the solver
+        only recovers through nonlinear reasoning. Emitting the root
+        disjunction and bounds makes the domain directly available.
+
+        Returns ``(x, roots)`` with roots as canonical representatives,
+        or ``None`` if the constraint is not a product of linear factors
+        in one symbol (or has more than 4 factors).
+        """
+        p = ARGS().field_type.value
+
+        factors: list[Any] = []
+
+        def split(node: Any) -> bool:
+            if hasattr(node, "is_times") and node.is_times():
+                return all(split(a) for a in node.args())
+            factors.append(node)
+            return True
+
+        split(c)
+        if not 2 <= len(factors) <= 4:
+            return None
+
+        x: Optional[FNode] = None
+        values: set[int] = set()
+        for f in factors:
+            lf = linear_form(f)
+            if lf is None:
+                return None
+            terms, const = lf
+            terms = {s: a % p for s, a in terms.items() if a % p != 0}
+            if not terms:
+                if const % p == 0:
+                    return None  # constraint is trivially satisfied
+                continue  # nonzero constant factor contributes no root
+            if len(terms) != 1:
+                return None
+            sym, a = next(iter(terms.items()))
+            if x is None:
+                x = sym
+            elif x != sym:
+                return None
+            values.add((-const * pow(a, -1, p)) % p)
+        if x is None or not values:
+            return None
+        # the raw (mod-free) emission relies on the canonical-representative
+        # convention, which simplify_bounds imposes for @N column symbols
+        name = x.symbol_name()
+        if "@" not in name or not name.rsplit("@", 1)[1].isdigit():
+            return None
+        return (x, values)
 
     def convert_derived(self, data: Iterable[Any]):
         """Convert derived-column definitions into symbolic equalities (stored for later use)."""
