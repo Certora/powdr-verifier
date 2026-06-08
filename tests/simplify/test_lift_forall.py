@@ -94,3 +94,13 @@ def test_removes_lifted_disjunct_from_or():
     out = script.commands[-1].args[0]
     assert out == (x > Int(1))
     assert Equals(x, Int(0)) in _top_asserts(script)
+
+
+def test_lift_bool_iff_hoists():
+    p = Symbol("lift_iff_p", BOOL)
+    inner = Or(Not(Iff(p, TRUE())), FALSE())
+    f = ForAll([p], inner)
+    script = simplify_lift_forall(_script_assert(f))
+    out = script.commands[-1].args[0]
+    assert out == FALSE()
+    assert Iff(p, TRUE()) in _top_asserts(script)

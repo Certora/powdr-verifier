@@ -5,6 +5,133 @@ import itertools
 from ..smt.utils import *
 
 
+def keyed_io_relation(
+    name: str,
+    interactions_a: list,
+    interactions_b: list,
+    is_a: list[FNode],
+    is_b: list[FNode],
+) -> FNode:
+    """Relate two sets of memory-bus I/O across independent encodings.
+
+    Used in completeness/soundness checks to require that the *before* and
+    *after* APC dumps expose the same inputs (or outputs), without fixing which
+    interaction index carries which record. Internal permutation/balancing on each
+    side is handled separately by ``plain_permutation_check``.
+
+    Each interaction is a ``BusInteraction`` whose ``args`` are
+    ``[address_space, pointer, *data, timestamp]``. The *key*
+    ``(address_space, pointer)`` identifies a memory cell; ``data`` and
+    ``timestamp`` are the payload. The encoding assumes that among interactions
+    marked as I/O on one side, keys are pairwise distinct (enforced by the plain
+    permutation axioms).
+
+    Arguments:
+        name: Comment prefix for generated conjuncts (e.g. ``"INPUT RELATION"``).
+        interactions_a: Interactions from the left/before encoder, same order as
+            when that side's permutation check was built.
+        interactions_b: Interactions from the right/after encoder.
+        is_a: For each index ``i`` into ``interactions_a``, a boolean formula that
+            is true exactly when that interaction counts as the chosen I/O kind
+            (input or output) on side A.
+        is_b: Same for side B, aligned with ``interactions_b``.
+
+    Returns a conjunction of three constraint families (see inline comments below).
+    """
+    n, m = len(interactions_a), len(interactions_b)
+    parts: list[FNode] = []
+
+    def key_eq(i: int, j: int) -> FNode:
+        """``(address_space, pointer)`` agree at indices ``i`` (A) and ``j`` (B)."""
+        return And(
+            field_eq(interactions_a[i].args[0], interactions_b[j].args[0]),
+            field_eq(interactions_a[i].args[1], interactions_b[j].args[1]),
+        )
+
+    def full_eq(i: int, j: int) -> FNode:
+        """All args (key, data, timestamp) agree at indices ``i`` and ``j``."""
+        return And(
+            *[
+                field_eq(a, b)
+                for a, b in zip(interactions_a[i].args, interactions_b[j].args, strict=True)
+            ]
+        )
+
+    # Same key and both marked I/O => identical record (bytes, timestamp, keys).
+    for i in range(n):
+        for j in range(m):
+            parts.append(
+                with_comment(
+                    Implies(And(is_a[i], is_b[j], key_eq(i, j)), full_eq(i, j)),
+                    f"{name}: key match => full eq ({i},{j})",
+                )
+            )
+
+    # Every I/O record on A has some I/O record on B at the same key.
+    for i in range(n):
+        parts.append(
+            with_comment(
+                Implies(
+                    is_a[i],
+                    Or([And(is_b[j], key_eq(i, j)) for j in range(m)]) if m else FALSE(),
+                ),
+                f"{name}: left record {i} has counterpart",
+            )
+        )
+
+    # Every I/O record on B has some I/O record on A at the same key.
+    for j in range(m):
+        parts.append(
+            with_comment(
+                Implies(
+                    is_b[j],
+                    Or([And(is_a[i], key_eq(i, j)) for i in range(n)]) if n else FALSE(),
+                ),
+                f"{name}: right record {j} has counterpart",
+            )
+        )
+
+    return And(*parts) if parts else TRUE()
+
+
+def boolean_propagate(conjuncts: list[FNode]) -> list[FNode]:
+    literals: list[FNode] = []
+    remaining = [keep_comment(f.simplify(), f) for f in conjuncts]
+    substitutions: dict[FNode, FNode] = {}
+
+    def record_literal(lit: FNode) -> bool:
+        if lit.is_symbol(BOOL):
+            sym, val = lit, TRUE()
+        elif lit.is_not() and lit.arg(0).is_symbol(BOOL):
+            sym, val = lit.arg(0), FALSE()
+        else:
+            return False
+        if sym in substitutions:
+            return False
+        substitutions[sym] = val
+        literals.append(lit)
+        return True
+
+    while True:
+        new_binding = False
+        next_remaining: list[FNode] = []
+        for f in remaining:
+            f = keep_comment(f.simplify(), f)
+            if record_literal(f):
+                new_binding = True
+            elif not f.is_true():
+                next_remaining.append(f)
+        remaining = (
+            [keep_comment(g.substitute(substitutions), g) for g in next_remaining]
+            if substitutions
+            else next_remaining
+        )
+        if not new_binding:
+            break
+
+    return literals + remaining
+
+
 class TimestampCheckMixin:
     """Mixin providing axioms that enforce monotonic timestamps over bus interactions."""
 
@@ -19,7 +146,7 @@ class TimestampCheckMixin:
             # for now we assume that zeroness of a.mult and b.mult are equivalent
             res.append(
                 Implies(
-                    Not(Equals(wrap_mod(a.mult), Int(0))), LT(a.args[-1], b.args[-1])
+                    Not(Equals(wrap_mod(a.mult), Int(0))), field_lt(a.args[-1], b.args[-1])
                 )
             )
 
@@ -366,7 +493,251 @@ class PermutationCheckMixin:
         outputs = actual_inputs[1:] # remove hadinput variables
         inputs = inputs[1:] # remove hadinput variables
         return conjuncts, outputs, intermediates, inputs, isinputs
+    
+    @simple_profile
+    def plain_permutation_check(
+        self,
+        interactions: list,
+        is_memory: bool = True
+    ) -> tuple[list[FNode], list[FNode], list[FNode]]:
+        """Encodes a permutation check in the spirit of busat."""
+        conjuncts = []
+        n = len(interactions)
+        if n == 0:
+            return [], [], []
+        # provide match variables for all pairs i <= j
+        is_inputs: dict[int, Any] = {
+            i: self._symbol(f"{self.NAME}_isinput_{i}", BOOL)
+            for i in range(n)
+        }
+        is_outputs: dict[int, Any] = {
+            i: self._symbol(f"{self.NAME}_isoutput_{i}", BOOL)
+            for i in range(n)
+        }
+        is_disableds: dict[int, Any] = {
+            i: self._symbol(f"{self.NAME}_isdisabled_{i}", BOOL)
+            for i in range(n)
+        }
+        match_vars: dict[tuple[int, int], Any] = {
+            (i, j): self._symbol(f"{self.NAME}_match_{i}_{j}", BOOL)
+            for i in range(n)
+            for j in range(i, n)
+        }
 
+        def m(i: int, j: int) -> FNode:
+            if i > j:
+                return m(j, i)
+            return match_vars[(i, j)]
+
+        def mult(i: int) -> FNode:
+            return interactions[i].mult
+
+        def args(i: int) -> list[FNode]:
+            return interactions[i].args
+
+        def is_input(i: int) -> FNode:
+            return is_inputs[i]
+        def is_output(i: int) -> FNode:
+            return is_outputs[i]
+        def is_disabled(i: int) -> FNode:
+            return is_disableds[i]
+
+        def bus_arg_constants_distinct(ii: int, jj: int, key: int) -> bool:
+            a, b = args(ii)[key], args(jj)[key]
+            return a.is_int_constant() and b.is_int_constant(a.constant_value())
+
+        # multiplicity range constraints
+        for i in range(n):
+            conjuncts.append(
+                with_comment(
+                    Or(
+                        field_eq(mult(i), Int(-1)),
+                        field_eq(mult(i), Int(0)),
+                        field_eq(mult(i), Int(1)),
+                    ),
+                    f"multiplicity {i} in {-1, 0, 1}"
+                )
+            )
+
+        # a bunch of facts about self-matches
+        for i in range(n):
+            conjuncts.append(
+                with_comment(
+                    Iff(
+                        m(i, i),
+                        Or(
+                            is_disabled(i),
+                            is_input(i),
+                            is_output(i),
+                        )
+                    ),
+                    f"self-match {i}: disabled, input, or output"
+                )
+            )
+            conjuncts.append(
+                with_comment(
+                    Iff(
+                        is_disabled(i),
+                        And(m(i, i), field_eq(mult(i)))
+                    ),
+                    f"disabled {i}: self-match and mult == 0"
+                )
+            )
+            conjuncts.append(
+                with_comment(
+                    Iff(
+                        is_input(i),
+                        And(m(i, i), field_eq(mult(i), Int(-1)))
+                    ),
+                    f"input {i}: self-match and mult == -1"
+                )
+            )
+            conjuncts.append(
+                with_comment(
+                    Iff(
+                        is_output(i),
+                        And(m(i, i), field_eq(mult(i), Int(1)))
+                    ),
+                    f"output {i}: self-match and mult == 1"
+                )
+            )
+            # self-match: not m_i_i => not disabled, input or output, mult != 0
+            conjuncts.append(
+                with_comment(
+                    Implies(
+                        Not(m(i, i)),
+                        And(
+                            Not(is_disabled(i)),
+                            Not(is_input(i)),
+                            Not(is_output(i)),
+                            Not(field_eq(mult(i))),
+                        )
+                    ),
+                    f"no self-match {i}: neither disabled, input, nor output, mult != 0"
+                )
+            )
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                # pairwise match: mul_i + mul_j == 0 and mul_i != 0 and mul_j != 0
+                conjuncts.append(
+                    with_comment(
+                        Implies(
+                            m(i, j),
+                            And(
+                                Equals(wrap_mod(Plus(mult(i), mult(j))), Int(0)),
+                                Not(Equals(wrap_mod(mult(i)), Int(0))),
+                                Not(Equals(wrap_mod(mult(j)), Int(0)))
+                            )
+                        ),
+                        f"match {i} and {j}: {mult(i)} + {mult(j)} == 0"
+                    )
+                )
+                #if i == 1 and j == 4:
+                #    continue
+                # pairwise match: data_i == data_j
+                conjuncts.append(
+                    with_comment(
+                        Implies(
+                            m(i, j),
+                            And(
+                                Equals(wrap_mod(Minus(*z)), Int(0)) for z in zip(args(i), args(j), strict=True)
+                            )
+                        ),
+                        f"match {i} and {j}: equal data"
+                    )
+                )
+
+        # every interaction has exactly one match
+        for i in range(n):
+            conjuncts.append(
+                with_comment(
+                    ExactlyOne(*[m(i, j) for j in range(n)]),
+                    f"interaction {i} has exactly one match"
+                )
+            )
+
+        # no two inputs or two outputs have the same address space and pointer
+        for i in range(n):
+            for j in range(i + 1, n):
+                conjuncts.append(
+                    with_comment(
+                        Implies(
+                            Or(
+                                And(is_input(i), is_input(j)),
+                                And(is_output(i), is_output(j)),
+                            ),
+                            Or(
+                                Not(Equals(args(i)[0], args(j)[0])),
+                                Not(Equals(args(i)[1], args(j)[1])),
+                            )
+                        ),
+                        f"inputs or outputs {i} and {j} have different address spaces or pointers"
+                    )
+                )
+        
+        # from hereon, the conjuncts are tuned to the actual inputs and might break on weird inputs
+        # at least, they encode properties that are not immediately obvious from the specs
+
+        for i in range(n):
+            non_distinct = [
+                t
+                for t in range(i + 1, n)
+                if not (bus_arg_constants_distinct(i, t, 0) or bus_arg_constants_distinct(i, t, 1))
+            ]
+            for jj, j in enumerate(non_distinct):
+                for k in non_distinct[jj + 1 :]:
+                    conjuncts.append(
+                        with_comment(
+                            Implies(
+                                And(
+                                    m(i, k),
+                                    Equals(args(i)[0], args(j)[0]),
+                                    Equals(args(i)[1], args(j)[1]),
+                                ),
+                                field_eq(mult(j)),
+                            ),
+                            f"match {i} and {k}: index {j} between with same key => mult==0",
+                        )
+                    )
+
+        # inputs and outputs have each distinct timestamps
+        for i in range(n):
+            for j in range(i + 1, n):
+                conjuncts.append(
+                    with_comment(
+                        Implies(
+                            Or(
+                                And(is_input(i), is_input(j)),
+                                And(is_output(i), is_output(j)),
+                            ),
+                            Not(Equals(args(i)[-1], args(j)[-1])),
+                        ),
+                        f"inputs or outputs {i} and {j} have different timestamps"
+                    )
+                )
+        
+        # usually the first is an input and the last is an output. we have the
+        # special zero-is-model check, though, and so we have to be a bit more
+        # careful.
+        conjuncts.append(
+            with_comment(
+                Implies(Not(field_eq(mult(0))), is_input(0)),
+                f"first is an input"
+            )
+        )
+        conjuncts.append(
+            with_comment(
+                Implies(Not(field_eq(mult(n - 1))), is_output(n - 1)),
+                f"last is an output"
+            )
+        )
+
+        return (
+            boolean_propagate(conjuncts),
+            [is_inputs[i] for i in range(n)],
+            [is_outputs[i] for i in range(n)],
+        )
 
     @simple_profile
     def busat_permutation_check(

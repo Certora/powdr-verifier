@@ -1,22 +1,10 @@
-"""Set-info for derived-column skolem pins (``:skolem-derived-*``).
+"""Skolem pin metadata for derived columns (``:skolem-derived-*``).
 
-Builds ``SetInfo`` fragments that pair quantified variables with witness
-expressions from derived column definitions and declares any UF symbols
-those pins reference.
+Builds :class:`SetInfo` with pin equations and any UF ``declare-fun``s needed
+for round-trip parsing.
 """
 from . import SetInfo
-from ..simplify.skolem_derived import SETINFO_PREFIX as SETINFO_DERIVED_PREFIX
-from ..simplify.skolem_utils import emit_pin_setinfo
 from ..smt.utils import *
-
-
-def _eq_pin_setinfo(prefix: str, pins: list[FNode]) -> list:
-    """Wrap each pin equation as a ``set-info :{prefix}N`` command.
-
-    Pins are kept as ``Equals(var, expr)`` ``FNode`` instances; the
-    simplifier-side parser splits them into qvar and witness.
-    """
-    return [emit_pin_setinfo(prefix, i, eq) for i, eq in enumerate(pins)]
 
 
 def _vars_only(symbols: frozenset[FNode]) -> frozenset[FNode]:
@@ -28,7 +16,7 @@ def _vars_only(symbols: frozenset[FNode]) -> frozenset[FNode]:
     don't want a derived equation to be filtered out merely because it
     mentions a UF the formula didn't reach. Whatever UFs the pins do
     reference are collected separately by :func:`_pin_ufs` and emitted
-    as ``declare-fun``s alongside the set-info commands.
+    as ``declare-fun``s when emitting the SMT-LIB script.
     """
     return frozenset(
         s for s in symbols if not s.symbol_type().is_function_type()
@@ -96,10 +84,10 @@ def derived_columns_skolem_setinfo(
     formula: FNode,
     derived: dict[FNode, FNode],
 ) -> SetInfo:
-    """Produce set-info / decls for derived-column skolem pins (``:skolem-derived-*``).
+    """Produce pin equations / decls for derived-column skolem pins (``:skolem-derived-*``).
 
-    Returns a :class:`SetInfo` whose ``cmds`` carry ``derived`` column
-    (and, in soundness, merged ``elimination``) equations for the
+    Returns a :class:`SetInfo` whose ``equations`` carry ``derived`` column
+    (and, in soundness, merged ``elimination``) formulas for the
     simplifier-side skolem orchestrator
     (:mod:`.simplify.skolem`);
     ``decls`` lists the UF function symbols referenced by those pins so
@@ -115,5 +103,4 @@ def derived_columns_skolem_setinfo(
     """
     live = _collect_all_symbols(formula)
     derived_pins = _derived_pins(derived, live)
-    cmds = _eq_pin_setinfo(SETINFO_DERIVED_PREFIX[1:], derived_pins)
-    return SetInfo(cmds, _pin_ufs(derived_pins))
+    return SetInfo(equations=derived_pins, decls=_pin_ufs(derived_pins))

@@ -32,6 +32,13 @@ case "$scenario" in
             "$script_dir/powdr-dumps/guest-keccak" \
             "$script_dir/reports/guest-keccak"
         ;;
+    keccak-selection)
+        download \
+            "verifier/powdr-dumps/guest-keccak-selection/" \
+            "verifier/reports/guest-keccak-selection/" \
+            "$script_dir/powdr-dumps/guest-keccak-selection" \
+            "$script_dir/reports/guest-keccak-selection"
+        ;;
     pairing)
         download \
             "verifier/powdr-dumps/guest-pairing-selection/" \
@@ -49,6 +56,8 @@ case "$scenario" in
     reports)
         echo "report guest-keccak"
         python3 "$script_dir/main.py" report "$script_dir/reports/guest-keccak" "$script_dir/report-keccak.html"
+        echo "report guest-keccak-selection"
+        python3 "$script_dir/main.py" report "$script_dir/reports/guest-keccak-selection" "$script_dir/report-keccak-selection.html"
         echo "report guest-pairing-selection"
         python3 "$script_dir/main.py" report "$script_dir/reports/guest-pairing-selection" "$script_dir/report-pairing.html"
         echo "report reth-selection"

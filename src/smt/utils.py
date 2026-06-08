@@ -1,14 +1,31 @@
 """Shared PySMT helpers: comments, models, field axioms, SMT-LIB I/O, and profiling."""
 import functools
-import json
+import itertools
 import logging
+from pathlib import Path
 from typing import Any, Iterable
 from types import GeneratorType
 
 from ..smt_backends.pysmt import *
+from ..utils.io import open_file
 from ..utils.profiling import simple_profile
 
 SUPPORTS_COMMENTS = "comment" in FNode.__slots__
+
+def strip_prefix_from_vars(f: FNode, prefix: str) -> FNode:
+    if f is None:
+        return None
+    if isinstance(f, list):
+        return [strip_prefix_from_vars(x, prefix) for x in f]
+    subs: dict[FNode, FNode] = {}
+    for sym in f.get_free_variables():
+        if not sym.is_symbol():
+            continue
+        n = sym.symbol_name()
+        nn = n[len(prefix) :] if n.startswith(prefix) else n
+        if nn != n:
+            subs[sym] = Symbol(nn, sym.symbol_type())
+    return f.substitute(subs) if subs else f
 
 
 def with_comment(f: FNode, comment: str) -> FNode:
@@ -206,3 +223,68 @@ def find_unique_solution(s: Solver, f: FNode) -> Optional[dict[str, int]]:
         return None
     except:
         return None
+
+
+_simplify_and_check_dump_i = itertools.count()
+
+
+def simplify_and_check(
+    formula: FNode,
+    *,
+    simplify_timeout: float,
+    check_timeout: float,
+    tactic: str,
+    smt_dump_base: Path | None = None,
+    parent_action=None,
+) -> bool | None:
+    """``True`` / ``False`` / ``None`` (inconclusive) for PySMT-validity of ``formula``."""
+    from ..checker import check_smt_script
+    from ..report.action import Action
+    from ..simplifier import simplify_smt_script
+
+    smt = convert_to_smt_script(Not(formula))
+    if not hasattr(ARGS(), "pretty"):
+        ARGS().pretty = False
+    if not hasattr(ARGS(), "dump_steps"):
+        ARGS().dump_steps = False
+    if not hasattr(ARGS(), "dump_model"):
+        ARGS().dump_model = None
+    prev_pretty = ARGS().pretty
+    prev_dump_steps = ARGS().dump_steps
+    prev_dump_model = ARGS().dump_model
+    try:
+        ARGS().pretty = False
+        ARGS().dump_steps = False
+        root_cm = (
+            parent_action.action("simplify-and-check")
+            if parent_action is not None
+            else Action("simplify-and-check")
+        )
+        with root_cm as check_action:
+            smt = simplify_smt_script(
+                smt,
+                tactic=tactic,
+                timeout=float(simplify_timeout),
+                parent_action=check_action,
+            )
+            if smt_dump_base is not None and getattr(ARGS(), "dump_smt", False):
+                n = next(_simplify_and_check_dump_i)
+                dump_path = Path(smt_dump_base).with_suffix(f".memory-align-{n:04d}.smt2")
+                dump_path.parent.mkdir(parents=True, exist_ok=True)
+                with open_file(dump_path, "w") as f:
+                    serialize_smtlib(smt, f)
+                logging.info("dumped simplify_and_check pre-check SMT2 to %s", dump_path)
+            ARGS().dump_model = None
+            match check_smt_script(
+                smt, check_action, input_for_log=None, check_timeout=check_timeout
+            ):
+                case "unsat":
+                    return True
+                case "sat":
+                    return False
+                case _:
+                    return None
+    finally:
+        ARGS().pretty = prev_pretty
+        ARGS().dump_steps = prev_dump_steps
+        ARGS().dump_model = prev_dump_model

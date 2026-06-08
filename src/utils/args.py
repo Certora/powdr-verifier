@@ -36,7 +36,12 @@ def __build_parser(skip_subparsers=False):
         choices=list(XOrEncoding),
     )
     parser.add_argument("--skip-memory-analysis", action="store_true")
-    parser.add_argument("--memory-encoding", type=str, choices=["array", "busat"], default="array")
+    parser.add_argument(
+        "--memory-encoding",
+        type=str,
+        choices=["array", "busat", "plain", "none"],
+        default="array",
+    )
     parser.add_argument("--dump-smt", action="store_true")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--base-dump", type=Path, default=None)
@@ -84,6 +89,7 @@ def __build_parser(skip_subparsers=False):
     sub_diff.add_argument("--with-before-model", type=Path)
     sub_diff.add_argument("--with-after-model", type=Path)
     sub_diff.add_argument("--only-simplified", action="store_true")
+    sub_diff.add_argument("--inject", nargs="?", default=None, const="random", metavar="SEED")
 
     sub_text = sub.add_parser("text")
     sub_text.add_argument("input", type=Path)
@@ -101,6 +107,7 @@ def __build_parser(skip_subparsers=False):
     sub_verify.add_argument("input_before", type=Path)
     sub_verify.add_argument("input_after", type=Path)
     sub_verify.add_argument("output", type=Path)
+    sub_verify.add_argument("--inject", nargs="?", default=None, const="random", metavar="SEED")
 
     sub_check = sub.add_parser("check")
     sub_check.add_argument("input", type=Path)

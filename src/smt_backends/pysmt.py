@@ -185,7 +185,7 @@ script.SmtLibCommand.serialize = __serialize_command
 
 # now go on with the rest
 
-from pysmt.exceptions import SolverReturnedUnknownResultError
+from pysmt.exceptions import SolverReturnedUnknownResultError, UnknownSolverAnswerError
 from pysmt.logics import Logic
 from pysmt.shortcuts import *
 from pysmt.smtlib import script, printers, solver
@@ -196,13 +196,53 @@ from ..utils.args import ARGS
 def __ensure_leading_colon(name: str) -> str:
     return f":{name.removeprefix(':')}"
 
+from pysmt.decorators import clear_pending_pop
+
 pysmt.smtlib.solver.SmtLibSolver.declare_fun = lambda self, symbol: self._declare_variable(symbol)
 pysmt.smtlib.solver.SmtLibSolver.assert_ = lambda self, formula: self.add_assertion(formula)
+
+
+@clear_pending_pop
+def __smtlib_add_assertion_no_simplify(self, formula, named=None):
+    sorts = self.to.get_types(formula, custom_only=True)
+    for s in sorts:
+        if all(s not in ds for ds in self.declared_sorts):
+            self._declare_sort(s)
+    deps = formula.get_free_variables()
+    for d in deps:
+        if all(d not in dv for dv in self.declared_vars):
+            self._declare_variable(d)
+    self._send_silent_command(script.SmtLibCommand(commands.ASSERT, [formula]))
+
+
+pysmt.smtlib.solver.SmtLibSolver.add_assertion = __smtlib_add_assertion_no_simplify
 pysmt.smtlib.solver.SmtLibSolver.set_info = lambda self, name, value: \
     self._send_silent_command(script.SmtLibCommand(name=commands.SET_INFO, args=[__ensure_leading_colon(name), value]))
 pysmt.smtlib.solver.SmtLibSolver.set_option = lambda self, name, value: \
     self._send_silent_command(script.SmtLibCommand(name=commands.SET_OPTION, args=[__ensure_leading_colon(name), value]))
 pysmt.smtlib.solver.SmtLibSolver.check_sat = lambda self: self.solve()
+
+
+@clear_pending_pop
+def __smtlib_solve_robust(self, assumptions=None):
+    assert assumptions is None
+    self._send_command(script.SmtLibCommand(commands.CHECK_SAT, []))
+    skip = frozenset({"", "success", "check-assignment"})
+    for _ in range(4096):
+        ans = self._get_answer()
+        if ans in skip:
+            continue
+        if ans == "sat":
+            return True
+        if ans == "unsat":
+            return False
+        if ans == "unknown":
+            raise SolverReturnedUnknownResultError
+        raise UnknownSolverAnswerError("Solver returned: " + ans)
+    raise UnknownSolverAnswerError("Solver: exhausted lines waiting for sat/unsat/unknown")
+
+
+pysmt.smtlib.solver.SmtLibSolver.solve = __smtlib_solve_robust
 
 class SimpleSizeOracle(DagWalker):
     """Simple version of SizeOracle that does not throw a warning."""
@@ -277,6 +317,16 @@ def wrap_mod(input: FNode, modulus: Optional[FNode] = None) -> FNode:
     if modulus is None:
         modulus = Int(ARGS().field_type.value)
     return Mod(input, modulus)
+
+def field_eq(a: FNode, b: FNode = None) -> FNode:
+    if b is None:
+        return Equals(wrap_mod(a), Int(0))
+    return Equals(wrap_mod(Minus(a, b)), Int(0))
+
+def field_lt(a: FNode, b: FNode) -> FNode:
+    return LT(wrap_mod(a), wrap_mod(b))
+    return LT(wrap_mod(Minus(b, a)), Int(2**29))
+
 
 class SMTPrettyPrinter(script.SmtPrinter):
 
@@ -429,7 +479,7 @@ def serialize_smtlib(smtlib: script.SmtLibScript, file: TextIO):
     for cmd in smtlib.commands:
         # Do not DAG-share subexpressions across top-level asserts: the printer
         # reuses let binders (``.def_N``) and can emit equalities that reference
-        # the wrong binder when read back (see shared-array pin asserts).
+        # the wrong binder when read back (e.g. skolem pin asserts).
         cmd.serialize(file, printer=None, daggify=cmd.name != "assert")
         file.write("\n")
 
@@ -464,9 +514,10 @@ def script_with_sorted_declarefuns(smtlib: script.SmtLibScript) -> script.SmtLib
     smtlib.commands = newcmds
     return smtlib
 
-def convert_to_smt_script(f: FNode, status = None, extra_setinfo: list = None, extra_decls: list = None) -> script.SmtLibScript:
+def convert_to_smt_script(f: FNode, status=None, pin_info=None) -> script.SmtLibScript:
     smtlib = script.smtlibscript_from_formula(f, None)
-    if extra_decls:
+    merged_decls = list(pin_info.decls) if pin_info is not None else []
+    if merged_decls:
         existing = {
             c.args[0] for c in smtlib.commands if c.name == "declare-fun"
         }
@@ -474,7 +525,7 @@ def convert_to_smt_script(f: FNode, status = None, extra_setinfo: list = None, e
         inserted = False
         for c in smtlib.commands:
             if not inserted and c.name != "declare-fun" and c.name != "set-logic":
-                for sym in extra_decls:
+                for sym in merged_decls:
                     if sym not in existing:
                         new_cmds.append(
                             script.SmtLibCommand(name="declare-fun", args=[sym])
@@ -482,7 +533,7 @@ def convert_to_smt_script(f: FNode, status = None, extra_setinfo: list = None, e
                 inserted = True
             new_cmds.append(c)
         if not inserted:
-            for sym in extra_decls:
+            for sym in merged_decls:
                 if sym not in existing:
                     new_cmds.append(
                         script.SmtLibCommand(name="declare-fun", args=[sym])
@@ -498,8 +549,15 @@ def convert_to_smt_script(f: FNode, status = None, extra_setinfo: list = None, e
     #smtlib.commands.insert(3, script.SmtLibCommand(name='set-option', args=[':produce-unsat-cores', 'true']))
     if status is not None:
         smtlib.commands.insert(4, script.SmtLibCommand(name='set-info', args=[':status', status]))
-    if extra_setinfo:
-        for i, cmd in enumerate(extra_setinfo):
+    if pin_info is not None and pin_info.equations:
+        from ..simplify.skolem_derived import SETINFO_PREFIX
+        from ..simplify.skolem_utils import emit_pin_setinfo
+
+        prefix = SETINFO_PREFIX[1:]
+        pin_cmds = [
+            emit_pin_setinfo(prefix, i, eq) for i, eq in enumerate(pin_info.equations)
+        ]
+        for i, cmd in enumerate(pin_cmds):
             smtlib.commands.insert(5 + i, cmd)
     #smtlib.commands.insert(2, script.SmtLibCommand(name='set-option', args=[':incremental', 'true']))
     # proof logging
