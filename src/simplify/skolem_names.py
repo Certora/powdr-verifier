@@ -14,6 +14,9 @@ For every qvar ``q`` of the current forall, the contributor:
   and ``q`` and ``q'`` agree on type, pins ``q := q'`` on the
   :class:`SkolemMap`.
 
+Program-style column names only (see :func:`_is_program_variable`); other
+qvars are skipped.
+
 This replaces ``ModelMapBuilder.__heuristic_same_name`` which used to
 build the same-name pins as part of the verifier-side encoding ``map``.
 The semantics is identical (a same-name fallback for everything not
@@ -51,9 +54,13 @@ def collect_declared_symbols(smt_script: script.SmtLibScript) -> dict[str, FNode
     return out
 
 
+def _is_program_variable(name: str) -> bool:
+    """Return True for program variables (column names with ``@index`` suffix)."""
+    return "@" in _strip_prefix(name)
+
+
 def contribute(skolem_map, declared: dict[str, FNode]) -> None:
-    """Pin same-name witnesses on ``skolem_map`` for every unpinned qvar
-    that has a typed same-name match at script scope.
+    """Pin same-name witnesses on ``skolem_map`` for unpinned qvars.
 
     See the module docstring for the full description.
 
@@ -76,10 +83,11 @@ def contribute(skolem_map, declared: dict[str, FNode]) -> None:
     surfaces as a tool-reported counterexample which the user can verify
     or reject against the actual circuit traces.
 
-    Previously this contributor was restricted to "program-variable"
-    names (those carrying an ``@index`` suffix), which excluded memory
-    state qvars like ``after-memory-N-hadinput``. The restriction is
-    removed — any qvar with a typed same-name match is now pinned.
+    Same-name pins are limited to program-style column names: after
+    stripping ``before-``/``after-``, the symbol must still contain ``@``
+    (typically ``...@index``). That excludes memory-like qvars such as
+    ``after-memory-N-hadinput``, which stay under ``forall`` unless another
+    contributor pins them.
     """
     for q in skolem_map.qvars:
         if skolem_map.is_pinned(q):
@@ -88,5 +96,7 @@ def contribute(skolem_map, declared: dict[str, FNode]) -> None:
         if other is None or other == q or other in skolem_map.qvars:
             continue
         if q.get_type() != other.get_type():
+            continue
+        if not _is_program_variable(q.symbol_name()):
             continue
         skolem_map.pin(q, other, source="names")
