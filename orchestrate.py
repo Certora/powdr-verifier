@@ -171,7 +171,7 @@ def __run_main(
     return None
 
 _DEFAULT_TACTIC = (
-    "nnf:evaluator:skolem:lift:witness:array_subst:flatten_outer_array:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:domain_probe:z3-propagate-values:pretty"
+    "nnf:evaluator:skolem:lift:witness:flatten_outer_array:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:domain_probe:z3-propagate-values:pretty"
 )
 
 
@@ -226,7 +226,7 @@ def run_powdr_guest(test, dirsuffix = ""):
     cmd = [
         f"APC_EXPORT_PATH={dir}",
         "APC_EXPORT_LEVEL=3",
-        f"cargo run --bin powdr_openvm_riscv -r compile {test} --input 1 --autoprecompiles 1 --apc-candidates-dir {dir}",
+        f"cargo run -p cli-openvm-riscv --bin powdr_openvm_riscv -r -- compile {test} --input 1 --autoprecompiles 1 --apc-candidates-dir {dir}",
     ]
     logging.warning(f"running {' '.join(cmd)}")
     subprocess.run(" ".join(cmd), shell=True, cwd=POWDR_DIR, check=True)
@@ -312,7 +312,7 @@ def run_verify(a, b):
         res_verify = __run_main("verify", a, b, first, parse_output=True, timeout=TIMEOUT_ENCODING_SEC)
         res_verify.name = "verify-encode"
         a_verify += res_verify
-        for file in sorted(res_verify.outputs):
+        for file in sorted(res_verify.outputs or []):
             with a_verify.action("check", inputs=[file]) as a_check:
                 res_simp = __do_simplify(file, file.with_suffix(".rewrite.smt2"))
                 a_check += res_simp

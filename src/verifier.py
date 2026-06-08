@@ -4,20 +4,19 @@ Loads before/after APC dumps, builds input/output relations and shared-bus
 array metadata, emits annotated scripts for external solvers, and records
 outputs via ``Action`` telemetry objects.
 """
+import copy
 import logging
+from pathlib import Path
 
 from .encoding.utils import get_is_valid
 from .report.action import Action
-from .smt.encoding import build_input_output_relation, collect_variables
+from .smt.encoding import collect_variables
 from .smt.conversion import SmtConverter
 from .smt.utils import *
 from .utils.basic_block import BasicBlock
 from .utils.io import load_apc_dump, load_json
-from .verify import combine_setinfo
-from .verify.shared_bus_arrays import (
-    BEFORE_PREFIX, AFTER_PREFIX,
-    shared_bus_arrays, shared_arrays_setinfo,
-)
+from .verify.bug_injection import apply_injection
+from .verify.memory_bus_alignment import BEFORE_PREFIX, AFTER_PREFIX, emit_memory_equalities
 from .verify.skolem_pins import derived_columns_skolem_setinfo
 
 
@@ -62,6 +61,12 @@ def verify():
     before = load_apc_dump(ARGS().input_before)
     after = load_apc_dump(ARGS().input_after)
 
+    if ARGS().inject is not None:
+        old_before = copy.deepcopy(before)
+        old_after = copy.deepcopy(after)
+        apply_injection(before, after)
+        assert before != old_before or after != old_after, "injection did not change the dumps"
+
     block = BasicBlock(before["block"])
     assert block == BasicBlock(after["block"]), "The basic block has changed"
 
@@ -78,16 +83,12 @@ def verify():
         if ARGS().eliminations is not None:
             eliminations = before_conv.convert_eliminations(load_json(ARGS().eliminations))
 
-        inputs1 = before_conv.bus_interaction_encoder.get_inputs()
-        inputs2 = after_conv.bus_interaction_encoder.get_inputs()
-        outputs1 = before_conv.bus_interaction_encoder.get_outputs()
-        outputs2 = after_conv.bus_interaction_encoder.get_outputs()
-        input_relation = build_input_output_relation("INPUT RELATION", inputs1, inputs2)
-        output_relation = build_input_output_relation(
-            "OUTPUT RELATION", outputs1, outputs2
+        input_relation = before_conv.bus_interaction_encoder.build_io_relation(
+            after_conv.bus_interaction_encoder, "input"
         )
-        shared_array_subs = shared_bus_arrays(before, after, before_conv, after_conv)
-
+        output_relation = before_conv.bus_interaction_encoder.build_io_relation(
+            after_conv.bus_interaction_encoder, "output"
+        )
         var1 = collect_variables(before_smt)
         var2 = collect_variables(after_smt)
         globals = before_smt.globals | after_smt.globals
@@ -96,6 +97,30 @@ def verify():
             *before_conv.bus_interaction_encoder.get_auxiliaries().values(),
             *after_conv.bus_interaction_encoder.get_auxiliaries().values(),
         )
+
+        map_sources = {**eliminations, **after_smt.derived, **before_smt.derived}
+
+        def pin_metadata(
+            formula: FNode,
+            derived: dict,
+            *,
+            reverse: bool = False,
+            smt_outfile: Path | None = None,
+        ):
+            info = derived_columns_skolem_setinfo(formula, derived)
+            info += emit_memory_equalities(
+                before,
+                after,
+                before_conv,
+                after_conv,
+                before_constraints=list(before_smt.derived.values())
+                + list(eliminations.values()),
+                after_constraints=list(after_smt.derived.values()),
+                reverse=reverse,
+                smt_dump_base=smt_outfile,
+                parent_action=action,
+            )
+            return info
 
         outfile = ARGS().output.with_suffix(".completeness.smt2")
         with open(outfile, "w") as dump:
@@ -107,17 +132,11 @@ def verify():
                 input_relation,
                 output_relation,
             )
-            info = combine_setinfo(
-                derived_columns_skolem_setinfo(
-                    completeness,
-                    after_smt.derived,
-                ),
-                shared_arrays_setinfo(shared_array_subs, reverse=True),
-            )
+            info = pin_metadata(completeness, after_smt.derived, reverse=True, smt_outfile=outfile)
 
             logging.info(f"dumping completeness check to {dump.name}")
             smtlib = convert_to_smt_script(
-                completeness, status='unsat', extra_setinfo=info.cmds, extra_decls=info.decls
+                completeness, status='unsat', pin_info=info
             )
             pretty_print_smtlib(smtlib, dump)
             action += ("outputs", outfile)
@@ -138,17 +157,10 @@ def verify():
                     output_relation,
                     additional_asserts=[Equals(is_valid_after, Int(1))],
                 )
-                map_sources = {**eliminations, **after_smt.derived, **before_smt.derived}
-                info = combine_setinfo(
-                    derived_columns_skolem_setinfo(
-                        soundness,
-                        map_sources,
-                    ),
-                    shared_arrays_setinfo(shared_array_subs),
-                )
+                info = pin_metadata(soundness, map_sources, smt_outfile=outfile)
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(
-                    soundness, status='unsat', extra_setinfo=info.cmds, extra_decls=info.decls
+                    soundness, status='unsat', pin_info=info
                 )
                 pretty_print_smtlib(smtlib, dump)
                 action += ("outputs", outfile)
@@ -203,18 +215,11 @@ def verify():
                     input_relation,
                     output_relation,
                 )
-                map_sources = {**eliminations, **after_smt.derived, **before_smt.derived}
-                info = combine_setinfo(
-                    derived_columns_skolem_setinfo(
-                        soundness,
-                        map_sources,
-                    ),
-                    shared_arrays_setinfo(shared_array_subs),
-                )
+                info = pin_metadata(soundness, map_sources, smt_outfile=outfile)
 
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(
-                    soundness, status='unsat', extra_setinfo=info.cmds, extra_decls=info.decls
+                    soundness, status='unsat', pin_info=info
                 )
                 pretty_print_smtlib(smtlib, dump)
                 action += ("outputs", outfile)

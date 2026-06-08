@@ -4,6 +4,11 @@ Parses ``(set-info :status ...)`` as the expected solver outcome, tries a
 small grid of random seeds and timeouts, and queries ``:reason-unknown``
 when the result is inconclusive.
 """
+import json
+import logging
+import re
+from pathlib import Path
+
 from .report.action import Action
 from .smt.utils import *
 from .utils.args import ARGS
@@ -11,19 +16,34 @@ from .utils.profiling import simple_profile
 
 
 def _get_reason_unknown(solver):
-    """Return SMT-LIB ``:reason-unknown`` text if the subprocess exposes stdio, else ``None``."""
+    """Return the reason string from ``(get-info :reason-unknown)``, or ``None``."""
     if not hasattr(solver, "solver_stdin") or not hasattr(solver, "solver_stdout"):
         return None
     try:
         solver.solver_stdin.write("(get-info :reason-unknown)\n")
         solver.solver_stdin.flush()
-        return solver.solver_stdout.readline().strip() or None
+        line = solver.solver_stdout.readline().strip()
+        if not line:
+            return None
+        m = re.fullmatch(r'\(\s*:reason-unknown\s+"([^"]*)"\s*\)', line)
+        return m.group(1) if m else line
     except Exception:
         return None
 
 
-def _solver_configs():
-    """Yield a short list of fast attempts plus one long-timeout fallback configuration."""
+def _solver_configs(*, check_timeout: float | None = None):
+    """Solver attempts for ``check-sat``. ``check_timeout`` in seconds; converted to Z3 ``timeout`` (ms)."""
+    if check_timeout is not None:
+        return [
+            {
+                "name": ARGS().solver,
+                "solver_options": {
+                    "timeout": int(check_timeout * 1000),
+                    "smt.random_seed": 0,
+                    "sat.random_seed": 0,
+                },
+            },
+        ]
     return [
         {
             "name": ARGS().solver,
@@ -31,16 +51,17 @@ def _solver_configs():
                 "timeout": 5000,
                 "smt.random_seed": k,
                 "sat.random_seed": k,
+                "smt.array.weak": "false" if k % 2 == 0 else "true",
             },
         }
-        for k in range(3)
+        for k in range(4)
     ] + [
         {
             "name": ARGS().solver,
             "solver_options": {
-                "timeout": 45000,
-                "smt.random_seed": 3,
-                "sat.random_seed": 3,
+                "timeout": 40000,
+                "smt.random_seed": 4,
+                "sat.random_seed": 4,
             },
         }
     ]
@@ -56,9 +77,11 @@ def _solver_config_label(config):
 
 def _display_path(path):
     """Prefer a path relative to ``cwd`` for logs; fall back to absolute if not under cwd."""
+    if path is None:
+        return "<memory>"
     resolved = path.resolve()
     try:
-        return resolved.relative_to(Path.cwd())
+        return resolved.relative_to(resolved.parent.parent)
     except ValueError:
         return resolved
 
@@ -72,7 +95,6 @@ def _run_solver_config(smt_script, config):
         }
         try:
             with Solver(
-                logic=AUFNIA,
                 name=config["name"],
                 solver_options=config["solver_options"],
             ) as s:
@@ -95,13 +117,56 @@ def _run_solver_config(smt_script, config):
                                     action += {"result": "unknown"}
                             break
                 except SolverReturnedUnknownResultError:
-                    action += {"result": "error-unknown"}
                     if reason := _get_reason_unknown(s):
-                        action += {"reason_unknown": reason}
-                        logging.warning(f"reason-unknown: {reason}")
+                        action += {"result": f"unknown-{reason}"}
+                    else:
+                        action += {"result": "unknown"}
         except BrokenPipeError:
             action += {"result": "error-broken-pipe"}
         return action
+
+
+def check_smt_script(
+    smt_script,
+    action: Action,
+    *,
+    input_for_log: Path | None = None,
+    check_timeout: float | None = None,
+) -> str:
+    """Run the same solver grid as :func:`check`; return ``sat`` / ``unsat`` / inconclusive."""
+    last_attempt = None
+    log_key = _display_path(input_for_log)
+    log = logging.warning if input_for_log is not None else logging.debug
+    for config in _solver_configs(check_timeout=check_timeout):
+        label = _solver_config_label(config)
+        log("check %s with %s", log_key, label)
+        attempt = _run_solver_config(smt_script, config)
+        action += attempt
+        last_attempt = attempt
+
+        if attempt.result in {"sat", "unsat"}:
+            break
+        log(
+            "check %s with %s returned %s, trying next config",
+            log_key,
+            label,
+            attempt.result,
+        )
+    if last_attempt is None:
+        res = "unknown"
+    else:
+        res = last_attempt.result
+    if res == "sat":
+        res = last_attempt.result
+        action += {"model": last_attempt.model}
+        if ARGS().dump_model:
+            logging.info("dumping model to %s", ARGS().dump_model)
+            with open(ARGS().dump_model, "w") as f:
+                json.dump(last_attempt.model, f, indent=4)
+    if action.expected is not None and res != action.expected:
+        logging.error("expected %s but got %s", action.expected, res)
+    action += {"result": res}
+    return res
 
 
 @simple_profile
@@ -119,31 +184,5 @@ def check():
                 action += {"expected": cmd.args[1]}
                 break
 
-        last_attempt = None
-        for config in _solver_configs():
-            label = _solver_config_label(config)
-            logging.warning(f"checking {_display_path(ARGS().input)} with {label}")
-            attempt = _run_solver_config(smt_script, config)
-            action += attempt
-            last_attempt = attempt
-
-            if attempt.result in {"sat", "unsat"}:
-                action += {"result": attempt.result}
-                if attempt.result == "sat":
-                    action += {"model": attempt.model}
-                    if ARGS().dump_model:
-                        logging.info(f"dumping model to {ARGS().dump_model}")
-                        with open(ARGS().dump_model, "w") as f:
-                            json.dump(attempt.model, f, indent=4)
-                break
-
-            logging.warning(f"{label} returned {attempt.result}, trying next config")
-
-        if action.result is None and last_attempt is not None:
-            action += {"result": last_attempt.result}
-            if last_attempt.reason_unknown is not None:
-                action += {"reason_unknown": last_attempt.reason_unknown}
-
-        if action.expected is not None and action.result != action.expected:
-            logging.error(f"expected {action.expected} but got {action.result}")
+        check_smt_script(smt_script, action, input_for_log=ARGS().input)
         return action

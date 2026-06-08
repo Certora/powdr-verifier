@@ -3,7 +3,6 @@ from ..utils.io import load_json
 from ..smt.utils import *
 from ..rewriter import rewrite
 
-from .array_subst import simplify_array_subst
 from .flatten_outer_array import simplify_flatten_outer_array
 from .solve_eqs import simplify_solve_eqs
 from .solve_store_eqs import simplify_solve_store_eqs

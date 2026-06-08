@@ -8,7 +8,7 @@ Pure utilities used by :mod:`.skolem` and the per-contributor modules
   ``Equals(var, expr)`` pin as a ``(set-info :prefix-N ...)`` command.
 * :func:`load_setinfo_pins` - simplifier-side counterpart that reads
   every entry of a given prefix back as an ``FNode``.
-* :func:`split_equation` - canonical ``Equals(var, expr) -> (var, expr)``
+* :func:`split_equation` - canonical ``Equals`` / ``Iff(var, expr)``
   splitter used by every contributor that consumes pin equations.
 """
 
@@ -66,7 +66,7 @@ def _collect_forall_qvars(smt_script: script.SmtLibScript) -> dict[str, FNode]:
 def _declare_types_from_script(smt_script: script.SmtLibScript) -> dict[str, object]:
     out: dict[str, object] = {}
     for cmd in smt_script:
-        if cmd.name != "declare-fun" or len(cmd.args) < 2:
+        if cmd.name != "declare-fun" or not cmd.args:
             continue
         sym = cmd.args[0]
         if not sym.is_symbol():
@@ -93,6 +93,8 @@ def _prebind_pin_identifiers(
             parser.cache.bind(tok, Symbol(tok, ty))
         elif "@" in tok:
             parser.cache.bind(tok, Symbol(tok, INT))
+        else:
+            parser.cache.bind(tok, Symbol(tok, BOOL))
 
 
 def _build_parser_with_cache(smt_script: script.SmtLibScript) -> SmtLibParser:
@@ -177,12 +179,15 @@ def load_setinfo_pins(
 
 
 def split_equation(eq: FNode) -> tuple[FNode, FNode] | None:
-    """Split an ``Equals(var, expr)`` pin equation into ``(var, expr)``.
+    """Split ``Equals(var, expr)`` or ``Iff(var, expr)`` (bool) into ``(var, expr)``.
 
-    Returns ``None`` for non-equality nodes; falls back to
-    ``(arg(1), arg(0))`` if the qvar happens to live on the right.
+    Returns ``None`` for other nodes. If one side is a symbol, it is taken as
+    ``var`` (prefer left, else right). ``Iff`` is only well-formed over bools in
+    PySMT; we assert that invariant.
     """
-    if not eq.is_equals():
+    if eq.is_iff():
+        assert eq.arg(0).get_type().is_bool_type() and eq.arg(1).get_type().is_bool_type()
+    elif not eq.is_equals():
         return None
     a, b = eq.arg(0), eq.arg(1)
     if a.is_symbol():

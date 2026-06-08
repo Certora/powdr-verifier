@@ -3,7 +3,11 @@ import itertools
 import logging
 from typing import Any
 
-from .permutation_check import PermutationCheckMixin, TimestampCheckMixin
+from .permutation_check import (
+    PermutationCheckMixin,
+    TimestampCheckMixin,
+    keyed_io_relation,
+)
 
 from .single_interaction_encoder import BusInteraction, SingleInteractionEncoder
 
@@ -173,6 +177,8 @@ class OpenVMMemoryEncoder(
         timestamp: FNode,
     ) -> FNode:
         """(Currently a stub) Placeholder for per-interaction local memory constraints."""
+        if ARGS().memory_encoding == "none":
+            return TRUE()
         if address_space.is_int_constant() and address_space.constant_value() == 0:
             assert mult.is_int_constant() and mult.constant_value() == 0
         return Implies(
@@ -218,6 +224,25 @@ class OpenVMMemoryEncoder(
                         is_memory=True,
                     )
                 )
+            case "plain":
+                bus_interactions = [
+                    BusInteraction(mult, [a, p, *args, t])
+                    for mult, (a, p, args, t) in self._interactions
+                ]
+                permutation_axioms, isinputs, isoutputs = self.plain_permutation_check(
+                    interactions=bus_interactions,
+                )
+                self._isinputs = isinputs
+                self._isoutputs = isoutputs
+                inputs = []
+                outputs = []
+                intermediates = []
+            case "none":
+                permutation_axioms = []
+                inputs = []
+                outputs = []
+                intermediates = []
+                isinputs = []
             case _:
                 raise ValueError(f"Invalid memory encoding: {ARGS().memory_encoding}")
         self.inputs = inputs
@@ -241,3 +266,22 @@ class OpenVMMemoryEncoder(
         #yield with_comment(ts, f"{self.NAME} timestamp check")
         yield with_comment(And(*permutation_axioms), f"{self.NAME} permutation axioms")
         yield with_comment(And(*assume_bytes), f"{self.NAME} assume bytes")
+
+    def _bus_interactions(self) -> list[BusInteraction]:
+        return [
+            BusInteraction(mult, [a, p, *args, t])
+            for mult, (a, p, args, t) in self._interactions
+        ]
+
+    def build_io_relation(self, other: SingleInteractionEncoder, kind: str) -> FNode | None:
+        if ARGS().memory_encoding == "none":
+            return None
+        if ARGS().memory_encoding == "plain":
+            return keyed_io_relation(
+                f"{kind.upper()} RELATION for {self.NAME}",
+                self._bus_interactions(),
+                other._bus_interactions(),
+                self._isinputs if kind == "input" else self._isoutputs,
+                other._isinputs if kind == "input" else other._isoutputs,
+            )
+        return super().build_io_relation(other, kind)

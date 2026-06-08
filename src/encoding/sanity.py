@@ -70,7 +70,7 @@ def sanity_timestamps_increase(conv: SmtConverter, formula: FormulaWithAxioms) -
                     Equals(wrap_mod(a.mult), Int(0)),
                     Equals(wrap_mod(b.mult), Int(0)),
                 ),
-                LT(a.args[-1], b.args[-1])
+                field_lt(a.args[-1], b.args[-1])
             )
             name = f"{encoder.NAME}#{ida}/{idb} timestamps increase"
             yield with_comment(Not(f), name)

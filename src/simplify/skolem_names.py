@@ -14,6 +14,9 @@ For every qvar ``q`` of the current forall, the contributor:
   and ``q`` and ``q'`` agree on type, pins ``q := q'`` on the
   :class:`SkolemMap`.
 
+Program-style column names only (see :func:`_is_program_variable`); other
+qvars are skipped.
+
 This replaces ``ModelMapBuilder.__heuristic_same_name`` which used to
 build the same-name pins as part of the verifier-side encoding ``map``.
 The semantics is identical (a same-name fallback for everything not
@@ -76,10 +79,11 @@ def contribute(skolem_map, declared: dict[str, FNode]) -> None:
     surfaces as a tool-reported counterexample which the user can verify
     or reject against the actual circuit traces.
 
-    Previously this contributor was restricted to "program-variable"
-    names (those carrying an ``@index`` suffix), which excluded memory
-    state qvars like ``after-memory-N-hadinput``. The restriction is
-    removed — any qvar with a typed same-name match is now pinned.
+    Same-name pins are limited to program-style column names: after
+    stripping ``before-``/``after-``, the symbol must still contain ``@``
+    (typically ``...@index``). That excludes memory-like qvars such as
+    ``after-memory-N-hadinput``, which stay under ``forall`` unless another
+    contributor pins them.
     """
     for q in skolem_map.qvars:
         if skolem_map.is_pinned(q):
