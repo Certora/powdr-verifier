@@ -3,6 +3,8 @@
 Builds :class:`SetInfo` with pin equations and any UF ``declare-fun``s needed
 for round-trip parsing.
 """
+import logging
+
 from . import SetInfo
 from ..smt.utils import *
 
@@ -78,6 +80,42 @@ def _collect_all_symbols(formula: FNode) -> frozenset[FNode]:
 
     visit(formula)
     return frozenset(out)
+
+
+def drop_mirrored_derived(
+    derived: dict[FNode, FNode],
+    other_derived: dict[FNode, FNode],
+    prefix: str,
+    other_prefix: str,
+) -> dict[FNode, FNode]:
+    """Drop derived columns that the other side defines identically.
+
+    When before and after dumps share a derived column (same name and
+    same defining expression modulo the ``before-``/``after-`` prefix),
+    do not emit a functional ``:skolem-derived`` pin for it: the
+    ``skolem_names`` same-name fallback then pins the quantified copy to
+    its free counterpart, which is an equally valid witness and a far
+    better one downstream — identity pins survive every simplifier
+    pass, whereas ``simplify_mod_inv``'s definition-level fold rewrites
+    functional ``QuotientOrZero`` pins into a pair of relational
+    implications, losing witness determinism and forcing the solver
+    into modular-inverse uniqueness reasoning.
+
+    Columns without an identical counterpart keep their functional pin
+    (the only valid witness when the circuits genuinely differ).
+    """
+    other_stripped = {
+        strip_prefix_from_vars(k, other_prefix): strip_prefix_from_vars(eq, other_prefix)
+        for k, eq in other_derived.items()
+    }
+    out: dict[FNode, FNode] = {}
+    for k, eq in derived.items():
+        ks = strip_prefix_from_vars(k, prefix)
+        if other_stripped.get(ks) == strip_prefix_from_vars(eq, prefix):
+            logging.info("derived pin dropped (mirrored on both sides): %s", k)
+            continue
+        out[k] = eq
+    return out
 
 
 def derived_columns_skolem_setinfo(
