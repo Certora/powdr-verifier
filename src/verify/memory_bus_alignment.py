@@ -45,8 +45,7 @@ def _memory_bus_id(data: dict) -> int | None:
 class MemoryBusPartialAlignment:
     """Structural overlap of Memory interaction lists (lengths may differ).
 
-    ``before_to_after`` maps aligned before interaction indices to after indices
-    (prefix at equal indices, then matching tails without re-entering the strict-prefix band).
+    ``before_to_after`` maps aligned before interaction indices to after indices.
     """
 
     n_before: int
@@ -184,7 +183,7 @@ def _iter_memory_alignment_index_pairs_core(
         yield b, a
 
 
-def analyze_memory_bus_partial_alignment(
+def analyze_memory_bus_partial_alignment_legacy(
     before_data: dict,
     after_data: dict,
     before_conv: SmtConverter,
@@ -195,19 +194,13 @@ def analyze_memory_bus_partial_alignment(
     parent_action: Action,
     smt_dump_base: Path | None = None,
 ) -> MemoryBusPartialAlignment | None:
-    """Infer aligned Memory interaction indices.
+    """Infer aligned Memory interaction indices (pair enumeration).
 
     Walks matching diagonal prefix and tail; each pair tries dump JSON equality before SMT.
     """
     mem_id = _memory_bus_id(before_data)
-    if mem_id is None or _memory_bus_id(after_data) != mem_id:
-        _LOG.debug(
-            "memory bus alignment skipped: Memory bus id missing or differs between dumps "
-            "(before=%s after=%s)",
-            mem_id,
-            _memory_bus_id(after_data),
-        )
-        return None
+    assert mem_id is not None
+    assert _memory_bus_id(after_data) == mem_id
 
     before_mem = [
         bi for bi in before_data["machine"]["bus_interactions"] if bi["id"] == mem_id
@@ -223,6 +216,7 @@ def analyze_memory_bus_partial_alignment(
     nb, na = len(before_mem), len(after_mem)
     if nb == 0 or na == 0:
         return None
+    assert nb >= na
 
     bc_strip = tuple(
         strip_prefix_from_vars(c, f"{BEFORE_PREFIX}-")
@@ -235,15 +229,11 @@ def analyze_memory_bus_partial_alignment(
 
     before_to_after: dict[int, int] = {}
     counters = {
-        "syntax-checks": 0,
         "syntax-matches": 0,
-        "syntax-time": 0,
-        "bare-checks": 0,
         "bare-true": 0,
         "bare-false": 0,
         "bare-unknown": 0,
         "bare-time": 0,
-        "context-checks": 0,
         "context-true": 0,
         "context-false": 0,
         "context-unknown": 0,
@@ -251,18 +241,15 @@ def analyze_memory_bus_partial_alignment(
     }
 
     bk0, ak0 = list(before_mem.keys()), list(after_mem.keys())
-    t0 = time.perf_counter()
     for kb, ka in _iter_memory_alignment_index_pairs_core(bk0, ak0):
         if kb not in before_mem or ka not in after_mem:
             continue
-        counters["syntax-checks"] += 1
         if before_mem[kb] == after_mem[ka]:
             counters["syntax-matches"] += 1
             _LOG.debug(f"memory bus alignment: syntactic match {kb} -> {ka}")
             before_to_after[kb] = ka
             del before_mem[kb]
             del after_mem[ka]
-    counters["syntax-time"] = time.perf_counter() - t0
 
     bk0 = list(before_mem.keys())
     ak0 = list(after_mem.keys())
@@ -343,6 +330,204 @@ def analyze_memory_bus_partial_alignment(
     return MemoryBusPartialAlignment(nb, na, before_to_after)
 
 
+def analyze_memory_bus_partial_alignment(
+    before_data: dict,
+    after_data: dict,
+    before_conv: SmtConverter,
+    after_conv: SmtConverter,
+    *,
+    before_constraints: Iterable[FNode],
+    after_constraints: Iterable[FNode],
+    parent_action: Action,
+    smt_dump_base: Path | None = None,
+) -> MemoryBusPartialAlignment | None:
+    """Infer aligned Memory indices (monotone subsequence: no reorder, no insertions).
+
+    Same-length traces use ``i -> i``. Otherwise sweeps only window pairs
+    ``|i-j| <= n_before - n_after`` with singleton propagation between passes.
+    """
+    mem_id = _memory_bus_id(before_data)
+    assert mem_id is not None
+    assert _memory_bus_id(after_data) == mem_id
+
+    before_list = [
+        bi for bi in before_data["machine"]["bus_interactions"] if bi["id"] == mem_id
+    ]
+    after_list = [
+        bi for bi in after_data["machine"]["bus_interactions"] if bi["id"] == mem_id
+    ]
+    nb, na = len(before_list), len(after_list)
+    if nb == 0 or na == 0:
+        return None
+    assert nb >= na
+
+    if nb == na:
+        m = {i: i for i in range(nb)}
+        parent_action += {
+            "identity-shortcut": True,
+        }
+        _LOG.info(
+            "memory bus alignment (identity): n_before=%d n_after=%d aligned_pairs=%d",
+            nb,
+            na,
+            nb,
+        )
+        return MemoryBusPartialAlignment(nb, na, m)
+
+    bc_strip = tuple(
+        strip_prefix_from_vars(c, f"{BEFORE_PREFIX}-")
+        for c in _flatten_outer_conjunctions(before_constraints)
+    )
+    ac_strip = tuple(
+        strip_prefix_from_vars(c, f"{AFTER_PREFIX}-")
+        for c in _flatten_outer_conjunctions(after_constraints)
+    )
+
+    counters = {
+        "syntax-matches": 0,
+        "singleton-matches": 0,
+        "bare-true": 0,
+        "bare-false": 0,
+        "bare-unknown": 0,
+        "bare-time": 0.0,
+        "context-true": 0,
+        "context-false": 0,
+        "context-unknown": 0,
+        "context-time": 0.0,
+    }
+
+    before_json = {i: before_list[i] for i in range(nb)}
+    after_json = {j: after_list[j] for j in range(na)}
+    before_to_after: dict[int, int] = {}
+    D = nb - na
+
+    def feasible_after(b: int) -> list[int]:
+        lo_w = max(0, b - D)
+        hi_w = min(na - 1, b)
+        for bb in range(b - 1, -1, -1):
+            if bb in before_to_after:
+                lo_w = max(lo_w, before_to_after[bb] + 1)
+                break
+        for bb in range(b + 1, nb):
+            if bb in before_to_after:
+                hi_w = min(hi_w, before_to_after[bb] - 1)
+                break
+        used_a = set(before_to_after.values())
+        return [a for a in range(lo_w, hi_w + 1) if a not in used_a]
+
+    def syntax_sweep() -> None:
+        for b in range(nb):
+            if b in before_to_after:
+                continue
+            for a in feasible_after(b):
+                if before_json[b] == after_json[a]:
+                    before_to_after[b] = a
+                    counters["syntax-matches"] += 1
+                    break
+
+    def singleton_sweep() -> None:
+        for b in range(nb):
+            if b in before_to_after:
+                continue
+            if b == 0 and 1 in before_to_after and before_to_after[1] == 1:
+                before_to_after[0] = 0
+                counters["singleton-matches"] += 1
+                continue
+            if b == nb-1 and nb-2 in before_to_after and before_to_after[nb-2] == na-2:
+                before_to_after[nb-1] = na-1
+                counters["singleton-matches"] += 1
+                continue
+            if b == 0 or b == nb - 1:
+                continue
+            if b-1 in before_to_after and b+1 in before_to_after and before_to_after[b-1] + 2 == before_to_after[b+1]:
+                before_to_after[b] = before_to_after[b-1] + 1
+                counters["singleton-matches"] += 1
+
+    syntax_sweep()
+    singleton_sweep()
+
+    used_after = set(before_to_after.values())
+    bk0 = sorted(b for b in range(nb) if b not in before_to_after)
+    ak0 = sorted(a for a in range(na) if a not in used_after)
+    before_rows: dict[int, BusInteraction] = {
+        idx: _strip_prefix(
+            before_conv.bus_interaction_encoder.memory._interactions[idx],
+            f"{BEFORE_PREFIX}-",
+        )
+        for idx in bk0
+    }
+    after_rows: dict[int, BusInteraction] = {
+        idx: _strip_prefix(
+            after_conv.bus_interaction_encoder.memory._interactions[idx],
+            f"{AFTER_PREFIX}-",
+        )
+        for idx in ak0
+    }
+    excluded: set[tuple[int, int]] = set()
+
+    def bare_sweep() -> None:
+        t0 = time.perf_counter()
+        for b in range(nb):
+            if b in before_to_after:
+                continue
+            for a in feasible_after(b):
+                match _check_equivalent_bare(
+                    before_rows[b], after_rows[a], smt_dump_base=smt_dump_base
+                ):
+                    case True:
+                        counters["bare-true"] += 1
+                        _LOG.debug("memory bus alignment: bare match %s -> %s", b, a)
+                        before_to_after[b] = a
+                        break
+                    case False:
+                        counters["bare-false"] += 1
+                        _LOG.debug("memory bus alignment: bare mismatch %s -> %s", b, a)
+                        excluded.add((b, a))
+                    case None:
+                        counters["bare-unknown"] += 1
+        counters["bare-time"] += time.perf_counter() - t0
+
+    def context_sweep() -> None:
+        t0 = time.perf_counter()
+        for b in range(nb):
+            if b in before_to_after:
+                continue
+            for a in feasible_after(b):
+                if (b, a) in excluded:
+                    continue
+                match _check_equivalent_contextual(
+                    before_rows[b], after_rows[a],
+                    bc_strip,
+                    ac_strip,
+                    smt_dump_base=smt_dump_base,
+                ):
+                    case True:
+                        counters["context-true"] += 1
+                        before_to_after[b] = a
+                        break
+                    case False:
+                        counters["context-false"] += 1
+                    case None:
+                        counters["context-unknown"] += 1
+        counters["context-time"] += time.perf_counter() - t0
+
+    bare_sweep()
+    singleton_sweep()
+    context_sweep()
+    singleton_sweep()
+
+    parent_action += counters
+
+    _LOG.info(
+        "memory bus alignment: n_before=%d n_after=%d aligned_pairs=%d",
+        nb,
+        na,
+        len(before_to_after),
+    )
+
+    return MemoryBusPartialAlignment(nb, na, before_to_after)
+
+
 # -----------------------------------------------------------------------------
 # 2. Encoding-specific maps: before symbol → after symbol
 # -----------------------------------------------------------------------------
@@ -391,48 +576,17 @@ def _plain_encoding_symbol_pairs(
     before_conv: SmtConverter,
     after_conv: SmtConverter,
 ) -> dict[FNode, FNode]:
-    """Pair ``memory_match_{i}_{j}`` across sides for aligned interaction pairs.
-
-    Uses ``alignment.before_to_after``: maximal initial run with ``m[k] == k`` as the
-    shared-prefix before-indices, then tail pairs ``(nb-1-t, na-1-t)`` with ``m[ib]==ia``
-    outside that prefix band on both sides.
-    """
+    """Pair ``memory_match_{i}_{j}`` for aligned indices via ``before_to_after``."""
     m = alignment.before_to_after
-    nb, na = alignment.n_before, alignment.n_after
     nm = before_conv.bus_interaction_encoder.memory.NAME
-
-    prefix_before: set[int] = set()
-    k = 0
-    while k < min(nb, na) and m.get(k) == k:
-        prefix_before.add(k)
-        k += 1
-    pfx_excl_end = k
-
-    suffix_before: set[int] = set()
-    t = 0
-    while t < min(nb, na):
-        ib, ia = nb - 1 - t, na - 1 - t
-        if ib < pfx_excl_end or ia < pfx_excl_end:
-            break
-        if m.get(ib) != ia:
-            break
-        suffix_before.add(ib)
-        t += 1
-
     subs: dict[FNode, FNode] = {}
-    for i_b in range(nb):
-        for j_b in range(i_b, nb):
-            if i_b not in m or j_b not in m:
-                continue
-            i_a, j_a = m[i_b], m[j_b]
-            in_prefix = i_b in prefix_before and j_b in prefix_before
-            in_suffix = i_b in suffix_before and j_b in suffix_before
-            if not (in_prefix or in_suffix):
+    for i_b, i_a in m.items():
+        for j_b, j_a in m.items():
+            if i_b > j_b:
                 continue
             b_leaf = f"{nm}_match_{i_b}_{j_b}"
             a_leaf = f"{nm}_match_{i_a}_{j_a}"
             subs[before_conv._symbol(b_leaf, BOOL)] = after_conv._symbol(a_leaf, BOOL)
-
     return subs
 
 
@@ -453,7 +607,7 @@ def emit_memory_equalities(
     reverse: bool = False,
     smt_dump_base: Path | None = None,
 ) -> SetInfo:
-    """Pair before/after memory symbols on shared prefix/suffix; record pin equations.
+    """Pair before/after memory symbols using alignment; record pin equations.
 
     ``subs`` maps ``{before_sym: after_sym}``.  For *completeness*
     (after-vars quantified) pass ``reverse=True`` so pins read ``Equals(after, before)``.

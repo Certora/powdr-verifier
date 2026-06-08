@@ -171,7 +171,7 @@ def __run_main(
     return None
 
 _DEFAULT_TACTIC = (
-    "nnf:evaluator:skolem:lift:witness:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:domain_probe:z3-propagate-values:pretty"
+    "nnf:evaluator:skolem:lift:witness:flatten_outer_array:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:domain_probe:z3-propagate-values:pretty"
 )
 
 
@@ -226,7 +226,7 @@ def run_powdr_guest(test, dirsuffix = ""):
     cmd = [
         f"APC_EXPORT_PATH={dir}",
         "APC_EXPORT_LEVEL=3",
-        f"cargo run --bin powdr_openvm_riscv -r compile {test} --input 1 --autoprecompiles 1 --apc-candidates-dir {dir}",
+        f"cargo run -p cli-openvm-riscv --bin powdr_openvm_riscv -r -- compile {test} --input 1 --autoprecompiles 1 --apc-candidates-dir {dir}",
     ]
     logging.warning(f"running {' '.join(cmd)}")
     subprocess.run(" ".join(cmd), shell=True, cwd=POWDR_DIR, check=True)
