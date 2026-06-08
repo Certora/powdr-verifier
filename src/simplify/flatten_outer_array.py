@@ -347,6 +347,42 @@ def simplify_flatten_outer_array(
             "asserts_rewritten_total": total_rewrites,
             "ineligible_at_final_round": total_ineligible,
         }
+
+    # Contract: at the end of this pass, no 2D+ array declaration may
+    # remain. Outer arrays are this pass's responsibility, and an
+    # upstream pass (e.g. solve_store_eqs) that leaves them in a shape
+    # this pass can't dissect is a bug — not a silent missed
+    # opportunity. Fail loudly with the survivor names so the regression
+    # is obvious.
+    # Walk every assert's free variables. Any 2D+ array symbol referenced
+    # (whether declared or auto-redeclared later by
+    # `_ensure_declarations_for_asserts`) breaks the contract. solve_store_eqs's
+    # cascading substitution can produce nested `(store 2d-base k v)`
+    # expressions that flatten's walk_equals can't split (it requires at
+    # least one bare flattenable symbol on a side), so 2D symbols silently
+    # survive. Catch that here.
+    fvo = get_env().fvo
+    survivor_set: set[str] = set()
+    for cmd in smt_script.commands:
+        if cmd.name != "assert":
+            continue
+        for sym in fvo.get_free_variables(cmd.args[0]):
+            if not (hasattr(sym, "is_symbol") and sym.is_symbol()):
+                continue
+            t = sym.get_type()
+            if not t.is_array_type():
+                continue
+            elem_t = t.elem_type if hasattr(t, "elem_type") else t.param_types[0]
+            if elem_t.is_array_type():
+                survivor_set.add(sym.symbol_name())
+    if survivor_set:
+        survivors = sorted(survivor_set)
+        raise AssertionError(
+            f"flatten_outer_array: {len(survivors)} 2D+ array symbol(s) "
+            f"still referenced in asserts after the pass: {survivors[:10]}"
+            + (f" (+{len(survivors)-10} more)" if len(survivors) > 10 else "")
+        )
+
     return smt_script
 
 
