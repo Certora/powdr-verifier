@@ -1,4 +1,5 @@
 """Tests for ``simplify_flatten_outer_array``."""
+import pytest
 from pysmt.typing import ArrayType
 
 from src.simplify.flatten_outer_array import simplify_flatten_outer_array
@@ -104,8 +105,10 @@ def test_flatten_store_equality_expands_to_paired_inner_equalities():
                 f"residual outer-typed expression: {arg}"
 
 
-def test_flatten_skipped_when_variable_index_outer_access():
-    """A single variable-index outer access disables flattening for that array."""
+def test_flatten_hard_fails_when_variable_index_outer_access():
+    """A single variable-index outer access disqualifies the array; flatten
+    now hard-fails because the array can't be eliminated. Per the new
+    contract: no 2D+ array may survive the pass."""
     M = Symbol("M3", OuterTy)
     inner = Symbol("inner3", InnerTy)
     addr = Symbol("addr3", INT)
@@ -115,14 +118,14 @@ def test_flatten_skipped_when_variable_index_outer_access():
         Equals(inner, Select(M, Int(1))),  # constant — fine
         Equals(inner, Select(M, i)),       # variable outer index — disqualifies M
     )
-    out = simplify_flatten_outer_array(s)
-    names = _decl_names_of(out)
-    assert "M3" in names, "M3 should NOT be flattened (variable outer index)"
-    assert "M3__1" not in names
+    with pytest.raises(AssertionError, match="2D\\+ array.*still referenced"):
+        simplify_flatten_outer_array(s)
 
 
-def test_flatten_skipped_when_outer_used_outside_array_positions():
-    """An outer array used in a non-array position disables flattening."""
+def test_flatten_hard_fails_when_outer_used_outside_array_positions():
+    """An outer array used in a non-array position disqualifies it; flatten
+    hard-fails because the array can't be eliminated. Per the new contract:
+    no 2D+ array may survive the pass."""
     # Use Ite to "consume" the outer-typed value in a non-select/store/eq slot.
     M = Symbol("M4", OuterTy)
     N = Symbol("N4", OuterTy)
@@ -131,17 +134,10 @@ def test_flatten_skipped_when_outer_used_outside_array_positions():
     expr = Ite(cond, M, N)  # outer-typed result, in an Ite (parent is array-typed)
     s = _script(
         [M, N, cond, inner],
-        # parent context: select((ite c M N), 1) — M and N each appear under Ite,
-        # not directly under select. Whether the pass treats this as eligible
-        # depends on the safety check; here we assert it bails out conservatively.
         Equals(inner, Select(expr, Int(1))),
     )
-    out = simplify_flatten_outer_array(s)
-    names = _decl_names_of(out)
-    # Conservative: M4 and N4 sit under Ite which is not a recognized ok-position
-    # for symbols → ineligible. Original decls remain.
-    assert "M4" in names and "N4" in names
-    assert "M4__1" not in names and "N4__1" not in names
+    with pytest.raises(AssertionError, match="2D\\+ array.*still referenced"):
+        simplify_flatten_outer_array(s)
 
 
 def test_flatten_outer_array_equality_expands():
