@@ -14,6 +14,9 @@ For every qvar ``q`` of the current forall, the contributor:
   and ``q`` and ``q'`` agree on type, pins ``q := q'`` on the
   :class:`SkolemMap`.
 
+Program-style column names only (see :func:`_is_program_variable`); other
+qvars are skipped.
+
 This replaces ``ModelMapBuilder.__heuristic_same_name`` which used to
 build the same-name pins as part of the verifier-side encoding ``map``.
 The semantics is identical (a same-name fallback for everything not
@@ -60,6 +63,31 @@ def contribute(skolem_map, declared: dict[str, FNode]) -> None:
     """Pin same-name witnesses on ``skolem_map`` for unpinned qvars.
 
     See the module docstring for the full description.
+
+    Soundness note
+    --------------
+    Adding ``q := other`` here is a Skolem witness for the existential
+    inside the surrounding ``∀ q. body(q)``. After ``simplify_lift_forall``
+    collapses the universal to ``body(other)`` the result is strictly
+    weaker than the original ∀-formula. That is:
+
+    * sound for **unsat-proving** (an unsat result on the pinned formula
+      implies unsat on the original), and
+    * incomplete: if ``other`` is the "wrong" witness for some assignment
+      of the formula's free variables, the simplifier returns **sat**.
+
+    For the verifier's equivalence-proving use case the trade-off is the
+    right one: dissolving the quantifier unlocks downstream simplifications
+    (``z3-propagate-values``, ``flatten_outer_array``, ``bounds``, …) that
+    are otherwise blocked behind universal scopes. A spurious sat
+    surfaces as a tool-reported counterexample which the user can verify
+    or reject against the actual circuit traces.
+
+    Same-name pins are limited to program-style column names: after
+    stripping ``before-``/``after-``, the symbol must still contain ``@``
+    (typically ``...@index``). That excludes memory-like qvars such as
+    ``after-memory-N-hadinput``, which stay under ``forall`` unless another
+    contributor pins them.
     """
     for q in skolem_map.qvars:
         if skolem_map.is_pinned(q):

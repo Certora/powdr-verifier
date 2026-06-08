@@ -171,7 +171,7 @@ def __run_main(
     return None
 
 _DEFAULT_TACTIC = (
-    "nnf:evaluator:skolem:lift:witness:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:domain_probe:z3-propagate-values:pretty"
+    "nnf:evaluator:skolem:lift:witness:flatten_outer_array:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:domain_probe:z3-propagate-values:pretty"
 )
 
 
