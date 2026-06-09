@@ -201,12 +201,17 @@ def _match_data(f: FNode) -> tuple[FNode, int] | None:
 
 
 def _match_inner_with_qvar(inner: FNode, qvar: FNode):
-    """Match the inner expression ``(* X sign) + qvar`` of constr_5..8.
+    """Match the inner expression ``(* a_e sign) + qvar`` of constr_5..8.
 
-    Returns ``(data, data_offset, cmp)`` or ``None``. ``data`` is the limb
-    symbol ``a_i``, ``data_offset`` is the constant added to it (``-1 mod p``
-    only for ``i==0``), and ``cmp`` is the ``cmp_result`` symbol shared with
-    the ``sign`` factor.
+    Returns ``(data_e, cmp)`` or ``None``. ``data_e`` is the per-limb operand
+    expression ``a_i_e`` multiplied by ``sign`` — i.e. the value the LessThan
+    constraint forces ``diff_val`` to negate. It is ``a_i - c_i`` when the
+    second operand is the constant ``c = (1,0,0,0)`` (``a_i`` for ``i>=1``,
+    ``a_0 - 1`` for ``i==0``), and ``a_i - b_i`` when the gadget compares two
+    *variable* operands (the form the ``memory`` step emits for its
+    consistency check). ``cmp`` is the ``cmp_result`` symbol shared with the
+    ``sign`` factor. The whole expression is kept symbolic so the witness
+    builders treat both cases uniformly.
     """
     terms = _flatten(operators.PLUS, inner)
     if len(terms) != 2:
@@ -231,11 +236,11 @@ def _match_inner_with_qvar(inner: FNode, qvar: FNode):
         cmp = _match_sign(sign_f)
         if cmp is None:
             continue
-        data = _match_data(data_f)
-        if data is None:
-            continue
-        b, off = data
-        return b, off, cmp
+        # ``data_f`` is the operand expression a_i_e. Accept it as-is: the
+        # constant case (a_i / a_0-1) and the variable case (a_i - b_i) are
+        # both valid; the surrounding shape (dm·(a_e·sign + diff_val),
+        # sign = 2·cmp-1, qvar = diff_val) is specific enough on its own.
+        return data_f, cmp
     return None
 
 
@@ -266,8 +271,8 @@ def _match_constraint(node: FNode, qvar: FNode):
             inside = _match_inner_with_qvar(rest_f, qvar)
             if inside is None:
                 continue
-            b, off, cmp = inside
-            return {"dm": dm_f, "data": b, "data_offset": off, "cmp": cmp}
+            data_e, cmp = inside
+            return {"dm": dm_f, "data_e": data_e, "cmp": cmp}
         return None
 
     if not node.is_or():
@@ -303,8 +308,8 @@ def _match_constraint(node: FNode, qvar: FNode):
     inside = _match_inner_with_qvar(inner, qvar)
     if inside is None:
         return None
-    b, off, cmp = inside
-    return {"dm": dm, "data": b, "data_offset": off, "cmp": cmp}
+    data_e, cmp = inside
+    return {"dm": dm, "data_e": data_e, "cmp": cmp}
 
 
 def _diff_marker_limb_and_gadget(sym: FNode) -> tuple[int, int] | None:
@@ -343,69 +348,61 @@ def _diff_val_gadget(sym: FNode) -> int | None:
 def _build_skolem(matches: dict[int, dict], cmp: FNode, p: int) -> FNode:
     """Build the canonical ``diff_val`` witness as a nested ``Ite`` modulo ``p``.
 
-    Mirrors OpenVM ``run_less_than`` against the constant ``c = (1, 0, 0, 0)``
-    (LSB-first): scan limbs MSB-first and pick the first index where the
-    operand differs from ``c``::
+    Mirrors OpenVM ``run_less_than`` of operand ``a`` against the gadget's
+    second operand (the constant ``c = (1, 0, 0, 0)`` in the original
+    less-than-vs-constant gadgets, or another *variable* operand ``b`` in the
+    ``memory`` step's consistency comparison). Each limb carries the symbolic
+    difference ``a_i_e = a_i - {c_i | b_i}`` (``matches[i]["data_e"]``); the
+    witness scans limbs MSB-first and at the first ``a_i_e != 0`` sets
+    ``diff_val = -a_i_e * sign``::
 
-        if   b3 != 0: diff_val = (0 - b3) * sign     # -b3 * sign
-        elif b2 != 0: diff_val = -b2 * sign
-        elif b1 != 0: diff_val = -b1 * sign
-        elif b0 != 1: diff_val = (1 - b0) * sign
-        else        : diff_val = 0
+        if   a_3_e != 0: diff_val = -a_3_e * sign
+        elif a_2_e != 0: diff_val = -a_2_e * sign
+        elif a_1_e != 0: diff_val = -a_1_e * sign
+        elif a_0_e != 0: diff_val = -a_0_e * sign
+        else           : diff_val = 0
 
-    The expression is built bottom-up: the ``b0 != 1`` branch is wrapped
-    inside the ``b1 != 0`` ``Ite``, and so on.
+    Built bottom-up (limb 0 innermost, limb 3 outermost). For the constant
+    case ``a_i_e`` is ``a_i`` (``i>=1``) / ``a_0 - 1`` (``i==0``), so this
+    reduces to the original ``-b_i * sign`` / ``(1 - b_0) * sign``.
     ``-x`` is encoded as ``(p-1) * x`` to stay in the unsigned residue ring.
     """
-    # NB: do not pre-wrap ``sign`` in ``wrap_mod``. Each consumer of
-    # ``sign`` (``neg_x_sign`` and the row-0 offset branch below) applies
-    # its own outer ``wrap_mod``, and the ``SkolemMap.emit_disjuncts`` step
-    # wraps once more. An additional inner ``wrap_mod`` on ``sign`` only
-    # nests the modulus deeper without changing semantics, and prevents
-    # z3 from propagating the pinned equality through the witness during
-    # ``z3-propagate-values``. See
-    # `apc_candidate_2104744_007_trivial_simp-…_008.soundness.rewrite` for
-    # a benchmark that times out > 30s with the inner ``wrap_mod`` and
-    # closes UNSAT in ~1s without it (16/16 seeds).
+    # NB: do not pre-wrap ``sign`` in ``wrap_mod``. Each consumer applies its
+    # own outer ``wrap_mod`` and ``SkolemMap.emit_disjuncts`` wraps once more;
+    # an extra inner ``wrap_mod`` on ``sign`` only nests the modulus deeper and
+    # blocks ``z3-propagate-values`` from propagating the pin (see the 007→008
+    # benchmark: >30s with the inner wrap_mod, ~1s without).
     sign = Plus(Int(p - 1), Times(Int(2), cmp))
 
-    def neg_x_sign(x: FNode) -> FNode:
-        return wrap_mod(Times(Int(p - 1), x, sign))
+    def neg_e_sign(xe: FNode) -> FNode:
+        return wrap_mod(Times(Int(p - 1), xe, sign))
 
     expr = Int(0)
-    m = matches[0]
-    expr = Ite(
-        Equals(m["data"], Int(1)),
-        expr,
-        wrap_mod(Times(Plus(Int(1), Times(Int(p - 1), m["data"])), sign)),
-    )
-    for i in (1, 2, 3):
-        m = matches[i]
-        expr = Ite(Equals(m["data"], Int(0)), expr, neg_x_sign(m["data"]))
+    for i in (0, 1, 2, 3):
+        xe = matches[i]["data_e"]
+        expr = Ite(Equals(wrap_mod(xe), Int(0)), expr, neg_e_sign(xe))
     return wrap_mod(expr)
 
 
 def _build_marker_skolems(matches: dict[int, dict]) -> list[tuple[FNode, FNode]]:
     """Build canonical ``diff_marker__i`` witnesses against ``c = (1, 0, 0, 0)``.
 
-    OpenVM sets ``marker[i] = 1`` exactly at the highest index where the operand
-    differs from ``c`` (LSB-first ``c = (1, 0, 0, 0)``)::
+    Sets ``marker[i] = 1`` exactly at the highest limb where the operands
+    differ, i.e. the first (MSB-first) ``a_i_e = a_i - {c_i | b_i} != 0``::
 
-        marker[3] = 1 iff b3 != 0
-        marker[2] = 1 iff b3 = 0 ∧ b2 != 0
-        marker[1] = 1 iff b3 = 0 ∧ b2 = 0 ∧ b1 != 0
-        marker[0] = 1 iff b3 = 0 ∧ b2 = 0 ∧ b1 = 0 ∧ b0 != 1
+        marker[3] = 1 iff a_3_e != 0
+        marker[2] = 1 iff a_3_e = 0 ∧ a_2_e != 0
+        marker[1] = 1 iff a_3_e = 0 ∧ a_2_e = 0 ∧ a_1_e != 0
+        marker[0] = 1 iff a_3_e = 0 ∧ a_2_e = 0 ∧ a_1_e = 0 ∧ a_0_e != 0
 
     Returned as a list of ``(dm_var, skolem_expr)`` pairs (one per limb).
     Pinning these instead of the same-name ``before-dm_i = after-dm_i`` skolem
     avoids the soundness hole introduced by the optimizer's ``EqualZeroCheck``
     rewrite, which leaves the after-side markers unconstrained.
     """
-    b0, b1, b2, b3 = (matches[i]["data"] for i in range(4))
-    eq3 = Equals(b3, Int(0))
-    eq2 = Equals(b2, Int(0))
-    eq1 = Equals(b1, Int(0))
-    eq0 = Equals(b0, Int(1))
+    eq0, eq1, eq2, eq3 = (
+        Equals(wrap_mod(matches[i]["data_e"]), Int(0)) for i in range(4)
+    )
     dm3_skolem = Ite(eq3, Int(0), Int(1))
     dm2_skolem = Ite(eq3, Ite(eq2, Int(0), Int(1)), Int(0))
     dm1_skolem = Ite(eq3, Ite(eq2, Ite(eq1, Int(0), Int(1)), Int(0)), Int(0))
@@ -474,13 +471,10 @@ def _openvm_bundle_from_named_limbs(body: FNode, dv: FNode) -> tuple[dict[int, d
         return None
     matches: dict[int, dict] = {}
     for i in range(4):
-        off = (p - 1) % p if i == 0 else 0
-        matches[i] = {
-            "dm": dms[i],
-            "data": bs[i],
-            "data_offset": off,
-            "cmp": cmp_sym,
-        }
+        # Reconstruct a_i_e = b_i - c_i for the constant operand c = (1,0,0,0):
+        # b_0 - 1 for limb 0, b_i for the rest.
+        data_e = Plus(bs[i], Int(p - 1)) if i == 0 else bs[i]
+        matches[i] = {"dm": dms[i], "data_e": data_e, "cmp": cmp_sym}
     return matches, cmp_sym
 
 
@@ -507,9 +501,6 @@ def _find_and_build_witnesses(body: FNode, diff_val_vars):
                 if mg != gadget:
                     continue
             elif mg != 0:
-                continue
-            expected_off = (ARGS().field_type.value - 1) % ARGS().field_type.value if idx == 0 else 0
-            if m["data_offset"] != expected_off:
                 continue
             if cmp_var is None:
                 cmp_var = m["cmp"]
@@ -650,12 +641,16 @@ def contribute_free(smt_script, qvars: set[FNode]) -> list[tuple[FNode, FNode]]:
                 return sym
             return declared[swapped]
 
+        def swap_expr(e: FNode) -> FNode:
+            # ``data_e`` is a per-limb operand expression (e.g. a_i - b_i);
+            # swap the before-/after- prefix of every symbol it mentions.
+            return e.substitute({s: swap_sym(s) for s in e.get_free_variables()})
+
         free_matches: dict[int, dict] = {}
         for idx, m in q_matches.items():
             free_matches[idx] = {
                 "dm": swap_sym(m["dm"]),
-                "data": swap_sym(m["data"]),
-                "data_offset": m["data_offset"],
+                "data_e": swap_expr(m["data_e"]),
                 "cmp": swap_sym(m["cmp"]),
             }
 
