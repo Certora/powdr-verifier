@@ -107,7 +107,36 @@ def verify():
         before_derived_pins = drop_mirrored_derived(
             before_smt.derived, after_smt.derived, f"{BEFORE_PREFIX}-", f"{AFTER_PREFIX}-"
         )
-        map_sources = {**eliminations, **after_derived_pins, **before_derived_pins}
+
+        # Drop solver-elimination pins for columns that also exist on the after
+        # side. An elimination is a before-only substitution (before-X :=
+        # before-expr); when before-X has a same-name after counterpart it
+        # preempts the same-name congruence pin (before-X := after-X), leaving
+        # the before/after duality un-collapsed and forcing the solver into
+        # nonlinear reasoning over before×after cross-monomials (e.g.
+        # `after-a · before-diff_inv_marker` on guest-keccak 2104744 003→004,
+        # which turns an instant congruence proof into a >9 s nlsat grind).
+        # Letting same-name witness them collapses the duality by congruence.
+        # Same rationale as drop_mirrored_derived (PR #6).
+        def _strip_side(sym):
+            n = sym.symbol_name()
+            for p in (f"{BEFORE_PREFIX}-", f"{AFTER_PREFIX}-"):
+                if n.startswith(p):
+                    return n[len(p):]
+            return n
+
+        after_stripped = {_strip_side(v) for v in var2}
+        elim_for_map = {
+            k: v for k, v in eliminations.items() if _strip_side(k) not in after_stripped
+        }
+        if len(elim_for_map) != len(eliminations):
+            logging.info(
+                "soundness: %d/%d eliminations have an after counterpart; "
+                "deferring those to same-name congruence",
+                len(eliminations) - len(elim_for_map),
+                len(eliminations),
+            )
+        map_sources = {**elim_for_map, **after_derived_pins, **before_derived_pins}
 
         def pin_metadata(
             formula: FNode,
