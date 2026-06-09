@@ -212,11 +212,11 @@ def _ground_or_lemmas(terms: Iterable[FNode]) -> Iterable[FNode]:
 
 def _ground_andor_connection_pairs(t: BitwiseTerms) -> Iterable[FNode]:
     """Grounded identity ``or(x,y) = x + y - and(x,y)`` for each argument pair seen on AND/OR."""
-    pairs: set[tuple[FNode, FNode]] = set()
-    for term in t.ands:
-        pairs.add((term.args()[0], term.args()[1]))
-    for term in t.ors:
-        pairs.add((term.args()[0], term.args()[1]))
+    pairs = {
+        (term.args()[0], term.args()[1])
+        for coll in (t.ands, t.ors)
+        for term in coll
+    }
     for x, y in pairs:
         # Relates ``uf_or`` and ``uf_and`` for this (x, y) pair (bitwise ``|`` / ``&`` on bytes).
         yield Equals(
