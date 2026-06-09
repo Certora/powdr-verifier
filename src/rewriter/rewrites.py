@@ -35,9 +35,61 @@ def is_mul_by_minus_one(node: FNode) -> Optional[FNode]:
     return None
 
 
+def _solved_roots(factors: list[FNode], p: int) -> Optional[tuple[FNode, set[int]]]:
+    """``(x, roots)`` when every factor is linear in the same single symbol.
+
+    Nonzero constant factors contribute no root; a zero constant factor
+    makes the product trivially zero (no information), so bail out.
+    """
+    x: Optional[FNode] = None
+    values: set[int] = set()
+    for f in factors:
+        lf = linear_form(f)
+        if lf is None:
+            return None
+        terms, const = lf
+        terms = {s: a % p for s, a in terms.items() if a % p != 0}
+        if not terms:
+            if const % p == 0:
+                return None
+            continue
+        if len(terms) != 1:
+            return None
+        sym, a = next(iter(terms.items()))
+        if x is None:
+            x = sym
+        elif x != sym:
+            return None
+        values.add((-const * pow(a, -1, p)) % p)
+    if x is None or not values:
+        return None
+    return x, values
+
+
+def roots_with_range(x: FNode, values: set[int]) -> FNode:
+    """``x ∈ {values}`` as a disjunction plus the interval it implies.
+
+    The range conjuncts are logically redundant (implied by the
+    disjunction) but hand the solver directly propagatable bounds.
+    """
+    return And(
+        Or(*[Equals(x, Int(v)) for v in sorted(values)]),
+        LE(Int(min(values)), x),
+        LE(x, Int(max(values))),
+    )
+
+
 @simple_profile
 def rewrite_choice_simple(node_type: int, args: list[FNode]) -> FNode:
-    """Rewrite `Mod(e, p) = 0` with field modulus `p` when `e` is a plain product into a disjunction of factor congruences."""
+    """Rewrite `Mod(e, p) = 0` with field modulus `p` when `e` is a plain product into a disjunction of factor congruences.
+
+    When every factor is linear in the same single variable, the
+    congruences are solved to root equalities and the implied interval
+    is attached (e.g. ``cmp (cmp - 1) = 0`` becomes
+    ``(cmp = 0 or cmp = 1) and 0 <= cmp <= 1``). Solving congruences to
+    canonical representatives follows the same convention as
+    ``rewrite_mod_equality`` / ``simplify_bounds``.
+    """
     assert node_type == operators.EQUALS
     lhs, rhs = args
     if not lhs.is_mod() or not rhs.is_zero():
@@ -53,6 +105,9 @@ def rewrite_choice_simple(node_type: int, args: list[FNode]) -> FNode:
     factors = _flatten_times_factors(expr)
     if factors is None:
         return None
+    solved = _solved_roots(factors, p)
+    if solved is not None:
+        return roots_with_range(*solved)
     return Or(*[Equals(Mod(f, modulus), Int(0)) for f in factors])
 
 
