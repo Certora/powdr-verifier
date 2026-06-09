@@ -3,7 +3,7 @@ import collections
 import itertools
 import logging
 import pprint
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 
 from .. import bus_interactions
