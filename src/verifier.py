@@ -79,9 +79,9 @@ def verify():
         before_smt = before_conv.to_formula_with_axioms(before)
         after_smt = after_conv.to_formula_with_axioms(after)
 
-        eliminations = {}
-        if ARGS().eliminations is not None:
-            eliminations = before_conv.convert_eliminations(load_json(ARGS().eliminations))
+        substitutions = {}
+        if ARGS().substitutions is not None:
+            substitutions = before_conv.convert_substitutions(load_json(ARGS().substitutions))
 
         input_relation = before_conv.bus_interaction_encoder.build_io_relation(
             after_conv.bus_interaction_encoder, "input"
@@ -107,7 +107,7 @@ def verify():
         before_derived_pins = drop_mirrored_derived(
             before_smt.derived, after_smt.derived, f"{BEFORE_PREFIX}-", f"{AFTER_PREFIX}-"
         )
-        map_sources = {**eliminations, **after_derived_pins, **before_derived_pins}
+        map_sources = {**substitutions, **after_derived_pins, **before_derived_pins}
 
         def pin_metadata(
             formula: FNode,
@@ -123,7 +123,7 @@ def verify():
                 before_conv,
                 after_conv,
                 before_constraints=list(before_smt.derived.values())
-                + list(eliminations.values()),
+                + list(substitutions.values()),
                 after_constraints=list(after_smt.derived.values()),
                 reverse=reverse,
                 smt_dump_base=smt_outfile,

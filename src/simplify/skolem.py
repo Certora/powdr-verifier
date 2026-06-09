@@ -15,7 +15,7 @@ in :mod:`.skolem_utils`.
 Each *contributor* lives in its own module:
 
   1. :mod:`.skolem_rules`    - OpenVM ``EqualZeroCheck``.
-  2. :mod:`.skolem_derived`  - eliminations / derived-column / memory-bus
+  2. :mod:`.skolem_derived`  - substitutions / derived-column / memory-bus
      alignment pins (verifier emits ``:skolem-derived-N`` set-info entries).
   3. :mod:`.skolem_witness` - collapsed free-var witness patterns.
   4. :mod:`.skolem_names`    - same-name fallback.

@@ -39,10 +39,10 @@ def _derived_pins(
     derived: dict[FNode, FNode],
     live: frozenset[FNode],
 ) -> list[FNode]:
-    """Return the equations from a ``derived`` / ``eliminations`` dict.
+    """Return the equations from a ``derived`` / ``substitutions`` dict.
 
     Both ``after_smt.derived`` (derived columns) and
-    ``before_conv.convert_eliminations(...)`` already canonicalize their
+    ``before_conv.convert_substitutions(...)`` already canonicalize their
     values as ``Equals(var, expr)``. We only emit equations all of whose
     *variable* free symbols appear in ``live``: anything else references
     a variable the encoder has already eliminated and whose
@@ -125,7 +125,7 @@ def derived_columns_skolem_setinfo(
     """Produce pin equations / decls for derived-column skolem pins (``:skolem-derived-*``).
 
     Returns a :class:`SetInfo` whose ``equations`` carry ``derived`` column
-    (and, in soundness, merged ``elimination``) formulas for the
+    (and, in soundness, merged ``substitution``) formulas for the
     simplifier-side skolem orchestrator
     (:mod:`.simplify.skolem`);
     ``decls`` lists the UF function symbols referenced by those pins so

@@ -616,7 +616,7 @@ def emit_memory_equalities(
     Encoding follows ``ARGS().memory_encoding`` (``array``, ``plain``, ``none``, or empty for others).
 
     ``before_constraints`` / ``after_constraints`` are passed from the verifier:
-    derived-column and elimination ``Equals`` terms (stripped for contextual SMT).
+    derived-column and substitution ``Equals`` terms (stripped for contextual SMT).
 
     Equations are serialized as ``:skolem-derived-*`` set-info when building the
     script (see :class:`SetInfo`).

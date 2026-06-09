@@ -52,10 +52,10 @@ def load_files_by_block(args):
                 step = int(m.group(2))
                 assert step not in files[block]
                 files[block][step] = file
-                if "eliminations" not in files[block]:
+                if "substitutions" not in files[block]:
                     tmp = POWDR_DUMPS_DIR / args.test / f"apc_candidate_{block}_substitutions.json"
                     if tmp.exists():
-                        files[block]["eliminations"] = tmp
+                        files[block]["substitutions"] = tmp
     
     return files
 
@@ -351,8 +351,8 @@ if __name__ == '__main__':
             args._additional_args = []
             if 0 in files:
                 args._additional_args += ["--base-dump", files[0]]
-            if "eliminations" in files:
-                args._additional_args += ["--eliminations", files["eliminations"]]
+            if "substitutions" in files:
+                args._additional_args += ["--substitutions", files["substitutions"]]
 
             match args.command:
                 case 'trace':
