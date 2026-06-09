@@ -58,7 +58,7 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
     NAME = "bitwise lookup"
 
     def __init__(self) -> None:
-        """Initialize the encoder and mark the bitwise UFs as global symbols."""
+        """Initialize the encoder and mark bitwise lookup UFs as global symbols."""
         super().__init__()
         self.globals = frozenset([self.UF_XOR, self.UF_AND, self.UF_OR])
     
