@@ -47,7 +47,19 @@ def test_equal_zero_check_or_flattened_still_pins_diff_val():
     assert m.is_pinned(dm0) and m.is_pinned(dm1)
 
 
-def test_named_openvm_limbs_pins_without_diff_marker_products():
+def test_quantified_contribute_does_not_pin_without_diff_marker_products():
+    """The quantified ``contribute`` path no longer name-fabricates a witness.
+
+    When the ``DiffMarkerConstraint`` products are absent (powdr reduced the
+    LessThan gadget to a free, range-checked ``diff_val`` cluster), the
+    name-only fallback would pin a witness (``(c[i]-b[i])*sign``) that ignores
+    the surviving range check and yields a spurious soundness sat
+    (guest-keccak 2104744 014->015). ``contribute`` disables that fallback
+    (``allow_name_fallback=False``) so the closed-island ``skolem_isolate``
+    pass can supply a range-satisfying witness instead. ``contribute_free``
+    keeps the fallback (its quantified counterpart still carries the gadget).
+    See journal 2026-06-09.
+    """
     parse_args(["simplify", "/tmp/x", "nnf", "/tmp/y"])
     g = 2
     row = 2 * (g - 1)
@@ -60,5 +72,46 @@ def test_named_openvm_limbs_pins_without_diff_marker_products():
     forall = ForAll([dv, *dms], Or(Equals(Int(1), Int(0)), body))
     m = SkolemMap([dv, *dms])
     contribute(m, forall.arg(0))
-    assert m.is_pinned(dv)
-    assert m.is_pinned(dms[0])
+    assert not m.is_pinned(dv), "name-only fallback must be disabled in contribute"
+    assert not any(m.is_pinned(dm) for dm in dms)
+
+
+def test_named_openvm_limbs_still_pin_in_contribute_free():
+    """``contribute_free`` retains the name fallback for free diff_val columns.
+
+    A *free* (non-quantified) ``after-diff_val`` whose quantified ``before-``
+    counterpart still carries the gadget is witnessed by reconstructing from
+    the before side and swapping prefixes. The name fallback is reached on the
+    quantified side; this guards that the legitimate reconstruction survives
+    the ``contribute`` workaround.
+    """
+    parse_args(["simplify", "/tmp/x", "nnf", "/tmp/y"])
+    p = ARGS().field_type.value
+    # before-side (quantified) carries the real DiffMarkerConstraint products.
+    dv_b = Symbol("before-diff_val_0@1", INT)
+    dms_b = [Symbol(f"before-diff_marker__{i}_0@{10 + i}", INT) for i in range(4)]
+    bs_b = [Symbol(f"before-a__{i}_0@{20 + i}", INT) for i in range(4)]
+    cmp_b = Symbol("before-cmp_result_0@30", INT)
+    # after-side (free) counterpart that contribute_free should witness.
+    dv_a = Symbol("after-diff_val_0@1", INT)
+    dms_a = [Symbol(f"after-diff_marker__{i}_0@{10 + i}", INT) for i in range(4)]
+    bs_a = [Symbol(f"after-a__{i}_0@{20 + i}", INT) for i in range(4)]
+    cmp_a = Symbol("after-cmp_result_0@30", INT)
+
+    limbs = [
+        _limb_disj(dms_b[i], bs_b[i], dv_b, cmp_b, i, p, extra_in_or=False)
+        for i in range(4)
+    ]
+    body = Or(Not(Equals(bs_b[0], bs_b[1])), And(*limbs))
+    forall = ForAll([dv_b, *dms_b], body)
+
+    smt_script = script.SmtLibScript()
+    decls = [dv_b, *dms_b, *bs_b, cmp_b, dv_a, *dms_a, *bs_a, cmp_a]
+    smt_script.commands = [
+        script.SmtLibCommand("declare-fun", [s, [], s.get_type()]) for s in decls
+    ] + [script.SmtLibCommand("assert", [forall])]
+
+    from src.simplify.skolem_rules import contribute_free
+    pins = contribute_free(smt_script, {dv_b, *dms_b})
+    pinned_vars = {var for var, _ in pins}
+    assert dv_a in pinned_vars, "contribute_free should still witness the free after-diff_val"

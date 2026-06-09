@@ -56,6 +56,12 @@ def _is_program_variable(name: str) -> bool:
     return "@" in _strip_prefix(name)
 
 
+def _is_diff_gadget_column(name: str) -> bool:
+    """True for OpenVM LessThan-gadget columns (``diff_marker__*`` / ``diff_val_*``)."""
+    stripped = _strip_prefix(name)
+    return stripped.startswith("diff_marker") or stripped.startswith("diff_val")
+
+
 def contribute(skolem_map, declared: dict[str, FNode]) -> None:
     """Pin same-name witnesses on ``skolem_map`` for unpinned qvars.
 
@@ -63,6 +69,17 @@ def contribute(skolem_map, declared: dict[str, FNode]) -> None:
     """
     for q in skolem_map.qvars:
         if skolem_map.is_pinned(q):
+            continue
+        if _is_diff_gadget_column(q.symbol_name()):
+            # diff_marker / diff_val are OpenVM LessThan-gadget columns. A
+            # same-name `before := after` pin is unsound for them (see
+            # skolem_rules module docstring): when the gadget's defining
+            # constraints survive on one side only, the after-side value is an
+            # arbitrary witness, not the one the before side forces. They must
+            # be witnessed by skolem_rules (gadget present) or, when powdr has
+            # reduced them to a free range-checked cluster, by the closed-island
+            # skolem_isolate pass. Claiming a marker here would also break that
+            # island for the sibling diff_val. See journal 2026-06-09.
             continue
         other = declared.get(_strip_prefix(q.symbol_name()))
         if other is None or other == q or other in skolem_map.qvars:
