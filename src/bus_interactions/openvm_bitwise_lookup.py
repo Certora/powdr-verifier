@@ -95,6 +95,7 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
             return None
         (tx, cx), (ty, cy), (tz, cz) = forms
         for sign, kind in ((1, "and"), (-1, "or")):
+            # sign=+1: z - x - y = -2a  (a = AND);  sign=-1: z + x + y = 2a  (a = OR)
             terms: dict = {}
             for t, mul in ((tz, 1), (tx, -sign), (ty, -sign)):
                 for s, c in t.items():
@@ -144,6 +145,9 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
                         Equals(a, Function(fn, [wx, wy])),
                         f"BITWISE lift: {a} = {kind}({x}, {y})",
                     ),
+                    # ground axioms for the uf_and application; the
+                    # keystone x + y = xor + 2 and carries the evenness
+                    # the bare table encoding loses
                     LE(Int(0), conj),
                     LE(conj, wx),
                     LE(conj, wy),
@@ -151,6 +155,8 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
                         Plus(wx, wy),
                         Plus(self.__XOR(wx, wy), Times(Int(2), conj)),
                     ),
+                    # byte range on the result (table semantics; for OR it
+                    # is not a linear consequence of the bounds above)
                     And(LE(Int(0), a), LE(a, Int(255))),
                 ]
             return Implies(
