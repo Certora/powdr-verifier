@@ -496,7 +496,6 @@ def pretty_print_formula(f: FNode) -> str:
         printer.printer(f)
         return s.getvalue()
 
-
 def script_with_sorted_declarefuns(smtlib: script.SmtLibScript) -> script.SmtLibScript:
     cmds = smtlib.commands
     newcmds = []
