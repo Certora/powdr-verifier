@@ -95,6 +95,7 @@ def _run_solver_config(smt_script, config):
         }
         try:
             with Solver(
+                logic=ALL,
                 name=config["name"],
                 solver_options=config["solver_options"],
             ) as s:
