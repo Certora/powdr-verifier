@@ -1,7 +1,7 @@
 from io import StringIO
 from textwrap import dedent
 
-from src.simplify.xor import UF_XOR, simplify_gxor, simplify_qxor
+from src.simplify.bitwise import UF_AND, UF_OR, UF_XOR, simplify_gbitwise, simplify_qbitwise
 from src.smt.utils import *
 
 
@@ -9,7 +9,7 @@ def _parse(script_text: str) -> script.SmtLibScript:
     return SmtLibParser().get_script(StringIO(dedent(script_text).strip() + "\n"))
 
 
-def test_qxor_inserts_quantified_axioms_when_uf_xor_is_used():
+def test_qbitwise_inserts_quantified_axioms_when_uf_xor_is_used():
     smt_script = _parse(
         """
         (set-logic ALL)
@@ -22,10 +22,10 @@ def test_qxor_inserts_quantified_axioms_when_uf_xor_is_used():
         """
     )
 
-    simplified = simplify_qxor(smt_script)
+    simplified = simplify_qbitwise(smt_script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
-    x = Symbol("__qxor_x", INT)
-    y = Symbol("__qxor_y", INT)
+    x = Symbol("__bwx", INT)
+    y = Symbol("__bwy", INT)
 
     assert ForAll([x], Equals(Function(UF_XOR, [x, Int(0)]), x)) in asserts
     assert ForAll([x], Equals(Function(UF_XOR, [Int(0), x]), x)) in asserts
@@ -40,7 +40,7 @@ def test_qxor_inserts_quantified_axioms_when_uf_xor_is_used():
     ) in asserts
 
 
-def test_qxor_is_noop_without_uf_xor_terms():
+def test_qbitwise_is_noop_without_uf_xor_terms():
     smt_script = _parse(
         """
         (set-logic ALL)
@@ -51,13 +51,13 @@ def test_qxor_is_noop_without_uf_xor_terms():
         """
     )
 
-    simplified = simplify_qxor(smt_script)
+    simplified = simplify_qbitwise(smt_script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
 
     assert asserts == [Equals(Symbol("x", INT), Int(7))]
 
 
-def test_gxor_grounds_axioms_for_seen_terms():
+def test_gbitwise_grounds_axioms_for_seen_terms():
     smt_script = _parse(
         """
         (set-logic ALL)
@@ -71,7 +71,7 @@ def test_gxor_grounds_axioms_for_seen_terms():
         """
     )
 
-    simplified = simplify_gxor(smt_script)
+    simplified = simplify_gbitwise(smt_script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
     x = Symbol("x", INT)
     y = Symbol("y", INT)
@@ -87,7 +87,7 @@ def test_gxor_grounds_axioms_for_seen_terms():
     assert Equals(xy, z) in asserts
 
 
-def test_gxor_injects_axioms_inside_quantifier():
+def test_gbitwise_injects_axioms_inside_quantifier():
     smt_script = _parse(
         """
         (set-logic ALL)
@@ -99,7 +99,7 @@ def test_gxor_injects_axioms_inside_quantifier():
         """
     )
 
-    simplified = simplify_gxor(smt_script)
+    simplified = simplify_gbitwise(smt_script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
     x = Symbol("x", INT)
     y = Symbol("y", INT)
@@ -118,7 +118,7 @@ def test_gxor_injects_axioms_inside_quantifier():
     assert Iff(Equals(y, xy), Equals(x, Int(0))) in body.args()
 
 
-def test_qxor_injects_axioms_inside_quantifier():
+def test_qbitwise_injects_axioms_inside_quantifier():
     smt_script = _parse(
         """
         (set-logic ALL)
@@ -130,13 +130,13 @@ def test_qxor_injects_axioms_inside_quantifier():
         """
     )
 
-    simplified = simplify_qxor(smt_script)
+    simplified = simplify_qbitwise(smt_script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
     x = Symbol("x", INT)
     y = Symbol("y", INT)
     z = Symbol("z", INT)
-    qx = Symbol("__qxor_x", INT)
-    qy = Symbol("__qxor_y", INT)
+    qx = Symbol("__bwx", INT)
+    qy = Symbol("__bwy", INT)
 
     assert len(asserts) == 1
     assert asserts[0].is_forall()
@@ -156,7 +156,7 @@ def test_qxor_injects_axioms_inside_quantifier():
     ) in body.args()
 
 
-def test_gxor_simplifies_quantified_xor_terms_locally():
+def test_gbitwise_simplifies_quantified_xor_terms_locally():
     smt_script = _parse(
         """
         (set-logic ALL)
@@ -168,7 +168,7 @@ def test_gxor_simplifies_quantified_xor_terms_locally():
         """
     )
 
-    simplified = simplify_gxor(smt_script)
+    simplified = simplify_gbitwise(smt_script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
     x = Symbol("x", INT)
 
@@ -177,7 +177,55 @@ def test_gxor_simplifies_quantified_xor_terms_locally():
     assert ForAll([x], Equals(Int(0), Int(0))) in asserts
 
 
-def test_qxor_simplifies_quantified_xor_terms_locally():
+def test_qbitwise_inserts_andor_connection_without_xor():
+    smt_script = _parse(
+        """
+        (set-logic ALL)
+        (declare-fun uf_and (Int Int) Int)
+        (declare-fun uf_or (Int Int) Int)
+        (declare-fun x () Int)
+        (declare-fun y () Int)
+        (assert (= (uf_and x y) 0))
+        (check-sat)
+        """
+    )
+    simplified = simplify_qbitwise(smt_script)
+    asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
+    x = Symbol("__bw_andor_x", INT)
+    y = Symbol("__bw_andor_y", INT)
+    expected = ForAll(
+        [x, y],
+        Equals(
+            Function(UF_OR, [x, y]),
+            Minus(Plus(x, y), Function(UF_AND, [x, y])),
+        ),
+    )
+    assert expected in asserts
+
+
+def test_gbitwise_inserts_grounded_andor_and_connection():
+    smt_script = _parse(
+        """
+        (set-logic ALL)
+        (declare-fun uf_and (Int Int) Int)
+        (declare-fun uf_or (Int Int) Int)
+        (declare-fun a () Int)
+        (declare-fun b () Int)
+        (assert (= (uf_or a b) 7))
+        (check-sat)
+        """
+    )
+    simplified = simplify_gbitwise(smt_script)
+    asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
+    a = Symbol("a", INT)
+    b = Symbol("b", INT)
+    assert Equals(
+        Function(UF_OR, [a, b]),
+        Minus(Plus(a, b), Function(UF_AND, [a, b])),
+    ) in asserts
+
+
+def test_qbitwise_simplifies_quantified_xor_terms_locally():
     smt_script = _parse(
         """
         (set-logic ALL)
@@ -189,7 +237,7 @@ def test_qxor_simplifies_quantified_xor_terms_locally():
         """
     )
 
-    simplified = simplify_qxor(smt_script)
+    simplified = simplify_qbitwise(smt_script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
     x = Symbol("x", INT)
 
