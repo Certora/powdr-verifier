@@ -23,11 +23,30 @@ def test_rewrite_choice_simple_equivalent_mod_zero():
 
 
 def test_rewrite_choice_simple_splits_non_atomic_products():
+    # single-variable linear factors are solved to roots with the
+    # implied range attached: (x = p-1 | x = p-2) & p-2 <= x <= p-1
     parse_args(["check", "x"])
     p = ARGS().field_type.value
     x = Symbol("x", INT)
     rew = rewrite_choice_simple(
         operators.EQUALS,
         [Mod(Times(Plus(x, Int(1)), Plus(x, Int(2))), Int(p)), Int(0)],
+    )
+    assert rew is not None and rew.is_and()
+    disj = rew.arg(0)
+    assert disj.is_or() and len(disj.args()) == 2
+    roots = {d.arg(1).constant_value() for d in disj.args()}
+    assert roots == {p - 1, p - 2}
+    bounds = {a.serialize() for a in rew.args()[1:]}
+    assert len(bounds) == 2
+
+
+def test_rewrite_choice_simple_keeps_multivar_products_as_congruences():
+    parse_args(["check", "x"])
+    p = ARGS().field_type.value
+    x, y = Symbol("mx", INT), Symbol("my", INT)
+    rew = rewrite_choice_simple(
+        operators.EQUALS,
+        [Mod(Times(x, y), Int(p)), Int(0)],
     )
     assert rew is not None and rew.is_or() and len(rew.args()) == 2
