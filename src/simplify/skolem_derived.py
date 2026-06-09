@@ -1,18 +1,18 @@
-"""Derived / elimination skolem contributor.
+"""Derived / substitution skolem contributor.
 
 Mirrors :mod:`.skolem_names`: not a
 standalone simplifier pass, just the :func:`contribute` function used
-by :mod:`.skolem` to add derived-column / elimination pins to a shared
+by :mod:`.skolem` to add derived-column / substitution pins to a shared
 :class:`~.skolem.SkolemMap`.
 
 What this module does
 ---------------------
 * :data:`SETINFO_PREFIX`  - the set-info keyword prefix the verifier
-  uses for derived / elimination pins (``after_smt.derived`` columns
-  for completeness, ``before_conv.convert_eliminations(...)`` for
+  uses for derived / substitution pins (``after_smt.derived`` columns
+  for completeness, ``before_conv.convert_substitutions(...)`` for
   soundness).
 * :func:`collect_pins`    - load every ``:skolem-derived-N`` value
-  back as an ``FNode`` equation (column-derived, elimination, and
+  back as an ``FNode`` equation (column-derived, substitution, and
   verifier memory-bus alignment pins share this prefix with disjoint indices).
 * :func:`contribute`      - for every loaded equation, pin the qvar
   side on the shared :class:`SkolemMap` if not already pinned.
@@ -27,7 +27,7 @@ SETINFO_PREFIX = ":skolem-derived-"
 
 
 def collect_pins(smt_script: script.SmtLibScript) -> list:
-    """Return the derived / elimination pins carried by set-info entries."""
+    """Return the derived / substitution pins carried by set-info entries."""
     return load_setinfo_pins(smt_script, SETINFO_PREFIX[1:])
 
 
