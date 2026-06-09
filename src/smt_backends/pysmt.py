@@ -496,50 +496,6 @@ def pretty_print_formula(f: FNode) -> str:
         printer.printer(f)
         return s.getvalue()
 
-#: Function symbols to emit as ``define-fun`` macros instead of
-#: ``declare-fun``: a readable name in the SMT file without paying for a
-#: congruence-closure UF (solvers macro-expand; the pysmt parser inlines
-#: on re-parse, so downstream passes never see the command). Encoders
-#: register ``{symbol_name: (params, return_type, body)}``.
-DEFINED_FUNCTIONS: dict = {}
-
-
-def register_defined_function(sym: FNode, params: list, body: FNode) -> None:
-    """Emit ``sym`` as a ``define-fun`` macro in generated scripts."""
-    DEFINED_FUNCTIONS[sym.symbol_name()] = (
-        params,
-        sym.symbol_type().return_type,
-        body,
-    )
-
-
-def _apply_defined_functions(smtlib: script.SmtLibScript) -> script.SmtLibScript:
-    """Swap registered ``declare-fun``s for ``define-fun``s (after all decls)."""
-    used = [
-        c
-        for c in smtlib.commands
-        if c.name == "declare-fun"
-        and c.args[0].symbol_name() in DEFINED_FUNCTIONS
-    ]
-    if not used:
-        return smtlib
-    newcmds = [c for c in smtlib.commands if c not in used]
-    last_decl = max(
-        (i for i, c in enumerate(newcmds) if c.name == "declare-fun"),
-        default=-1,
-    )
-    for off, c in enumerate(used):
-        params, rtype, body = DEFINED_FUNCTIONS[c.args[0].symbol_name()]
-        newcmds.insert(
-            last_decl + 1 + off,
-            script.SmtLibCommand(
-                name="define-fun",
-                args=[c.args[0].symbol_name(), params, rtype, body],
-            ),
-        )
-    smtlib.commands = newcmds
-    return smtlib
-
 
 def script_with_sorted_declarefuns(smtlib: script.SmtLibScript) -> script.SmtLibScript:
     cmds = smtlib.commands
@@ -585,7 +541,6 @@ def convert_to_smt_script(f: FNode, status=None, pin_info=None) -> script.SmtLib
                     )
         smtlib.commands = new_cmds
     smtlib = script_with_sorted_declarefuns(smtlib)
-    smtlib = _apply_defined_functions(smtlib)
 
     smtlib.commands[0].args[0] = "ALL"
 

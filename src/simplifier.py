@@ -242,12 +242,6 @@ def simplify():
                 parser = SmtLibParser()
                 logging.info(f"loading from {f.name}")
                 smt_script = parser.get_script(f)
-            # the parser macro-expands every use of a define-fun during
-            # parsing; the leftover command is decorative and the z3
-            # tactic path does not accept it — drop it here
-            smt_script.commands = [
-                c for c in smt_script.commands if c.name != "define-fun"
-            ]
 
         smt_script = simplify_smt_script(
             smt_script,

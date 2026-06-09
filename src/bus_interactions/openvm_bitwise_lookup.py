@@ -22,8 +22,6 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
 
     UF_XOR = Symbol("uf_xor", FunctionType(INT, [INT, INT]))
     UF_AND = Symbol("uf_and", FunctionType(INT, [INT, INT]))
-    # uf_or is emitted as a define-fun macro (see module bottom): a name in
-    # the SMT file without paying for another congruence-closure UF.
     UF_OR = Symbol("uf_or", FunctionType(INT, [INT, INT]))
     WRAP_XOR = lambda self, x, y: Ite(
         Equals(x, Int(0)), y,
@@ -168,17 +166,3 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
         else:
             logging.error(f"Unsupported bitwise operation: {op}")
             return None
-
-
-# uf_or as a define-fun macro: OR = x + y - AND(x, y); readable in dumps,
-# macro-expanded by the solver, inlined by the parser on re-parse.
-_OR_X = Symbol("uf_or!x", INT)
-_OR_Y = Symbol("uf_or!y", INT)
-register_defined_function(
-    OpenVMBitwiseLookupEncoder.UF_OR,
-    [_OR_X, _OR_Y],
-    Minus(
-        Plus(_OR_X, _OR_Y),
-        Function(OpenVMBitwiseLookupEncoder.UF_AND, [_OR_X, _OR_Y]),
-    ),
-)
