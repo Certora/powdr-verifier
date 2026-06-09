@@ -21,6 +21,8 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
     """
 
     UF_XOR = Symbol("uf_xor", FunctionType(INT, [INT, INT]))
+    UF_AND = Symbol("uf_and", FunctionType(INT, [INT, INT]))
+    UF_OR = Symbol("uf_or", FunctionType(INT, [INT, INT]))
     WRAP_XOR = lambda self, x, y: Ite(
         Equals(x, Int(0)), y,
         Ite(
@@ -38,13 +40,27 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
                 else (x if y.is_zero() else (Int(0) if x == y else None))
             ),
         ),
+        UF_AND: (
+            lambda x, y: Int(x & y),
+            lambda x, y: (
+                Int(0)
+                if x.is_zero() or y.is_zero()
+                else (x if x == y else None)
+            ),
+        ),
+        UF_OR: (
+            lambda x, y: Int(x | y),
+            lambda x, y: (
+                y if x.is_zero() else (x if y.is_zero() or x == y else None)
+            ),
+        ),
     }
     NAME = "bitwise lookup"
 
     def __init__(self) -> None:
-        """Initialize the encoder and mark the `uf_xor` UF as a global symbol."""
+        """Initialize the encoder and mark bitwise lookup UFs as global symbols."""
         super().__init__()
-        self.globals = frozenset([self.UF_XOR])
+        self.globals = frozenset([self.UF_XOR, self.UF_AND, self.UF_OR])
     
     def __XOR(self, x: Any, y: Any) -> FNode:
         match ARGS().xor:
