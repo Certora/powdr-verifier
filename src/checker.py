@@ -4,9 +4,11 @@ Parses ``(set-info :status ...)`` as the expected solver outcome, tries a
 small grid of random seeds and timeouts, and queries ``:reason-unknown``
 when the result is inconclusive.
 """
+import itertools
 import json
 import logging
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 from .report.action import Action
@@ -169,8 +171,11 @@ def check_smt_script(
     return res
 
 
-def _goal_chunk_scripts(smt_script: list, chunks: int) -> list[list] | None:
-    """Split the goal disjunction into ``chunks`` scripts, or ``None``.
+def _goal_chunk_scripts(smt_script: list, chunks: int) -> Iterator[list]:
+    """Yield scripts that split the goal disjunction into up to ``chunks`` parts.
+
+    Yields nothing if there is no splittable goal ``Or``, or if
+    ``len(disjuncts) < 2 * chunks``.
 
     The goal of an equivalence check is one large ``Or`` (the negated
     quantified-side constraints). ``base ∧ (D₁ ∨ … ∨ Dₙ)`` is sat iff
@@ -187,10 +192,10 @@ def _goal_chunk_scripts(smt_script: list, chunks: int) -> list[list] | None:
     """
 
     def family_key(f):
-        def strip(n):
-            return n.split("-", 1)[1] if n.startswith(("before-", "after-")) else n
-
-        return tuple(sorted({strip(s.symbol_name()) for s in f.get_free_variables()}))
+        return tuple(sorted({
+            s.symbol_name().removeprefix("before-").removeprefix("after-")
+            for s in f.get_free_variables()
+        }))
 
     goal_idx, goal_args = None, None
     for i, cmd in enumerate(smt_script):
@@ -199,10 +204,9 @@ def _goal_chunk_scripts(smt_script: list, chunks: int) -> list[list] | None:
         if goal_args is None or len(cmd.args[0].args()) > len(goal_args):
             goal_idx, goal_args = i, cmd.args[0].args()
     if goal_idx is None or len(goal_args) < 2 * chunks:
-        return None
+        return
     disjuncts = sorted(goal_args, key=family_key)
     size = (len(disjuncts) + chunks - 1) // chunks
-    out = []
     for k in range(chunks):
         part = disjuncts[k * size : (k + 1) * size]
         if not part:
@@ -211,8 +215,7 @@ def _goal_chunk_scripts(smt_script: list, chunks: int) -> list[list] | None:
         chunk_script[goal_idx] = script.SmtLibCommand(
             name="assert", args=[Or(*part) if len(part) > 1 else part[0]]
         )
-        out.append(chunk_script)
-    return out
+        yield chunk_script
 
 
 @simple_profile
@@ -230,20 +233,26 @@ def check():
                 action += {"expected": cmd.args[1]}
                 break
 
-        chunk_scripts = (
-            _goal_chunk_scripts(smt_script, ARGS().goal_chunks)
-            if ARGS().goal_chunks > 1
-            else None
-        )
-        if chunk_scripts is None:
+        if ARGS().goal_chunks <= 1:
+            check_smt_script(smt_script, action, input_for_log=ARGS().input)
+            return action
+
+        chunk_iter = _goal_chunk_scripts(smt_script, ARGS().goal_chunks)
+        try:
+            first_chunk = next(chunk_iter)
+        except StopIteration:
             check_smt_script(smt_script, action, input_for_log=ARGS().input)
             return action
 
         logging.info(
-            "checking goal in %d chunks (%s)", len(chunk_scripts), ARGS().input
+            "checking goal in chunks (up to %d partitions) (%s)",
+            ARGS().goal_chunks,
+            ARGS().input,
         )
         results = []
-        for k, chunk_script in enumerate(chunk_scripts):
+        for k, chunk_script in enumerate(
+            itertools.chain((first_chunk,), chunk_iter)
+        ):
             with action.action(f"chunk-{k}") as chunk_action:
                 res = check_smt_script(
                     chunk_script, chunk_action, input_for_log=ARGS().input
