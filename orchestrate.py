@@ -27,6 +27,7 @@ from src.paths import (
     data_path_for_dump,
     ensure_layout,
 )
+from src.utils.args import ARGS, parse_args as verifier_parse_args
 
 ensure_layout()
 set_report_dir(REPORTS_DIR)
@@ -110,12 +111,17 @@ def parse_args():
     ])
     parser.add_argument('test', type=str)
     parser.add_argument('k', type=str, nargs='*')
-    parser.add_argument('--clean', action='store_true')
+    parser.add_argument("--clean", action="store_true")
     parser.add_argument("--with-patch", type=Path, default=None)
     parser.add_argument("-j", "--jobs", type=int, default=1)
+    parser.add_argument("--run-id", default="", metavar="ID")
 
     global _ARGS
     _ARGS, leftover = parser.parse_known_args()
+    verifier_parse_args([])
+    ARGS().run_id = _ARGS.run_id
+    r = (ARGS().run_id or "").strip()
+    ARGS().run_id = "" if (not r or r == "-") else f"-{r}"
     _ARGS._main_args, _ARGS._sub_args = __split_args_for_main(leftover)
     _ARGS._additional_args = []
 
@@ -146,7 +152,19 @@ def __run_main(
 ) -> Optional[Any]:
     """Run ``main.py`` as a subprocess. With ``parse_output=True``, capture stdout and return ``load_json`` of it."""
     extra = list(extra_args or [])
-    cmd = [PYTHON, VERIFIER_DIR / "main.py", *_ARGS._additional_args, *_ARGS._main_args, command, *args, *extra, *_ARGS._sub_args]
+    rid = (_ARGS.run_id or "").strip()
+    run_id_frag = [] if (not rid or rid == "-") else ["--run-id", rid]
+    cmd = [
+        PYTHON,
+        VERIFIER_DIR / "main.py",
+        *_ARGS._additional_args,
+        *_ARGS._main_args,
+        *run_id_frag,
+        command,
+        *args,
+        *extra,
+        *_ARGS._sub_args,
+    ]
     cmdstr = " ".join(map(str, cmd))
     if parse_output:
         try:
