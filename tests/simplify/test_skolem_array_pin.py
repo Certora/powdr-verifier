@@ -2,6 +2,7 @@ from src.simplify.lift_forall import simplify_lift_forall
 from src.simplify.skolem import SkolemMap
 from src.simplify import skolem_derived
 from src.smt.utils import *
+from src.verify import SetInfos, SkolemPin, SkolemPinKind
 
 
 def test_skolem_map_accepts_array_qvar_pin():
@@ -20,7 +21,10 @@ def test_skolem_derived_array_pin_hoists_via_lift_forall():
     inner = Or(LT(Select(q_mem, Int(0)), Int(99)), TRUE())
     forall = ForAll([q_mem], inner)
     m = SkolemMap([q_mem])
-    skolem_derived.contribute(m, [Equals(q_mem, free_mem)])
+    skolem_derived.contribute(
+        m,
+        SetInfos(equations=[SkolemPin(Equals(q_mem, free_mem), SkolemPinKind.DERIVED)]),
+    )
     assert m.is_pinned(q_mem) and m.pins[q_mem] == free_mem
     disj = m.emit_disjuncts()
     new_body = Or(*inner.args(), *disj)

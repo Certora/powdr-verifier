@@ -11,3 +11,6 @@ ignore = ["F403", "F405"]
 
 [tool.ruff.lint.per-file-ignores]
 "orchestrate.py" = ["E701"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

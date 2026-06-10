@@ -1,7 +1,7 @@
 """Shared memory-bus alignment between before/after APC encodings.
 
 Aligned before/after symbols (array snapshots or plain ``memory_match_*``)
-are emitted as ``set-info :skolem-derived-*`` so ``simplify.skolem_derived``
+are emitted as ``set-info :skolem-memory-bus-*`` keys so ``simplify.skolem_derived``
 pins quantified sides to free witnesses (then ``lift_forall`` hoists).
 """
 from __future__ import annotations
@@ -618,7 +618,7 @@ def emit_memory_equalities(
     ``before_constraints`` / ``after_constraints`` are passed from the verifier:
     derived-column and substitution ``Equals`` terms (stripped for contextual SMT).
 
-    Equations are serialized as ``:skolem-derived-*`` set-info when building the
+    Equations are serialized as ``:skolem-memory-bus-*`` set-info when building the
     script (see :class:`SetInfos`).
     """
     with parent_action.action("memory-bus-alignment") as align_a:
