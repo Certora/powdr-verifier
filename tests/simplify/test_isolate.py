@@ -83,21 +83,18 @@ def test_isolate_does_not_pin_with_outer_free_var():
     assert not pins, f"isolate should NOT pin q here; got pins: {pins}"
 
 
-def test_isolate_does_not_pin_with_other_qvar_in_disjunct():
-    """A disjunct mentioning multiple qvars also disqualifies isolation.
+def test_isolate_pins_closed_multi_qvar_island():
+    """A multi-qvar disjunct is fine when the whole component is *closed*.
 
-    The pin would establish the body at one specific assignment of the
-    "other" qvar (the model the probe happens to find), but the rest of
-    the formula could force a different value on that other qvar.
-
-    Verified empirically: an earlier "other qvars in same disjunct are
-    fine" relaxation pinned ``after-memory-N-isinput := False`` on the
-    keccak benchmarks because a disjunct ``(= isinput (not hadinput-2))``
-    mentions both qvars and the probe's model picked ``hadinput-2 = True``
-    — but the rest of the formula entailed ``hadinput-2 = False``.
+    ``{a, b}`` form a closed island: every disjunct mentioning either of them
+    mentions only ``a``/``b`` (no outer free var, no other qvar). The island is
+    decoupled from the rest of the formula, so any satisfying assignment is a
+    uniform witness and both are pinned jointly from one model. This is the
+    ``diff_marker__*`` / ``diff_val_*`` cluster shape left by powdr
+    ``remove_free`` (see journal 2026-06-09).
     """
-    a = Symbol("multi_q_a", INT)
-    b = Symbol("multi_q_b", INT)
+    a = Symbol("island_q_a", INT)
+    b = Symbol("island_q_b", INT)
     body = Or(Equals(a, b), Equals(a, Int(7)))
     smt_script = _script(ForAll([a, b], body))
 
@@ -109,4 +106,32 @@ def test_isolate_does_not_pin_with_other_qvar_in_disjunct():
         if c.name == "assert" and c.args[0].is_equals()
         and c.args[0].arg(0) in (a, b)
     ]
-    assert not pins, f"isolate should not pin multi-qvar disjuncts; got: {pins}"
+    assert {p.arg(0) for p in pins} == {a, b}, f"expected both a and b pinned; got: {pins}"
+
+
+def test_isolate_does_not_pin_qvar_island_coupled_to_outer():
+    """A multi-qvar component reaching an outer free var is NOT pinned.
+
+    ``a`` and ``b`` co-occur (``a = b``), and ``b`` *also* shares a disjunct
+    with the outer free var ``y`` (``b = y``). The component ``{a, b}`` is
+    therefore tainted: a one-shot probe model fixes ``y`` to one value and the
+    pin would only be valid for that value, while the rest of the formula can
+    force a different ``y``. This is the failure mode the old strict gate
+    guarded against (``after-memory-N-isinput`` / ``hadinput`` on the keccak
+    benchmarks), preserved transitively.
+    """
+    a = Symbol("coupled_q_a", INT)
+    b = Symbol("coupled_q_b", INT)
+    y = Symbol("coupled_outer_y", INT)
+    body = Or(Equals(a, b), Equals(b, y), Equals(a, Int(7)))
+    smt_script = _script(ForAll([a, b], body))
+
+    skolem = simplify_skolem(smt_script)
+    lifted = simplify_lift_forall(skolem)
+    pins = [
+        c.args[0]
+        for c in lifted.commands
+        if c.name == "assert" and c.args[0].is_equals()
+        and c.args[0].arg(0) in (a, b)
+    ]
+    assert not pins, f"tainted component must not be pinned; got: {pins}"
