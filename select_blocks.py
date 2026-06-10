@@ -12,8 +12,15 @@ def parse_args() -> argparse.Namespace:
         metavar="ID,ID,...",
         help=(
             "Comma-separated APC block ids to copy; if set, skips reduction-ratio ranking "
-            "(default mode copies top 50 blocks by reduction ratio)."
+            "(default mode copies top --count blocks by reduction ratio)."
         ),
+    )
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=50,
+        metavar="N",
+        help="When --block-ids is omitted, copy the top N blocks by reduction ratio (default: 50).",
     )
     parser.add_argument("input_dir", type=Path)
     return parser.parse_args()
@@ -63,10 +70,12 @@ def main() -> None:
         if not selected_ids:
             raise SystemExit("empty --block-ids (no integers parsed)")
     else:
+        if args.count < 1:
+            raise SystemExit("--count must be >= 1")
         with input_file.open() as f:
             data = json.load(f)
         apcs = data["apcs"]
-        selected_apcs = sorted(apcs, key=reduction_ratio, reverse=True)[:50]
+        selected_apcs = sorted(apcs, key=reduction_ratio, reverse=True)[: args.count]
         selected_ids = [block_start_pc(apc) for apc in selected_apcs]
     output_dir = input_dir.parent / f"{input_dir.name}-selection"
     if output_dir.exists():

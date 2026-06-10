@@ -1,11 +1,11 @@
-"""Skolem pin metadata for derived columns (``:skolem-derived-*``).
+"""Skolem pin metadata for derived columns (``:skolem-<kind>-*``).
 
-Builds :class:`SetInfo` with pin equations and any UF ``declare-fun``s needed
+Builds :class:`SetInfos` with pin equations and any UF ``declare-fun``s needed
 for round-trip parsing.
 """
 import logging
 
-from . import SetInfo
+from . import SetInfos, SkolemPin, SkolemPinKind
 from ..smt.utils import *
 
 
@@ -39,10 +39,10 @@ def _derived_pins(
     derived: dict[FNode, FNode],
     live: frozenset[FNode],
 ) -> list[FNode]:
-    """Return the equations from a ``derived`` / ``eliminations`` dict.
+    """Return the equations from a ``derived`` / ``substitutions`` dict.
 
     Both ``after_smt.derived`` (derived columns) and
-    ``before_conv.convert_eliminations(...)`` already canonicalize their
+    ``before_conv.convert_substitutions(...)`` already canonicalize their
     values as ``Equals(var, expr)``. We only emit equations all of whose
     *variable* free symbols appear in ``live``: anything else references
     a variable the encoder has already eliminated and whose
@@ -92,7 +92,7 @@ def drop_mirrored_derived(
 
     When before and after dumps share a derived column (same name and
     same defining expression modulo the ``before-``/``after-`` prefix),
-    do not emit a functional ``:skolem-derived`` pin for it: the
+    do not emit a functional ``:skolem-derived-`` pin for it: the
     ``skolem_names`` same-name fallback then pins the quantified copy to
     its free counterpart, which is an equally valid witness and a far
     better one downstream — identity pins survive every simplifier
@@ -121,12 +121,15 @@ def drop_mirrored_derived(
 def derived_columns_skolem_setinfo(
     formula: FNode,
     derived: dict[FNode, FNode],
-) -> SetInfo:
-    """Produce pin equations / decls for derived-column skolem pins (``:skolem-derived-*``).
+    *,
+    kind: SkolemPinKind = SkolemPinKind.DERIVED,
+) -> SetInfos:
+    """Produce pin equations / decls for skolem pins (``:skolem-<kind>-*``).
 
-    Returns a :class:`SetInfo` whose ``equations`` carry ``derived`` column
-    (and, in soundness, merged ``elimination``) formulas for the
-    simplifier-side skolem orchestrator
+    ``kind`` is applied to each :class:`SkolemPin` (equations and matching decls).
+
+    Returns a :class:`SetInfos` whose ``equations`` carry the given map's
+    ``Equals`` / ``Iff`` pins for the simplifier-side skolem orchestrator
     (:mod:`.simplify.skolem`);
     ``decls`` lists the UF function symbols referenced by those pins so
     :func:`convert_to_smt_script` can emit ``declare-fun``s for them
@@ -141,4 +144,8 @@ def derived_columns_skolem_setinfo(
     """
     live = _collect_all_symbols(formula)
     derived_pins = _derived_pins(derived, live)
-    return SetInfo(equations=derived_pins, decls=_pin_ufs(derived_pins))
+    decls = _pin_ufs(derived_pins)
+    return SetInfos(
+        equations=[SkolemPin(eq, kind) for eq in derived_pins],
+        decls=[SkolemPin(d, kind) for d in decls],
+    )

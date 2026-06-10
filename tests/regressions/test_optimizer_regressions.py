@@ -91,15 +91,15 @@ def test_optimizer_regression(case: RegressionCase):
         pytest.skip(f"missing benchmark data: {data_dir}")
 
     base = data_dir / f"apc_candidate_{case.block}_000_unopt.json"
-    eliminations = data_dir / f"apc_candidate_{case.block}_substitutions.json"
+    substitutions = data_dir / f"apc_candidate_{case.block}_substitutions.json"
     before = data_dir / f"{case.before}.json"
     after = data_dir / f"{case.after}.json"
-    for path in [base, eliminations, before, after]:
+    for path in [base, substitutions, before, after]:
         assert path.exists(), path
 
     with tempfile.TemporaryDirectory(prefix=".tmp-regression-", dir=WORKSPACE) as tmp:
         prefix = Path(tmp) / "case"
-        run([PYTHON if PYTHON.exists() else sys.executable, MAIN, "--base-dump", base, "--eliminations", eliminations, "verify", before, after, prefix])
+        run([PYTHON if PYTHON.exists() else sys.executable, MAIN, "--base-dump", base, "--substitutions", substitutions, "verify", before, after, prefix])
 
         smt = prefix.with_suffix(f".{case.check}.smt2")
         simplified = prefix.with_suffix(f".{case.check}.rewrite.smt2")

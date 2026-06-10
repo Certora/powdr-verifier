@@ -93,6 +93,12 @@ def insert_verification_row(i1, i2, val) -> int:
             (p1, p2, size_bytes, block, passname),
         )
     else:
+        combined_result = val.result
+        em = getattr(val, "error_message", None)
+        if em:
+            combined_result = (
+                f"{combined_result}: {em}" if combined_result else em
+            )[:800]
         cur = __DB.execute(
             """
             INSERT INTO verification_steps (
@@ -106,7 +112,7 @@ def insert_verification_row(i1, i2, val) -> int:
                 val.block,
                 val.passname,
                 val.running_time,
-                val.result,
+                combined_result,
                 val.status,
             ),
         )
@@ -125,6 +131,12 @@ def _insert_substep(
     parent: int | None,
 ) -> int:
     assert __DB is not None
+    combined_result = step.result
+    em = getattr(step, "error_message", None)
+    if em:
+        combined_result = (
+            f"{combined_result}: {em}" if combined_result else em
+        )[:800]
     cur = __DB.execute(
         """
         INSERT INTO substeps (
@@ -137,7 +149,7 @@ def _insert_substep(
             parent,
             step.name,
             step.running_time,
-            step.result,
+            combined_result,
             step.expected,
             step.status,
         ),

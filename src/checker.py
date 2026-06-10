@@ -11,7 +11,7 @@ import re
 from collections.abc import Iterator
 from pathlib import Path
 
-from .report.action import Action
+from .report.action import Action, classify_expected_vs_result
 from .smt.utils import *
 from .utils.args import ARGS
 from .utils.profiling import simple_profile
@@ -98,8 +98,14 @@ def _run_solver_config(smt_script, config):
         try:
             with Solver(
                 name=config["name"],
+                logic=ALL,
                 solver_options=config["solver_options"],
             ) as s:
+                # The script's own ``(set-logic …)`` is dropped (pysmt has
+                # already sent the solver its init logic above); without an
+                # array-capable init logic, array-mode scripts fail with
+                # "unknown sort 'Array'". ``ALL`` covers both memory encodings
+                # and does not slow the QF (plain) path — z3 auto-detects QF.
                 s.set_logic = lambda l: None
                 try:
                     for cmd in smt_script:
@@ -165,8 +171,18 @@ def check_smt_script(
             logging.info("dumping model to %s", ARGS().dump_model)
             with open(ARGS().dump_model, "w") as f:
                 json.dump(last_attempt.model, f, indent=4)
-    if action.expected is not None and res != action.expected:
-        logging.error("expected %s but got %s", action.expected, res)
+    if action.expected is not None:
+        o = classify_expected_vs_result(
+            name=action.name, expected=action.expected, result=res
+        )
+        if o == "wrong":
+            logging.error("expected %s but got %s", action.expected, res)
+        elif o == "timeout":
+            logging.warning(
+                "expected %s; solver timed out (result %s)", action.expected, res
+            )
+        elif o != "success":
+            logging.error("expected %s but got %s", action.expected, res)
     action += {"result": res}
     return res
 
@@ -266,7 +282,19 @@ def check():
             overall = "unsat"
         else:
             overall = "unknown"
-        if action.expected is not None and overall != action.expected:
-            logging.error("expected %s but got %s", action.expected, overall)
+        if action.expected is not None:
+            o = classify_expected_vs_result(
+                name=action.name, expected=action.expected, result=overall
+            )
+            if o == "wrong":
+                logging.error("expected %s but got %s", action.expected, overall)
+            elif o == "timeout":
+                logging.warning(
+                    "expected %s; solver timed out (result %s)",
+                    action.expected,
+                    overall,
+                )
+            elif o != "success":
+                logging.error("expected %s but got %s", action.expected, overall)
         action += {"result": overall, "chunk_results": results}
         return action

@@ -17,6 +17,7 @@ from .utils.basic_block import BasicBlock
 from .utils.io import load_apc_dump, load_json
 from .verify.bug_injection import apply_injection
 from .verify.memory_bus_alignment import BEFORE_PREFIX, AFTER_PREFIX, emit_memory_equalities
+from .verify import SetInfos, SkolemPinKind
 from .verify.skolem_pins import derived_columns_skolem_setinfo, drop_mirrored_derived
 
 
@@ -79,9 +80,9 @@ def verify():
         before_smt = before_conv.to_formula_with_axioms(before)
         after_smt = after_conv.to_formula_with_axioms(after)
 
-        eliminations = {}
-        if ARGS().eliminations is not None:
-            eliminations = before_conv.convert_eliminations(load_json(ARGS().eliminations))
+        substitutions = {}
+        if ARGS().substitutions is not None:
+            substitutions = before_conv.convert_substitutions(load_json(ARGS().substitutions))
 
         input_relation = before_conv.bus_interaction_encoder.build_io_relation(
             after_conv.bus_interaction_encoder, "input"
@@ -107,23 +108,29 @@ def verify():
         before_derived_pins = drop_mirrored_derived(
             before_smt.derived, after_smt.derived, f"{BEFORE_PREFIX}-", f"{AFTER_PREFIX}-"
         )
-        map_sources = {**eliminations, **after_derived_pins, **before_derived_pins}
+        derived_for_soundness = {**after_derived_pins, **before_derived_pins}
 
         def pin_metadata(
             formula: FNode,
             derived: dict,
             *,
+            substitutions_map: dict | None = None,
             reverse: bool = False,
             smt_outfile: Path | None = None,
         ):
-            info = derived_columns_skolem_setinfo(formula, derived)
+            info = SetInfos()
+            if substitutions_map:
+                info += derived_columns_skolem_setinfo(
+                    formula, substitutions_map, kind=SkolemPinKind.SUBSTITUTION
+                )
+            info += derived_columns_skolem_setinfo(formula, derived, kind=SkolemPinKind.DERIVED)
             info += emit_memory_equalities(
                 before,
                 after,
                 before_conv,
                 after_conv,
                 before_constraints=list(before_smt.derived.values())
-                + list(eliminations.values()),
+                + list(substitutions.values()),
                 after_constraints=list(after_smt.derived.values()),
                 reverse=reverse,
                 smt_dump_base=smt_outfile,
@@ -166,7 +173,12 @@ def verify():
                     output_relation,
                     additional_asserts=[Equals(is_valid_after, Int(1))],
                 )
-                info = pin_metadata(soundness, map_sources, smt_outfile=outfile)
+                info = pin_metadata(
+                    soundness,
+                    derived_for_soundness,
+                    substitutions_map=substitutions,
+                    smt_outfile=outfile,
+                )
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(
                     soundness, status='unsat', pin_info=info
@@ -224,7 +236,12 @@ def verify():
                     input_relation,
                     output_relation,
                 )
-                info = pin_metadata(soundness, map_sources, smt_outfile=outfile)
+                info = pin_metadata(
+                    soundness,
+                    derived_for_soundness,
+                    substitutions_map=substitutions,
+                    smt_outfile=outfile,
+                )
 
                 logging.info(f"dumping soundness check to {dump.name}")
                 smtlib = convert_to_smt_script(
