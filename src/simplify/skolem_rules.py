@@ -484,15 +484,9 @@ def _openvm_bundle_from_named_limbs(body: FNode, dv: FNode) -> tuple[dict[int, d
     return matches, cmp_sym
 
 
-def _find_and_build_witnesses(body: FNode, diff_val_vars, allow_name_fallback: bool = True):
+def _find_and_build_witnesses(body: FNode, diff_val_vars):
     """Match ``DiffMarkerConstraint`` patterns for each ``diff_val`` variable
     and return ``(diff_val_var, matches, cmp_var)`` triples for successful matches.
-
-    ``allow_name_fallback`` controls whether, when the actual
-    ``DiffMarkerConstraint`` products are *absent* from ``body``, we still
-    reconstruct the LessThan witness from variable *names* alone
-    (:func:`_openvm_bundle_from_named_limbs`). See the WORKAROUND note in
-    :func:`contribute` for why the quantified path turns this off.
     """
     results = []
     for dv in diff_val_vars:
@@ -529,8 +523,6 @@ def _find_and_build_witnesses(body: FNode, diff_val_vars, allow_name_fallback: b
         if cmp_var is not None and set(matches.keys()) == {0, 1, 2, 3}:
             results.append((dv, matches, cmp_var))
             continue
-        if not allow_name_fallback:
-            continue
         named = _openvm_bundle_from_named_limbs(body, dv)
         if named is not None:
             results.append((dv, named[0], named[1]))
@@ -545,25 +537,6 @@ def contribute(skolem_map, body: FNode) -> None:
     shapes pins both the ``diff_val`` witness and the four
     ``diff_marker__i`` witnesses (when they are themselves qvars).
     Already-pinned qvars on ``skolem_map`` are left untouched.
-
-    WORKAROUND (2026-06-09, pending review before PR)
-    -------------------------------------------------
-    The name-only fallback ``_openvm_bundle_from_named_limbs`` is disabled
-    here (``allow_name_fallback=False``). The constructive witness
-    ``diff_val = (c[i] − b[i])·sign`` is only *correct* when the LessThan
-    gadget's defining constraints (``diff_marker·(b·sign + diff_val) = 0``)
-    are actually present to force that value. After powdr's ``remove_free``
-    (and the upstream ``rule_based`` pass), ``diff_val`` can survive as a
-    *free* column whose only live constraint is a byte-range check
-    (``diff_val − 1 ∈ [0,255]``); the gadget products are gone. The name
-    fallback fires anyway (it keys off variable *names*), pinning a value
-    (e.g. ``−1 ≡ p−1``) that violates the surviving range check and yields a
-    spurious soundness ``sat`` (guest-keccak 2104744 014→015 plain). Gating
-    it off means: gadget present ⇒ rules witnesses as before; gadget gone
-    ⇒ rules abstains and the closed-island ``skolem_isolate`` pass supplies
-    a range-satisfying witness instead. ``contribute_free`` keeps the
-    fallback: there the quantified counterpart still carries the gadget, so
-    the witness it reconstructs is real. See journal 2026-06-09.
     """
     targets = [
         v for v in skolem_map.qvars
@@ -573,7 +546,7 @@ def contribute(skolem_map, body: FNode) -> None:
         return
 
     p = ARGS().field_type.value
-    results = _find_and_build_witnesses(body, targets, allow_name_fallback=False)
+    results = _find_and_build_witnesses(body, targets)
     if not results:
         logging.debug(
             "skolem rules: forall has diff_val qvar(s) but no complete 4-limb "

@@ -14,6 +14,9 @@ For every qvar ``q`` of the current forall, the contributor:
   and ``q`` and ``q'`` agree on type, pins ``q := q'`` on the
   :class:`SkolemMap`.
 
+Program-style column names only (see :func:`_is_program_variable`); other
+qvars are skipped.
+
 This replaces ``ModelMapBuilder.__heuristic_same_name`` which used to
 build the same-name pins as part of the verifier-side encoding ``map``.
 The semantics is identical (a same-name fallback for everything not
@@ -56,30 +59,38 @@ def _is_program_variable(name: str) -> bool:
     return "@" in _strip_prefix(name)
 
 
-def _is_diff_gadget_column(name: str) -> bool:
-    """True for OpenVM LessThan-gadget columns (``diff_marker__*`` / ``diff_val_*``)."""
-    stripped = _strip_prefix(name)
-    return stripped.startswith("diff_marker") or stripped.startswith("diff_val")
-
-
 def contribute(skolem_map, declared: dict[str, FNode]) -> None:
     """Pin same-name witnesses on ``skolem_map`` for unpinned qvars.
 
     See the module docstring for the full description.
+
+    Soundness note
+    --------------
+    Adding ``q := other`` here is a Skolem witness for the existential
+    inside the surrounding ``∀ q. body(q)``. After ``simplify_lift_forall``
+    collapses the universal to ``body(other)`` the result is strictly
+    weaker than the original ∀-formula. That is:
+
+    * sound for **unsat-proving** (an unsat result on the pinned formula
+      implies unsat on the original), and
+    * incomplete: if ``other`` is the "wrong" witness for some assignment
+      of the formula's free variables, the simplifier returns **sat**.
+
+    For the verifier's equivalence-proving use case the trade-off is the
+    right one: dissolving the quantifier unlocks downstream simplifications
+    (``z3-propagate-values``, ``flatten_outer_array``, ``bounds``, …) that
+    are otherwise blocked behind universal scopes. A spurious sat
+    surfaces as a tool-reported counterexample which the user can verify
+    or reject against the actual circuit traces.
+
+    Same-name pins are limited to program-style column names: after
+    stripping ``before-``/``after-``, the symbol must still contain ``@``
+    (typically ``...@index``). That excludes memory-like qvars such as
+    ``after-memory-N-hadinput``, which stay under ``forall`` unless another
+    contributor pins them.
     """
     for q in skolem_map.qvars:
         if skolem_map.is_pinned(q):
-            continue
-        if _is_diff_gadget_column(q.symbol_name()):
-            # diff_marker / diff_val are OpenVM LessThan-gadget columns. A
-            # same-name `before := after` pin is unsound for them (see
-            # skolem_rules module docstring): when the gadget's defining
-            # constraints survive on one side only, the after-side value is an
-            # arbitrary witness, not the one the before side forces. They must
-            # be witnessed by skolem_rules (gadget present) or, when powdr has
-            # reduced them to a free range-checked cluster, by the closed-island
-            # skolem_isolate pass. Claiming a marker here would also break that
-            # island for the sibling diff_val. See journal 2026-06-09.
             continue
         other = declared.get(_strip_prefix(q.symbol_name()))
         if other is None or other == q or other in skolem_map.qvars:
