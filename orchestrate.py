@@ -179,9 +179,16 @@ def __run_main(
         except subprocess.TimeoutExpired:
             logging.error(f"timed out running {cmdstr}")
             return Action(command, result="timeout")
+        except subprocess.CalledProcessError as e:
+            logging.error("command failed (exit %s): %s", e.returncode, cmdstr)
+            return Action(command, result="error", error_message=str(e))
         except json.JSONDecodeError:
             logging.error(f"failed to parse output of {cmdstr}:\n{result.stdout}")
-            return Action(command, result="invalid-json")
+            return Action(
+                command,
+                result="invalid-json",
+                error_message=(result.stdout[:400] if result.stdout else ""),
+            )
     try:
         subprocess.run(cmd, check=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -390,7 +397,7 @@ if __name__ == '__main__':
                     logging.error(f"unknown command: {args.command}")
                     exit(1)
 
-    except subprocess.CalledProcessError:
-        pass
+    except subprocess.CalledProcessError as e:
+        logging.error("%s", e)
     except KeyboardInterrupt:
         pass
