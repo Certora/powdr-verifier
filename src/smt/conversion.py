@@ -82,40 +82,42 @@ class SmtConverter:
         for id, c in enumerate(data):
             self.__add_constraint(Equals(wrap_mod(c), Int(0)), f"CONSTRAINT #{id}")
 
+    def convert_computation_method(self, cm: Any) -> FNode:
+        match cm:
+            case {"Constant": int(value)}:
+                return Int(value)
+            case {"QuotientOrZero": [a, b]}:
+                ae, be = self.convert_manual(a), self.convert_manual(b)
+                return Ite(
+                    Equals(wrap_mod(be), Int(0)),
+                    Int(0),
+                    Times(wrap_mod(ae), Function(self.UF_MOD_INV, [wrap_mod(be)])),
+                )
+            case {"IfEqZero": [cond, then_cm, else_cm]}:
+                ce = self.convert_manual(cond)
+                return Ite(
+                    Equals(wrap_mod(ce), Int(0)),
+                    self.convert_computation_method(then_cm),
+                    self.convert_computation_method(else_cm),
+                )
+            case _:
+                logging.error(f"Unsupported computation method: {cm}")
+                return Int(0)
+
     def convert_derived(self, data: Iterable[Any]):
         """Convert derived-column definitions into symbolic equalities (stored for later use)."""
         for derived in data:
             match derived:
-                case [str(name), {"Constant": int(value)}]:
+                case [bool(new), str(name), cm]:
                     sym = self._symbol(name, INT)
                     assert sym not in self.derived_columns
                     self.derived_columns[sym] = with_comment(
-                        Equals(sym, Int(value)), f"DERIVED COLUMN {name} = {value}"
-                    )
-                case [str(name), {"QuotientOrZero": [a, b]}] | {
-                    "variable": str(name),
-                    "computation_method": {"QuotientOrZero": [a, b]},
-                }:
-                    sym = self._symbol(name, INT)
-                    assert sym not in self.derived_columns
-                    a = self.convert_manual(a)
-                    b = self.convert_manual(b)
-                    self.derived_columns[sym] = with_comment(
-                        Equals(
-                            sym,
-                            Ite(
-                                Equals(wrap_mod(b), Int(0)),
-                                Int(0),
-                                Times(
-                                    wrap_mod(a),
-                                    Function(self.UF_MOD_INV, [wrap_mod(b)]),
-                                )
-                            ),
-                        ),
-                        f"DERIVED COLUMN {name} = QuotientOrZero({a}, {b})",
+                        Equals(sym, self.convert_computation_method(cm)),
+                        f"DERIVED COLUMN {name}",
                     )
                 case _:
                     logging.error(f"Unsupported derived column: {derived}")
+                    continue
 
     @simple_profile
     def convert_manual(self, data: Any) -> Any:
