@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from pathlib import Path
 
-from . import SetInfo
+from . import SetInfos, SkolemPin, SkolemPinKind
 from ..bus_interactions.single_interaction_encoder import BusInteraction
 from ..report.action import Action
 from ..smt.conversion import SmtConverter
@@ -606,7 +606,7 @@ def emit_memory_equalities(
     parent_action: Action,
     reverse: bool = False,
     smt_dump_base: Path | None = None,
-) -> SetInfo:
+) -> SetInfos:
     """Pair before/after memory symbols using alignment; record pin equations.
 
     ``subs`` maps ``{before_sym: after_sym}``.  For *completeness*
@@ -619,7 +619,7 @@ def emit_memory_equalities(
     derived-column and substitution ``Equals`` terms (stripped for contextual SMT).
 
     Equations are serialized as ``:skolem-derived-*`` set-info when building the
-    script (see :class:`SetInfo`).
+    script (see :class:`SetInfos`).
     """
     with parent_action.action("memory-bus-alignment") as align_a:
         align_a += {"file": smt_dump_base.name}
@@ -636,7 +636,7 @@ def emit_memory_equalities(
         )
     if alignment is None:
         _LOG.info("memory bus pins skipped (no alignment)")
-        return SetInfo()
+        return SetInfos()
     match ARGS().memory_encoding:
         case "array":
             subs = _array_encoding_symbol_pairs(alignment, before_conv, after_conv)
@@ -660,4 +660,6 @@ def emit_memory_equalities(
         pins = [Equals(v, k) for k, v in subs.items()]
     else:
         pins = [Equals(k, v) for k, v in subs.items()]
-    return SetInfo(equations=pins)
+    return SetInfos(
+        equations=[SkolemPin(p, SkolemPinKind.MEMORY_BUS) for p in pins],
+    )

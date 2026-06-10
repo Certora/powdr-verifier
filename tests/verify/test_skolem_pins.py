@@ -1,3 +1,4 @@
+from src.verify import SetInfos, SkolemPin, SkolemPinKind
 from src.verify.skolem_pins import drop_mirrored_derived
 from src.smt.utils import *
 
@@ -41,6 +42,15 @@ def test_derived_column_without_counterpart_is_kept():
     after = {a_v: _quotient_or_zero(a_v, Int(1), a_x)}
 
     assert drop_mirrored_derived(after, {}, "after-", "before-") == after
+
+
+def test_set_infos_preserves_per_pin_types():
+    a = SetInfos(equations=[SkolemPin(Int(0), SkolemPinKind.DERIVED)])
+    a += SetInfos(equations=[SkolemPin(Int(1), SkolemPinKind.SUBSTITUTION)])
+    assert [p.pin_type for p in a.equations] == [
+        SkolemPinKind.DERIVED,
+        SkolemPinKind.SUBSTITUTION,
+    ]
 
 
 def test_mixed_derived_columns_filter_only_mirrored():
