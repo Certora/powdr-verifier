@@ -28,6 +28,10 @@ class ActionDumper(Action):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+        if exc_type is not None and not issubclass(
+            exc_type, (KeyboardInterrupt, SystemExit)
+        ):
+            self += {"result": "error", "error_message": str(exc_value)}
         inputs = [i.stem for i in self.inputs]
         sub = f"{self.test}{ARGS().run_id}"
         self.dump_to(BASE_REPORT_DIR / sub / f"{self.name}-{"-".join(inputs)}.json")
