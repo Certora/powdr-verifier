@@ -36,6 +36,7 @@ def __build_parser(skip_subparsers=False):
         choices=list(XOrEncoding),
     )
     parser.add_argument("--skip-memory-analysis", action="store_true")
+    parser.add_argument("--skip-range-inference", action="store_true")
     parser.add_argument(
         "--memory-encoding",
         type=str,

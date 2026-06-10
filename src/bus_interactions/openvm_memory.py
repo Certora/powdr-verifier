@@ -273,6 +273,190 @@ class OpenVMMemoryEncoder(
             for mult, (a, p, args, t) in self._interactions
         ]
 
+    @staticmethod
+    def _collect_syntactic_bounds(all_constraints: list[FNode]) -> dict[FNode, int]:
+        """Map terms to proven unconditional upper bounds, syntactically.
+
+        Walks each constraint: descends conjunctions, folds ``Implies``
+        whose antecedent simplifies to a constant (the range-checking
+        encoders guard their facts with ``mult != 0``, which folds away
+        when the multiplicity is a constant). Collects ``t <= c`` /
+        ``t < c`` with constant ``c``; keys are the bounded terms as-is
+        (typically ``(mod e p)`` nodes from ``wrap_mod``).
+        """
+        bounds: dict[FNode, int] = {}
+
+        def visit(f: FNode) -> None:
+            if f.is_and():
+                for a in f.args():
+                    visit(a)
+                return
+            if f.is_implies():
+                guard = f.arg(0).simplify()
+                if guard.is_true():
+                    visit(f.arg(1))
+                return
+            if f.is_le() or f.is_lt():
+                t, c = f.args()
+                if c.is_int_constant():
+                    hi = c.constant_value() - (1 if f.is_lt() else 0)
+                    bounds[t] = min(bounds.get(t, hi), hi)
+
+        for c in all_constraints:
+            visit(c)
+        return bounds
+
+    def infer_unconditional_ranges(
+        self, all_constraints: list[FNode]
+    ) -> list[FNode]:
+        """Derive unconditional ranges for plain-encoding data limbs.
+
+        Case-join over the plain permutation matching: in every model, an
+        interaction's data limb is either covered by the input byte
+        assumption (``assume_bytes``), or equal (mod p) to the data of a
+        match partner whose limb is itself in range. The base of the
+        derivation is read off syntactically, never assumed: the
+        range-checking encoders (bitwise lookup, variable / tuple range
+        checkers) emit their facts directly into the constraint list, and
+        :meth:`_collect_syntactic_bounds` picks up exactly those whose
+        guard is statically true. Reads then inherit bounds by least
+        fixpoint over their possible match partners (case-join =
+        ``max`` over cases, with the input case contributing 255); limbs
+        sharing the same term propagate to each other, which covers
+        write-data-is-an-earlier-read-column chains.
+
+        Every emitted fact is a logical consequence of the existing
+        constraint set — a lemma. It saves the solver from re-deriving
+        the range through the matching case split at search time, which
+        is what makes e.g. EqualZeroCheck bridging tractable (byte sums
+        satisfy ``sum != 0 mod p`` iff some byte is nonzero only under
+        these ranges).
+
+        Interactions whose multiplicity is not a nonzero constant are
+        skipped: a potentially-disabled interaction has unconstrained
+        data, so no unconditional fact holds for it.
+        """
+        n = len(self._interactions)
+        if n == 0:
+            return []
+
+        p = ARGS().field_type.value
+        INPUT_BOUND = 255  # assume_bytes: inputs are byte-decomposed
+
+        def const_mult(i: int) -> int | None:
+            m = self._interactions[i].mult
+            return m.constant_value() % p if m.is_int_constant() else None
+
+        mults = [const_mult(i) for i in range(n)]
+        datas = [self._interactions[i].args[2] for i in range(n)]
+
+        def flat_args(i: int) -> list[FNode]:
+            a, ptr, data, t = self._interactions[i].args
+            return [a, ptr, *data, t]
+
+        def cannot_match(i: int, j: int) -> bool:
+            """``m(i, j)`` is statically impossible.
+
+            Matching forces every arg pair equal mod p; if any pair
+            differs by a nonzero constant (distinct pointer constants, or
+            ``T + c1`` vs ``T + c2`` timestamps), the case is dead. This
+            is what severs a read from its own write-back half, whose
+            data is the same unranged column.
+            """
+            if mults[i] is not None and mults[j] is not None and (mults[i] + mults[j]) % p != 0:
+                return True
+            for x, y in zip(flat_args(i), flat_args(j)):
+                d = wrap_mod(Minus(x, y)).simplify()
+                if d.is_int_constant() and d.constant_value() % p != 0:
+                    return True
+            return False
+
+        base = self._collect_syntactic_bounds(all_constraints)
+
+        def base_bound(d: FNode) -> int | None:
+            b = base.get(wrap_mod(d), base.get(d))
+            if d.is_int_constant():
+                v = d.constant_value() % p
+                b = v if b is None else min(b, v)
+            return b
+
+        # bound[(i, k)]: limb k of interaction i is in [0, bound] in every model
+        bound: dict[tuple[int, int], int | None] = {
+            (i, k): base_bound(d)
+            for i in range(n)
+            for k, d in enumerate(datas[i])
+        }
+
+        def join(*cases: int | None) -> int | None:
+            """Bound holding in all cases: max, None if any case is unbounded."""
+            return None if any(c is None for c in cases) else max(cases)
+
+        def meet(a: int | None, b: int | None) -> int | None:
+            """Tightest of two bounds for the same limb."""
+            return a if b is None else b if a is None else min(a, b)
+
+        def run_fixpoint() -> None:
+            changed = True
+            while changed:
+                changed = False
+                # limbs naming the same term share their bounds
+                by_term: dict[FNode, int | None] = {}
+                for i in range(n):
+                    for k, d in enumerate(datas[i]):
+                        by_term[d] = meet(by_term.get(d), bound[(i, k)])
+                for i in range(n):
+                    if mults[i] is None or mults[i] == 0:
+                        continue  # may be disabled => data unconstrained
+                    for k, d in enumerate(datas[i]):
+                        new = meet(bound[(i, k)], by_term[d])
+                        if mults[i] == p - 1:
+                            # cases: self-match as input (assumed bytes), or
+                            # a pair match with j (limb equal mod p to j's)
+                            partners = [
+                                bound[(j, k)] if k < len(datas[j]) else None
+                                for j in range(n)
+                                if j != i and not cannot_match(i, j)
+                            ]
+                            new = meet(new, join(INPUT_BOUND, *partners))
+                        if new != bound[(i, k)]:
+                            bound[(i, k)] = new
+                            changed = True
+
+        run_fixpoint()
+
+        out = []
+        emitted: dict[FNode, int] = {}
+        for (i, k), hi in sorted(bound.items(), key=lambda x: x[0]):
+            d = datas[i][k]
+            if hi is None or d.is_int_constant():
+                continue
+            if base_bound(d) is not None and base_bound(d) <= hi:
+                continue  # already syntactically present
+            if emitted.get(d, p) <= hi:
+                continue
+            emitted[d] = hi
+            w = wrap_mod(d)
+            out.append(
+                with_comment(
+                    And(LE(Int(0), w), LE(w, Int(hi))),
+                    f"RANGE INFERENCE: {self.NAME} interaction {i} data limb {k}",
+                )
+            )
+        logging.info(
+            "%s range inference: %d base bounds, %d/%d limbs bounded, %d facts emitted",
+            self.NAME,
+            len(base),
+            sum(1 for v in bound.values() if v is not None),
+            len(bound),
+            len(out),
+        )
+        for (i, k), hi in sorted(bound.items()):
+            logging.debug(
+                "range inference limb (%d,%d) mult=%s bound=%s expr=%s",
+                i, k, mults[i], hi, datas[i][k],
+            )
+        return out
+
     def build_io_relation(self, other: SingleInteractionEncoder, kind: str) -> FNode | None:
         if ARGS().memory_encoding == "none":
             return None
