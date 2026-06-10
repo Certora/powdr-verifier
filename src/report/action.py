@@ -4,6 +4,46 @@ import os
 from pathlib import Path
 import time
 
+_UNKNOWN_PREFIX = "unknown-"
+
+
+def unknown_reason_from_result(result: str | None) -> str | None:
+    if result is None:
+        return None
+    if result == "unknown":
+        return ""
+    if result.startswith(_UNKNOWN_PREFIX):
+        return result[len(_UNKNOWN_PREFIX) :]
+    return None
+
+
+def is_timeout_reason(reason: str | None) -> bool:
+    if reason is None:
+        return False
+    r = reason.lower()
+    return (
+        "timeout" in r
+        or "time out" in r
+        or "resource limit" in r
+        or "resource limits" in r
+    )
+
+
+def classify_expected_vs_result(*, name: str, expected: str | None, result: str | None) -> str:
+    if name == "isqf" or expected is None or result is None:
+        return result if result is not None else "error"
+    if result == "timeout":
+        return "timeout"
+    if result in ("invalid-json",) or (isinstance(result, str) and result.startswith("error")):
+        return "error"
+    if result in ("sat", "unsat"):
+        return "success" if result == expected else "wrong"
+    reason = unknown_reason_from_result(result)
+    if reason is not None:
+        return "timeout" if is_timeout_reason(reason) else "error"
+    return "error"
+
+
 class Action:
     """Context manager accumulating properties, child ``Action`` nodes, and wall times."""
 
@@ -51,10 +91,10 @@ class Action:
         return self.properties[name]
     
     def status(self):
-        """Derive a coarse outcome: aggregate children or compare ``result`` to ``expected``."""
+        """Derive a coarse outcome: aggregate children or classify ``result`` vs ``expected``."""
         if "result" not in self.properties:
-            sub = [ a.status() for a in self.actions ]
-            sub = { s for s in sub if s is not None }
+            sub = [a.status() for a in self.actions]
+            sub = {s for s in sub if s is not None}
             if len(sub) == 0:
                 return None
             if len(sub) == 1:
@@ -69,11 +109,20 @@ class Action:
                 return "unknown"
             return "success"
 
-        if self.name != "isqf" and "expected" in self.properties:
-            if self.result == self.expected:
-                return "success"
+        if self.error_message:
             return "error"
-        return self.result
+        r = self.result
+        if "expected" in self.properties:
+            return classify_expected_vs_result(
+                name=self.name,
+                expected=self.expected,
+                result=r,
+            )
+        if r == "timeout":
+            return "timeout"
+        if r in ("invalid-json",) or (isinstance(r, str) and r.startswith("error")):
+            return "error"
+        return r
 
     
     def as_dict(self):
