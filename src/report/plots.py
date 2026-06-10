@@ -85,10 +85,17 @@ def basic_stats() -> str:
     )
     fastest_unknown = query(
         """
-        SELECT input1, input2, running_time, size_bytes
-        FROM verification_steps
-        WHERE status = 'unknown' AND running_time IS NOT NULL
-        ORDER BY running_time ASC
+        SELECT v.input1, v.input2, v.running_time, v.size_bytes
+        FROM verification_steps v
+        WHERE v.running_time IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM substeps s
+              WHERE s.verification_step_id = v.id
+                AND s.name = 'check'
+                AND s.status = 'error'
+                AND (s.result = 'unknown' OR s.result LIKE 'unknown-%')
+          )
+        ORDER BY v.running_time ASC
         LIMIT 5
         """
     )
@@ -265,6 +272,8 @@ def _badge_kind(kind: str) -> str:
             "color:#fff;border:1px solid rgba(0,0,0,.2)"
         )
         return f'<span class="badge" style="{style}">{html.escape(kind)}</span>'
+    if kind == "timeout":
+        return f'<span class="badge text-bg-warning">{html.escape(kind)}</span>'
     if kind == "unknown":
         css = "text-bg-warning"
     elif kind == "not-qf":

@@ -58,6 +58,9 @@ class TreeTableWidget:
     _STATUS = {
         "success": ("✓", "#155724", "#d4edda"),
         "running":  ("↻", "#004085", "#cce5ff"),
+        "wrong":    ("≠", "#856404", "#fff3cd"),
+        "timeout":  ("⏱", "#856404", "#ffeeba"),
+        "unknown":  ("?", "#664d03", "#fff3cd"),
         "error":    ("✗", "#721c24", "#f8d7da"),
         "pending":  ("·", "#6c757d", "#f8f9fa"),
         "skipped":  ("–", "#856404", "#fff3cd"),
