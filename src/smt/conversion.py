@@ -81,111 +81,43 @@ class SmtConverter:
         """Convert raw constraint expressions to `wrap_mod(expr) == 0` and add them."""
         for id, c in enumerate(data):
             self.__add_constraint(Equals(wrap_mod(c), Int(0)), f"CONSTRAINT #{id}")
-            roots = self._single_var_roots(c)
-            if roots is not None:
-                x, values = roots
-                self.__add_constraint(
-                    And(
-                        Or(*[Equals(x, Int(v)) for v in values]),
-                        LE(Int(min(values)), x),
-                        LE(x, Int(max(values))),
-                    ),
-                    f"ROOTS LIFT for CONSTRAINT #{id}: {x} in {sorted(values)}",
+
+    def convert_computation_method(self, cm: Any) -> FNode:
+        match cm:
+            case {"Constant": int(value)}:
+                return Int(value)
+            case {"QuotientOrZero": [a, b]}:
+                ae, be = self.convert_manual(a), self.convert_manual(b)
+                return Ite(
+                    Equals(wrap_mod(be), Int(0)),
+                    Int(0),
+                    Times(wrap_mod(ae), Function(self.UF_MOD_INV, [wrap_mod(be)])),
                 )
-
-    @staticmethod
-    def _single_var_roots(c: Any) -> Optional[tuple[FNode, set[int]]]:
-        """Lift ``∏ (aᵢ·x + bᵢ) ≡ 0 (mod p)`` to ``x ∈ {roots}``.
-
-        Circuits state small domains algebraically — ``x (x − 1) ≡ 0``
-        for booleans (EqualZeroCheck results), ``x (x−1) (x−2) ≡ 0`` for
-        ternary flags. Over the prime field a product vanishes iff some
-        factor does, so the constraint pins ``x`` to the factor roots —
-        an exact lemma (no chip-semantics needed), but one the solver
-        only recovers through nonlinear reasoning. Emitting the root
-        disjunction and bounds makes the domain directly available.
-
-        Returns ``(x, roots)`` with roots as canonical representatives,
-        or ``None`` if the constraint is not a product of linear factors
-        in one symbol (or has more than 4 factors).
-        """
-        p = ARGS().field_type.value
-
-        factors: list[Any] = []
-
-        def split(node: Any) -> bool:
-            if hasattr(node, "is_times") and node.is_times():
-                return all(split(a) for a in node.args())
-            factors.append(node)
-            return True
-
-        split(c)
-        if not 2 <= len(factors) <= 4:
-            return None
-
-        x: Optional[FNode] = None
-        values: set[int] = set()
-        for f in factors:
-            lf = linear_form(f)
-            if lf is None:
-                return None
-            terms, const = lf
-            terms = {s: a % p for s, a in terms.items() if a % p != 0}
-            if not terms:
-                if const % p == 0:
-                    return None  # constraint is trivially satisfied
-                continue  # nonzero constant factor contributes no root
-            if len(terms) != 1:
-                return None
-            sym, a = next(iter(terms.items()))
-            if x is None:
-                x = sym
-            elif x != sym:
-                return None
-            values.add((-const * pow(a, -1, p)) % p)
-        if x is None or not values:
-            return None
-        # the raw (mod-free) emission relies on the canonical-representative
-        # convention, which simplify_bounds imposes for @N column symbols
-        name = x.symbol_name()
-        if "@" not in name or not name.rsplit("@", 1)[1].isdigit():
-            return None
-        return (x, values)
+            case {"IfEqZero": [cond, then_cm, else_cm]}:
+                ce = self.convert_manual(cond)
+                return Ite(
+                    Equals(wrap_mod(ce), Int(0)),
+                    self.convert_computation_method(then_cm),
+                    self.convert_computation_method(else_cm),
+                )
+            case _:
+                logging.error(f"Unsupported computation method: {cm}")
+                return Int(0)
 
     def convert_derived(self, data: Iterable[Any]):
         """Convert derived-column definitions into symbolic equalities (stored for later use)."""
         for derived in data:
             match derived:
-                case [str(name), {"Constant": int(value)}]:
+                case [bool(new), str(name), cm]:
                     sym = self._symbol(name, INT)
                     assert sym not in self.derived_columns
                     self.derived_columns[sym] = with_comment(
-                        Equals(sym, Int(value)), f"DERIVED COLUMN {name} = {value}"
-                    )
-                case [str(name), {"QuotientOrZero": [a, b]}] | {
-                    "variable": str(name),
-                    "computation_method": {"QuotientOrZero": [a, b]},
-                }:
-                    sym = self._symbol(name, INT)
-                    assert sym not in self.derived_columns
-                    a = self.convert_manual(a)
-                    b = self.convert_manual(b)
-                    self.derived_columns[sym] = with_comment(
-                        Equals(
-                            sym,
-                            Ite(
-                                Equals(wrap_mod(b), Int(0)),
-                                Int(0),
-                                Times(
-                                    wrap_mod(a),
-                                    Function(self.UF_MOD_INV, [wrap_mod(b)]),
-                                )
-                            ),
-                        ),
-                        f"DERIVED COLUMN {name} = QuotientOrZero({a}, {b})",
+                        Equals(sym, self.convert_computation_method(cm)),
+                        f"DERIVED COLUMN {name}",
                     )
                 case _:
                     logging.error(f"Unsupported derived column: {derived}")
+                    continue
 
     @simple_profile
     def convert_manual(self, data: Any) -> Any:
@@ -247,8 +179,8 @@ class SmtConverter:
             case _:
                 logging.error(f"Unsupported data in conversion: {data}")
     
-    def convert_eliminations(self, data: Iterable[Any]):
-        """Convert eliminations into SMT terms."""
+    def convert_substitutions(self, data: Iterable[Any]):
+        """Convert APC substitution pairs into SMT ``Equals`` terms."""
         return {
             self.convert_manual(k): Equals(self.convert_manual(k), self.convert_manual(v))
             for k, v in data
@@ -264,10 +196,6 @@ class SmtConverter:
             without_trues(self.constraints),
             without_trues(self.bus_interaction_encoder.encode())
         ))
-        if ARGS().memory_encoding == "plain" and not ARGS().skip_range_inference:
-            constraints += self.bus_interaction_encoder.memory.infer_unconditional_ranges(
-                constraints
-            )
         axioms = list(without_trues(self.bus_interaction_encoder.get_axioms()))
         derived = dict(self.derived_columns)
         fwa = FormulaWithAxioms(
