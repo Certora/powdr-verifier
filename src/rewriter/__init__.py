@@ -4,7 +4,6 @@ import sympy
 from .conversion import to_sympy, to_smt
 from .rewrites import (
     rewrite_choice_simple,
-    rewrite_eqmod,
     rewrite_mod,
     rewrite_simplify,
     rewrite_z3simplify,
@@ -16,7 +15,7 @@ from ..smt.utils import *
 logger = logging.getLogger(__name__)
 
 REWRITES = {
-    operators.EQUALS: [rewrite_choice_simple, rewrite_eqmod],  # rewrite_z3simplify
+    operators.EQUALS: [rewrite_choice_simple],  # rewrite_z3simplify
 #    operators.MOD: [rewrite_mod],
 }
 REWRITES_SYMPY = {

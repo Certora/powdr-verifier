@@ -4,12 +4,14 @@ Parses ``(set-info :status ...)`` as the expected solver outcome, tries a
 small grid of random seeds and timeouts, and queries ``:reason-unknown``
 when the result is inconclusive.
 """
+import itertools
 import json
 import logging
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
-from .report.action import Action
+from .report.action import Action, classify_expected_vs_result
 from .smt.utils import *
 from .utils.args import ARGS
 from .utils.profiling import simple_profile
@@ -96,8 +98,14 @@ def _run_solver_config(smt_script, config):
         try:
             with Solver(
                 name=config["name"],
+                logic=ALL,
                 solver_options=config["solver_options"],
             ) as s:
+                # The script's own ``(set-logic …)`` is dropped (pysmt has
+                # already sent the solver its init logic above); without an
+                # array-capable init logic, array-mode scripts fail with
+                # "unknown sort 'Array'". ``ALL`` covers both memory encodings
+                # and does not slow the QF (plain) path — z3 auto-detects QF.
                 s.set_logic = lambda l: None
                 try:
                     for cmd in smt_script:
@@ -163,10 +171,67 @@ def check_smt_script(
             logging.info("dumping model to %s", ARGS().dump_model)
             with open(ARGS().dump_model, "w") as f:
                 json.dump(last_attempt.model, f, indent=4)
-    if action.expected is not None and res != action.expected:
-        logging.error("expected %s but got %s", action.expected, res)
+    if action.expected is not None:
+        o = classify_expected_vs_result(
+            name=action.name, expected=action.expected, result=res
+        )
+        if o == "wrong":
+            logging.error("expected %s but got %s", action.expected, res)
+        elif o == "timeout":
+            logging.warning(
+                "expected %s; solver timed out (result %s)", action.expected, res
+            )
+        elif o != "success":
+            logging.error("expected %s but got %s", action.expected, res)
     action += {"result": res}
     return res
+
+
+def _goal_chunk_scripts(smt_script: list, chunks: int) -> Iterator[list]:
+    """Yield scripts that split the goal disjunction into up to ``chunks`` parts.
+
+    Yields nothing if there is no splittable goal ``Or``, or if
+    ``len(disjuncts) < 2 * chunks``.
+
+    The goal of an equivalence check is one large ``Or`` (the negated
+    quantified-side constraints). ``base ∧ (D₁ ∨ … ∨ Dₙ)`` is sat iff
+    some ``base ∧ (chunk k)`` is sat, so the chunks can be checked
+    independently: all-unsat ⟺ unsat, any-sat ⟺ sat (with the model
+    carrying over). Each chunk stays far inside the easy regime, where
+    the monolithic goal lets the SAT solver interleave case splits
+    across unrelated constraint families and occasionally wander.
+
+    Disjuncts are sorted by their (side-prefix-stripped) free-variable
+    name sets first, which clusters constraints over the same variable
+    families together, so each chunk's case splits stay within related
+    constraints.
+    """
+
+    def family_key(f):
+        return tuple(sorted({
+            s.symbol_name().removeprefix("before-").removeprefix("after-")
+            for s in f.get_free_variables()
+        }))
+
+    goal_idx, goal_args = None, None
+    for i, cmd in enumerate(smt_script):
+        if cmd.name != "assert" or not cmd.args[0].is_or():
+            continue
+        if goal_args is None or len(cmd.args[0].args()) > len(goal_args):
+            goal_idx, goal_args = i, cmd.args[0].args()
+    if goal_idx is None or len(goal_args) < 2 * chunks:
+        return
+    disjuncts = sorted(goal_args, key=family_key)
+    size = (len(disjuncts) + chunks - 1) // chunks
+    for k in range(chunks):
+        part = disjuncts[k * size : (k + 1) * size]
+        if not part:
+            continue
+        chunk_script = list(smt_script)
+        chunk_script[goal_idx] = script.SmtLibCommand(
+            name="assert", args=[Or(*part) if len(part) > 1 else part[0]]
+        )
+        yield chunk_script
 
 
 @simple_profile
@@ -184,5 +249,52 @@ def check():
                 action += {"expected": cmd.args[1]}
                 break
 
-        check_smt_script(smt_script, action, input_for_log=ARGS().input)
+        if ARGS().goal_chunks <= 1:
+            check_smt_script(smt_script, action, input_for_log=ARGS().input)
+            return action
+
+        chunk_iter = _goal_chunk_scripts(smt_script, ARGS().goal_chunks)
+        try:
+            first_chunk = next(chunk_iter)
+        except StopIteration:
+            check_smt_script(smt_script, action, input_for_log=ARGS().input)
+            return action
+
+        logging.info(
+            "checking goal in chunks (up to %d partitions) (%s)",
+            ARGS().goal_chunks,
+            ARGS().input,
+        )
+        results = []
+        for k, chunk_script in enumerate(
+            itertools.chain((first_chunk,), chunk_iter)
+        ):
+            with action.action(f"chunk-{k}") as chunk_action:
+                res = check_smt_script(
+                    chunk_script, chunk_action, input_for_log=ARGS().input
+                )
+                results.append(res)
+            if res == "sat":
+                break  # a chunk model is a model of the whole goal
+        if "sat" in results:
+            overall = "sat"
+        elif all(r == "unsat" for r in results):
+            overall = "unsat"
+        else:
+            overall = "unknown"
+        if action.expected is not None:
+            o = classify_expected_vs_result(
+                name=action.name, expected=action.expected, result=overall
+            )
+            if o == "wrong":
+                logging.error("expected %s but got %s", action.expected, overall)
+            elif o == "timeout":
+                logging.warning(
+                    "expected %s; solver timed out (result %s)",
+                    action.expected,
+                    overall,
+                )
+            elif o != "success":
+                logging.error("expected %s but got %s", action.expected, overall)
+        action += {"result": overall, "chunk_results": results}
         return action

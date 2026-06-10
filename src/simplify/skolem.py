@@ -15,8 +15,8 @@ in :mod:`.skolem_utils`.
 Each *contributor* lives in its own module:
 
   1. :mod:`.skolem_rules`    - OpenVM ``EqualZeroCheck``.
-  2. :mod:`.skolem_derived`  - eliminations / derived-column / memory-bus
-     alignment pins (verifier emits ``:skolem-derived-N`` set-info entries).
+  2. :mod:`.skolem_derived`  - substitutions / derived-column / memory-bus
+     alignment pins (verifier emits ``:skolem-<kind>-N`` set-info entries).
   3. :mod:`.skolem_witness` - collapsed free-var witness patterns.
   4. :mod:`.skolem_names`    - same-name fallback.
   5. :mod:`.skolem_isolate`  - field-bounded isolation probes (QF_UFNIA).
@@ -35,7 +35,10 @@ assertion, removing ``q`` from the universal.
 from ..smt.utils import *
 from ..smt_backends.pysmt import wrap_mod
 
+from ..verify import SKOLEM_SETINFO_COLON_PREFIX
+
 from . import skolem_derived, skolem_isolate, skolem_names, skolem_rules, skolem_witness
+from .skolem_utils import load_skolem_setinfos
 
 
 class SkolemMap:
@@ -92,15 +95,15 @@ class _SkolemWalker(IdentityDagWalker):
     def __init__(
         self,
         declared: dict[str, FNode],
-        derived: list[FNode],
+        skolem_pins,
         witness_candidates: list,
         *args,
         **kwargs,
     ):
-        """Walker state: global declarations, derived pins, collapsed-witness candidates."""
+        """Walker state: global declarations, loaded skolem pins, witness candidates."""
         super().__init__(*args, **kwargs)
         self.declared = declared
-        self.derived = derived
+        self.skolem_pins = skolem_pins
         self.witness_candidates = witness_candidates
         self.applied: dict[str, int] = {}
         self.qvar_sets: list[set[FNode]] = []
@@ -113,9 +116,9 @@ class _SkolemWalker(IdentityDagWalker):
         m = SkolemMap(qvars)
 
         skolem_rules.contribute(m, body)
-        skolem_derived.contribute(m, self.derived)
-        skolem_witness.contribute(m, body, self.witness_candidates)
         skolem_names.contribute(m, self.declared)
+        skolem_derived.contribute(m, self.skolem_pins)
+        skolem_witness.contribute(m, body, self.witness_candidates)
         skolem_isolate.contribute(m, body)
 
         for src in m.sources.values():
@@ -139,10 +142,10 @@ def simplify_skolem(smt_script: script.SmtLibScript, subaction=None) -> script.S
     Must run before ``simplify_lift_forall``.
     """
     declared = skolem_names.collect_declared_symbols(smt_script)
-    derived = skolem_derived.collect_pins(smt_script)
+    skolem_pins = load_skolem_setinfos(smt_script)
     witness_candidates = skolem_witness.collect_candidates(smt_script)
 
-    w = _SkolemWalker(declared, derived, witness_candidates, env=get_env())
+    w = _SkolemWalker(declared, skolem_pins, witness_candidates, env=get_env())
     for cmd in smt_script:
         if cmd.name == "assert":
             cmd.args[0] = keep_comment(w.walk(cmd.args[0]), cmd.args[0])
@@ -169,7 +172,6 @@ def simplify_skolem(smt_script: script.SmtLibScript, subaction=None) -> script.S
             "pins_by_source": dict(w.applied),
             "free_value_asserts": len(free_pins),
         }
-    prefix = skolem_derived.SETINFO_PREFIX
     smt_script.commands = [
         cmd
         for cmd in smt_script.commands
@@ -177,7 +179,7 @@ def simplify_skolem(smt_script: script.SmtLibScript, subaction=None) -> script.S
             cmd.name == "set-info"
             and len(cmd.args) >= 1
             and isinstance(cmd.args[0], str)
-            and cmd.args[0].startswith(prefix)
+            and cmd.args[0].startswith(SKOLEM_SETINFO_COLON_PREFIX)
         )
     ]
     return smt_script

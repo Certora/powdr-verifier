@@ -20,13 +20,13 @@ def load_files_by_block(basedir: pathlib.Path):
             block,step,passname = m
             assert step not in files[block], f"{step} is already there for block {block}"
             files[block][step] = (file, passname)
-            if "eliminations" not in files[block]:
+            if "substitutions" not in files[block]:
                 tmp = basedir / f"apc_candidate_{block}_substitutions.json"
                 if tmp.exists():
-                    files[block]["eliminations"] = tmp
+                    files[block]["substitutions"] = tmp
     #for blk in files:
     #    print(blk)
-    #    for i in sorted(set(files[blk].keys()) - {"eliminations"}):
+    #    for i in sorted(set(files[blk].keys()) - {"substitutions"}):
     #        print(i, files[blk][i])
 
     return files

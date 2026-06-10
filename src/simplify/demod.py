@@ -1,7 +1,10 @@
 """Demodulation / interval-aware simplification of top-level asserted constraints."""
 from typing import Iterable
 
+from pysmt.walkers import IdentityDagWalker
+
 from ..smt.utils import *
+from ..utils.args import ARGS
 from .intervals.domain import INF, IntInterval
 
 
@@ -58,6 +61,63 @@ def _intersect_range(
     """Tighten the currently known interval for ``sym`` with one more bound fact."""
     prev = ranges.get(sym, IntInterval(INF, INF))
     ranges[sym] = prev.intersect(interval)
+
+
+def _is_mul_by_minus_one(node: FNode) -> FNode | None:
+    if node.is_times() and len(node.args()) == 2:
+        a, b = node.args()
+        p = int(ARGS().field_type.value)
+        if a.is_int_constant(-1) or a.is_int_constant(p - 1):
+            return b
+        if b.is_int_constant(-1) or b.is_int_constant(p - 1):
+            return a
+    return None
+
+
+def _demod_rewrite_eqmod_zero_equals(lhs: FNode, rhs: FNode) -> FNode | None:
+    """Replaces ``Mod(e, p) = 0`` (field ``p``) with a defining equality on ``e``.
+
+    Mirrors the former ``rewrite_eqmod`` rewriter rule (``Plus`` / ``Minus`` /
+    ``Times(-1,…)`` shapes only).
+    """
+    if not lhs.is_mod() or not rhs.is_zero():
+        return None
+    expr, modulus = lhs.args()
+    if (
+        not modulus.is_int_constant()
+        or modulus.constant_value() != ARGS().field_type.value
+    ):
+        return None
+    if expr.is_plus() and len(expr.args()) == 2:
+        a, b = expr.args()
+        if a.is_int_constant() and b.is_symbol():
+            return Equals(b, wrap_mod(Int(-a.constant_value())))
+        if a.is_symbol() and b.is_int_constant():
+            return Equals(a, wrap_mod(Int(-b.constant_value())))
+        minusa = _is_mul_by_minus_one(a)
+        if minusa is not None and (b.is_symbol() or b.is_int_constant()):
+            return Equals(b, wrap_mod(minusa))
+        minusb = _is_mul_by_minus_one(b)
+        if minusb is not None and (a.is_symbol() or a.is_int_constant()):
+            return Equals(a, wrap_mod(minusb))
+    if expr.is_minus() and len(expr.args()) == 2:
+        a, b = expr.args()
+        if a.is_int_constant() and b.is_symbol():
+            return Equals(b, wrap_mod(Int(a.constant_value())))
+        if a.is_symbol() and b.is_int_constant():
+            return Equals(a, wrap_mod(Int(b.constant_value())))
+    return None
+
+
+class _EqModZeroWalker(IdentityDagWalker):
+    """Apply ``_demod_rewrite_eqmod_zero_equals`` at every ``Equals`` node."""
+
+    def walk_equals(self, formula, args, **kwargs):
+        lhs, rhs = args
+        rep = _demod_rewrite_eqmod_zero_equals(lhs, rhs)
+        if rep is not None:
+            return rep
+        return self.mgr.Equals(lhs, rhs)
 
 
 def extract_symbol_ranges(
@@ -206,9 +266,20 @@ class DeModSubstituter(substituter.Substituter):
 
 def simplify_demod(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Run the lightweight de-mod pass over all assertions in an SMT-LIB script."""
+    eqmod_walker = _EqModZeroWalker(env=get_env())
+    eqmod_asserts_changed = 0
+    for cmd in smt_script:
+        if cmd.name != "assert":
+            continue
+        old = cmd.args[0]
+        new = eqmod_walker.walk(old)
+        if new is not old:
+            eqmod_asserts_changed += 1
+        cmd.args[0] = keep_comment(new, old)
+
     constraints = [cmd.args[0] for cmd in smt_script if cmd.name == "assert"]
     ranges, protected_constraints = extract_symbol_ranges(constraints)
-    stats: dict[str, int] = {}
+    stats: dict[str, int] = {"eqmod_asserts_changed": eqmod_asserts_changed}
     demod = DeModSubstituter(
         ranges=ranges,
         protected_constraints=protected_constraints,

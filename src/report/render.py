@@ -48,6 +48,7 @@ class TreeNode:
     running_time: Optional[float] = None   # seconds
     result: Optional[str] = None
     expected: Optional[str] = None
+    error_message: Optional[str] = None
     status: str = "pending"                # pending | running | success | error | skipped
     children: list = dataclasses.field(default_factory=list)
     block: Optional[int] = None
@@ -57,6 +58,9 @@ class TreeTableWidget:
     _STATUS = {
         "success": ("✓", "#155724", "#d4edda"),
         "running":  ("↻", "#004085", "#cce5ff"),
+        "wrong":    ("≠", "#856404", "#fff3cd"),
+        "timeout":  ("⏱", "#856404", "#ffeeba"),
+        "unknown":  ("?", "#664d03", "#fff3cd"),
         "error":    ("✗", "#721c24", "#f8d7da"),
         "pending":  ("·", "#6c757d", "#f8f9fa"),
         "skipped":  ("–", "#856404", "#fff3cd"),
@@ -141,6 +145,8 @@ class TreeTableWidget:
         time_str   = f"{node.running_time:.2f}s" if node.running_time is not None else "—"
         shown_result = node.result if node.result is not None else node.status
         status_str = f"{icon} {shown_result}"
+        if node.error_message:
+            status_str = f"{status_str} — {node.error_message}"
 
         row = (
             f'<tr class="ttt-row" style="background:{row_bg}">'
@@ -193,6 +199,7 @@ def normalize_substep_tree(node: TreeNode) -> TreeNode:
         running_time=node.running_time,
         result=node.result,
         expected=node.expected,
+        error_message=node.error_message,
         status=node.status,
         children=[normalize_substep_tree(child) for child in node.children],
         block=node.block,
@@ -207,12 +214,17 @@ def to_tree_node(data: Action) -> TreeNode:
         running_time=data.running_time,
         result=data.properties.get("result"),
         expected=data.properties.get("expected"),
+        error_message=data.properties.get("error_message"),
         status=data.status(),
         children=[to_tree_node(c) for c in data.actions]
     )
 
 def collect(basedir: Path):
-    inputdir = (POWDR_DUMPS_DIR / basedir.name).resolve()
+    name = basedir.name
+    rid = ARGS().run_id or ""
+    if rid and name.endswith(rid):
+        name = name[: -len(rid)]
+    inputdir = (POWDR_DUMPS_DIR / name).resolve()
     data = []
     for file in sorted(basedir.glob("**/*.json")):
         try:

@@ -28,6 +28,39 @@ def strip_prefix_from_vars(f: FNode, prefix: str) -> FNode:
     return f.substitute(subs) if subs else f
 
 
+def linear_form(e: FNode):
+    """``e`` as ``({symbol: coeff}, const)``, or ``None`` if not linear."""
+    terms: dict = {}
+    const = 0
+
+    def add(c: int, node: FNode) -> bool:
+        nonlocal const
+        if node.is_int_constant():
+            const += c * node.constant_value()
+            return True
+        if node.is_symbol():
+            terms[node] = terms.get(node, 0) + c
+            return True
+        if node.is_plus():
+            return all(add(c, a) for a in node.args())
+        if node.is_minus():
+            return add(c, node.arg(0)) and add(-c, node.arg(1))
+        if node.is_times():
+            consts = [a for a in node.args() if a.is_int_constant()]
+            rest = [a for a in node.args() if not a.is_int_constant()]
+            k = 1
+            for cc in consts:
+                k *= cc.constant_value()
+            if len(rest) == 1:
+                return add(c * k, rest[0])
+            if not rest:
+                const += c * k
+                return True
+        return False
+
+    return (terms, const) if add(1, e) else None
+
+
 def with_comment(f: FNode, comment: str) -> FNode:
     """Set the comment of f to comment."""
     if f is None:

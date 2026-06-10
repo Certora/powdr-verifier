@@ -6,8 +6,8 @@ Pure utilities used by :mod:`.skolem` and the per-contributor modules
 
 * :func:`emit_pin_setinfo` - verifier-side serialization of a single
   ``Equals(var, expr)`` pin as a ``(set-info :prefix-N ...)`` command.
-* :func:`load_setinfo_pins` - simplifier-side counterpart that reads
-  every entry of a given prefix back as an ``FNode``.
+* :func:`load_skolem_setinfos` - read verifier ``:skolem-<kind>-N`` pins into a
+  :class:`~..verify.SetInfos` (script order preserved).
 * :func:`split_equation` - canonical ``Equals`` / ``Iff(var, expr)``
   splitter used by every contributor that consumes pin equations.
 """
@@ -153,29 +153,43 @@ def _parse_equation(
         return None
 
 
-def load_setinfo_pins(
-    smt_script: script.SmtLibScript, prefix: str
-) -> list[FNode]:
-    """Return all pin equations carried by ``:{prefix}N`` set-info entries.
+@functools.cache
+def _skolem_pin_keyword_re() -> re.Pattern[str]:
+    from ..verify import SKOLEM_SETINFO_COLON_PREFIX
 
-    Entries whose value cannot be parsed are skipped with a warning.
-    """
+    return re.compile(
+        rf"^{re.escape(SKOLEM_SETINFO_COLON_PREFIX)}([a-z0-9-]+)-(\d+)\Z",
+        re.IGNORECASE,
+    )
+
+
+def load_skolem_setinfos(smt_script: script.SmtLibScript) -> "SetInfos":
+    """Load skolem pin equations from ``set-info`` keys sharing ``:skolem-``."""
+    from ..verify import SetInfos, SkolemPin, SkolemPinKind
+
     declare_types = _declare_types_from_script(smt_script)
-    out: list[FNode] = []
+    equations: list[SkolemPin] = []
+    kw_re = _skolem_pin_keyword_re()
     for cmd in smt_script:
         if cmd.name != "set-info":
             continue
-        keyword = cmd.args[0]
-        if not keyword.startswith(f":{prefix}"):
+        m = kw_re.match(cmd.args[0])
+        if not m:
+            continue
+        try:
+            pin_type = SkolemPinKind(m.group(1).replace("-", "_"))
+        except ValueError:
+            logging.warning(
+                "skolem: skip unknown pin kind slug %r in %s",
+                m.group(1),
+                cmd.args[0],
+            )
             continue
         parser = _build_parser_with_cache(smt_script)
-        raw = cmd.args[1]
-        if not isinstance(raw, str):
-            continue
-        eq = _parse_equation(parser, raw, declare_types=declare_types)
+        eq = _parse_equation(parser, cmd.args[1], declare_types=declare_types)
         if eq is not None:
-            out.append(eq)
-    return out
+            equations.append(SkolemPin(eq, pin_type))
+    return SetInfos(equations=equations)
 
 
 def split_equation(eq: FNode) -> tuple[FNode, FNode] | None:

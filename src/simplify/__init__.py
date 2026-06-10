@@ -3,6 +3,10 @@ from ..utils.io import load_json
 from ..smt.utils import *
 from ..rewriter import rewrite
 
+from .flatten_outer_array import simplify_flatten_outer_array
+from .solve_eqs import simplify_solve_eqs
+from .solve_store_eqs import simplify_solve_store_eqs
+from .rewrite_store_eqs import simplify_rewrite_store_eqs
 from .cvc5 import simplify_cvc5
 from .bounds import simplify_bounds
 from .demod import simplify_demod
@@ -11,7 +15,7 @@ from .z3 import simplify_z3
 from .nnf import simplify_nnf
 from .lift_forall import simplify_lift_forall
 from .intervals import simplify_intervals2
-from .xor import simplify_gxor, simplify_qxor
+from .bitwise import simplify_gbitwise, simplify_qbitwise
 from .mod_inv import simplify_mod_inv
 from .skolem import simplify_skolem
 

@@ -44,6 +44,9 @@ def basic_stats() -> str:
         )
         """
     )
+    n_errors = query_single_value(
+        "SELECT COUNT(*) FROM verification_steps WHERE status = 'error'"
+    )
     worst_blocks = query(
         """
         SELECT block,
@@ -82,10 +85,17 @@ def basic_stats() -> str:
     )
     fastest_unknown = query(
         """
-        SELECT input1, input2, running_time, size_bytes
-        FROM verification_steps
-        WHERE status = 'unknown' AND running_time IS NOT NULL
-        ORDER BY running_time ASC
+        SELECT v.input1, v.input2, v.running_time, v.size_bytes
+        FROM verification_steps v
+        WHERE v.running_time IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM substeps s
+              WHERE s.verification_step_id = v.id
+                AND s.name = 'check'
+                AND s.status = 'error'
+                AND (s.result = 'unknown' OR s.result LIKE 'unknown-%')
+          )
+        ORDER BY v.running_time ASC
         LIMIT 5
         """
     )
@@ -114,11 +124,21 @@ def basic_stats() -> str:
         LIMIT 5
         """
     )
+    fastest_errors = query(
+        """
+        SELECT input1, input2, running_time, size_bytes
+        FROM verification_steps
+        WHERE status = 'error' AND running_time IS NOT NULL
+        ORDER BY running_time ASC
+        LIMIT 5
+        """
+    )
     selected_jobs = [
         *[("wrong", *row) for row in fastest_unexpected_sat],
         *[("unknown", *row) for row in fastest_unknown],
         *[("timeout", *row) for row in smallest_timed_out],
         *[("not-qf", *row) for row in fastest_isqf_not_qf],
+        *[("error", *row) for row in fastest_errors],
     ]
     selected_jobs.sort(
         key=lambda r: float(r[3]) if r[3] is not None else float("-inf"),
@@ -127,6 +147,7 @@ def basic_stats() -> str:
     steps_rows = [
         ("checked", n_checked or 0),
         ("timeouts", n_timeouts or 0),
+        ("errors", n_errors or 0),
         ("not-qf", n_not_qf or 0),
         ("wrongs", n_wrongs or 0),
     ]
@@ -244,8 +265,16 @@ def _format_bytes(size_bytes: int) -> str:
 
 def _badge_kind(kind: str) -> str:
     if kind == "wrong":
-        css = "text-bg-danger"
-    elif kind == "unknown":
+        return f'<span class="badge text-bg-danger">{html.escape(kind)}</span>'
+    if kind == "error":
+        style = (
+            "background:repeating-linear-gradient(-45deg,#842029 0 5px,#c82333 5px 10px);"
+            "color:#fff;border:1px solid rgba(0,0,0,.2)"
+        )
+        return f'<span class="badge" style="{style}">{html.escape(kind)}</span>'
+    if kind == "timeout":
+        return f'<span class="badge text-bg-warning">{html.escape(kind)}</span>'
+    if kind == "unknown":
         css = "text-bg-warning"
     elif kind == "not-qf":
         css = "text-bg-info"

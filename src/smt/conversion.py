@@ -3,7 +3,7 @@ import collections
 import itertools
 import logging
 import pprint
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 
 from .. import bus_interactions
@@ -177,8 +177,8 @@ class SmtConverter:
             case _:
                 logging.error(f"Unsupported data in conversion: {data}")
     
-    def convert_eliminations(self, data: Iterable[Any]):
-        """Convert eliminations into SMT terms."""
+    def convert_substitutions(self, data: Iterable[Any]):
+        """Convert APC substitution pairs into SMT ``Equals`` terms."""
         return {
             self.convert_manual(k): Equals(self.convert_manual(k), self.convert_manual(v))
             for k, v in data

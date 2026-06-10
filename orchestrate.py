@@ -27,6 +27,7 @@ from src.paths import (
     data_path_for_dump,
     ensure_layout,
 )
+from src.utils.args import ARGS, parse_args as verifier_parse_args
 
 ensure_layout()
 set_report_dir(REPORTS_DIR)
@@ -52,10 +53,10 @@ def load_files_by_block(args):
                 step = int(m.group(2))
                 assert step not in files[block]
                 files[block][step] = file
-                if "eliminations" not in files[block]:
+                if "substitutions" not in files[block]:
                     tmp = POWDR_DUMPS_DIR / args.test / f"apc_candidate_{block}_substitutions.json"
                     if tmp.exists():
-                        files[block]["eliminations"] = tmp
+                        files[block]["substitutions"] = tmp
     
     return files
 
@@ -110,12 +111,17 @@ def parse_args():
     ])
     parser.add_argument('test', type=str)
     parser.add_argument('k', type=str, nargs='*')
-    parser.add_argument('--clean', action='store_true')
+    parser.add_argument("--clean", action="store_true")
     parser.add_argument("--with-patch", type=Path, default=None)
     parser.add_argument("-j", "--jobs", type=int, default=1)
+    parser.add_argument("--run-id", default="", metavar="ID")
 
     global _ARGS
     _ARGS, leftover = parser.parse_known_args()
+    verifier_parse_args([])
+    ARGS().run_id = _ARGS.run_id
+    r = (ARGS().run_id or "").strip()
+    ARGS().run_id = "" if (not r or r == "-") else f"-{r}"
     _ARGS._main_args, _ARGS._sub_args = __split_args_for_main(leftover)
     _ARGS._additional_args = []
 
@@ -146,7 +152,19 @@ def __run_main(
 ) -> Optional[Any]:
     """Run ``main.py`` as a subprocess. With ``parse_output=True``, capture stdout and return ``load_json`` of it."""
     extra = list(extra_args or [])
-    cmd = [PYTHON, VERIFIER_DIR / "main.py", *_ARGS._additional_args, *_ARGS._main_args, command, *args, *extra, *_ARGS._sub_args]
+    rid = (_ARGS.run_id or "").strip()
+    run_id_frag = [] if (not rid or rid == "-") else ["--run-id", rid]
+    cmd = [
+        PYTHON,
+        VERIFIER_DIR / "main.py",
+        *_ARGS._additional_args,
+        *_ARGS._main_args,
+        *run_id_frag,
+        command,
+        *args,
+        *extra,
+        *_ARGS._sub_args,
+    ]
     cmdstr = " ".join(map(str, cmd))
     if parse_output:
         try:
@@ -161,9 +179,16 @@ def __run_main(
         except subprocess.TimeoutExpired:
             logging.error(f"timed out running {cmdstr}")
             return Action(command, result="timeout")
+        except subprocess.CalledProcessError as e:
+            logging.error("command failed (exit %s): %s", e.returncode, cmdstr)
+            return Action(command, result="error", error_message=str(e))
         except json.JSONDecodeError:
             logging.error(f"failed to parse output of {cmdstr}:\n{result.stdout}")
-            return Action(command, result="invalid-json")
+            return Action(
+                command,
+                result="invalid-json",
+                error_message=(result.stdout[:400] if result.stdout else ""),
+            )
     try:
         subprocess.run(cmd, check=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -171,7 +196,7 @@ def __run_main(
     return None
 
 _DEFAULT_TACTIC = (
-    "nnf:evaluator:skolem:lift:witness:z3-propagate-values:isqf:bounds:rewrite:gxor:mod_inv:demod:domain_probe:z3-propagate-values:pretty"
+    "nnf:evaluator:skolem:lift:witness:demod:z3-propagate-values:flatten_outer_array:isqf:bounds:rewrite:gbitwise:mod_inv:demod:domain_probe:z3-propagate-values:pretty"
 )
 
 
@@ -226,7 +251,7 @@ def run_powdr_guest(test, dirsuffix = ""):
     cmd = [
         f"APC_EXPORT_PATH={dir}",
         "APC_EXPORT_LEVEL=3",
-        f"cargo run --bin powdr_openvm_riscv -r compile {test} --input 1 --autoprecompiles 1 --apc-candidates-dir {dir}",
+        f"cargo run -p cli-openvm-riscv --bin powdr_openvm_riscv -r -- compile {test} --input 1 --autoprecompiles 1 --apc-candidates-dir {dir}",
     ]
     logging.warning(f"running {' '.join(cmd)}")
     subprocess.run(" ".join(cmd), shell=True, cwd=POWDR_DIR, check=True)
@@ -351,8 +376,8 @@ if __name__ == '__main__':
             args._additional_args = []
             if 0 in files:
                 args._additional_args += ["--base-dump", files[0]]
-            if "eliminations" in files:
-                args._additional_args += ["--eliminations", files["eliminations"]]
+            if "substitutions" in files:
+                args._additional_args += ["--substitutions", files["substitutions"]]
 
             match args.command:
                 case 'trace':
@@ -372,7 +397,7 @@ if __name__ == '__main__':
                     logging.error(f"unknown command: {args.command}")
                     exit(1)
 
-    except subprocess.CalledProcessError:
-        pass
+    except subprocess.CalledProcessError as e:
+        logging.error("%s", e)
     except KeyboardInterrupt:
         pass
