@@ -516,7 +516,7 @@ def script_with_sorted_declarefuns(smtlib: script.SmtLibScript) -> script.SmtLib
 
 def convert_to_smt_script(f: FNode, status=None, pin_info=None) -> script.SmtLibScript:
     smtlib = script.smtlibscript_from_formula(f, None)
-    merged_decls = list(pin_info.decls) if pin_info is not None else []
+    merged_decls = [p.node for p in pin_info.decls] if pin_info is not None else []
     if merged_decls:
         existing = {
             c.args[0] for c in smtlib.commands if c.name == "declare-fun"
@@ -555,7 +555,7 @@ def convert_to_smt_script(f: FNode, status=None, pin_info=None) -> script.SmtLib
 
         prefix = SETINFO_PREFIX[1:]
         pin_cmds = [
-            emit_pin_setinfo(prefix, i, eq) for i, eq in enumerate(pin_info.equations)
+            emit_pin_setinfo(prefix, i, p.node) for i, p in enumerate(pin_info.equations)
         ]
         for i, cmd in enumerate(pin_cmds):
             smtlib.commands.insert(5 + i, cmd)
