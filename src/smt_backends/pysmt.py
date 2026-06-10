@@ -550,12 +550,12 @@ def convert_to_smt_script(f: FNode, status=None, pin_info=None) -> script.SmtLib
     if status is not None:
         smtlib.commands.insert(4, script.SmtLibCommand(name='set-info', args=[':status', status]))
     if pin_info is not None and pin_info.equations:
-        from ..simplify.skolem_derived import SETINFO_PREFIX
         from ..simplify.skolem_utils import emit_pin_setinfo
+        from ..verify import skolem_setinfo_keyword_prefix
 
-        prefix = SETINFO_PREFIX[1:]
         pin_cmds = [
-            emit_pin_setinfo(prefix, i, p.node) for i, p in enumerate(pin_info.equations)
+            emit_pin_setinfo(skolem_setinfo_keyword_prefix(p.pin_type), i, p.node)
+            for i, p in enumerate(pin_info.equations)
         ]
         for i, cmd in enumerate(pin_cmds):
             smtlib.commands.insert(5 + i, cmd)
