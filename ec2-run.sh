@@ -62,9 +62,7 @@ case "$scenario" in
             "$script_dir/data/guest-keccak-selection${drsuf}/" \
             "$script_dir/reports/guest-keccak-selection${drsuf}/"
         python3 "$script_dir/orchestrate.py" "${orch_run[@]}" powdr-guest guest-keccak
-        python3 "$script_dir/select_blocks.py" \
-            --block-ids "2099556,2099672,2101000,2104104,2104636,2104744,2105036,2106172,2106456,2106476" \
-            "$script_dir/powdr-dumps/guest-keccak"
+        python3 "$script_dir/select_blocks.py" --count 10 "$script_dir/powdr-dumps/guest-keccak"
         python3 "$script_dir/orchestrate.py" "${orch_run[@]}" -j28 verify guest-keccak-selection : : "$@"
         for bid in $(list_trace_block_ids_every_fifth guest-keccak-selection); do
             python3 "$script_dir/orchestrate.py" "${orch_run[@]}" -j28 trace guest-keccak-selection ${bid} : "$@"
