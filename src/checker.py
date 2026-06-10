@@ -98,8 +98,14 @@ def _run_solver_config(smt_script, config):
         try:
             with Solver(
                 name=config["name"],
+                logic=ALL,
                 solver_options=config["solver_options"],
             ) as s:
+                # The script's own ``(set-logic …)`` is dropped (pysmt has
+                # already sent the solver its init logic above); without an
+                # array-capable init logic, array-mode scripts fail with
+                # "unknown sort 'Array'". ``ALL`` covers both memory encodings
+                # and does not slow the QF (plain) path — z3 auto-detects QF.
                 s.set_logic = lambda l: None
                 try:
                     for cmd in smt_script:
