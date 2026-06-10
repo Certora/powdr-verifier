@@ -66,14 +66,18 @@ case "$scenario" in
             "$script_dir/reports/reth-selection${drsuf}"
         ;;
     reports)
+        main_run=()
+        if [ -n "$drsuf" ]; then
+            main_run=(--run-id "$run_id")
+        fi
         echo "report guest-keccak"
-        #python3 "$script_dir/main.py" report "$script_dir/reports/guest-keccak${drsuf}" "$script_dir/report-keccak${drsuf}.html"
+        python3 "$script_dir/main.py" "${main_run[@]}" report "$script_dir/reports/guest-keccak${drsuf}" "$script_dir/report-keccak${drsuf}.html"
         echo "report guest-keccak-selection"
-        python3 "$script_dir/main.py" report "$script_dir/reports/guest-keccak-selection${drsuf}" "$script_dir/report-keccak-selection${drsuf}.html"
+        python3 "$script_dir/main.py" "${main_run[@]}" report "$script_dir/reports/guest-keccak-selection${drsuf}" "$script_dir/report-keccak-selection${drsuf}.html"
         echo "report guest-pairing-selection"
-        #python3 "$script_dir/main.py" report "$script_dir/reports/guest-pairing-selection${drsuf}" "$script_dir/report-pairing${drsuf}.html"
+        python3 "$script_dir/main.py" "${main_run[@]}" report "$script_dir/reports/guest-pairing-selection${drsuf}" "$script_dir/report-pairing${drsuf}.html"
         echo "report reth-selection"
-        #python3 "$script_dir/main.py" report "$script_dir/reports/reth-selection${drsuf}" "$script_dir/report-reth${drsuf}.html"
+        python3 "$script_dir/main.py" "${main_run[@]}" report "$script_dir/reports/reth-selection${drsuf}" "$script_dir/report-reth${drsuf}.html"
         ;;
     *)
         echo "unknown scenario: $scenario" >&2
