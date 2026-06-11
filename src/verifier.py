@@ -154,7 +154,7 @@ def verify():
             smtlib = convert_to_smt_script(
                 completeness, status='unsat', pin_info=info
             )
-            pretty_print_smtlib(smtlib, dump)
+            write_smtlib_script(smtlib, dump)
             action += ("outputs", outfile)
         
         is_valid_before = get_is_valid(var1, "before")
@@ -183,7 +183,7 @@ def verify():
                 smtlib = convert_to_smt_script(
                     soundness, status='unsat', pin_info=info
                 )
-                pretty_print_smtlib(smtlib, dump)
+                write_smtlib_script(smtlib, dump)
                 action += ("outputs", outfile)
 
             outfile = ARGS().output.with_suffix(".soundness.zero-is-model.smt2")
@@ -203,7 +203,7 @@ def verify():
                     ),
                     status='sat'
                 )
-                pretty_print_smtlib(smtlib, dump)
+                write_smtlib_script(smtlib, dump)
                 action += ("outputs", outfile)
 
             outfile = ARGS().output.with_suffix(".soundness.invalid-all-mult-zero.smt2")
@@ -223,7 +223,7 @@ def verify():
                     ),
                     status='unsat'
                 )
-                pretty_print_smtlib(smtlib, dump)
+                write_smtlib_script(smtlib, dump)
                 action += ("outputs", outfile)
         else:
             outfile = ARGS().output.with_suffix(".soundness.smt2")
@@ -247,7 +247,7 @@ def verify():
                 smtlib = convert_to_smt_script(
                     soundness, status='unsat', pin_info=info
                 )
-                pretty_print_smtlib(smtlib, dump)
+                write_smtlib_script(smtlib, dump)
                 action += ("outputs", outfile)
         action += {"result": "success"}
 

@@ -1,8 +1,8 @@
 """SMT-LIB simplification pipeline driven by colon-separated tactic names.
 
 Each tactic mutates or inspects a parsed script in place; optional per-step
-dumps are controlled via ``--dump-steps``; final serialization uses ``--pretty``
-(or the ``pretty`` tactic, which sets that flag on ``ARGS()``).
+dumps are controlled via ``--dump-steps``. Serialization uses ``--pretty`` or
+the ``pretty`` tactic (sets ``ARGS().pretty``).
 """
 import copy
 import logging
@@ -13,7 +13,7 @@ from typing import Callable, TypeVar
 
 from .report.action import Action
 from .smt.utils import *
-from .smt_backends.pysmt import pretty_print_smtlib, serialize_smtlib
+from .smt_backends.pysmt import write_smtlib_script
 from .utils.args import ARGS
 from .utils.io import open_file
 
@@ -220,10 +220,7 @@ def simplify_smt_script(
             dump_file = output.with_name(f"{stem}.{step_no:02d}.{raw_tactic}.smt2")
             with open_file(dump_file, "w") as out:
                 logging.info("dumping intermediate formula to %s", out.name)
-                if ARGS().pretty:
-                    pretty_print_smtlib(smt_script, out)
-                else:
-                    serialize_smtlib(smt_script, out)
+                write_smtlib_script(smt_script, out)
 
     _ensure_declarations_for_asserts(smt_script)
     return smt_script
@@ -253,8 +250,5 @@ def simplify():
         with action.action("dump"):
             with open_file(ARGS().output, "w") as out:
                 logging.info(f"dumping formula to {out.name}")
-                if ARGS().pretty:
-                    pretty_print_smtlib(smt_script, out)
-                else:
-                    serialize_smtlib(smt_script, out)
+                write_smtlib_script(smt_script, out)
         return action

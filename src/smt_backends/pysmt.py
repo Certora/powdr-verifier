@@ -569,9 +569,16 @@ def convert_to_smt_script(f: FNode, status=None, pin_info=None) -> script.SmtLib
     #smtlib.add_command(script.SmtLibCommand(name='get-unsat-core', args=[]))
     return smtlib
 
+
+def write_smtlib_script(smtlib: script.SmtLibScript, file: TextIO) -> None:
+    if ARGS().pretty:
+        pretty_print_smtlib(smtlib, file)
+    else:
+        serialize_smtlib(smtlib, file)
+
 def print_formula_to_file(f, dump):
     smtlib = convert_to_smt_script(f)
-    pretty_print_smtlib(smtlib, dump)
+    write_smtlib_script(smtlib, dump)
 
 def z3_simplify(f: FNode) -> FNode:
     s = Solver()
