@@ -37,7 +37,7 @@ def __build_parser(skip_subparsers=False):
     )
     parser.add_argument("--skip-memory-analysis", action="store_true")
     parser.add_argument("--skip-range-inference", action="store_true")
-    parser.add_argument("--use-memory-order", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--use-memory-order", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument(
         "--memory-encoding",
         type=str,
