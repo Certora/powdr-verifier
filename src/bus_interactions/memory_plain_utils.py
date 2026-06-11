@@ -1,4 +1,4 @@
-"""Presolve for plain memory permutation encodings (boolean unit facts).
+"""Helpers for the plain (busat-style) memory permutation encoding.
 
 ``cone_of_influence`` narrows main constraints to those touching seed variables.
 ``plain_memory_presolve`` alternates boolean unit propagation, dropping match
@@ -9,7 +9,7 @@ import logging
 import time
 
 from ..utils.args import ARGS
-from .utils import FNode, Solver, Not, keep_comment, TRUE, FALSE, BOOL, logics
+from ..smt.utils import FNode, Solver, Not, keep_comment, TRUE, FALSE, BOOL, logics
 
 
 def cone_of_influence(constraints: list[FNode], variables: set[FNode]) -> list[FNode]:

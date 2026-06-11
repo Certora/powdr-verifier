@@ -2,7 +2,7 @@
 from itertools import batched, pairwise
 import itertools
 
-from ..smt.presolve import boolean_propagate, cone_of_influence, plain_memory_presolve
+from .memory_plain_utils import boolean_propagate, cone_of_influence, plain_memory_presolve
 from ..smt.utils import *
 
 
