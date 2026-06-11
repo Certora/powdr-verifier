@@ -82,7 +82,8 @@ def plain_memory_const_key_io_hints(
 
     When multiplicity is not identically zero, the first interaction in trace
     order with a given constant key is marked an input; the last such
-    interaction is marked an output.
+    interaction is marked an output. Each scan stops at the first row whose
+    address space or pointer is not an int constant.
     """
     n = len(interactions)
     if n == 0:
@@ -102,7 +103,9 @@ def plain_memory_const_key_io_hints(
     seen_in: set[tuple[int, int]] = set()
     for i in range(n):
         k = const_key(i)
-        if k is None or k in seen_in:
+        if k is None:
+            break
+        if k in seen_in:
             continue
         seen_in.add(k)
         msg = f"const-key first occurrence => input (interaction {i}, key {k})"
@@ -117,7 +120,9 @@ def plain_memory_const_key_io_hints(
     seen_out: set[tuple[int, int]] = set()
     for i in range(n - 1, -1, -1):
         k = const_key(i)
-        if k is None or k in seen_out:
+        if k is None:
+            break
+        if k in seen_out:
             continue
         seen_out.add(k)
         msg = f"const-key last occurrence => output (interaction {i}, key {k})"
