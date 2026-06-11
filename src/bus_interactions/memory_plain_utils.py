@@ -1,15 +1,18 @@
 """Helpers for the plain (busat-style) memory permutation encoding.
 
 ``cone_of_influence`` narrows main constraints to those touching seed variables.
-``plain_memory_presolve`` alternates boolean unit propagation, dropping match
+``plain_memory_const_key_io_hints`` adds first/last-occurrence input/output pins
+for constant (address_space, pointer) keys. ``plain_memory_presolve`` alternates boolean unit propagation, dropping match
 variables already fixed at top level, and SMT checks for further implied units,
 using optional ``context`` (e.g. timestamp COI) only inside the working formula.
 """
 import logging
 import time
+from collections.abc import Callable
+from typing import Any
 
 from ..utils.args import ARGS
-from ..smt.utils import FNode, Solver, Not, keep_comment, TRUE, FALSE, BOOL, logics
+from ..smt.utils import *
 
 
 def cone_of_influence(constraints: list[FNode], variables: set[FNode]) -> list[FNode]:
@@ -67,6 +70,70 @@ def boolean_propagate(conjuncts: list[FNode]) -> list[FNode]:
             break
 
     return literals + remaining
+
+
+def plain_memory_const_key_io_hints(
+    interactions: list[Any],
+    is_input: Callable[[int], FNode],
+    is_output: Callable[[int], FNode],
+    mult: Callable[[int], FNode],
+) -> list[FNode]:
+    """Pin first (resp. last) occurrence of each constant (addr_space, ptr) as input (resp. output).
+
+    When multiplicity is not identically zero, the first interaction in trace
+    order with a given constant key is marked an input; the last such
+    interaction is marked an output. Skips indices ``0`` and ``n-1`` so the
+    existing first/last pins are not duplicated.
+    """
+    n = len(interactions)
+    if n == 0:
+        return []
+    p = ARGS().field_type.value
+
+    def const_key(i: int) -> tuple[int, int] | None:
+        a = interactions[i].args
+        if len(a) < 2:
+            return None
+        as_, ptr = a[0], a[1]
+        if not as_.is_int_constant() or not ptr.is_int_constant():
+            return None
+        return (as_.constant_value() % p, ptr.constant_value() % p)
+
+    out: list[FNode] = []
+    seen_in: set[tuple[int, int]] = set()
+    for i in range(n):
+        if i == 0:
+            continue
+        k = const_key(i)
+        if k is None or k in seen_in:
+            continue
+        seen_in.add(k)
+        msg = f"const-key first occurrence => input (interaction {i}, key {k})"
+        logging.warning("plain_memory_const_key_io_hints: %s", msg)
+        out.append(
+            with_comment(
+                Implies(Not(field_eq(mult(i))), is_input(i)),
+                msg,
+            )
+        )
+
+    seen_out: set[tuple[int, int]] = set()
+    for i in range(n - 1, -1, -1):
+        if i == n - 1:
+            continue
+        k = const_key(i)
+        if k is None or k in seen_out:
+            continue
+        seen_out.add(k)
+        msg = f"const-key last occurrence => output (interaction {i}, key {k})"
+        logging.warning("plain_memory_const_key_io_hints: %s", msg)
+        out.append(
+            with_comment(
+                Implies(Not(field_eq(mult(i))), is_output(i)),
+                msg,
+            )
+        )
+    return out
 
 
 def _unit_bool_key(conjunct: FNode) -> tuple[FNode, bool] | None:
