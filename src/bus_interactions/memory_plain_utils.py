@@ -109,7 +109,7 @@ def plain_memory_const_key_io_hints(
             continue
         seen_in.add(k)
         msg = f"const-key first occurrence => input (interaction {i}, key {k})"
-        logging.warning("plain_memory_const_key_io_hints: %s", msg)
+        logging.info("plain_memory_const_key_io_hints: %s", msg)
         out.append(
             with_comment(
                 Implies(Not(field_eq(mult(i))), is_input(i)),
@@ -126,7 +126,7 @@ def plain_memory_const_key_io_hints(
             continue
         seen_out.add(k)
         msg = f"const-key last occurrence => output (interaction {i}, key {k})"
-        logging.warning("plain_memory_const_key_io_hints: %s", msg)
+        logging.info("plain_memory_const_key_io_hints: %s", msg)
         out.append(
             with_comment(
                 Implies(Not(field_eq(mult(i))), is_output(i)),
@@ -145,30 +145,20 @@ def _unit_bool_key(conjunct: FNode) -> tuple[FNode, bool] | None:
     return None
 
 
-def _known_unit_keys(conjuncts: list[FNode]) -> set[tuple[FNode, bool]]:
-    out: set[tuple[FNode, bool]] = set()
-    for c in conjuncts:
-        k = _unit_bool_key(c)
-        if k is not None:
-            out.add(k)
-    return out
-
-
 def _record_new_unit_prefix(
-    conjuncts: list[FNode],
-    known: set[tuple[FNode, bool]],
-    learned: list[FNode],
+    working: list[FNode],
+    units: dict[FNode, bool],
 ) -> bool:
-    """Append leading unit literals not yet in ``known`` to ``learned``; return whether any were new."""
     changed = False
-    for c in conjuncts:
+    for c in working:
         k = _unit_bool_key(c)
         if k is None:
             break
-        if k not in known:
-            known.add(k)
-            learned.append(c.simplify())
-            changed = True
+        sym, pol = k
+        if sym in units:
+            continue
+        units[sym] = pol
+        changed = True
     return changed
 
 
@@ -186,7 +176,7 @@ def _safe_is_valid(solver: Solver, f: FNode) -> bool | None:
     try:
         return bool(solver.is_valid(f))
     except Exception:
-        logging.debug("plain_memory_presolve: is_valid failed for %s", f)
+        logging.info("plain_memory_presolve: is_valid failed for %s", f)
         return None
 
 
@@ -201,16 +191,10 @@ def _collect_implied_top_level_literals(
         logic=logics.ALL,
         name=ARGS().solver,
         incremental=True,
-        solver_options={"rlimit": 1000000},
+        solver_options={"rlimit": 10000000},
     ) as s:
         for c in conjuncts:
             s.add_assertion(c)
-        try:
-            if not s.solve():
-                return []
-        except Exception:
-            logging.debug("plain_memory_presolve: initial solve failed", exc_info=True)
-            return []
         for v in list(bool_vars):
             pv = _safe_is_valid(s, v)
             nv = _safe_is_valid(s, Not(v))
@@ -218,12 +202,12 @@ def _collect_implied_top_level_literals(
                 continue
             if pv is True:
                 out.append(v)
-                logging.warning("plain_memory_presolve: solver implied unit %s", v)
+                logging.info("plain_memory_presolve: solver implied unit %s", v)
                 s.add_assertion(v)
             elif nv is True:
                 lit = Not(v)
                 out.append(lit)
-                logging.warning("plain_memory_presolve: solver implied unit %s", lit)
+                logging.info("plain_memory_presolve: solver implied unit %s", lit)
                 s.add_assertion(lit)
     return out
 
@@ -236,22 +220,21 @@ def plain_memory_presolve(
 ) -> list[FNode]:
     """Learn unit bool facts for match variables; mutates ``bool_vars`` in place.
 
-    ``context`` is included only in the internal working formula (not returned
-    with ``learned``). Returns new unit literals to add to the permutation side.
+    ``context`` is included only in the internal working formula (not in the
+    returned list). Returns new unit literals to add to the permutation side.
     """
     ctx = context or []
     t0 = time.monotonic()
     n_tracked0 = len(bool_vars)
     n_ctx = len(ctx)
     working = [*ctx, *conjuncts]
-    known = _known_unit_keys(ctx) | _known_unit_keys(conjuncts)
-    learned: list[FNode] = []
+    units: dict[FNode, bool] = {}
     iterations = 0
     while True:
         iterations += 1
         changed = False
         working[:] = boolean_propagate(working)
-        if _record_new_unit_prefix(working, known, learned):
+        if _record_new_unit_prefix(working, units):
             changed = True
         n_before = len(bool_vars)
         bool_vars.difference_update(_top_level_fixed_bool_symbols(working))
@@ -262,9 +245,12 @@ def plain_memory_presolve(
         new_lits = _collect_implied_top_level_literals(working, bool_vars)
         for lit in new_lits:
             k = _unit_bool_key(lit)
-            if k is not None and k not in known:
-                known.add(k)
-                learned.append(lit.simplify())
+            if k is None:
+                continue
+            sym, pol = k
+            if sym in units:
+                continue
+            units[sym] = pol
         if new_lits:
             changed = True
             working[:] = new_lits + working
@@ -278,10 +264,11 @@ def plain_memory_presolve(
         )
         if not changed:
             break
+    out = [(sym if pol else Not(sym)).simplify() for sym, pol in units.items()]
     elapsed_ms = (time.monotonic() - t0) * 1000.0
     n_tracked1 = len(bool_vars)
     remaining = ", ".join(sorted(str(v) for v in bool_vars))
-    logging.warning(
+    logging.debug(
         "plain_memory_presolve: %.1f ms, %d rounds, tracked match_vars %d -> %d "
         "(%d fixed / dropped), %d learned unit literals for output, %d context conjuncts; "
         "remaining unknown match_vars (%d): %s",
@@ -290,9 +277,9 @@ def plain_memory_presolve(
         n_tracked0,
         n_tracked1,
         n_tracked0 - n_tracked1,
-        len(learned),
+        len(out),
         n_ctx,
         n_tracked1,
         remaining if remaining else "(none)",
     )
-    return learned
+    return out
