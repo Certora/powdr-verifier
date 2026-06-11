@@ -686,22 +686,7 @@ class PermutationCheckMixin:
                     )
                 )
         
-        # usually the first is an input and the last is an output. we have the
-        # special zero-is-model check, though, and so we have to be a bit more
-        # careful.
         if ARGS().use_memory_order:
-            conjuncts.append(
-                with_comment(
-                    Implies(Not(field_eq(mult(0))), is_input(0)),
-                    f"first is an input"
-                )
-            )
-            conjuncts.append(
-                with_comment(
-                    Implies(Not(field_eq(mult(n - 1))), is_output(n - 1)),
-                    f"last is an output"
-                )
-            )
             conjuncts.extend(
                 plain_memory_const_key_io_hints(
                     interactions, is_input, is_output, mult

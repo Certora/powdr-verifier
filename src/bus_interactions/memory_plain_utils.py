@@ -82,8 +82,7 @@ def plain_memory_const_key_io_hints(
 
     When multiplicity is not identically zero, the first interaction in trace
     order with a given constant key is marked an input; the last such
-    interaction is marked an output. Skips indices ``0`` and ``n-1`` so the
-    existing first/last pins are not duplicated.
+    interaction is marked an output.
     """
     n = len(interactions)
     if n == 0:
@@ -102,8 +101,6 @@ def plain_memory_const_key_io_hints(
     out: list[FNode] = []
     seen_in: set[tuple[int, int]] = set()
     for i in range(n):
-        if i == 0:
-            continue
         k = const_key(i)
         if k is None or k in seen_in:
             continue
@@ -119,8 +116,6 @@ def plain_memory_const_key_io_hints(
 
     seen_out: set[tuple[int, int]] = set()
     for i in range(n - 1, -1, -1):
-        if i == n - 1:
-            continue
         k = const_key(i)
         if k is None or k in seen_out:
             continue
