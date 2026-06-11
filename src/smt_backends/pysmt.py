@@ -319,6 +319,8 @@ def wrap_mod(input: FNode, modulus: Optional[FNode] = None) -> FNode:
     return Mod(input, modulus)
 
 def field_eq(a: FNode, b: FNode = None) -> FNode:
+    if a == b:
+        return TRUE()
     if b is None:
         return Equals(wrap_mod(a), Int(0))
     return Equals(wrap_mod(Minus(a, b)), Int(0))
