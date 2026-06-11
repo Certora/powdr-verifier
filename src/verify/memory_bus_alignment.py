@@ -580,13 +580,19 @@ def _plain_encoding_symbol_pairs(
     m = alignment.before_to_after
     nm = before_conv.bus_interaction_encoder.memory.NAME
     subs: dict[FNode, FNode] = {}
+    def add_sub(b, a):
+        subs[before_conv._symbol(b, BOOL)] = after_conv._symbol(a, BOOL)
+
     for i_b, i_a in m.items():
+        add_sub(f"{nm}_isinput_{i_b}", f"{nm}_isinput_{i_a}")
+        add_sub(f"{nm}_isoutput_{i_b}", f"{nm}_isoutput_{i_a}")
+        add_sub(f"{nm}_isdisabled_{i_b}", f"{nm}_isdisabled_{i_a}")
+
         for j_b, j_a in m.items():
             if i_b > j_b:
                 continue
-            b_leaf = f"{nm}_match_{i_b}_{j_b}"
-            a_leaf = f"{nm}_match_{i_a}_{j_a}"
-            subs[before_conv._symbol(b_leaf, BOOL)] = after_conv._symbol(a_leaf, BOOL)
+            add_sub(f"{nm}_match_{i_b}_{j_b}", f"{nm}_match_{i_a}_{j_a}")
+
     return subs
 
 
