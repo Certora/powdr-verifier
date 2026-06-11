@@ -97,6 +97,7 @@ def keyed_io_relation(
                 f"{name}: right record {j} has counterpart",
             )
         )
+    parts = without_trues([keep_comment(p.simplify(), p) for p in parts])
 
     return And(*parts) if parts else TRUE()
 
