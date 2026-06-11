@@ -728,17 +728,18 @@ class PermutationCheckMixin:
                 )
             )
 
-        ts_vars: set[FNode] = set()
-        for bi in interactions:
-            if bi.args:
-                ts_vars |= bi.args[-1].get_free_variables()
-        coi = cone_of_influence(self.constraints(), ts_vars)
-        tracked_bools = set(match_vars.values())
-        learned = plain_memory_presolve(
-            conjuncts, tracked_bools, context=coi
-        )
-        if learned:
-            conjuncts = learned + conjuncts
+        if False:
+            ts_vars: set[FNode] = set()
+            for bi in interactions:
+                if bi.args:
+                    ts_vars |= bi.args[-1].get_free_variables()
+            coi = cone_of_influence(self.constraints(), ts_vars)
+            tracked_bools = set(match_vars.values())
+            learned = plain_memory_presolve(
+                conjuncts, tracked_bools, context=coi
+            )
+            if learned:
+                conjuncts = learned + [c for c in conjuncts if c not in learned]
         conjuncts = boolean_propagate(conjuncts)
         return (
             conjuncts,
