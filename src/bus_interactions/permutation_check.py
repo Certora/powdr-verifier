@@ -2,8 +2,14 @@
 from itertools import batched, pairwise
 import itertools
 
-from .memory_plain_utils import boolean_propagate, cone_of_influence, plain_memory_presolve
+from .memory_plain_utils import (
+    boolean_propagate,
+    cone_of_influence,
+    plain_memory_const_key_io_hints,
+    plain_memory_presolve,
+)
 from ..smt.utils import *
+from ..utils.args import ARGS
 
 
 def keyed_io_relation(
@@ -95,44 +101,6 @@ def keyed_io_relation(
     return And(*parts) if parts else TRUE()
 
 
-def boolean_propagate(conjuncts: list[FNode]) -> list[FNode]:
-    literals: list[FNode] = []
-    remaining = [keep_comment(f.simplify(), f) for f in conjuncts]
-    substitutions: dict[FNode, FNode] = {}
-
-    def record_literal(lit: FNode) -> bool:
-        if lit.is_symbol(BOOL):
-            sym, val = lit, TRUE()
-        elif lit.is_not() and lit.arg(0).is_symbol(BOOL):
-            sym, val = lit.arg(0), FALSE()
-        else:
-            return False
-        if sym in substitutions:
-            return False
-        substitutions[sym] = val
-        literals.append(lit)
-        return True
-
-    while True:
-        new_binding = False
-        next_remaining: list[FNode] = []
-        for f in remaining:
-            f = keep_comment(f.simplify(), f)
-            if record_literal(f):
-                new_binding = True
-            elif not f.is_true():
-                next_remaining.append(f)
-        remaining = (
-            [keep_comment(g.substitute(substitutions), g) for g in next_remaining]
-            if substitutions
-            else next_remaining
-        )
-        if not new_binding:
-            break
-
-    return literals + remaining
-
-
 class TimestampCheckMixin:
     """Mixin providing axioms that enforce monotonic timestamps over bus interactions."""
 
@@ -161,7 +129,7 @@ class PermutationCheckMixin:
     def ordered_permutation_check(self) -> FNode:
         """
         Encodes a permutation check for the given list of interactions. We assume
-        that the interactions are already well-ordered: two consecutive interactions
+        the interactions are already well-ordered: two consecutive interactions
         where the first is even-indexed permute (their data is equivalent and their
         multiplicities cancel out).
         """
@@ -721,20 +689,25 @@ class PermutationCheckMixin:
         # usually the first is an input and the last is an output. we have the
         # special zero-is-model check, though, and so we have to be a bit more
         # careful.
-        conjuncts.append(
-            with_comment(
-                Implies(Not(field_eq(mult(0))), is_input(0)),
-                f"first is an input"
+        if ARGS().use_memory_order:
+            conjuncts.append(
+                with_comment(
+                    Implies(Not(field_eq(mult(0))), is_input(0)),
+                    f"first is an input"
+                )
             )
-        )
-        conjuncts.append(
-            with_comment(
-                Implies(Not(field_eq(mult(n - 1))), is_output(n - 1)),
-                f"last is an output"
+            conjuncts.append(
+                with_comment(
+                    Implies(Not(field_eq(mult(n - 1))), is_output(n - 1)),
+                    f"last is an output"
+                )
             )
-        )
+            conjuncts.extend(
+                plain_memory_const_key_io_hints(
+                    interactions, is_input, is_output, mult
+                )
+            )
 
-        if False:
             ts_vars: set[FNode] = set()
             for bi in interactions:
                 if bi.args:
