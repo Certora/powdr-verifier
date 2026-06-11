@@ -156,6 +156,7 @@ def _record_new_unit_prefix(
             break
         sym, pol = k
         if sym in units:
+            assert units[sym] == pol, (sym, units[sym], pol)
             continue
         units[sym] = pol
         changed = True
@@ -173,10 +174,13 @@ def _top_level_fixed_bool_symbols(working: list[FNode]) -> set[FNode]:
 
 
 def _safe_is_valid(solver: Solver, f: FNode) -> bool | None:
+    solver.z3.set("timeout", 200)
     try:
         return bool(solver.is_valid(f))
     except Exception:
         logging.info("plain_memory_presolve: is_valid failed for %s", f)
+        # TODO: it seems the solver is in an unknown state after this.
+        # Can we return to a good state without loosing everything?
         return None
 
 
@@ -189,26 +193,25 @@ def _collect_implied_top_level_literals(
     out: list[FNode] = []
     with Solver(
         logic=logics.ALL,
-        name=ARGS().solver,
+        name="z3",
         incremental=True,
         solver_options={"rlimit": 10000000},
     ) as s:
         for c in conjuncts:
             s.add_assertion(c)
         for v in list(bool_vars):
-            pv = _safe_is_valid(s, v)
             nv = _safe_is_valid(s, Not(v))
-            if pv is True and nv is True:
-                continue
-            if pv is True:
-                out.append(v)
-                logging.info("plain_memory_presolve: solver implied unit %s", v)
-                s.add_assertion(v)
-            elif nv is True:
+            if nv is True:
                 lit = Not(v)
                 out.append(lit)
                 logging.info("plain_memory_presolve: solver implied unit %s", lit)
                 s.add_assertion(lit)
+                continue
+            pv = _safe_is_valid(s, v)
+            if pv is True:
+                out.append(v)
+                logging.info("plain_memory_presolve: solver implied unit %s", v)
+                s.add_assertion(v)
     return out
 
 
@@ -249,6 +252,7 @@ def plain_memory_presolve(
                 continue
             sym, pol = k
             if sym in units:
+                assert units[sym] == pol, (sym, units[sym], pol)
                 continue
             units[sym] = pol
         if new_lits:
