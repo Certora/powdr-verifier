@@ -644,8 +644,8 @@ class PermutationCheckMixin:
                                 And(is_output(i), is_output(j)),
                             ),
                             Or(
-                                Not(Equals(args(i)[0], args(j)[0])),
-                                Not(Equals(args(i)[1], args(j)[1])),
+                                Not(field_eq(args(i)[0], args(j)[0])),
+                                Not(field_eq(args(i)[1], args(j)[1])),
                             )
                         ),
                         f"inputs or outputs {i} and {j} have different address spaces or pointers"
