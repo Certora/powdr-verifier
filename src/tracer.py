@@ -3,7 +3,7 @@
 Writes ``*.core.smt2`` (constraints + axioms as ``sat``) and ``*.sanity.smt2``
 (unsat obligations encoding structural well-formedness checks).
 """
-from .encoding import *
+from .encoding import encode_trace, encode_trace_sanity
 from .report.dumpers import Action
 from .utils.args import ARGS
 from .utils.basic_block import BasicBlock
@@ -28,9 +28,11 @@ def trace():
                 formula = conv.to_formula_with_axioms(input)
 
         with action.action("out-core"):
-            encode_to_file(out_core, encode_trace(formula))
+            with open(out_core, "w") as dump:
+                write_smtlib_script(encode_trace(formula), dump)
 
         with action.action("out-sanity"):
-            encode_to_file(out_sanity, encode_trace_sanity(conv, formula))
+            with open(out_sanity, "w") as dump:
+                write_smtlib_script(encode_trace_sanity(conv, formula), dump)
 
         return action

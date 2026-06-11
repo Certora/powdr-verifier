@@ -53,6 +53,7 @@ def __build_parser(skip_subparsers=False):
     parser.add_argument("--elim-with-model", type=Path, default=None)
     parser.add_argument("--cprofile", action="store_true")
     parser.add_argument("--no-typecheck", action="store_true")
+    parser.add_argument("--pretty", action="store_true")
 
     parser.add_argument("--no-memory", action="store_true")
     parser.add_argument("--no-bitwise", action="store_true")
@@ -102,7 +103,6 @@ def __build_parser(skip_subparsers=False):
     sub_simplify.add_argument("output", type=Path)
     sub_simplify.add_argument("--timeout", type=float, default=60.0, metavar="SEC")
     sub_simplify.add_argument("--dump-steps", action="store_true")
-    sub_simplify.add_argument("--pretty", action="store_true")
     sub_simplify.add_argument("--with-model", type=Path)
 
     sub_verify = sub.add_parser("verify")
