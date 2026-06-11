@@ -504,6 +504,9 @@ class PermutationCheckMixin:
         def args(i: int) -> list[FNode]:
             return interactions[i].args
 
+        def ts(ii: int) -> FNode:
+            return args(ii)[-1]
+
         def is_input(i: int) -> FNode:
             return is_inputs[i]
         def is_output(i: int) -> FNode:
@@ -514,6 +517,12 @@ class PermutationCheckMixin:
         def bus_arg_constants_distinct(ii: int, jj: int, key: int) -> bool:
             a, b = args(ii)[key], args(jj)[key]
             return a.is_int_constant() and not b.is_int_constant(a.constant_value())
+
+        def mem_key_eq(ii: int, jj: int) -> tuple[FNode, FNode]:
+            return (
+                Equals(args(ii)[0], args(jj)[0]),
+                Equals(args(ii)[1], args(jj)[1]),
+            )
 
         # multiplicity range constraints
         for i in range(n):
@@ -602,8 +611,6 @@ class PermutationCheckMixin:
                         f"match {i} and {j}: {mult(i)} + {mult(j)} == 0"
                     )
                 )
-                #if i == 1 and j == 4:
-                #    continue
                 # pairwise match: data_i == data_j
                 conjuncts.append(
                     with_comment(
@@ -644,7 +651,35 @@ class PermutationCheckMixin:
                         f"inputs or outputs {i} and {j} have different address spaces or pointers"
                     )
                 )
-        
+
+        for i in range(n):
+            conjuncts.append(
+                with_comment(
+                    Or(*[And(is_input(j), *mem_key_eq(i, j)) for j in range(n)]),
+                    f"key of interaction {i}: some input on that address_space/pointer",
+                )
+            )
+            conjuncts.append(
+                with_comment(
+                    Or(*[And(is_output(j), *mem_key_eq(i, j)) for j in range(n)]),
+                    f"key of interaction {i}: some output on that address_space/pointer",
+                )
+            )
+
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    continue
+                conjuncts.append(
+                    with_comment(
+                        Implies(
+                            And(*mem_key_eq(i, j), field_lt(ts(i), ts(j))),
+                            And(Not(is_output(i)), Not(is_input(j))),
+                        ),
+                        f"same key {i},{j}: earlier ts not output, later ts not input",
+                    )
+                )
+
         # from hereon, the conjuncts are tuned to the actual inputs and might break on weird inputs
         # at least, they encode properties that are not immediately obvious from the specs
 
@@ -662,8 +697,7 @@ class PermutationCheckMixin:
                                 Implies(
                                     And(
                                         m(i, k),
-                                        Equals(args(i)[0], args(j)[0]),
-                                        Equals(args(i)[1], args(j)[1]),
+                                        *mem_key_eq(i, j),
                                     ),
                                     field_eq(mult(j)),
                                 ),
