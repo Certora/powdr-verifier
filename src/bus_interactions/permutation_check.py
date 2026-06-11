@@ -2,6 +2,7 @@
 from itertools import batched, pairwise
 import itertools
 
+from ..smt.presolve import boolean_propagate, cone_of_influence, plain_memory_presolve
 from ..smt.utils import *
 
 
@@ -733,8 +734,21 @@ class PermutationCheckMixin:
             )
         )
 
+        if False:
+            ts_vars: set[FNode] = set()
+            for bi in interactions:
+                if bi.args:
+                    ts_vars |= bi.args[-1].get_free_variables()
+            coi = cone_of_influence(self.constraints(), ts_vars)
+            tracked_bools = set(match_vars.values())
+            learned = plain_memory_presolve(
+                conjuncts, tracked_bools, context=coi
+            )
+            if learned:
+                conjuncts = learned + conjuncts
+        conjuncts = boolean_propagate(conjuncts)
         return (
-            boolean_propagate(conjuncts),
+            conjuncts,
             [is_inputs[i] for i in range(n)],
             [is_outputs[i] for i in range(n)],
         )
