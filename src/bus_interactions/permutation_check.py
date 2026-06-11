@@ -648,27 +648,28 @@ class PermutationCheckMixin:
         # from hereon, the conjuncts are tuned to the actual inputs and might break on weird inputs
         # at least, they encode properties that are not immediately obvious from the specs
 
-        for i in range(n):
-            non_distinct = [
-                t
-                for t in range(i + 1, n)
-                if not (bus_arg_constants_distinct(i, t, 0) or bus_arg_constants_distinct(i, t, 1))
-            ]
-            for jj, j in enumerate(non_distinct):
-                for k in non_distinct[jj + 1 :]:
-                    conjuncts.append(
-                        with_comment(
-                            Implies(
-                                And(
-                                    m(i, k),
-                                    Equals(args(i)[0], args(j)[0]),
-                                    Equals(args(i)[1], args(j)[1]),
+        if ARGS().use_memory_order:
+            for i in range(n):
+                non_distinct = [
+                    t
+                    for t in range(i + 1, n)
+                    if not (bus_arg_constants_distinct(i, t, 0) or bus_arg_constants_distinct(i, t, 1))
+                ]
+                for jj, j in enumerate(non_distinct):
+                    for k in non_distinct[jj + 1 :]:
+                        conjuncts.append(
+                            with_comment(
+                                Implies(
+                                    And(
+                                        m(i, k),
+                                        Equals(args(i)[0], args(j)[0]),
+                                        Equals(args(i)[1], args(j)[1]),
+                                    ),
+                                    field_eq(mult(j)),
                                 ),
-                                field_eq(mult(j)),
-                            ),
-                            f"match {i} and {k}: index {j} between with same key => mult==0",
+                                f"match {i} and {k}: index {j} between with same key => mult==0",
+                            )
                         )
-                    )
 
         # inputs and outputs have each distinct timestamps
         for i in range(n):
@@ -693,17 +694,17 @@ class PermutationCheckMixin:
                 )
             )
 
-            ts_vars: set[FNode] = set()
-            for bi in interactions:
-                if bi.args:
-                    ts_vars |= bi.args[-1].get_free_variables()
-            coi = cone_of_influence(self.constraints(), ts_vars)
-            tracked_bools = set(match_vars.values())
-            learned = plain_memory_presolve(
-                conjuncts, tracked_bools, context=coi
-            )
-            if learned:
-                conjuncts = learned + conjuncts
+        ts_vars: set[FNode] = set()
+        for bi in interactions:
+            if bi.args:
+                ts_vars |= bi.args[-1].get_free_variables()
+        coi = cone_of_influence(self.constraints(), ts_vars)
+        tracked_bools = set(match_vars.values())
+        learned = plain_memory_presolve(
+            conjuncts, tracked_bools, context=coi
+        )
+        if learned:
+            conjuncts = learned + conjuncts
         conjuncts = boolean_propagate(conjuncts)
         return (
             conjuncts,
