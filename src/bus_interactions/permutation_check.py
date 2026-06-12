@@ -654,15 +654,24 @@ class PermutationCheckMixin:
                 )
 
         for i in range(n):
+            is_active = Or(
+                And(Not(is_disabled(j)), *mem_key_eq(i, j)) for j in range(n)
+            )
+            has_input = Or(
+                And(is_input(j), *mem_key_eq(i, j)) for j in range(n)
+            )
+            has_output = Or(
+                And(is_output(j), *mem_key_eq(i, j)) for j in range(n)
+            )
             conjuncts.append(
                 with_comment(
-                    Or(*[And(is_input(j), *mem_key_eq(i, j)) for j in range(n)]),
+                    Implies(is_active, has_input),
                     f"key of interaction {i}: some input on that address_space/pointer",
                 )
             )
             conjuncts.append(
                 with_comment(
-                    Or(*[And(is_output(j), *mem_key_eq(i, j)) for j in range(n)]),
+                    Implies(is_active, has_output),
                     f"key of interaction {i}: some output on that address_space/pointer",
                 )
             )
@@ -674,7 +683,12 @@ class PermutationCheckMixin:
                 conjuncts.append(
                     with_comment(
                         Implies(
-                            And(*mem_key_eq(i, j), field_lt(ts(i), ts(j))),
+                            And(
+                                Not(is_disabled(i)),
+                                Not(is_disabled(j)),
+                                *mem_key_eq(i, j),
+                                field_lt(ts(i), ts(j))
+                            ),
                             And(Not(is_output(i)), Not(is_input(j))),
                         ),
                         f"same key {i},{j}: earlier ts not output, later ts not input",
