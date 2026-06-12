@@ -9,6 +9,47 @@ from ..utils.enums import XOrEncoding
 from ..utils.utils import none_if
 
 
+def _trim_mod_p(p: int, terms: dict) -> dict:
+    out: dict = {}
+    for sym, c in terms.items():
+        c %= p
+        if c != 0:
+            out[sym] = c
+    return out
+
+
+def _linear_z_minus_x_minus_y(
+    p: int,
+    tx: dict,
+    cx: int,
+    ty: dict,
+    cy: int,
+    tz: dict,
+    cz: int,
+) -> tuple[dict, int]:
+    terms: dict = {}
+    for t, mul in ((tz, 1), (tx, -1), (ty, -1)):
+        for s, c in t.items():
+            terms[s] = terms.get(s, 0) + mul * c
+    return _trim_mod_p(p, terms), (cz - cx - cy) % p
+
+
+def _linear_z_plus_x_plus_y(
+    p: int,
+    tx: dict,
+    cx: int,
+    ty: dict,
+    cy: int,
+    tz: dict,
+    cz: int,
+) -> tuple[dict, int]:
+    terms: dict = {}
+    for t, mul in ((tz, 1), (tx, 1), (ty, 1)):
+        for s, c in t.items():
+            terms[s] = terms.get(s, 0) + mul * c
+    return _trim_mod_p(p, terms), (cz + cx + cy) % p
+
+
 class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
     """
     Encodes bitwise lookup bus interactions. It implements two cases:
@@ -87,25 +128,29 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
         ``x + y - z``, so the byte range on ``a`` is chip semantics that
         must be restored explicitly, not derived.
 
+        Matching is purely on linear forms of ``x``, ``y``, ``z``. Plain XOR
+        rows with ``x`` and ``y`` the same term (``x ⊕ x = 0``) satisfy
+        ``z - x - y = -2x`` spuriously, so those are skipped.
+
         Returns ``(column, "and" | "or")`` or ``None``.
         """
+        if x == y:
+            return None
         p = ARGS().field_type.value
         forms = [linear_form(e) for e in (x, y, z)]
         if any(f is None for f in forms):
             return None
         (tx, cx), (ty, cy), (tz, cz) = forms
-        for sign, kind in ((1, "and"), (-1, "or")):
-            # sign=+1: z - x - y = -2a  (a = AND);  sign=-1: z + x + y = 2a  (a = OR)
-            terms: dict = {}
-            for t, mul in ((tz, 1), (tx, -sign), (ty, -sign)):
-                for s, c in t.items():
-                    terms[s] = terms.get(s, 0) + mul * c
-            terms = {s: c % p for s, c in terms.items() if c % p != 0}
-            const = (cz - sign * (cx + cy)) % p
-            if const == 0 and len(terms) == 1:
-                a, c = next(iter(terms.items()))
-                if c == (-2 * sign) % p:
-                    return a, kind
+        terms, const = _linear_z_minus_x_minus_y(p, tx, cx, ty, cy, tz, cz)
+        if const == 0 and len(terms) == 1:
+            a, c = next(iter(terms.items()))
+            if c == (-2) % p:
+                return a, "and"
+        terms, const = _linear_z_plus_x_plus_y(p, tx, cx, ty, cy, tz, cz)
+        if const == 0 and len(terms) == 1:
+            a, c = next(iter(terms.items()))
+            if c == 2 % p:
+                return a, "or"
         return None
 
     @none_if(lambda: ARGS().no_bitwise)
