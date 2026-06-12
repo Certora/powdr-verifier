@@ -63,6 +63,31 @@ def _intersect_range(
     ranges[sym] = prev.intersect(interval)
 
 
+def _normalize_arith_under_mod(e: FNode, m: int) -> FNode:
+    """Congruence mod ``m``: ``-`` as ``+`` / ``*`` with ``m-1``; int literals as ``k % m``."""
+    assert m > 0
+    if (ic := _int_constant(e)) is not None:
+        return Int(ic % m)
+    if e.is_plus():
+        return Plus(*[_normalize_arith_under_mod(a, m) for a in e.args()])
+    if e.is_minus():
+        a, b = e.args()
+        na = _normalize_arith_under_mod(a, m)
+        nb = _normalize_arith_under_mod(b, m)
+        neg1 = Int(m - 1)
+        return Plus(na, Times(neg1, nb))
+    if e.is_times():
+        return Times(*[_normalize_arith_under_mod(a, m) for a in e.args()])
+    if e.is_ite():
+        c, thn, els = e.args()
+        return Ite(
+            c,
+            _normalize_arith_under_mod(thn, m),
+            _normalize_arith_under_mod(els, m),
+        )
+    return e
+
+
 def _is_mul_by_minus_one(node: FNode) -> FNode | None:
     if node.is_times() and len(node.args()) == 2:
         a, b = node.args()
@@ -236,6 +261,8 @@ class DeModSubstituter(substituter.Substituter):
     def walk_mod(self, formula, args, **kwargs):
         """Fold constant mod, push mod through ``ite``, or drop ``mod`` when in-range."""
         expr, modulus = args
+        if (mc := _int_constant(modulus)) is not None and mc > 0:
+            expr = _normalize_arith_under_mod(expr, mc)
         if (ec := _int_constant(expr)) is not None and (mc := _int_constant(modulus)) is not None and mc != 0:
             self._bump("const_eval")
             return keep_comment(Int(ec % mc), formula)
