@@ -521,8 +521,8 @@ class PermutationCheckMixin:
 
         def mem_key_eq(ii: int, jj: int) -> tuple[FNode, FNode]:
             return (
-                Equals(args(ii)[0], args(jj)[0]),
-                Equals(args(ii)[1], args(jj)[1]),
+                field_eq(args(ii)[0], args(jj)[0]),
+                field_eq(args(ii)[1], args(jj)[1]),
             )
 
         # multiplicity range constraints
@@ -604,9 +604,9 @@ class PermutationCheckMixin:
                         Implies(
                             m(i, j),
                             And(
-                                Equals(wrap_mod(Plus(mult(i), mult(j))), Int(0)),
-                                Not(Equals(wrap_mod(mult(i)), Int(0))),
-                                Not(Equals(wrap_mod(mult(j)), Int(0)))
+                                field_eq(Plus(mult(i), mult(j))),
+                                Not(field_eq(mult(i))),
+                                Not(field_eq(mult(j)))
                             )
                         ),
                         f"match {i} and {j}: {mult(i)} + {mult(j)} == 0"
@@ -618,7 +618,7 @@ class PermutationCheckMixin:
                         Implies(
                             m(i, j),
                             And(
-                                Equals(wrap_mod(Minus(*z)), Int(0)) for z in zip(args(i), args(j), strict=True)
+                                field_eq(*z) for z in zip(args(i), args(j), strict=True)
                             )
                         ),
                         f"match {i} and {j}: equal data"
@@ -716,7 +716,7 @@ class PermutationCheckMixin:
                                 And(is_input(i), is_input(j)),
                                 And(is_output(i), is_output(j)),
                             ),
-                            Not(Equals(args(i)[-1], args(j)[-1])),
+                            Not(field_eq(args(i)[-1], args(j)[-1])),
                         ),
                         f"inputs or outputs {i} and {j} have different timestamps"
                     )
@@ -779,9 +779,9 @@ class PermutationCheckMixin:
                         Implies(
                             mv,
                             And(
-                                Equals(wrap_mod(Plus(bi.mult, bj.mult)), Int(0)),
-                                Not(Equals(wrap_mod(bi.mult), Int(0))),
-                                Not(Equals(wrap_mod(bj.mult), Int(0))),
+                                field_eq(Plus(bi.mult, bj.mult)),
+                                Not(field_eq(bi.mult)),
+                                Not(field_eq(bj.mult)),
                             )
                         ),
                         f"pairwise match ({i},{j}): {bi.mult} + {bj.mult} == 0"
@@ -792,7 +792,7 @@ class PermutationCheckMixin:
                 for arg_i, arg_j in zip(bi.args, bj.args):
                     constraints.append(
                         with_comment(
-                            Implies(mv, Equals(wrap_mod(Minus(arg_i, arg_j)), Int(0))),
+                            Implies(mv, field_eq(arg_i, arg_j)),
                             f"pairwise match ({i},{j}): {arg_i} == {arg_j}"
                         )
                     )
@@ -813,9 +813,9 @@ class PermutationCheckMixin:
                     with_comment(
                         Implies(mv,
                             Or(
-                                Equals(wrap_mod(Plus(bi.mult, Int(1))), Int(0)),
-                                Equals(wrap_mod(Plus(bi.mult, Int(0))), Int(0)),
-                                Equals(wrap_mod(Plus(bi.mult, Int(-1))), Int(0)),
+                                field_eq(bi.mult, Int(-1)),
+                                field_eq(bi.mult, Int(0)),
+                                field_eq(bi.mult, Int(1)),
                             )
                         ),
                         f"self-match {i}: {bi.mult} == -1, 0, 1"
@@ -824,7 +824,7 @@ class PermutationCheckMixin:
             else:
                 constraints.append(
                     with_comment(
-                        Implies(mv, Equals(wrap_mod(bi.mult), Int(0))),
+                        Implies(mv, field_eq(bi.mult)),
                         f"self-match {i}: {bi.mult} == 0"
                     )
                 )
