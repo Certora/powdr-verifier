@@ -25,9 +25,9 @@ class OpenVMVariableRangeCheckerEncoder(SingleInteractionEncoder):
         x = wrap_mod(x)
 
         if mult.is_int_constant() and mult.constant_value() != 0:
-            return And(LE(Int(0), x), LT(x, Int(2**curbits)))
+            return LT(x, Int(2**curbits))
 
         return Implies(
-            Not(Equals(wrap_mod(mult), Int(0))),
+            Not(field_eq(mult)),
             LT(x, Int(2**curbits)),
         )
