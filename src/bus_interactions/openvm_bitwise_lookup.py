@@ -133,7 +133,22 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
         ``z - x - y = -2x`` spuriously, so those are skipped.
 
         Returns ``(column, "and" | "or")`` or ``None``.
+
+        ``x``/``y``/``z`` are normalized first: an un-simplified coefficient
+        such as ``(1-1)*a`` (a ``Minus`` node, not an int constant) makes
+        ``linear_form`` bail, so the same row recognized on its folded side
+        (post ``solver`` pass) is missed on its unfolded side — leaving one
+        side of a VC without the AND/OR byte-range axioms and producing a
+        spurious ``sat`` (guest-keccak 2105476 002->003). Simplifying makes
+        recognition independent of how the upstream pass left the coefficients.
+
+        Note: this only helps rows whose operands are *concrete* up to
+        normalization. It does NOT recognize the flag-multiplexed form
+        ``(1-(xor+or+and))*a + ...`` that appears before the ``solver`` pass
+        folds the opcode flags (the coefficient is then a symbolic flag sum, so
+        ``linear_form`` still bails). Lifting those needs flag-gated axioms.
         """
+        x, y, z = x.simplify(), y.simplify(), z.simplify()
         if x == y:
             return None
         p = ARGS().field_type.value
@@ -152,6 +167,26 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
             if c == 2 % p:
                 return a, "or"
         return None
+
+    def _lift_facts(self, a: FNode, kind: str, wx: FNode, wy: FNode) -> list[FNode]:
+        """AND/OR byte-range lift bundle for result column ``a`` over ``wx``/``wy``.
+
+        Restores the chip semantics ``uf_xor`` drops: ``a`` is the AND/OR, the
+        ``uf_and`` application is a byte bounded by both operands, and the
+        keystone ``x + y = xor + 2·and`` carries the lost evenness.
+        """
+        fn = self.UF_AND if kind == "and" else self.UF_OR
+        conj = Function(self.UF_AND, [wx, wy])
+        return [
+            Equals(a, Function(fn, [wx, wy])),
+            LE(Int(0), conj),
+            LE(conj, wx),
+            LE(conj, wy),
+            Equals(Plus(wx, wy), Plus(self.__XOR(wx, wy), Times(Int(2), conj))),
+            # byte range on the result (table semantics; for OR it is not a
+            # linear consequence of the bounds above)
+            And(LE(Int(0), a), LE(a, Int(255))),
+        ]
 
     @none_if(lambda: ARGS().no_bitwise)
     def encode_pointwise(self, mult: Any, x: Any, y: Any, z: Any, op: Any) -> Optional[FNode]:
@@ -181,29 +216,14 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
             ]
             target = self._and_or_target(x, y, z)
             if target is not None:
+                # folded row: operands are concrete, lift directly
                 a, kind = target
-                wx, wy = wrap_mod(x), wrap_mod(y)
-                fn = self.UF_AND if kind == "and" else self.UF_OR
-                conj = Function(self.UF_AND, [wx, wy])
-                facts += [
+                facts.append(
                     with_comment(
-                        Equals(a, Function(fn, [wx, wy])),
+                        And(*self._lift_facts(a, kind, wrap_mod(x), wrap_mod(y))),
                         f"BITWISE lift: {a} = {kind}({x}, {y})",
-                    ),
-                    # ground axioms for the uf_and application; the
-                    # keystone x + y = xor + 2 and carries the evenness
-                    # the bare table encoding loses
-                    LE(Int(0), conj),
-                    LE(conj, wx),
-                    LE(conj, wy),
-                    Equals(
-                        Plus(wx, wy),
-                        Plus(self.__XOR(wx, wy), Times(Int(2), conj)),
-                    ),
-                    # byte range on the result (table semantics; for OR it
-                    # is not a linear consequence of the bounds above)
-                    And(LE(Int(0), a), LE(a, Int(255))),
-                ]
+                    )
+                )
             return Implies(
                 Not(Equals(wrap_mod(mult), Int(0))),
                 And(*facts),
