@@ -1,8 +1,7 @@
 """APC equivalence verification: encode completeness and soundness as SMT-LIB.
 
-Loads before/after APC dumps, builds input/output relations and shared-bus
-array metadata, emits annotated scripts for external solvers, and records
-outputs via ``Action`` telemetry objects.
+Loads before/after APC dumps, builds the cross-dump I/O relation, emits annotated
+scripts for external solvers, and records outputs via ``Action`` telemetry objects.
 """
 import copy
 import logging
@@ -21,11 +20,11 @@ from .verify import SetInfos, SkolemPinKind
 from .verify.skolem_pins import derived_columns_skolem_setinfo, drop_mirrored_derived
 
 
-def encoding(before, after, qvars, input_relation, output_relation, additional_asserts=[]):
+def encoding(before, after, qvars, io_relation, additional_asserts=[]):
     """Build the verification formula without any encoder-side model map.
 
     The forall body is the negation of (after.constraints AND
-    input_relation AND output_relation); the ``simplify_skolem`` pass
+    ``io_relation``); the ``simplify_skolem`` pass
     later attaches per-qvar witnesses (rules / derived /
     same-name) as ``Not(q = expr)`` disjuncts which ``simplify_lift_forall``
     hoists out as top-level assertions.
@@ -36,8 +35,7 @@ def encoding(before, after, qvars, input_relation, output_relation, additional_a
             qvars,
             Or(
                 Not(And(*after.constraints)),
-                Not(input_relation),
-                Not(output_relation),
+                Not(io_relation),
             ),
         ),
         *before.axioms,
@@ -84,14 +82,12 @@ def verify():
         if ARGS().substitutions is not None:
             substitutions = before_conv.convert_substitutions(load_json(ARGS().substitutions))
 
-        input_relation = before_conv.bus_interaction_encoder.build_io_relation(
-            after_conv.bus_interaction_encoder, "input"
+        io_relation = before_conv.bus_interaction_encoder.build_io_relation(
+            after_conv.bus_interaction_encoder
         )
-        output_relation = before_conv.bus_interaction_encoder.build_io_relation(
-            after_conv.bus_interaction_encoder, "output"
-        )
-        var1 = collect_variables(before_smt)
-        var2 = collect_variables(after_smt)
+        iorelvars = io_relation.get_free_variables()
+        var1 = collect_variables(before_smt) | iorelvars
+        var2 = collect_variables(after_smt) | iorelvars
         globals = before_smt.globals | after_smt.globals
         auxiliaries = frozenset.union(
             frozenset(),
@@ -145,8 +141,7 @@ def verify():
                 before_smt,
                 after_smt,
                 var2 - globals,
-                input_relation,
-                output_relation,
+                io_relation,
             )
             info = pin_metadata(completeness, after_derived_pins, reverse=True, smt_outfile=outfile)
 
@@ -169,8 +164,7 @@ def verify():
                     after_smt,
                     before_smt,
                     var1 - globals,
-                    input_relation,
-                    output_relation,
+                    io_relation,
                     additional_asserts=[Equals(is_valid_after, Int(1))],
                 )
                 info = pin_metadata(
@@ -233,8 +227,7 @@ def verify():
                     after_smt,
                     before_smt,
                     var1 - globals,
-                    input_relation,
-                    output_relation,
+                    io_relation,
                 )
                 info = pin_metadata(
                     soundness,

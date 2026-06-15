@@ -16,8 +16,12 @@ def keyed_io_relation(
     name: str,
     interactions_a: list,
     interactions_b: list,
-    is_a: list[FNode],
-    is_b: list[FNode],
+    isi_a: list[list[FNode]],
+    iso_a: list[list[FNode]],
+    isi_b: list[list[FNode]],
+    iso_b: list[list[FNode]],
+    *,
+    xmatch_name_prefix: str,
 ) -> FNode:
     """Relate two sets of memory-bus I/O across independent encodings.
 
@@ -33,6 +37,11 @@ def keyed_io_relation(
     marked as I/O on one side, keys are pairwise distinct (enforced by the plain
     permutation axioms).
 
+    Boolean ``{xmatch_name_prefix}_xmatch_i_j`` mean: I/O row ``i`` on A is paired
+    with I/O row ``j`` on B (same cell and payload). Row/column ``Iff``/``Xor``
+    constraints are pure Boolean in ``xmatch`` and ``is_*``; theory only appears in
+    the reification pair linking ``xmatch`` to field equalities.
+
     Arguments:
         name: Comment prefix for generated conjuncts (e.g. ``"INPUT RELATION"``).
         interactions_a: Interactions from the left/before encoder, same order as
@@ -42,18 +51,18 @@ def keyed_io_relation(
             is true exactly when that interaction counts as the chosen I/O kind
             (input or output) on side A.
         is_b: Same for side B, aligned with ``interactions_b``.
+        xmatch_symbol: ``(stem, sort) ->`` fresh symbol (e.g. encoder ``_symbol``).
+        xmatch_name_prefix: Bus name used in ``{prefix}_xmatch_i_j`` stems.
 
-    Returns a conjunction of three constraint families (see inline comments below).
+    Returns a conjunction of reification + row/column Boolean constraints.
     """
     n, m = len(interactions_a), len(interactions_b)
     parts: list[FNode] = []
-
-    def key_eq(i: int, j: int) -> FNode:
-        """``(address_space, pointer)`` agree at indices ``i`` (A) and ``j`` (B)."""
-        return And(
-            field_eq(interactions_a[i].args[0], interactions_b[j].args[0]),
-            field_eq(interactions_a[i].args[1], interactions_b[j].args[1]),
-        )
+    xmatch_vars: dict[tuple[int, int], FNode] = {
+        (i, j): Symbol(f"{xmatch_name_prefix}_xmatch_{i}_{j}", BOOL)
+        for i in range(n)
+        for j in range(m)
+    }
 
     def full_eq(i: int, j: int) -> FNode:
         """All args (key, data, timestamp) agree at indices ``i`` and ``j``."""
@@ -64,40 +73,61 @@ def keyed_io_relation(
             ]
         )
 
-    # Same key and both marked I/O => identical record (bytes, timestamp, keys).
     for i in range(n):
         for j in range(m):
             parts.append(
                 with_comment(
-                    Implies(And(is_a[i], is_b[j], key_eq(i, j)), full_eq(i, j)),
-                    f"{name}: key match => full eq ({i},{j})",
+                    Implies(
+                        xmatch_vars[(i, j)],
+                        And(
+                            Iff(isi_a[i], isi_b[j]),
+                            Iff(iso_a[i], iso_b[j]),
+                            full_eq(i, j)
+                        )
+                    ),
+                    f"{name}: xmatch ({i},{j}) => I/O + full eq",
                 )
             )
 
-    # Every I/O record on A has some I/O record on B at the same key.
+    for i in range(n):
+        for j in range(m):
+            for k in range(j + 1, m):
+                parts.append(
+                    with_comment(
+                        Not(And(xmatch_vars[(i, j)], xmatch_vars[(i, k)])),
+                        f"{name}: at most one xmatch on row {i}",
+                    )
+                )
+                parts.append(
+                    with_comment(
+                        Not(And(xmatch_vars[(j, i)], xmatch_vars[(k, i)])),
+                        f"{name}: at most one xmatch on column {i}",
+                    )
+                )
+
     for i in range(n):
         parts.append(
             with_comment(
                 Implies(
-                    is_a[i],
-                    Or([And(is_b[j], key_eq(i, j)) for j in range(m)]) if m else FALSE(),
+                    Or(isi_a[i], isi_b[i]),
+                    Or([xmatch_vars[(i, j)] for j in range(m)]) if m else FALSE(),
                 ),
-                f"{name}: left record {i} has counterpart",
+                f"{name}: row {i} I/O iff some xmatch",
             )
         )
 
-    # Every I/O record on B has some I/O record on A at the same key.
     for j in range(m):
         parts.append(
             with_comment(
                 Implies(
-                    is_b[j],
-                    Or([And(is_a[i], key_eq(i, j)) for i in range(n)]) if n else FALSE(),
+                    Or(isi_b[j], iso_b[j]),
+                    Or([xmatch_vars[(i, j)] for i in range(n)]) if n else FALSE(),
                 ),
-                f"{name}: right record {j} has counterpart",
+                f"{name}: column {j} I/O iff some xmatch",
             )
         )
-    parts = without_trues([keep_comment(p.simplify(), p) for p in parts])
+
+    parts = boolean_propagate([keep_comment(p.simplify(), p) for p in parts])
 
     return And(*parts) if parts else TRUE()
 

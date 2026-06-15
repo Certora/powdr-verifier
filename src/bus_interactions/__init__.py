@@ -62,7 +62,7 @@ class InteractionEncoder:
         simplifier, or just a concrete evaluator."""
         return merge_dicts(self.encoders, lambda encoder: encoder.get_interpreters())
 
-    def build_io_relation(self, other: "InteractionEncoder", kind: str) -> FNode:
+    def build_io_relation(self, other: "InteractionEncoder") -> FNode:
         """Combine per-bus I/O relations between this encoder bundle and `other`."""
         other_by_name = {encoder.NAME: encoder for encoder in other.encoders}
         parts = []
@@ -70,7 +70,7 @@ class InteractionEncoder:
             other_enc = other_by_name.get(encoder.NAME)
             if other_enc is None:
                 continue
-            rel = encoder.build_io_relation(other_enc, kind)
+            rel = encoder.build_io_relation(other_enc)
             if rel is not None:
                 parts.append(rel)
         return And(*parts) if parts else TRUE()

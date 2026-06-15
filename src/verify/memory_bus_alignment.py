@@ -1,8 +1,11 @@
 """Shared memory-bus alignment between before/after APC encodings.
 
-Aligned before/after symbols (array snapshots or plain ``memory_match_*``)
-are emitted as ``set-info :skolem-memory-bus-*`` keys so ``simplify.skolem_derived``
-pins quantified sides to free witnesses (then ``lift_forall`` hoists).
+Aligned before/after symbols (array snapshots or plain ``memory_match_*`` and
+I/O flags) are emitted as ``set-info :skolem-memory-bus-*`` keys so
+``simplify.skolem_derived`` pins quantified sides to free witnesses (then
+``lift_forall`` hoists). Plain encoding also asserts each aligned
+``before-…-memory_xmatch_{input|output}_{i_b}_{i_a}`` to ``true`` (xmatch symbols exist only on
+the before side where the I/O relation is built).
 """
 from __future__ import annotations
 
@@ -576,7 +579,7 @@ def _plain_encoding_symbol_pairs(
     before_conv: SmtConverter,
     after_conv: SmtConverter,
 ) -> dict[FNode, FNode]:
-    """Pair ``memory_match_{i}_{j}`` for aligned indices via ``before_to_after``."""
+    """Map before symbols to after symbols or constants (``true`` for aligned xmatch)."""
     m = alignment.before_to_after
     nm = before_conv.bus_interaction_encoder.memory.NAME
     subs: dict[FNode, FNode] = {}
@@ -584,10 +587,11 @@ def _plain_encoding_symbol_pairs(
         subs[before_conv._symbol(b, BOOL)] = after_conv._symbol(a, BOOL)
 
     for i_b, i_a in m.items():
+        subs[Symbol(f"{nm}_xmatch_{i_b}_{i_a}", BOOL)] = TRUE()
+
         add_sub(f"{nm}_isinput_{i_b}", f"{nm}_isinput_{i_a}")
         add_sub(f"{nm}_isoutput_{i_b}", f"{nm}_isoutput_{i_a}")
         add_sub(f"{nm}_isdisabled_{i_b}", f"{nm}_isdisabled_{i_a}")
-
         for j_b, j_a in m.items():
             if i_b > j_b:
                 continue
