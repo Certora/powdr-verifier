@@ -82,10 +82,9 @@ def verify():
         if ARGS().substitutions is not None:
             substitutions = before_conv.convert_substitutions(load_json(ARGS().substitutions))
 
-        io_relation = before_conv.bus_interaction_encoder.build_io_relation(
+        io_relation, iorelvars = before_conv.bus_interaction_encoder.build_io_relation(
             after_conv.bus_interaction_encoder
         )
-        iorelvars = io_relation.get_free_variables()
         var1 = collect_variables(before_smt) | iorelvars
         var2 = collect_variables(after_smt) | iorelvars
         globals = before_smt.globals | after_smt.globals

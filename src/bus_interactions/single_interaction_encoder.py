@@ -85,7 +85,9 @@ class SingleInteractionEncoder:
             return Equals(wrap_mod(Minus(x, y)), Int(0))
         return Equals(x, y)
 
-    def build_io_relation(self, other: "SingleInteractionEncoder") -> FNode | None:
+    def build_io_relation(
+        self, other: "SingleInteractionEncoder"
+    ) -> tuple[FNode, frozenset[FNode]]:
         """Equate this encoder's input and output summaries with ``other`` (symbol-wise)."""
         parts: list[FNode] = []
         for attr, lab in (("inputs", "INPUT"), ("outputs", "OUTPUT")):
@@ -99,7 +101,9 @@ class SingleInteractionEncoder:
                     f"{lab} RELATION for {self.NAME}",
                 )
             )
-        return And(*parts) if parts else None
+        if not parts:
+            return (TRUE(), frozenset())
+        return (And(*parts), frozenset())
 
     def get_auxiliaries(self) -> dict:
         """Return auxiliary symbols introduced by this encoder (defaults to empty)."""
