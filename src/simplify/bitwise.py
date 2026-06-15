@@ -1,5 +1,5 @@
-"""Bitwise UF handling: axioms over ``UF_XOR``, ``UF_AND``, ``UF_OR`` (quantified or grounded lemmas)."""
-from typing import Callable, Iterable, NamedTuple
+"""Bitwise UF handling: grounded lemmas over ``UF_XOR``, ``UF_AND``, ``UF_OR``."""
+from typing import Iterable, Iterator, NamedTuple
 
 from ..bus_interactions.openvm_bitwise_lookup import OpenVMBitwiseLookupEncoder
 from ..smt.utils import *
@@ -20,14 +20,6 @@ class BitwiseTerms(NamedTuple):
         return bool(self.xors or self.ands or self.ors)
 
 
-def _bitwise_stats_template() -> dict:
-    """Counters for UF applications ``seen`` and axioms ``emitted`` (``link`` = OR–AND identity)."""
-    return {
-        "seen": {"xor": 0, "and": 0, "or": 0},
-        "emitted": {"xor": 0, "and": 0, "or": 0, "link": 0},
-    }
-
-
 def _note_seen(stats: dict | None, terms: BitwiseTerms) -> None:
     if stats is None:
         return
@@ -43,22 +35,12 @@ def _note_emitted(stats: dict | None, kind: str) -> None:
     stats["emitted"][kind] += 1
 
 
-def _counting_axiom_builder(
-    tagged: Callable[[BitwiseTerms], Iterable[tuple[str, FNode]]],
-    stats: dict | None,
-) -> Callable[[BitwiseTerms], Iterable[FNode]]:
-    def builder(t: BitwiseTerms) -> Iterable[FNode]:
-        for kind, axiom in tagged(t):
-            _note_emitted(stats, kind)
-            yield axiom
+def _bitwise_terms_for_scope(
+    formula: FNode, qvarset: frozenset[FNode] | None
+) -> BitwiseTerms:
+    """Collect ``UF_*`` apps under ``formula`` (not descending into quantifier bodies).
 
-    return builder
-
-
-def _collect_bitwise_terms(formula: FNode) -> BitwiseTerms:
-    """Collect every ``UF_XOR`` / ``UF_AND`` / ``UF_OR`` application under ``formula``.
-
-    Skips quantifier bodies for descent (same scoping rule as the legacy XOR collector).
+    If ``qvarset`` is set, keep only applications whose free variables intersect it.
     """
     xor_t: set[FNode] = set()
     and_t: set[FNode] = set()
@@ -73,11 +55,14 @@ def _collect_bitwise_terms(formula: FNode) -> BitwiseTerms:
         if node.is_function_application():
             fn = node.function_name()
             if fn == UF_XOR:
-                xor_t.add(node)
+                if qvarset is None or node.get_free_variables() & qvarset:
+                    xor_t.add(node)
             elif fn == UF_AND:
-                and_t.add(node)
+                if qvarset is None or node.get_free_variables() & qvarset:
+                    and_t.add(node)
             elif fn == UF_OR:
-                or_t.add(node)
+                if qvarset is None or node.get_free_variables() & qvarset:
+                    or_t.add(node)
         if not (node.is_forall() or node.is_exists()):
             stack.extend(node.args())
     return BitwiseTerms(
@@ -87,51 +72,7 @@ def _collect_bitwise_terms(formula: FNode) -> BitwiseTerms:
     )
 
 
-def _quantified_xor_axioms(_terms: Iterable[FNode] = ()) -> tuple[FNode, ...]:
-    """Universal algebraic axioms for ``UF_XOR`` (identity, nilpotence, cancellation)."""
-    x = Symbol("__bwx", INT)
-    y = Symbol("__bwy", INT)
-    return (
-        ForAll([x], Equals(Function(UF_XOR, [x, Int(0)]), x)),
-        ForAll([x], Equals(Function(UF_XOR, [Int(0), x]), x)),
-        ForAll([x], Equals(Function(UF_XOR, [x, x]), Int(0))),
-        ForAll(
-            [x, y],
-            Implies(Equals(Function(UF_XOR, [x, y]), x), Equals(y, Int(0))),
-        ),
-        ForAll(
-            [x, y],
-            Implies(Equals(Function(UF_XOR, [y, x]), x), Equals(y, Int(0))),
-        ),
-    )
-
-
-def _quantified_andor_axioms() -> tuple[FNode, ...]:
-    """Universal identity linking ``UF_OR`` and ``UF_AND`` (bitwise ``x|y = x+y-(x&y)``)."""
-    x = Symbol("__bw_andor_x", INT)
-    y = Symbol("__bw_andor_y", INT)
-    return (
-        ForAll(
-            [x, y],
-            Equals(
-                Function(UF_OR, [x, y]),
-                Minus(Plus(x, y), Function(UF_AND, [x, y])),
-            ),
-        ),
-    )
-
-
-def _qbitwise_axioms_tagged(t: BitwiseTerms) -> Iterable[tuple[str, FNode]]:
-    """Quantified XOR algebra plus, when AND/OR appear, the global OR–AND identity."""
-    if t.xors:
-        for ax in _quantified_xor_axioms():
-            yield ("xor", ax)
-    if t.ands or t.ors:
-        for ax in _quantified_andor_axioms():
-            yield ("link", ax)
-
-
-def _ground_keystone_lemmas(terms: Iterable[FNode]) -> Iterable[FNode]:
+def _ground_keystone_lemmas(t: BitwiseTerms) -> Iterable[FNode]:
     """Per-``UF_XOR(x,y)`` keystone tying XOR to AND/OR, byte-guarded.
 
     This is the *symmetric* fix for the AND/OR byte-range asymmetry: keyed off
@@ -153,7 +94,7 @@ def _ground_keystone_lemmas(terms: Iterable[FNode]) -> Iterable[FNode]:
     only hold for bytes); the guard is discharged from the per-row range
     asserts the bitwise encoder already emits.
     """
-    for term in terms:
+    for term in t.xors:
         x, y = term.args()
         if x == y:
             continue
@@ -171,9 +112,9 @@ def _ground_keystone_lemmas(terms: Iterable[FNode]) -> Iterable[FNode]:
         )
 
 
-def _ground_xor_lemmas(terms: Iterable[FNode]) -> Iterable[FNode]:
-    """Per-term ``UF_XOR(x,y)`` lemmas for 8-bit-style bounds (used with ``simplify_gbitwise``)."""
-    for term in terms:
+def _ground_xor_lemmas(t: BitwiseTerms) -> Iterable[FNode]:
+    """Per-term ``UF_XOR(x,y)`` lemmas for 8-bit-style bounds (used with ``simplify_bitwise``)."""
+    for term in t.xors:
         x, y = term.args()
         if x == y:
             yield Equals(term, Int(0))
@@ -200,9 +141,9 @@ def _ground_xor_lemmas(terms: Iterable[FNode]) -> Iterable[FNode]:
             yield Iff(Equals(y, term), Equals(x, Int(0)))
 
 
-def _ground_and_lemmas(terms: Iterable[FNode]) -> Iterable[FNode]:
-    """Per-term ``UF_AND(x,y)`` lemmas for 8-bit-style bounds (used with ``simplify_gbitwise``)."""
-    for term in terms:
+def _ground_and_lemmas(t: BitwiseTerms) -> Iterable[FNode]:
+    """Per-term ``UF_AND(x,y)`` lemmas for 8-bit-style bounds (used with ``simplify_bitwise``)."""
+    for term in t.ands:
         x, y = term.args()
         if x == y:
             yield Equals(term, x)
@@ -225,9 +166,9 @@ def _ground_and_lemmas(terms: Iterable[FNode]) -> Iterable[FNode]:
             )
 
 
-def _ground_or_lemmas(terms: Iterable[FNode]) -> Iterable[FNode]:
-    """Per-term ``UF_OR(x,y)`` lemmas for 8-bit-style bounds (used with ``simplify_gbitwise``)."""
-    for term in terms:
+def _ground_or_lemmas(t: BitwiseTerms) -> Iterable[FNode]:
+    """Per-term ``UF_OR(x,y)`` lemmas for 8-bit-style bounds (used with ``simplify_bitwise``)."""
+    for term in t.ors:
         x, y = term.args()
         if x == y:
             yield Equals(term, x)
@@ -265,28 +206,48 @@ def _ground_andor_connection_pairs(t: BitwiseTerms) -> Iterable[FNode]:
         )
 
 
-def _gbitwise_axioms_tagged(t: BitwiseTerms) -> Iterable[tuple[str, FNode]]:
-    """Merge XOR / AND / OR grounded lemmas plus pairwise OR–AND links."""
-    for ax in _ground_xor_lemmas(t.xors):
-        yield ("xor", ax)
-    for ax in _ground_keystone_lemmas(t.xors):
-        yield ("link", ax)
-    for ax in _ground_and_lemmas(t.ands):
-        yield ("and", ax)
-    for ax in _ground_or_lemmas(t.ors):
-        yield ("or", ax)
-    for ax in _ground_andor_connection_pairs(t):
-        yield ("link", ax)
+def _conjoin_axioms_flat(body: FNode, axioms: Iterable[FNode]) -> FNode:
+    axs = list(axioms)
+    if not axs:
+        return body
+    parts = list(body.args()) if body.is_and() else [body]
+    parts.extend(axs)
+    return And(*parts)
 
 
 class BitwiseQuantifierSubstituter(substituter.Substituter):
-    """Simplify bitwise UFs under quantifiers and attach ``axiom_builder`` facts local to each scope."""
+    """Simplify bitwise UFs under quantifiers and attach bitwise axiom conjuncts.
 
-    def __init__(self, axiom_builder, env=None, stats=None):
-        """``axiom_builder(terms)`` yields extra conjuncts for UF terms mentioning bound variables."""
+    Expects ``env.bitwise_axiom_generators`` (sequence of
+    ``(BitwiseTerms) -> Iterable[(str, FNode)]``) and optionally
+    ``env.bitwise_stats`` while ``substitute`` / ``bitwise_lemmas`` run.
+    """
+
+    def __init__(self, env=None):
         substituter.Substituter.__init__(self, env=env)
-        self.axiom_builder = axiom_builder
-        self.stats = stats
+
+    def bitwise_lemmas(
+        self,
+        body: FNode,
+        qvarset: frozenset[FNode] | None,
+        dedupe: set[FNode],
+    ) -> Iterator[FNode]:
+        t = _bitwise_terms_for_scope(body, qvarset)
+        if not t.non_empty():
+            return
+        stats = getattr(self.env, "bitwise_stats", None)
+        if stats is not None:
+            _note_seen(stats, t)
+        gens = getattr(self.env, "bitwise_axiom_generators", ())
+        for gen in gens:
+            for kind, axiom in gen(t):
+                if axiom is None or axiom.is_true():
+                    continue
+                if axiom in dedupe:
+                    continue
+                dedupe.add(axiom)
+                _note_emitted(stats, kind)
+                yield axiom
 
     @substituter.handles(
         set(operators.ALL_TYPES)
@@ -332,63 +293,62 @@ class BitwiseQuantifierSubstituter(substituter.Substituter):
         qvars = list(formula.quantifier_vars())
         qvarset = frozenset(qvars)
         body = args[0]
-        full = _collect_bitwise_terms(body)
-        local = BitwiseTerms(
-            frozenset(t for t in full.xors if t.get_free_variables() & qvarset),
-            frozenset(t for t in full.ands if t.get_free_variables() & qvarset),
-            frozenset(t for t in full.ors if t.get_free_variables() & qvarset),
+        body = _conjoin_axioms_flat(
+            body, self.bitwise_lemmas(body, qvarset, set())
         )
-        if local.non_empty():
-            _note_seen(self.stats, local)
-            local_axioms = list(without_trues(self.axiom_builder(local)))
-            if local_axioms:
-                body = And(body, *local_axioms)
         if formula.is_forall():
             return keep_comment(ForAll(qvars, body), formula)
         return keep_comment(Exists(qvars, body), formula)
 
 
-def _simplify_bitwise(
-    smt_script: script.SmtLibScript,
-    tagged_axioms: Callable[[BitwiseTerms], Iterable[tuple[str, FNode]]],
-    subaction=None,
-) -> script.SmtLibScript:
-    """Shared implementation for ``simplify_qbitwise`` / ``simplify_gbitwise``."""
-    stats = _bitwise_stats_template() if subaction is not None else None
-    counting_builder = _counting_axiom_builder(tagged_axioms, stats)
-    injector = BitwiseQuantifierSubstituter(counting_builder, stats=stats)
-    output = []
-    top_axiom_asserts = 0
-    for cmd in smt_script:
-        if cmd.name == "assert":
-            cmd.args[0] = injector.substitute(cmd.args[0])
-            output.append(cmd)
-            terms = _collect_bitwise_terms(cmd.args[0])
-            if terms.non_empty():
-                _note_seen(stats, terms)
-                axioms = list(without_trues(counting_builder(terms)))
-                top_axiom_asserts += len(axioms)
-                output.extend(
-                    script.SmtLibCommand(name="assert", args=[axiom])
-                    for axiom in axioms
-                )
-        else:
-            output.append(cmd)
-    smt_script.commands = output
+def simplify_bitwise(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
+    """Inject grounded lemmas for each distinct bitwise UF application.
+
+    Runs the pipeline twice on the full script: first linking lemmas only, then
+    XOR / AND / OR lemmas (after link axioms are present in formulas and as
+    asserts). Top-level additions are de-duplicated by formula node identity
+    across both passes.
+    """
     if subaction is not None:
-        # Counts every extra assert from this pass (XOR, AND, OR, and connection lemmas).
-        payload: dict = {"top_level_bitwise_axiom_asserts": top_axiom_asserts}
-        if stats is not None:
-            payload["bitwise_stats"] = stats
-        subaction += payload
+        stats = {
+            "seen": {"xor": 0, "and": 0, "or": 0},
+            "emitted": {"xor": 0, "and": 0, "or": 0, "link": 0},
+        }
+    env = get_env()
+    if stats is not None:
+        env.bitwise_stats = stats
+    seen_top_axioms: set[FNode] = set()
+    top_axiom_asserts = 0
+    try:
+        for generators in (
+            (
+                lambda t: (("link", ax) for ax in _ground_keystone_lemmas(t)),
+                lambda t: (("link", ax) for ax in _ground_andor_connection_pairs(t)),
+            ),
+            (
+                lambda t: (("xor", ax) for ax in _ground_xor_lemmas(t)),
+                lambda t: (("and", ax) for ax in _ground_and_lemmas(t)),
+                lambda t: (("or", ax) for ax in _ground_or_lemmas(t)),
+            ),
+        ):
+            env.bitwise_axiom_generators = generators
+            subst = BitwiseQuantifierSubstituter(env)
+            output = []
+            for cmd in smt_script:
+                if cmd.name == "assert":
+                    cmd.args[0] = subst.substitute(cmd.args[0])
+                    output.append(cmd)
+                    for axiom in subst.bitwise_lemmas(cmd.args[0], None, seen_top_axioms):
+                        top_axiom_asserts += 1
+                        output.append(script.SmtLibCommand(name="assert", args=[axiom]))
+                else:
+                    output.append(cmd)
+            smt_script.commands = output
+    finally:
+        for name in ("bitwise_axiom_generators", "bitwise_stats"):
+            if hasattr(env, name):
+                delattr(env, name)
+    if subaction is not None:
+        subaction += ("top_level_axioms", top_axiom_asserts)
+        subaction += stats
     return smt_script
-
-
-def simplify_qbitwise(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
-    """Inject global and local quantified axioms for bitwise UFs."""
-    return _simplify_bitwise(smt_script, _qbitwise_axioms_tagged, subaction)
-
-
-def simplify_gbitwise(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
-    """Inject grounded lemmas for each distinct bitwise UF application."""
-    return _simplify_bitwise(smt_script, _gbitwise_axioms_tagged, subaction)

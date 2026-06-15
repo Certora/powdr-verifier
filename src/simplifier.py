@@ -26,14 +26,13 @@ from .simplify import (
     simplify_demod,
     simplify_evaluate,
     simplify_flatten_outer_array,
-    simplify_gbitwise,
+    simplify_bitwise,
     simplify_intervals,
     simplify_intervals2,
     simplify_lift_forall,
     simplify_mod_inv,
     simplify_model,
     simplify_nnf,
-    simplify_qbitwise,
     simplify_rewrite,
     simplify_skolem,
     simplify_solve_eqs,
@@ -93,10 +92,8 @@ def _apply_tactic_pass(
             return simplify_rewrite(smt_script, subaction)
         case "demod":
             return simplify_demod(smt_script, subaction)
-        case "qbitwise":
-            return simplify_qbitwise(smt_script, subaction)
-        case "gbitwise":
-            return simplify_gbitwise(smt_script, subaction)
+        case "bitwise":
+            return simplify_bitwise(smt_script, subaction)
         case "mod_inv":
             return simplify_mod_inv(smt_script, subaction)
         case "evaluator":
