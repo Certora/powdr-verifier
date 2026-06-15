@@ -131,6 +131,46 @@ def _qbitwise_axioms_tagged(t: BitwiseTerms) -> Iterable[tuple[str, FNode]]:
             yield ("link", ax)
 
 
+def _ground_keystone_lemmas(terms: Iterable[FNode]) -> Iterable[FNode]:
+    """Per-``UF_XOR(x,y)`` keystone tying XOR to AND/OR, byte-guarded.
+
+    This is the *symmetric* fix for the AND/OR byte-range asymmetry: keyed off
+    the ``uf_xor`` application itself, it is emitted for every ``uf_xor`` term
+    on *both* sides of a VC, regardless of whether the per-row recognizer
+    (`openvm_bitwise_lookup._and_or_target`) fired. The recognizer fires only
+    on *folded* rows (post ``solver`` pass), so on the multiplexed pre-solver
+    side the result column is otherwise left without a byte range -> the side
+    that DID recognize is strictly stronger -> spurious ``sat`` (guest-keccak
+    2105476 002->003). Making this an axiom removes the dependence on
+    recognition entirely.
+
+    The keystone ``x + y = uf_xor(x,y) + 2·uf_and(x,y)`` (the lost evenness of
+    ``2·AND``) combined with the row's table fact ``uf_xor(x,y) = z`` forces
+    ``a = uf_and(x,y)`` for an AND row (``z = x+y-2a``) — exactly what the
+    recognizer asserts, but now on both sides. ``uf_or`` is tied via
+    ``x|y = x+y - x&y`` (its byte range is not a linear consequence, so it is
+    asserted explicitly). Guarded by ``byte(x) and byte(y)`` (the relations
+    only hold for bytes); the guard is discharged from the per-row range
+    asserts the bitwise encoder already emits.
+    """
+    for term in terms:
+        x, y = term.args()
+        if x == y:
+            continue
+        conj = Function(UF_AND, [x, y])
+        disj = Function(UF_OR, [x, y])
+        guard = And(LE(Int(0), x), LE(x, Int(255)), LE(Int(0), y), LE(y, Int(255)))
+        # keystone: x + y = (x ^ y) + 2·(x & y)
+        yield Implies(guard, Equals(Plus(x, y), Plus(term, Times(Int(2), conj))))
+        # x & y is a byte bounded by both operands
+        yield Implies(guard, And(LE(Int(0), conj), LE(conj, x), LE(conj, y)))
+        # x | y = x + y - (x & y), and is a byte (NOT a linear consequence)
+        yield Implies(
+            guard,
+            And(Equals(disj, Minus(Plus(x, y), conj)), LE(Int(0), disj), LE(disj, Int(255))),
+        )
+
+
 def _ground_xor_lemmas(terms: Iterable[FNode]) -> Iterable[FNode]:
     """Per-term ``UF_XOR(x,y)`` lemmas for 8-bit-style bounds (used with ``simplify_gbitwise``)."""
     for term in terms:
@@ -229,6 +269,8 @@ def _gbitwise_axioms_tagged(t: BitwiseTerms) -> Iterable[tuple[str, FNode]]:
     """Merge XOR / AND / OR grounded lemmas plus pairwise OR–AND links."""
     for ax in _ground_xor_lemmas(t.xors):
         yield ("xor", ax)
+    for ax in _ground_keystone_lemmas(t.xors):
+        yield ("link", ax)
     for ax in _ground_and_lemmas(t.ands):
         yield ("and", ax)
     for ax in _ground_or_lemmas(t.ors):
