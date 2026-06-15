@@ -95,10 +95,14 @@ def keyed_io_relation(
                         f"{name}: at most one xmatch on row {i}",
                     )
                 )
+
+    for j in range(m):
+        for i in range(n):
+            for k in range(i + 1, n):
                 parts.append(
                     with_comment(
-                        Not(And(xmatch_vars[(j, i)], xmatch_vars[(k, i)])),
-                        f"{name}: at most one xmatch on column {i}",
+                        Not(And(xmatch_vars[(i, j)], xmatch_vars[(k, j)])),
+                        f"{name}: at most one xmatch on column {j}",
                     )
                 )
 
