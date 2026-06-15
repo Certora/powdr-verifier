@@ -110,7 +110,7 @@ def keyed_io_relation(
         parts.append(
             with_comment(
                 Implies(
-                    Or(isi_a[i], isi_b[i]),
+                    Or(isi_a[i], iso_a[i]),
                     Or([xmatch_vars[(i, j)] for j in range(m)]) if m else FALSE(),
                 ),
                 f"{name}: row {i} I/O iff some xmatch",
