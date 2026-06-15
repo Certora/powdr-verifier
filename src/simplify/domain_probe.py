@@ -22,8 +22,49 @@ _SOLVER_OPTS = {"rlimit": 1000000}
 
 # TODO: hacky filter for specific variables
 
-def _assertions_mentioning(sym: FNode, assertions: list[FNode]) -> list[FNode]:
-    return [a for a in assertions if sym in a.get_free_variables()]
+def _flag_local_assertions(
+    assertions: list[FNode], flag_vars: frozenset[FNode]
+) -> list[FNode]:
+    """Constraints whose free variables are *all* small-domain ("flag-local").
+
+    A flag's pinned value is determined by its flag-local polynomial structure
+    — the domain cubic ``f·(f-1)·(f-2) ≡ 0`` (or ``f·(f-1) ≡ 0``) and the
+    group's one-hot / sum constraint — not by the wide bus interactions the
+    flag gates (those mention data columns ``a/b/c`` and pull a 178s nonlinear
+    solve into each probe). Slicing to constraints whose free vars are all
+    flag-like keeps exactly the structural-lever system (cf.
+    ``flag-pinning-structural-lever``) and makes each probe tiny.
+
+    Sound w.r.t. pinning: probing a *subset* of constraints can only return
+    ``unsat`` when the full set is ``unsat`` (sound pin) and otherwise declines
+    to pin (conservative). Flags determined only by global interaction are
+    missed — but those are precisely the probes that are too expensive anyway.
+    """
+    return [a for a in assertions if a.get_free_variables() <= flag_vars]
+
+
+def _small_domain_vars(
+    assertions: list[FNode],
+    reasoner: "IntervalReasoner",
+    or_map: dict[FNode, set[int]],
+    max_n: int,
+) -> frozenset[FNode]:
+    """Int symbols with a known finite domain of <= ``max_n`` values (flag-like)."""
+    flags: set[FNode] = set()
+    seen: set[FNode] = set()
+    for a in assertions:
+        for v in a.get_free_variables():
+            if v in seen:
+                continue
+            seen.add(v)
+            if not (v.is_symbol() and v.get_type().is_int_type()):
+                continue
+            vs = _finite_values(reasoner.get_domain(v), max_n)
+            if (vs is not None and len(vs) <= max_n) or (
+                v in or_map and len(or_map[v]) <= max_n
+            ):
+                flags.add(v)
+    return frozenset(flags)
 
 
 def _finite_values(dom: IntDomain, max_n: int) -> Optional[list[int]]:
@@ -197,12 +238,25 @@ def simplify_domain_probe(
         )
         logger.info("domain_probe: %d pair(s): %s", len(pairs), cand)
 
+        # Flag-local slice: probe pins against constraints involving only
+        # small-domain vars (cubics + group one-hot/sum), not the wide bus
+        # interactions a flag gates. Same for every candidate, so compute once.
+        flag_vars = _small_domain_vars(assertions, base_reasoner, or_map, _MAX_VALUES)
+        flag_local = _flag_local_assertions(assertions, flag_vars)
+        extra["flag_vars"] = len(flag_vars)
+        extra["flag_local_asserts"] = len(flag_local)
+        logger.info(
+            "domain_probe: flag-local slice = %d assert(s) over %d flag var(s)",
+            len(flag_local),
+            len(flag_vars),
+        )
+
         try:
             batch: list[FNode] = []
             for sym, vals in pairs:
-                rel = _assertions_mentioning(sym, assertions)
+                rel = flag_local
                 logger.info(
-                    "domain_probe: symbol %s: %d relevant of %d assert(s)",
+                    "domain_probe: symbol %s: %d flag-local of %d assert(s)",
                     sym,
                     len(rel),
                     len(assertions),
