@@ -81,7 +81,7 @@ def _strip_prefix(row: BusInteraction, prefix: str) -> BusInteraction:
 
 
 _MEMORY_ALIGN_CHECK_TACTIC_FULL = (
-    "z3-propagate-values:bounds:rewrite:gbitwise:mod_inv:demod"
+    "z3-propagate-values:bounds:rewrite:bitwise:mod_inv:demod"
 )
 _MEMORY_ALIGN_CHECK_TACTIC_BARE = "z3-propagate-values:demod"
 

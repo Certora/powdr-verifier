@@ -15,7 +15,7 @@ from .z3 import simplify_z3
 from .nnf import simplify_nnf
 from .lift_forall import simplify_lift_forall
 from .intervals import simplify_intervals2
-from .bitwise import simplify_gbitwise, simplify_qbitwise
+from .bitwise import simplify_bitwise
 from .mod_inv import simplify_mod_inv
 from .skolem import simplify_skolem
 

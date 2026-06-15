@@ -3,7 +3,7 @@ from textwrap import dedent
 
 import z3
 
-from src.simplify.bitwise import UF_AND, UF_OR, UF_XOR, simplify_gbitwise, simplify_qbitwise
+from src.simplify.bitwise import UF_AND, UF_OR, UF_XOR, simplify_bitwise
 from src.smt.utils import *
 
 BABYBEAR_PRIME = 0x78000001
@@ -13,38 +13,7 @@ def _parse(script_text: str) -> script.SmtLibScript:
     return SmtLibParser().get_script(StringIO(dedent(script_text).strip() + "\n"))
 
 
-def test_qbitwise_inserts_quantified_axioms_when_uf_xor_is_used():
-    smt_script = _parse(
-        """
-        (set-logic ALL)
-        (declare-fun uf_xor (Int Int) Int)
-        (declare-fun x () Int)
-        (declare-fun y () Int)
-        (declare-fun z () Int)
-        (assert (= (uf_xor x y) z))
-        (check-sat)
-        """
-    )
-
-    simplified = simplify_qbitwise(smt_script)
-    asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
-    x = Symbol("__bwx", INT)
-    y = Symbol("__bwy", INT)
-
-    assert ForAll([x], Equals(Function(UF_XOR, [x, Int(0)]), x)) in asserts
-    assert ForAll([x], Equals(Function(UF_XOR, [Int(0), x]), x)) in asserts
-    assert ForAll([x], Equals(Function(UF_XOR, [x, x]), Int(0))) in asserts
-    assert ForAll(
-        [x, y],
-        Implies(Equals(Function(UF_XOR, [x, y]), x), Equals(y, Int(0))),
-    ) in asserts
-    assert ForAll(
-        [x, y],
-        Implies(Equals(Function(UF_XOR, [y, x]), x), Equals(y, Int(0))),
-    ) in asserts
-
-
-def test_qbitwise_is_noop_without_uf_xor_terms():
+def test_bitwise_is_noop_without_bitwise_uf():
     smt_script = _parse(
         """
         (set-logic ALL)
@@ -55,13 +24,13 @@ def test_qbitwise_is_noop_without_uf_xor_terms():
         """
     )
 
-    simplified = simplify_qbitwise(smt_script)
+    simplified = simplify_bitwise(smt_script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
 
     assert asserts == [Equals(Symbol("x", INT), Int(7))]
 
 
-def test_gbitwise_grounds_axioms_for_seen_terms():
+def test_bitwise_grounds_axioms_for_seen_terms():
     smt_script = _parse(
         """
         (set-logic ALL)
@@ -75,7 +44,7 @@ def test_gbitwise_grounds_axioms_for_seen_terms():
         """
     )
 
-    simplified = simplify_gbitwise(smt_script)
+    simplified = simplify_bitwise(smt_script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
     x = Symbol("x", INT)
     y = Symbol("y", INT)
@@ -91,7 +60,7 @@ def test_gbitwise_grounds_axioms_for_seen_terms():
     assert Equals(xy, z) in asserts
 
 
-def test_gbitwise_injects_axioms_inside_quantifier():
+def test_bitwise_injects_axioms_inside_quantifier():
     smt_script = _parse(
         """
         (set-logic ALL)
@@ -103,7 +72,7 @@ def test_gbitwise_injects_axioms_inside_quantifier():
         """
     )
 
-    simplified = simplify_gbitwise(smt_script)
+    simplified = simplify_bitwise(smt_script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
     x = Symbol("x", INT)
     y = Symbol("y", INT)
@@ -122,45 +91,7 @@ def test_gbitwise_injects_axioms_inside_quantifier():
     assert Iff(Equals(y, xy), Equals(x, Int(0))) in body.args()
 
 
-def test_qbitwise_injects_axioms_inside_quantifier():
-    smt_script = _parse(
-        """
-        (set-logic ALL)
-        (declare-fun uf_xor (Int Int) Int)
-        (declare-fun y () Int)
-        (declare-fun z () Int)
-        (assert (forall ((x Int)) (= (uf_xor x y) z)))
-        (check-sat)
-        """
-    )
-
-    simplified = simplify_qbitwise(smt_script)
-    asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
-    x = Symbol("x", INT)
-    y = Symbol("y", INT)
-    z = Symbol("z", INT)
-    qx = Symbol("__bwx", INT)
-    qy = Symbol("__bwy", INT)
-
-    assert len(asserts) == 1
-    assert asserts[0].is_forall()
-    body = asserts[0].arg(0)
-    assert body.is_and()
-    assert Equals(Function(UF_XOR, [x, y]), z) in body.args()
-    assert ForAll([qx], Equals(Function(UF_XOR, [qx, Int(0)]), qx)) in body.args()
-    assert ForAll([qx], Equals(Function(UF_XOR, [Int(0), qx]), qx)) in body.args()
-    assert ForAll([qx], Equals(Function(UF_XOR, [qx, qx]), Int(0))) in body.args()
-    assert ForAll(
-        [qx, qy],
-        Implies(Equals(Function(UF_XOR, [qx, qy]), qx), Equals(qy, Int(0))),
-    ) in body.args()
-    assert ForAll(
-        [qx, qy],
-        Implies(Equals(Function(UF_XOR, [qy, qx]), qx), Equals(qy, Int(0))),
-    ) in body.args()
-
-
-def test_gbitwise_simplifies_quantified_xor_terms_locally():
+def test_bitwise_simplifies_quantified_xor_terms_locally():
     smt_script = _parse(
         """
         (set-logic ALL)
@@ -172,7 +103,7 @@ def test_gbitwise_simplifies_quantified_xor_terms_locally():
         """
     )
 
-    simplified = simplify_gbitwise(smt_script)
+    simplified = simplify_bitwise(smt_script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
     x = Symbol("x", INT)
 
@@ -181,7 +112,7 @@ def test_gbitwise_simplifies_quantified_xor_terms_locally():
     assert ForAll([x], Equals(Int(0), Int(0))) in asserts
 
 
-def test_qbitwise_inserts_andor_connection_without_xor():
+def test_bitwise_inserts_andor_connection_from_and_only():
     smt_script = _parse(
         """
         (set-logic ALL)
@@ -193,21 +124,17 @@ def test_qbitwise_inserts_andor_connection_without_xor():
         (check-sat)
         """
     )
-    simplified = simplify_qbitwise(smt_script)
+    simplified = simplify_bitwise(smt_script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
-    x = Symbol("__bw_andor_x", INT)
-    y = Symbol("__bw_andor_y", INT)
-    expected = ForAll(
-        [x, y],
-        Equals(
-            Function(UF_OR, [x, y]),
-            Minus(Plus(x, y), Function(UF_AND, [x, y])),
-        ),
-    )
-    assert expected in asserts
+    x = Symbol("x", INT)
+    y = Symbol("y", INT)
+    assert Equals(
+        Function(UF_OR, [x, y]),
+        Minus(Plus(x, y), Function(UF_AND, [x, y])),
+    ) in asserts
 
 
-def test_gbitwise_inserts_grounded_andor_and_connection():
+def test_bitwise_inserts_grounded_andor_and_connection():
     smt_script = _parse(
         """
         (set-logic ALL)
@@ -219,7 +146,7 @@ def test_gbitwise_inserts_grounded_andor_and_connection():
         (check-sat)
         """
     )
-    simplified = simplify_gbitwise(smt_script)
+    simplified = simplify_bitwise(smt_script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
     a = Symbol("a", INT)
     b = Symbol("b", INT)
@@ -229,28 +156,7 @@ def test_gbitwise_inserts_grounded_andor_and_connection():
     ) in asserts
 
 
-def test_qbitwise_simplifies_quantified_xor_terms_locally():
-    smt_script = _parse(
-        """
-        (set-logic ALL)
-        (declare-fun uf_xor (Int Int) Int)
-        (assert (forall ((x Int)) (= (uf_xor x 0) x)))
-        (assert (forall ((x Int)) (= (uf_xor 0 x) x)))
-        (assert (forall ((x Int)) (= (uf_xor x x) 0)))
-        (check-sat)
-        """
-    )
-
-    simplified = simplify_qbitwise(smt_script)
-    asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
-    x = Symbol("x", INT)
-
-    assert ForAll([x], Equals(x, x)) in asserts
-    assert ForAll([x], Equals(x, x)) in asserts
-    assert ForAll([x], Equals(Int(0), Int(0))) in asserts
-
-
-def test_gbitwise_emits_symmetric_keystone_for_xor_term():
+def test_bitwise_emits_symmetric_keystone_for_xor_term():
     """The keystone x+y = uf_xor + 2·uf_and (byte-guarded) is attached to every
     uf_xor application — independent of the AND/OR recognizer — so the AND/OR
     byte-range is present on both sides of a VC. Regression for 2105476
@@ -266,7 +172,7 @@ def test_gbitwise_emits_symmetric_keystone_for_xor_term():
         (check-sat)
         """
     )
-    simplified = simplify_gbitwise(smt_script)
+    simplified = simplify_bitwise(smt_script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
     x, y = Symbol("x", INT), Symbol("y", INT)
     xy = Function(UF_XOR, [x, y])
@@ -276,7 +182,7 @@ def test_gbitwise_emits_symmetric_keystone_for_xor_term():
     assert Implies(guard, And(LE(Int(0), conj), LE(conj, x), LE(conj, y))) in asserts
 
 
-def test_gbitwise_keystone_skipped_for_equal_args():
+def test_bitwise_keystone_skipped_for_equal_args():
     """uf_xor(x,x) folds to 0; no keystone (guarded Implies) is emitted."""
     smt_script = _parse(
         """
@@ -287,7 +193,7 @@ def test_gbitwise_keystone_skipped_for_equal_args():
         (check-sat)
         """
     )
-    simplified = simplify_gbitwise(smt_script)
+    simplified = simplify_bitwise(smt_script)
     asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
     assert not any(a.is_implies() for a in asserts)
 
