@@ -18,6 +18,7 @@ from .intervals import simplify_intervals2
 from .bitwise import simplify_bitwise
 from .mod_inv import simplify_mod_inv
 from .skolem import simplify_skolem
+from .normalize_eqs import simplify_normalize_eqs
 
 def simplify_model(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
     """Substitute concrete values from ``ARGS().with_model`` into asserted formulas (including ForAll)."""
