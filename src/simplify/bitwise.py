@@ -72,8 +72,8 @@ def _bitwise_terms_for_scope(
     )
 
 
-def _ground_keystone_lemmas(t: BitwiseTerms) -> Iterable[FNode]:
-    """Per-``UF_XOR(x,y)`` keystone tying XOR to AND/OR, byte-guarded.
+def _ground_linking_lemmas(t: BitwiseTerms) -> Iterable[FNode]:
+    """Per-``UF_XOR(x,y)`` linking lemmas tying XOR to AND/OR, byte-guarded.
 
     This is the *symmetric* fix for the AND/OR byte-range asymmetry: keyed off
     the ``uf_xor`` application itself, it is emitted for every ``uf_xor`` term
@@ -85,7 +85,7 @@ def _ground_keystone_lemmas(t: BitwiseTerms) -> Iterable[FNode]:
     2105476 002->003). Making this an axiom removes the dependence on
     recognition entirely.
 
-    The keystone ``x + y = uf_xor(x,y) + 2·uf_and(x,y)`` (the lost evenness of
+    The linking block ``x + y = uf_xor(x,y) + 2·uf_and(x,y)`` (the lost evenness of
     ``2·AND``) combined with the row's table fact ``uf_xor(x,y) = z`` forces
     ``a = uf_and(x,y)`` for an AND row (``z = x+y-2a``) — exactly what the
     recognizer asserts, but now on both sides. ``uf_or`` is tied via
@@ -101,7 +101,7 @@ def _ground_keystone_lemmas(t: BitwiseTerms) -> Iterable[FNode]:
         conj = Function(UF_AND, [x, y])
         disj = Function(UF_OR, [x, y])
         guard = And(LE(Int(0), x), LE(x, Int(255)), LE(Int(0), y), LE(y, Int(255)))
-        # keystone: x + y = (x ^ y) + 2·(x & y)
+        # x + y = (x ^ y) + 2·(x & y)
         yield Implies(guard, Equals(Plus(x, y), Plus(term, Times(Int(2), conj))))
         # x & y is a byte bounded by both operands
         yield Implies(guard, And(LE(Int(0), conj), LE(conj, x), LE(conj, y)))
@@ -189,21 +189,6 @@ def _ground_or_lemmas(t: BitwiseTerms) -> Iterable[FNode]:
                 And(LE(Int(0), y), LE(y, Int(255)), Equals(x, Int(255))),
                 Equals(term, Int(255)),
             )
-
-
-def _ground_andor_connection_pairs(t: BitwiseTerms) -> Iterable[FNode]:
-    """Grounded identity ``or(x,y) = x + y - and(x,y)`` for each argument pair seen on AND/OR."""
-    pairs = {
-        (term.args()[0], term.args()[1])
-        for coll in (t.ands, t.ors)
-        for term in coll
-    }
-    for x, y in pairs:
-        # Relates ``uf_or`` and ``uf_and`` for this (x, y) pair (bitwise ``|`` / ``&`` on bytes).
-        yield Equals(
-            Function(UF_OR, [x, y]),
-            Minus(Plus(x, y), Function(UF_AND, [x, y])),
-        )
 
 
 def _conjoin_axioms_flat(body: FNode, axioms: Iterable[FNode]) -> FNode:
@@ -309,6 +294,7 @@ def simplify_bitwise(smt_script: script.SmtLibScript, subaction=None) -> script.
     asserts). Top-level additions are de-duplicated by formula node identity
     across both passes.
     """
+    stats = None
     if subaction is not None:
         stats = {
             "seen": {"xor": 0, "and": 0, "or": 0},
@@ -321,10 +307,7 @@ def simplify_bitwise(smt_script: script.SmtLibScript, subaction=None) -> script.
     top_axiom_asserts = 0
     try:
         for generators in (
-            (
-                lambda t: (("link", ax) for ax in _ground_keystone_lemmas(t)),
-                lambda t: (("link", ax) for ax in _ground_andor_connection_pairs(t)),
-            ),
+            (lambda t: (("link", ax) for ax in _ground_linking_lemmas(t)),),
             (
                 lambda t: (("xor", ax) for ax in _ground_xor_lemmas(t)),
                 lambda t: (("and", ax) for ax in _ground_and_lemmas(t)),
@@ -349,6 +332,8 @@ def simplify_bitwise(smt_script: script.SmtLibScript, subaction=None) -> script.
             if hasattr(env, name):
                 delattr(env, name)
     if subaction is not None:
-        subaction += ("top_level_axioms", top_axiom_asserts)
-        subaction += stats
+        payload: dict = {"top_level_bitwise_axiom_asserts": top_axiom_asserts}
+        if stats is not None:
+            payload["bitwise_stats"] = stats
+        subaction += payload
     return smt_script

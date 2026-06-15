@@ -191,7 +191,7 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
                         f"BITWISE lift: {a} = {kind}({x}, {y})",
                     ),
                     # ground axioms for the uf_and application; the
-                    # keystone x + y = xor + 2 and carries the evenness
+                    # linking x + y = xor + 2 and carries the evenness
                     # the bare table encoding loses
                     LE(Int(0), conj),
                     LE(conj, wx),
