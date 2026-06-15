@@ -587,6 +587,12 @@ def _plain_encoding_symbol_pairs(
         subs[before_conv._symbol(b, BOOL)] = after_conv._symbol(a, BOOL)
 
     for i_b, i_a in m.items():
+        # Pin only the matched cell to TRUE. The row/column complement is left
+        # to the at-most-one xmatch axioms in ``io_relation``: any off-diagonal
+        # xmatch being true falsifies ``io_relation``, so that case is satisfied
+        # vacuously by ``Not(io_relation)`` in the goal, and the universal over
+        # the complement collapses to the valid-permutation (complement-false)
+        # instance on its own. Explicit FALSE pins are redundant.
         subs[Symbol(f"{nm}_xmatch_{i_b}_{i_a}", BOOL)] = TRUE()
 
         add_sub(f"{nm}_isinput_{i_b}", f"{nm}_isinput_{i_a}")
