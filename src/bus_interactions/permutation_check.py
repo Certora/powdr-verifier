@@ -22,7 +22,7 @@ def keyed_io_relation(
     iso_b: list[list[FNode]],
     *,
     xmatch_name_prefix: str,
-) -> FNode:
+) -> tuple[FNode, frozenset[FNode]]:
     """Relate two sets of memory-bus I/O across independent encodings.
 
     Used in completeness/soundness checks to require that the *before* and
@@ -47,14 +47,11 @@ def keyed_io_relation(
         interactions_a: Interactions from the left/before encoder, same order as
             when that side's permutation check was built.
         interactions_b: Interactions from the right/after encoder.
-        is_a: For each index ``i`` into ``interactions_a``, a boolean formula that
-            is true exactly when that interaction counts as the chosen I/O kind
-            (input or output) on side A.
-        is_b: Same for side B, aligned with ``interactions_b``.
-        xmatch_symbol: ``(stem, sort) ->`` fresh symbol (e.g. encoder ``_symbol``).
+        isi_a, iso_a: Per-interaction input/output flags on side A (lists of length ``n``).
+        isi_b, iso_b: Same on side B (length ``m``).
         xmatch_name_prefix: Bus name used in ``{prefix}_xmatch_i_j`` stems.
 
-    Returns a conjunction of reification + row/column Boolean constraints.
+    Returns ``(conjunction, introduced)`` where ``introduced`` are the xmatch symbols.
     """
     n, m = len(interactions_a), len(interactions_b)
     parts: list[FNode] = []
@@ -129,7 +126,8 @@ def keyed_io_relation(
 
     parts = boolean_propagate([keep_comment(p.simplify(), p) for p in parts])
 
-    return And(*parts) if parts else TRUE()
+    introduced = frozenset(xmatch_vars.values())
+    return (And(*parts) if parts else TRUE(), introduced)
 
 
 class TimestampCheckMixin:

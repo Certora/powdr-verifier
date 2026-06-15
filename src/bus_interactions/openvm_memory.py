@@ -457,18 +457,20 @@ class OpenVMMemoryEncoder(
             )
         return out
 
-    def build_io_relation(self, other: SingleInteractionEncoder) -> FNode | None:
+    def build_io_relation(
+        self, other: SingleInteractionEncoder
+    ) -> tuple[FNode, frozenset[FNode]]:
         if ARGS().memory_encoding == "none":
-            return None
+            return (TRUE(), frozenset())
         if ARGS().memory_encoding == "plain":
             return keyed_io_relation(
-                    f"IO RELATION for {self.NAME}",
-                    self._bus_interactions(),
-                    other._bus_interactions(),
-                    self._isinputs,
-                    self._isoutputs,
-                    other._isinputs,
-                    other._isoutputs,
-                    xmatch_name_prefix=self.NAME,
-                )
+                f"IO RELATION for {self.NAME}",
+                self._bus_interactions(),
+                other._bus_interactions(),
+                self._isinputs,
+                self._isoutputs,
+                other._isinputs,
+                other._isoutputs,
+                xmatch_name_prefix=self.NAME,
+            )
         return super().build_io_relation(other)
