@@ -133,28 +133,29 @@ def verify():
             )
             return info
 
-        outfile = ARGS().output.with_suffix(".completeness.smt2")
-        with open(outfile, "w") as dump:
-            dump.write(";; completeness check\n")
-            completeness = encoding(
-                before_smt,
-                after_smt,
-                var2 - globals,
-                io_relation,
-            )
-            info = pin_metadata(completeness, after_derived_pins, reverse=True, smt_outfile=outfile)
+        if not ARGS().skip_correctness:
+            outfile = ARGS().output.with_suffix(".completeness.smt2")
+            with open(outfile, "w") as dump:
+                dump.write(";; completeness check\n")
+                completeness = encoding(
+                    before_smt,
+                    after_smt,
+                    var2 - globals,
+                    io_relation,
+                )
+                info = pin_metadata(completeness, after_derived_pins, reverse=True, smt_outfile=outfile)
 
-            logging.info(f"dumping completeness check to {dump.name}")
-            smtlib = convert_to_smt_script(
-                completeness, status='unsat', pin_info=info
-            )
-            write_smtlib_script(smtlib, dump)
-            action += ("outputs", outfile)
-        
+                logging.info(f"dumping completeness check to {dump.name}")
+                smtlib = convert_to_smt_script(
+                    completeness, status='unsat', pin_info=info
+                )
+                write_smtlib_script(smtlib, dump)
+                action += ("outputs", outfile)
+
         is_valid_before = get_is_valid(var1, "before")
         is_valid_after = get_is_valid(var2, "after")
 
-        if is_valid_before is None and is_valid_after is not None:
+        if not ARGS().skip_soundness and is_valid_before is None and is_valid_after is not None:
             logging.warning("is_valid was introduced, perform special soundness check")
             outfile = ARGS().output.with_suffix(".soundness.smt2")
             with open(outfile, "w") as dump:
@@ -218,7 +219,7 @@ def verify():
                 )
                 write_smtlib_script(smtlib, dump)
                 action += ("outputs", outfile)
-        else:
+        elif not ARGS().skip_soundness:
             outfile = ARGS().output.with_suffix(".soundness.smt2")
             with open(outfile, "w") as dump:
                 dump.write(";; soundness check\n")
