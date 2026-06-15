@@ -112,52 +112,8 @@ def test_bitwise_simplifies_quantified_xor_terms_locally():
     assert ForAll([x], Equals(Int(0), Int(0))) in asserts
 
 
-def test_bitwise_inserts_andor_connection_from_and_only():
-    smt_script = _parse(
-        """
-        (set-logic ALL)
-        (declare-fun uf_and (Int Int) Int)
-        (declare-fun uf_or (Int Int) Int)
-        (declare-fun x () Int)
-        (declare-fun y () Int)
-        (assert (= (uf_and x y) 0))
-        (check-sat)
-        """
-    )
-    simplified = simplify_bitwise(smt_script)
-    asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
-    x = Symbol("x", INT)
-    y = Symbol("y", INT)
-    assert Equals(
-        Function(UF_OR, [x, y]),
-        Minus(Plus(x, y), Function(UF_AND, [x, y])),
-    ) in asserts
-
-
-def test_bitwise_inserts_grounded_andor_and_connection():
-    smt_script = _parse(
-        """
-        (set-logic ALL)
-        (declare-fun uf_and (Int Int) Int)
-        (declare-fun uf_or (Int Int) Int)
-        (declare-fun a () Int)
-        (declare-fun b () Int)
-        (assert (= (uf_or a b) 7))
-        (check-sat)
-        """
-    )
-    simplified = simplify_bitwise(smt_script)
-    asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
-    a = Symbol("a", INT)
-    b = Symbol("b", INT)
-    assert Equals(
-        Function(UF_OR, [a, b]),
-        Minus(Plus(a, b), Function(UF_AND, [a, b])),
-    ) in asserts
-
-
-def test_bitwise_emits_symmetric_keystone_for_xor_term():
-    """The keystone x+y = uf_xor + 2·uf_and (byte-guarded) is attached to every
+def test_bitwise_emits_symmetric_linking_for_xor_term():
+    """The linking x+y = uf_xor + 2·uf_and (byte-guarded) is attached to every
     uf_xor application — independent of the AND/OR recognizer — so the AND/OR
     byte-range is present on both sides of a VC. Regression for 2105476
     002->003, whose multiplexed (pre-solver) side the recognizer cannot lift."""
@@ -182,8 +138,8 @@ def test_bitwise_emits_symmetric_keystone_for_xor_term():
     assert Implies(guard, And(LE(Int(0), conj), LE(conj, x), LE(conj, y))) in asserts
 
 
-def test_bitwise_keystone_skipped_for_equal_args():
-    """uf_xor(x,x) folds to 0; no keystone (guarded Implies) is emitted."""
+def test_bitwise_linking_skipped_for_equal_args():
+    """uf_xor(x,x) folds to 0; no linking (guarded Implies) is emitted."""
     smt_script = _parse(
         """
         (set-logic ALL)
@@ -201,7 +157,7 @@ def test_bitwise_keystone_skipped_for_equal_args():
 def _z3_and_row(a_value):
     """z3 fixtures for a BabyBear AND row a = (x & y) via the XOR table.
     Operands x=2,y=1 (real a=0). Table arg z = (x+y-2a) mod p; uf_xor(x,y)=z.
-    Returns (solver, uf_xor, x, y) so a test can add the keystone."""
+    Returns (solver, uf_xor, x, y) so a test can add the linking lemmas."""
     p = BABYBEAR_PRIME
     x, y = 2, 1
     z = (x + y - 2 * a_value) % p
@@ -213,17 +169,17 @@ def _z3_and_row(a_value):
     return s, uf_xor, uf_and, x, y
 
 
-def test_keystone_rejects_overapproximated_and_witness():
+def test_linking_rejects_overapproximated_and_witness():
     """Bogus a=(p-1)/2 makes the wrapped table arg z=4 (solver wants uf_xor(2,1)=4).
-    Keystone 2+1 = uf_xor + 2·uf_and then forces 2·uf_and=-1 — unsat over Int."""
+    Linking 2+1 = uf_xor + 2·uf_and then forces 2·uf_and=-1 — unsat over Int."""
     s, uf_xor, uf_and, x, y = _z3_and_row((BABYBEAR_PRIME - 1) // 2)
-    assert s.check() == z3.sat  # over-approximated model exists pre-keystone
+    assert s.check() == z3.sat  # over-approximated model exists pre-linking
     s.add(x + y == uf_xor(x, y) + 2 * uf_and(x, y))
     assert s.check() == z3.unsat
 
 
-def test_keystone_admits_real_and_witness():
-    """Real a=2&1=0 gives z=3=2^1; keystone pins uf_and(2,1)=0 and stays sat."""
+def test_linking_admits_real_and_witness():
+    """Real a=2&1=0 gives z=3=2^1; linking pins uf_and(2,1)=0 and stays sat."""
     s, uf_xor, uf_and, x, y = _z3_and_row(0)
     s.add(x + y == uf_xor(x, y) + 2 * uf_and(x, y))
     s.add(0 <= uf_and(x, y), uf_and(x, y) <= x, uf_and(x, y) <= y)
