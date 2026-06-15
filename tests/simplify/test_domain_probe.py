@@ -44,6 +44,35 @@ def test_domain_probe_strengthens_binary_disjunction():
     assert len(asserts) == 1
 
 
+def test_flag_local_slice_keeps_flag_constraints_drops_wide_ones():
+    """Flag-local slicing keeps constraints over small-domain (flag) vars and
+    drops those touching wide data columns, so a flag probe doesn't drag the
+    nonlinear bus arithmetic into the solver (the 202s->3.5s win on 2105476)."""
+    from src.simplify.domain_probe import (
+        _collect_or_map,
+        _flag_local_assertions,
+        _small_domain_vars,
+    )
+    from src.simplify.intervals.reasoner import IntervalReasoner
+
+    f = Symbol("opcode_and_flag", INT)  # small domain {0,1}
+    a = Symbol("a__0_0", INT)  # wide, unbounded data column
+    flag_dom = Or(Equals(f, Int(0)), Equals(f, Int(1)))
+    wide = Equals(Times(f, a), a)  # mentions wide a -> not flag-local
+    asserts = [flag_dom, wide]
+
+    reasoner = IntervalReasoner()
+    reasoner.assume_all(asserts)
+    or_map = _collect_or_map(asserts)
+    flags = _small_domain_vars(asserts, reasoner, or_map, 3)
+
+    assert f in flags  # {0,1} -> flag-like
+    assert a not in flags  # unbounded -> not flag-like
+    sliced = _flag_local_assertions(asserts, flags)
+    assert flag_dom in sliced  # flag-only constraint kept
+    assert wide not in sliced  # data-touching constraint dropped
+
+
 def test_domain_probe_subaction_added_facts():
     from src.report.action import Action
 
