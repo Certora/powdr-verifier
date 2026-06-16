@@ -133,7 +133,7 @@ def verify():
             )
             return info
 
-        if not ARGS().skip_correctness:
+        if not ARGS().skip_completeness:
             outfile = ARGS().output.with_suffix(".completeness.smt2")
             with open(outfile, "w") as dump:
                 dump.write(";; completeness check\n")

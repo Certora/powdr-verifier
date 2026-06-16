@@ -112,7 +112,7 @@ def __build_parser(skip_subparsers=False):
     sub_verify.add_argument("output", type=Path)
     sub_verify.add_argument("--inject", nargs="?", default=None, const="random", metavar="SEED")
     sub_verify.add_argument("--skip-soundness", action="store_true")
-    sub_verify.add_argument("--skip-correctness", action="store_true")
+    sub_verify.add_argument("--skip-completeness", action="store_true")
 
     sub_check = sub.add_parser("check")
     sub_check.add_argument("input", type=Path)
