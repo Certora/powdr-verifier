@@ -28,18 +28,53 @@ def _field_modulus() -> int:
     return int(ARGS().field_type.value)
 
 
+def _is_combinator(n: FNode) -> bool:
+    """Arithmetic nodes that ``_expr_to_poly`` decomposes rather than treats as a ring atom."""
+    return n.is_plus() or n.is_minus() or n.is_times()
+
+
 def collect_variables(smt_script: script.SmtLibScript) -> tuple[FNode, ...]:
-    """All free ``Int`` variables appearing under ``assert``, sorted by symbol name."""
-    syms: set[FNode] = set()
+    """Atomic ring generators across all ``assert`` bodies, in a deterministic order.
+
+    A generator is any ``Int`` subterm that ``_expr_to_poly`` treats atomically: an ``Int``
+    symbol, **or** a maximal **opaque** ``Int`` node — e.g. an uninterpreted ``uf_and(…)``
+    bitwise application — that is neither an integer constant nor an ``+``/``-``/``*``
+    combinator. Opaque nodes are *not* descended into: the whole node is one generator (so
+    its internal structure never leaks extra generators). Field ``(mod body p)`` wrappers are
+    transparent here because ``walk_equals`` unwraps them before parsing ``body``.
+
+    Treating bitwise/uninterpreted terms as generators (rather than bailing) is what lets the
+    monic rewrite reach booleanity atoms like ``(= (mod (… + c·uf_and(a,3)) p) 0)``.
+    """
+    gens: set[FNode] = set()
+    seen: set[FNode] = set()  # assert bodies are shared DAGs — visit each node once
+
+    def visit(n: FNode) -> None:
+        if n in seen:
+            return
+        seen.add(n)
+        if n.get_type().is_int_type():
+            if _as_int_const(n) is not None:
+                return
+            if _field_mod_wrap(n):
+                visit(n.arg(0))  # unwrapped by ``walk_equals`` before parsing
+                return
+            if _is_combinator(n):
+                for a in n.args():
+                    visit(a)
+                return
+            # Int symbol or opaque Int node (uninterpreted application, ite, non-field mod, …).
+            gens.add(n)
+            return
+        # Non-Int node (Bool connective, comparison, …): recurse to reach Int subterms.
+        for a in n.args():
+            visit(a)
+
     for cmd in smt_script.commands:
         if cmd.name == "assert":
-            syms |= {
-                v
-                for v in cmd.args[0].get_free_variables()
-                if v.get_type().is_int_type()
-            }
-    # Deterministic ring variable order: name sort matches exponent tuple index in ``Poly``.
-    return tuple(sorted(syms, key=lambda s: s.symbol_name()))
+            visit(cmd.args[0])
+    # Deterministic ring variable order: serialization sort matches exponent tuple index.
+    return tuple(sorted(gens, key=lambda s: s.serialize()))
 
 
 def _compare_monomials(e1: Monomial, e2: Monomial) -> int:
@@ -106,11 +141,6 @@ def _expr_to_poly(
     if (ic := _as_int_const(n)) is not None:
         m = ic % p
         return {(0,) * nvars: m} if m else {}
-    if n.is_symbol() and n.symbol_type().is_int_type():
-        assert n in var_index
-        e = [0] * nvars
-        e[var_index[n]] = 1
-        return {tuple(e): 1}
     if n.is_plus():
         acc: Poly | None = {}
         for a in n.args():
@@ -137,6 +167,13 @@ def _expr_to_poly(
             acc = _poly_mul(acc, q, nvars)
             assert acc is not None
         return acc
+    # Atomic ring generator: an ``Int`` symbol or opaque ``Int`` node collected by
+    # ``collect_variables`` (e.g. ``uf_and(a, 3)``). Anything not collected (a non-linear
+    # form we don't model) leaves the assert unchanged.
+    if n in var_index:
+        e = [0] * nvars
+        e[var_index[n]] = 1
+        return {tuple(e): 1}
     return None
 
 

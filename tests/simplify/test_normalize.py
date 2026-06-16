@@ -139,6 +139,67 @@ def test_normalize_zero_equals_zero():
     assert asserts == [field_eq(Int(0))]
 
 
+def test_normalize_opaque_uf_term_is_a_generator():
+    # Atoms carrying an uninterpreted (bitwise-like) Int term must be normalized, not skipped:
+    # the opaque ``uf(a, 3)`` application is treated as an atomic ring generator.
+    p = int(ARGS().field_type.value)
+    smt = _parse(
+        f"""
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (declare-fun a () Int)
+        (declare-fun uf (Int Int) Int)
+        (assert (= (mod (+ (* 256 x) (* 7864320 (uf a 3))) {p}) 0))
+        (check-sat)
+        """
+    )
+    old = [c.args[0] for c in smt.commands if c.name == "assert"][0]
+    simplify_normalize(smt)
+    new = [c.args[0] for c in smt.commands if c.name == "assert"][0]
+    # The pass must have rewritten the atom rather than bailing on the ``uf`` term.
+    assert new != old
+
+
+def test_normalize_uf_reflection_collapses_to_same_monic():
+    # The booleanity-reflection bug: two atoms that are unit-(-1) multiples of each other,
+    # both containing an opaque ``uf`` term, must collapse to one canonical monic form.
+    p = int(ARGS().field_type.value)
+    smt = _parse(
+        f"""
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (declare-fun a () Int)
+        (declare-fun uf (Int Int) Int)
+        (assert (= (mod (+ (* 256 x) (* 7864320 (uf a 3))) {p}) 0))
+        (assert (= (mod (+ (* {p - 256} x) (* {(p - 7864320) % p} (uf a 3))) {p}) 0))
+        (check-sat)
+        """
+    )
+    simplify_normalize(smt)
+    asserts = [c.args[0] for c in smt.commands if c.name == "assert"]
+    # ``L ≡ 0`` and ``-L ≡ 0`` normalize to the identical monic representative.
+    assert asserts[0] == asserts[1]
+
+
+def test_normalize_uf_booleanity_roots_reflect():
+    # Mirrors 036↔037: root ``V-1`` (before) and its reflection ``-V+1`` (after) unify.
+    p = int(ARGS().field_type.value)
+    smt = _parse(
+        f"""
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (declare-fun a () Int)
+        (declare-fun uf (Int Int) Int)
+        (assert (= (mod (+ (* 256 x) (* 7864320 (uf a 3)) {p - 1}) {p}) 0))
+        (assert (= (mod (+ (* {p - 256} x) (* {(p - 7864320) % p} (uf a 3)) 1) {p}) 0))
+        (check-sat)
+        """
+    )
+    simplify_normalize(smt)
+    asserts = [c.args[0] for c in smt.commands if c.name == "assert"]
+    assert asserts[0] == asserts[1]
+
+
 def test_normalize_skips_mod():
     smt = _parse(
         """
