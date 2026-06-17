@@ -93,14 +93,14 @@ class SmtConverter:
             case {"QuotientOrZero": [a, b]}:
                 ae, be = self.convert_manual(a), self.convert_manual(b)
                 return Ite(
-                    Equals(wrap_mod(be), Int(0)),
+                    field_eq(be),
                     Int(0),
                     Times(wrap_mod(ae), Function(self.UF_MOD_INV, [wrap_mod(be)])),
                 )
             case {"IfEqZero": [cond, then_cm, else_cm]}:
                 ce = self.convert_manual(cond)
                 return Ite(
-                    Equals(wrap_mod(ce), Int(0)),
+                    field_eq(ce),
                     self.convert_computation_method(then_cm),
                     self.convert_computation_method(else_cm),
                 )
