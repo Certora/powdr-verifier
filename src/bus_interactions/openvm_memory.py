@@ -180,7 +180,7 @@ class OpenVMMemoryEncoder(
         if ARGS().memory_encoding == "none":
             return TRUE()
         if address_space.is_int_constant() and address_space.constant_value() == 0:
-            assert mult.is_int_constant() and mult.constant_value() == 0
+            assert mult.is_int_constant() and mult.constant_value() == 0, f"mult is {mult}, {address_space}, {pointer}"
         return Implies(
             And(
                 Equals(wrap_mod(Plus(mult, Int(1))), Int(0)),
