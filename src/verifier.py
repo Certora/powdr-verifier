@@ -84,8 +84,8 @@ def verify():
         io_relation, iorelvars = before_conv.bus_interaction_encoder.build_io_relation(
             after_conv.bus_interaction_encoder
         )
-        var1 = before_smt.symbols | iorelvars
-        var2 = after_smt.symbols | iorelvars
+        var1 = before_conv.symbols | iorelvars
+        var2 = after_conv.symbols | iorelvars
         globals = before_smt.globals | after_smt.globals
         auxiliaries = frozenset.union(
             frozenset(),
