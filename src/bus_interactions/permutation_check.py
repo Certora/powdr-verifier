@@ -775,12 +775,17 @@ class PermutationCheckMixin:
                 )
             )
 
-        if False:
+        if True:
             ts_vars: set[FNode] = set()
             for bi in interactions:
                 if bi.args:
                     ts_vars |= bi.args[-1].get_free_variables()
-            coi = cone_of_influence(self.constraints(), ts_vars)
+            vrs = self._cur_state.bus_interaction_encoder.variable_range_checker
+            coi_constraints = list(self.constraints())
+            coi_constraints.extend(
+                c for c in vrs.encode() if c is not None
+            )
+            coi = cone_of_influence(coi_constraints, ts_vars)
             tracked_bools = set(match_vars.values())
             learned = plain_memory_presolve(
                 conjuncts, tracked_bools, context=coi
