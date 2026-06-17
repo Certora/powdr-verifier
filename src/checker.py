@@ -4,11 +4,9 @@ Parses ``(set-info :status ...)`` as the expected solver outcome, tries a
 small grid of random seeds and timeouts, and queries ``:reason-unknown``
 when the result is inconclusive.
 """
-import itertools
 import json
 import logging
 import re
-from collections.abc import Iterator
 from pathlib import Path
 
 from .report.action import Action, classify_expected_vs_result
@@ -134,6 +132,112 @@ def _run_solver_config(smt_script, config):
         return action
 
 
+def _find_largest_or_goal(smt_script: list) -> FNode | None:
+    """Return the largest top-level ``Or`` assert body, if splittable."""
+    goal = None
+    n_disjuncts = 0
+    for cmd in smt_script:
+        if cmd.name != "assert" or not cmd.args[0].is_or():
+            continue
+        f = cmd.args[0]
+        k = len(f.args())
+        if k > n_disjuncts:
+            goal, n_disjuncts = f, k
+    if goal is None or n_disjuncts < 2:
+        return None
+    return goal
+
+
+def check_smt_script_disjuncts(
+    smt_script,
+    goal,
+    action: Action,
+    *,
+    input_for_log: Path | None = None,
+    check_timeout: float | None = None,
+) -> str:
+    """Like :func:`check_smt_script`, but solve the goal ``Or`` one disjunct at a time."""
+    log_key = _display_path(input_for_log)
+    log = logging.warning if input_for_log is not None else logging.debug
+    first = _solver_configs(check_timeout=check_timeout)[0]
+    config = {
+        "name": first["name"],
+        "solver_options": {**first["solver_options"], "timeout": 60_000},
+    }
+    label = _solver_config_label(config)
+    logging.warning("check %s (disjuncts) with %s", log_key, label)
+    disjuncts = goal.args()
+    with Action("check-attempt") as attempt:
+        attempt += {
+            "solver": config["name"],
+            "solver_options": config["solver_options"],
+        }
+        try:
+            with Solver(
+                name=config["name"],
+                logic=ALL,
+                incremental=True,
+                solver_options=config["solver_options"],
+            ) as s:
+                s.set_logic = lambda l: None
+                for cmd in smt_script:
+                    if cmd.name == "set-info" and cmd.args[0] == ":status":
+                        continue
+                    if cmd.name == "assert" and cmd.args[0] is goal:
+                        continue
+                    if cmd.name == "check-sat":
+                        continue
+                    script.evaluate_command(cmd, s)
+                for k, disjunct in enumerate(disjuncts):
+                    s.push()
+                    s.add_assertion(disjunct)
+                    try:
+                        sat = s.solve()
+                    except SolverReturnedUnknownResultError:
+                        if reason := _get_reason_unknown(s):
+                            attempt += {"result": f"unknown-{reason}"}
+                        else:
+                            attempt += {"result": "unknown"}
+                        attempt += {"disjunct_index": k}
+                        s.pop()
+                        break
+                    if sat:
+                        attempt += {
+                            "result": "sat",
+                            "model": to_nice_model(s.get_model()),
+                            "disjunct_index": k,
+                        }
+                        s.pop()
+                        break
+                    s.pop()
+                    s.add_assertion(Not(disjunct))
+                else:
+                    attempt += {"result": "unsat"}
+        except BrokenPipeError:
+            attempt += {"result": "error-broken-pipe"}
+    action += attempt
+    res = attempt.result
+    if res == "sat":
+        if ARGS().dump_model:
+            logging.info("dumping model to %s", ARGS().dump_model)
+            with open(ARGS().dump_model, "w") as f:
+                json.dump(attempt.model, f, indent=4)
+    if action.expected is not None:
+        o = classify_expected_vs_result(
+            name=action.name, expected=action.expected, result=res
+        )
+        if o == "wrong":
+            logging.error("expected %s but got %s", action.expected, res)
+        elif o == "timeout":
+            logging.warning(
+                "expected %s; solver timed out (result %s)", action.expected, res
+            )
+        elif o != "success":
+            logging.error("expected %s but got %s", action.expected, res)
+    action += {"result": res}
+    return res
+
+
 def check_smt_script(
     smt_script,
     action: Action,
@@ -187,53 +291,6 @@ def check_smt_script(
     return res
 
 
-def _goal_chunk_scripts(smt_script: list, chunks: int) -> Iterator[list]:
-    """Yield scripts that split the goal disjunction into up to ``chunks`` parts.
-
-    Yields nothing if there is no splittable goal ``Or``, or if
-    ``len(disjuncts) < 2 * chunks``.
-
-    The goal of an equivalence check is one large ``Or`` (the negated
-    quantified-side constraints). ``base ∧ (D₁ ∨ … ∨ Dₙ)`` is sat iff
-    some ``base ∧ (chunk k)`` is sat, so the chunks can be checked
-    independently: all-unsat ⟺ unsat, any-sat ⟺ sat (with the model
-    carrying over). Each chunk stays far inside the easy regime, where
-    the monolithic goal lets the SAT solver interleave case splits
-    across unrelated constraint families and occasionally wander.
-
-    Disjuncts are sorted by their (side-prefix-stripped) free-variable
-    name sets first, which clusters constraints over the same variable
-    families together, so each chunk's case splits stay within related
-    constraints.
-    """
-
-    def family_key(f):
-        return tuple(sorted({
-            s.symbol_name().removeprefix("before-").removeprefix("after-")
-            for s in f.get_free_variables()
-        }))
-
-    goal_idx, goal_args = None, None
-    for i, cmd in enumerate(smt_script):
-        if cmd.name != "assert" or not cmd.args[0].is_or():
-            continue
-        if goal_args is None or len(cmd.args[0].args()) > len(goal_args):
-            goal_idx, goal_args = i, cmd.args[0].args()
-    if goal_idx is None or len(goal_args) < 2 * chunks:
-        return
-    disjuncts = sorted(goal_args, key=family_key)
-    size = (len(disjuncts) + chunks - 1) // chunks
-    for k in range(chunks):
-        part = disjuncts[k * size : (k + 1) * size]
-        if not part:
-            continue
-        chunk_script = list(smt_script)
-        chunk_script[goal_idx] = script.SmtLibCommand(
-            name="assert", args=[Or(*part) if len(part) > 1 else part[0]]
-        )
-        yield chunk_script
-
-
 @simple_profile
 def check():
     """Check the smt2 file."""
@@ -249,52 +306,25 @@ def check():
                 action += {"expected": cmd.args[1]}
                 break
 
-        if ARGS().goal_chunks <= 1:
+        if not ARGS().solve_chunked:
             check_smt_script(smt_script, action, input_for_log=ARGS().input)
             return action
 
-        chunk_iter = _goal_chunk_scripts(smt_script, ARGS().goal_chunks)
-        try:
-            first_chunk = next(chunk_iter)
-        except StopIteration:
+        goal = _find_largest_or_goal(smt_script)
+        if goal is None:
+            logging.warning("no goal found, checking entire script")
             check_smt_script(smt_script, action, input_for_log=ARGS().input)
             return action
 
-        logging.info(
-            "checking goal in chunks (up to %d partitions) (%s)",
-            ARGS().goal_chunks,
+        logging.warning(
+            "checking goal disjunct-by-disjunct (%d disjuncts) (%s)",
+            len(goal.args()),
             ARGS().input,
         )
-        results = []
-        for k, chunk_script in enumerate(
-            itertools.chain((first_chunk,), chunk_iter)
-        ):
-            with action.action(f"chunk-{k}") as chunk_action:
-                res = check_smt_script(
-                    chunk_script, chunk_action, input_for_log=ARGS().input
-                )
-                results.append(res)
-            if res == "sat":
-                break  # a chunk model is a model of the whole goal
-        if "sat" in results:
-            overall = "sat"
-        elif all(r == "unsat" for r in results):
-            overall = "unsat"
-        else:
-            overall = "unknown"
-        if action.expected is not None:
-            o = classify_expected_vs_result(
-                name=action.name, expected=action.expected, result=overall
-            )
-            if o == "wrong":
-                logging.error("expected %s but got %s", action.expected, overall)
-            elif o == "timeout":
-                logging.warning(
-                    "expected %s; solver timed out (result %s)",
-                    action.expected,
-                    overall,
-                )
-            elif o != "success":
-                logging.error("expected %s but got %s", action.expected, overall)
-        action += {"result": overall, "chunk_results": results}
+        check_smt_script_disjuncts(
+            smt_script,
+            goal,
+            action,
+            input_for_log=ARGS().input,
+        )
         return action
