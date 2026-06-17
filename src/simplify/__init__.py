@@ -82,7 +82,7 @@ def simplify_rewrite(smt_script: script.SmtLibScript, subaction=None) -> script.
         if cmd.name == "assert":
             total += 1
             old = cmd.args[0]
-            new = keep_comment(rewrite(old), old)
+            new = keep_comment(rewrite(old).simplify(), old)
             cmd.args[0] = new
             if new != old:
                 changed += 1
