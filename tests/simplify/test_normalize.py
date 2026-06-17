@@ -1,7 +1,7 @@
 from io import StringIO
 from textwrap import dedent
 
-from src.simplify.normalize import simplify_normalize
+from src.simplify.normalize import collect_variables, relation_poly_diff, simplify_normalize
 from src.smt.utils import *
 from src.utils.args import ARGS
 
@@ -136,7 +136,7 @@ def test_normalize_zero_equals_zero():
     )
     simplify_normalize(smt)
     asserts = [c.args[0] for c in smt.commands if c.name == "assert"]
-    assert asserts == [field_eq(Int(0))]
+    assert asserts == [Equals(Int(0), Int(0))]
 
 
 def test_normalize_opaque_uf_term_is_a_generator():
@@ -213,3 +213,198 @@ def test_normalize_skips_mod():
     simplify_normalize(smt)
     new = [c.args[0] for c in smt.commands if c.name == "assert"][0]
     assert old.serialize() == new.serialize()
+
+
+def test_normalize_weak_eq_orders_terms_grlex():
+    smt = _parse(
+        """
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (declare-fun y () Int)
+        (assert (= (+ y x) (+ x y)))
+        (check-sat)
+        """
+    )
+    simplify_normalize(smt)
+    asserts = [c.args[0] for c in smt.commands if c.name == "assert"]
+    assert asserts == [Equals(Int(0), Int(0))]
+
+
+def test_normalize_weak_eq_divides_coeff_gcd():
+    smt = _parse(
+        """
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (declare-fun y () Int)
+        (assert (= (+ (* 2 x) (* 4 y)) 0))
+        (check-sat)
+        """
+    )
+    x, y = Symbol("x", INT), Symbol("y", INT)
+    simplify_normalize(smt)
+    asserts = [c.args[0] for c in smt.commands if c.name == "assert"]
+    assert asserts == [Equals(Plus(x, Times(Int(2), y)), Int(0))]
+
+
+def test_normalize_weak_lt_moves_to_diff():
+    smt = _parse(
+        """
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (declare-fun y () Int)
+        (assert (< (+ y x) x))
+        (check-sat)
+        """
+    )
+    y = Symbol("y", INT)
+    simplify_normalize(smt)
+    asserts = [c.args[0] for c in smt.commands if c.name == "assert"]
+    assert asserts == [LT(y, Int(0))]
+
+
+def test_normalize_weak_le_moves_to_diff():
+    smt = _parse(
+        """
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (declare-fun y () Int)
+        (assert (<= (+ (* 2 x) y) x))
+        (check-sat)
+        """
+    )
+    x, y = Symbol("x", INT), Symbol("y", INT)
+    simplify_normalize(smt)
+    asserts = [c.args[0] for c in smt.commands if c.name == "assert"]
+    assert asserts == [LE(Plus(x, y), Int(0))]
+
+
+def test_normalize_weak_le_field_mod_vs_const():
+    p = int(ARGS().field_type.value)
+    smt = _parse(
+        f"""
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (declare-fun y () Int)
+        (assert (<= (mod (+ y x) {p}) 255))
+        (check-sat)
+        """
+    )
+    x, y = Symbol("x", INT), Symbol("y", INT)
+    simplify_normalize(smt)
+    asserts = [c.args[0] for c in smt.commands if c.name == "assert"]
+    diff = Plus(x, y, Int((-255) % p))
+    assert asserts == [LE(wrap_mod(diff), Int(0))]
+
+
+def test_normalize_weak_lt_both_field_mod():
+    p = int(ARGS().field_type.value)
+    smt = _parse(
+        f"""
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (declare-fun y () Int)
+        (assert (< (mod (+ y x) {p}) (mod x {p})))
+        (check-sat)
+        """
+    )
+    y = Symbol("y", INT)
+    simplify_normalize(smt)
+    asserts = [c.args[0] for c in smt.commands if c.name == "assert"]
+    assert asserts == [LT(wrap_mod(y), Int(0))]
+
+
+def test_relation_poly_diff_plain_eq():
+    smt = _parse(
+        """
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (declare-fun y () Int)
+        (assert (= (+ y x) (+ x y)))
+        (check-sat)
+        """
+    )
+    vars_ = collect_variables(smt)
+    vi = {s: i for i, s in enumerate(vars_)}
+    lhs, rhs = [c.args[0] for c in smt.commands if c.name == "assert"][0].args()
+    parsed = relation_poly_diff(lhs, rhs, vi, vars_)
+    assert parsed == ({}, False)
+
+
+def test_relation_poly_diff_field_mod_eq():
+    p = int(ARGS().field_type.value)
+    smt = _parse(
+        f"""
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (declare-fun y () Int)
+        (assert (= (mod (+ (* 2 x) (* 4 y)) {p}) 0))
+        (check-sat)
+        """
+    )
+    vars_ = collect_variables(smt)
+    vi = {s: i for i, s in enumerate(vars_)}
+    lhs, rhs = [c.args[0] for c in smt.commands if c.name == "assert"][0].args()
+    parsed = relation_poly_diff(lhs, rhs, vi, vars_)
+    assert parsed is not None
+    diff, modular = parsed
+    assert modular is True
+    x, y = Symbol("x", INT), Symbol("y", INT)
+    assert diff == _poly_from_terms(vars_, (x, 2), (y, 4), mod=p)
+
+
+def test_relation_poly_diff_mod_vs_const():
+    p = int(ARGS().field_type.value)
+    smt = _parse(
+        f"""
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (assert (<= (mod x {p}) 255))
+        (check-sat)
+        """
+    )
+    vars_ = collect_variables(smt)
+    vi = {s: i for i, s in enumerate(vars_)}
+    lhs, rhs = [c.args[0] for c in smt.commands if c.name == "assert"][0].args()
+    parsed = relation_poly_diff(lhs, rhs, vi, vars_)
+    assert parsed is not None
+    diff, modular = parsed
+    assert modular is True
+    x = Symbol("x", INT)
+    assert diff == _poly_from_terms(vars_, (x, 1), mod=p, const=-255 % p)
+
+
+def test_relation_poly_diff_mixed_mod_plain_rejected():
+    p = int(ARGS().field_type.value)
+    smt = _parse(
+        f"""
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (declare-fun y () Int)
+        (assert (< (mod x {p}) y))
+        (check-sat)
+        """
+    )
+    vars_ = collect_variables(smt)
+    vi = {s: i for i, s in enumerate(vars_)}
+    lhs, rhs = [c.args[0] for c in smt.commands if c.name == "assert"][0].args()
+    assert relation_poly_diff(lhs, rhs, vi, vars_) is None
+
+
+def _poly_from_terms(
+    vars_: tuple,
+    *terms: tuple,
+    mod: int | None = None,
+    const: int = 0,
+) -> dict:
+    idx = {v: i for i, v in enumerate(vars_)}
+    n = len(vars_)
+    poly: dict = {}
+    for sym, coef in terms:
+        e = [0] * n
+        e[idx[sym]] = 1
+        poly[tuple(e)] = coef % mod if mod is not None else coef
+    if const:
+        c = const % mod if mod is not None else const
+        if c:
+            poly[(0,) * n] = c
+    return poly
