@@ -43,6 +43,7 @@ class SmtConverter:
         self.constraints = []
         self.derived_columns = {}
         self.name = name
+        self.symbols: set[FNode] = set()
         self.constraint_solver = Solver(solver_options={":timeout": 2000})
         type(self.constraint_solver).check_is_valid = _check_is_valid
 
@@ -57,10 +58,13 @@ class SmtConverter:
                 )
                 self.bus_interaction_encoder = None
     
-    def _symbol(self, name: str, sort) -> FNode:
-        if self.name is not None:
-            return Symbol(f"{self.name}-{name}", sort)
-        return Symbol(name, sort)
+    def _symbol(self, name: str, sort, add_prefix=True) -> FNode:
+        if add_prefix and self.name is not None:
+            sym = Symbol(f"{self.name}-{name}", sort)
+        else:
+            sym = Symbol(name, sort)
+        self.symbols.add(sym)
+        return sym
 
     def __enter__(self):
         """No-op when entering a resource management context."""

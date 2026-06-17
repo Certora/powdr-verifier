@@ -9,7 +9,6 @@ from pathlib import Path
 
 from .encoding.utils import get_is_valid
 from .report.action import Action
-from .smt.encoding import collect_variables
 from .smt.conversion import SmtConverter
 from .smt.utils import *
 from .utils.basic_block import BasicBlock
@@ -85,8 +84,8 @@ def verify():
         io_relation, iorelvars = before_conv.bus_interaction_encoder.build_io_relation(
             after_conv.bus_interaction_encoder
         )
-        var1 = collect_variables(before_smt) | iorelvars
-        var2 = collect_variables(after_smt) | iorelvars
+        var1 = before_conv.symbols | iorelvars
+        var2 = after_conv.symbols | iorelvars
         globals = before_smt.globals | after_smt.globals
         auxiliaries = frozenset.union(
             frozenset(),
