@@ -254,15 +254,15 @@ class PermutationCheckMixin:
             selects = [input]
             # stepwise select, add to selects and conjuncts as we go
             for id, key in enumerate(keys):
-                newsym = Symbol(
-                    f"{input.symbol_name()}-{id + 1}", selects[-1].get_type().elem_type
+                newsym = self._symbol(
+                    f"{input.symbol_name()}-{id + 1}", selects[-1].get_type().elem_type, add_prefix=False
                 )
                 conjuncts.append(Equals(newsym, Select(selects[-1], wrap_mod(key))))
                 selects.append(newsym)
                 intermediates.add(newsym)
 
             # fresh variable for the new value
-            newval = Symbol(f"{input.symbol_name()}-new", newsym.get_type())
+            newval = self._symbol(f"{input.symbol_name()}-new", newsym.get_type(), add_prefix=False)
             intermediates.add(newval)
 
             # stepwise store, add to store as we go
