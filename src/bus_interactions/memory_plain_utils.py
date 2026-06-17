@@ -175,13 +175,20 @@ def _top_level_fixed_bool_symbols(working: list[FNode]) -> set[FNode]:
 
 def _safe_is_valid(solver: Solver, f: FNode) -> bool | None:
     solver.z3.set("timeout", 200)
+    solver.push()
+    solver.add_assertion(Not(f))
     try:
-        return bool(solver.is_valid(f))
+        if solver.solve():
+            return False
+        return True
+    except SolverReturnedUnknownResultError:
+        logging.info("plain_memory_presolve: is_valid unknown for %s", f)
+        return None
     except Exception:
         logging.info("plain_memory_presolve: is_valid failed for %s", f)
-        # TODO: it seems the solver is in an unknown state after this.
-        # Can we return to a good state without loosing everything?
         return None
+    finally:
+        solver.pop()
 
 
 def _collect_implied_top_level_literals(
