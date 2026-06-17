@@ -115,7 +115,7 @@ class _SkolemWalker(IdentityDagWalker):
         self.qvar_sets.append(set(qvars))
         m = SkolemMap(qvars)
 
-        skolem_rules.contribute(m, body)
+        #skolem_rules.contribute(m, body)
         skolem_names.contribute(m, self.declared)
         skolem_derived.contribute(m, self.skolem_pins)
         skolem_witness.contribute(m, body, self.witness_candidates)
