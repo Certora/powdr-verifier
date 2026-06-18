@@ -2,10 +2,10 @@
 
 ``cone_of_influence`` narrows main constraints to those touching seed variables.
 ``plain_memory_const_key_io_hints`` adds first/last-occurrence input/output pins
-for constant (address_space, pointer) keys. ``plain_memory_presolve`` alternates boolean unit propagation, dropping match
-variables already fixed at top level, and SMT checks for further implied units,
-using optional ``context`` (e.g. timestamp COI) only inside the working formula.
-``plain_memory_presolve_new`` does the same but uses a fresh solver per literal, with
+for constant (address_space, pointer) keys. ``plain_memory_presolve_incremental`` alternates boolean unit propagation and
+incremental SMT checks: full timestamp COI from ``coi_constraints`` in the solver base,
+then per match variable a pushed one-step COI from the conjuncts before checking polarities.
+``plain_memory_presolve_individual`` does the same but uses a fresh solver per literal, with
 full timestamp COI from ``coi_constraints`` and a one-step match-variable COI from
 the permutation conjuncts.
 """
@@ -212,6 +212,36 @@ def _top_level_fixed_bool_symbols(working: list[FNode]) -> set[FNode]:
     return syms
 
 
+def _all_timestamp_vars(interactions: list[Any]) -> set[FNode]:
+    ts_vars: set[FNode] = set()
+    for bi in interactions:
+        if bi.args:
+            ts_vars |= bi.args[-1].get_free_variables()
+    return ts_vars
+
+
+def _first_valid_literal(
+    solver: Solver,
+    literals: list[FNode],
+    *,
+    log_prefix: str,
+) -> FNode | None:
+    """Return the first literal entailed at the current solver scope, if any."""
+    for lit in literals:
+        solver.push()
+        solver.add_assertion(Not(lit))
+        try:
+            if not solver.solve():
+                return lit
+        except SolverReturnedUnknownResultError:
+            logging.info("%s: is_valid unknown for %s", log_prefix, lit)
+        except Exception:
+            logging.info("%s: is_valid failed for %s", log_prefix, lit)
+        finally:
+            solver.pop()
+    return None
+
+
 def _fresh_is_valid(
     conjuncts: list[FNode],
     literals: list[FNode],
@@ -231,45 +261,21 @@ def _fresh_is_valid(
             s.z3.set("timeout", timeout)
             for c in conjuncts:
                 s.add_assertion(c)
-            for lit in literals:
-                s.push()
-                s.add_assertion(Not(lit))
-                try:
-                    if not s.solve():
-                        return lit
-                except SolverReturnedUnknownResultError:
-                    logging.info("%s: is_valid unknown for %s", log_prefix, lit)
-                except Exception:
-                    logging.info("%s: is_valid failed for %s", log_prefix, lit)
-                finally:
-                    s.pop()
+            return _first_valid_literal(s, literals, log_prefix=log_prefix)
     except Exception:
         logging.info("%s: is_valid failed for %s", log_prefix, literals)
     return None
 
 
-def _safe_is_valid(solver: Solver, f: FNode) -> bool | None:
-    solver.z3.set("timeout", 200)
-    solver.push()
-    solver.add_assertion(Not(f))
-    try:
-        if solver.solve():
-            return False
-        return True
-    except SolverReturnedUnknownResultError:
-        logging.info("plain_memory_presolve: is_valid unknown for %s", f)
-        return None
-    except Exception:
-        logging.info("plain_memory_presolve: is_valid failed for %s", f)
-        return None
-    finally:
-        solver.pop()
-
-
 def _collect_implied_top_level_literals(
-    conjuncts: list[FNode], bool_vars: set[FNode]
+    full_ts_coi: list[FNode],
+    working: list[FNode],
+    bool_vars: set[FNode],
+    *,
+    log_prefix: str,
+    timeout: int,
 ) -> list[FNode]:
-    """Entailed ``v`` / ``Not(v)`` for remaining ``bool_vars`` via incremental ``is_valid`` checks."""
+    """Entailed match literals via incremental checks with layered COI."""
     if not bool_vars:
         return []
     out: list[FNode] = []
@@ -279,43 +285,45 @@ def _collect_implied_top_level_literals(
         incremental=True,
         solver_options={"rlimit": 10000000},
     ) as s:
-        for c in conjuncts:
+        s.z3.set("timeout", timeout)
+        for c in full_ts_coi:
             s.add_assertion(c)
         for v in list(bool_vars):
-            nv = _safe_is_valid(s, Not(v))
-            if nv is True:
-                lit = Not(v)
-                out.append(lit)
-                logging.info("plain_memory_presolve: solver implied unit %s", lit)
-                s.add_assertion(lit)
+            s.push()
+            for c in cone_of_influence_one_step(working, {v}):
+                s.add_assertion(c)
+            lit = _first_valid_literal(s, [Not(v), v], log_prefix=log_prefix)
+            s.pop()
+            if lit is None:
                 continue
-            pv = _safe_is_valid(s, v)
-            if pv is True:
-                out.append(v)
-                logging.info("plain_memory_presolve: solver implied unit %s", v)
-                s.add_assertion(v)
+            out.append(lit)
+            logging.info("%s: solver implied unit %s", log_prefix, lit)
+            s.add_assertion(lit)
     return out
 
 
-def plain_memory_presolve(
+def plain_memory_presolve_incremental(
     conjuncts: list[FNode],
     bool_vars: set[FNode],
     *,
-    context: list[FNode] | None = None,
+    coi_constraints: list[FNode],
+    interactions: list[Any],
+    match_vars: dict[tuple[int, int], FNode],
 ) -> list[FNode]:
-    """Learn unit bool facts for match variables; mutates ``bool_vars`` in place.
-
-    ``context`` is included only in the internal working formula (not in the
-    returned list). Returns new unit literals to add to the permutation side.
-    """
-    ctx = context or []
+    """Learn unit bool facts for match variables; mutates ``bool_vars`` in place."""
+    _ = match_vars
+    log_prefix = "plain_memory_presolve_incremental"
+    full_ts_coi = cone_of_influence(
+        coi_constraints, _all_timestamp_vars(interactions)
+    )
     t0 = time.monotonic()
     n_tracked0 = len(bool_vars)
-    n_ctx = len(ctx)
-    working = [*ctx, *conjuncts]
+    n_coi = len(coi_constraints)
+    working = list(conjuncts)
     units: dict[FNode, bool] = {}
     iterations = 0
-    while True:
+    timeout = max(25, 1000 // max(len(bool_vars), 1))
+    while len(bool_vars) > 0:
         iterations += 1
         changed = False
         working[:] = boolean_propagate(working)
@@ -327,7 +335,13 @@ def plain_memory_presolve(
         if n_after_strip != n_before:
             changed = True
 
-        new_lits = _collect_implied_top_level_literals(working, bool_vars)
+        new_lits = _collect_implied_top_level_literals(
+            full_ts_coi,
+            working,
+            bool_vars,
+            log_prefix=log_prefix,
+            timeout=timeout,
+        )
         for lit in new_lits:
             k = _unit_bool_key(lit)
             if k is None:
@@ -342,7 +356,7 @@ def plain_memory_presolve(
             working[:] = new_lits + working
             bool_vars.difference_update(_top_level_fixed_bool_symbols(working))
         logging.debug(
-            "plain_memory_presolve round %d: tracked=%d implied_lits=%d changed=%s",
+            "plain_memory_presolve_incremental round %d: tracked=%d implied_lits=%d changed=%s",
             iterations,
             len(bool_vars),
             len(new_lits),
@@ -355,8 +369,8 @@ def plain_memory_presolve(
     n_tracked1 = len(bool_vars)
     remaining = ", ".join(sorted(str(v) for v in bool_vars))
     logging.debug(
-        "plain_memory_presolve: %.1f ms, %d rounds, tracked match_vars %d -> %d "
-        "(%d fixed / dropped), %d learned unit literals for output, %d context conjuncts; "
+        "plain_memory_presolve_incremental: %.1f ms, %d rounds, tracked match_vars %d -> %d "
+        "(%d fixed / dropped), %d learned unit literals for output, %d coi conjuncts; "
         "remaining unknown match_vars (%d): %s",
         elapsed_ms,
         iterations,
@@ -364,14 +378,14 @@ def plain_memory_presolve(
         n_tracked1,
         n_tracked0 - n_tracked1,
         len(out),
-        n_ctx,
+        n_coi,
         n_tracked1,
         remaining if remaining else "(none)",
     )
     return out
 
 
-def plain_memory_presolve_new(
+def plain_memory_presolve_individual(
     conjuncts: list[FNode],
     bool_vars: set[FNode],
     *,
@@ -379,14 +393,14 @@ def plain_memory_presolve_new(
     interactions: list[Any],
     match_vars: dict[tuple[int, int], FNode],
 ) -> list[FNode]:
-    """Like :func:`plain_memory_presolve`, but COI and solver checks are per literal.
+    """Like :func:`plain_memory_presolve_incremental`, but COI and solver checks are per literal.
 
     For each remaining match variable ``v`` at indices ``(i, j)``, include the full
     timestamp COI of ``coi_constraints``, a one-step COI of the working
     conjuncts around ``v``, then check validity.
     """
     var_to_indices = {v: ij for ij, v in match_vars.items()}
-    log_prefix = "plain_memory_presolve_new"
+    log_prefix = "plain_memory_presolve_individual"
     t0 = time.monotonic()
     n_tracked0 = len(bool_vars)
     working = list(conjuncts)
@@ -394,7 +408,7 @@ def plain_memory_presolve_new(
     pending = list(bool_vars)
     idx = 0
     iterations = 0
-    timeout = 3000 // len(bool_vars)
+    timeout = 1000 // len(bool_vars)
 
     def try_imply_unit(v: FNode) -> FNode | None:
         formula = coi_for_match_imply(
@@ -432,7 +446,7 @@ def plain_memory_presolve_new(
                 sym, pol = k
                 if sym not in units:
                     units[sym] = pol
-                    logging.debug(
+                    logging.info(
                         "%s: solver implied unit %s", log_prefix, new_lit
                     )
             working.insert(0, new_lit)

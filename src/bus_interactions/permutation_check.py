@@ -4,10 +4,9 @@ import itertools
 
 from .memory_plain_utils import (
     boolean_propagate,
-    cone_of_influence,
     plain_memory_const_key_io_hints,
-    plain_memory_presolve,
-    plain_memory_presolve_new,
+    plain_memory_presolve_incremental,
+    plain_memory_presolve_individual,
 )
 from ..smt.utils import *
 from ..utils.args import ARGS
@@ -777,28 +776,27 @@ class PermutationCheckMixin:
             )
 
         if True:
-            ts_vars: set[FNode] = set()
-            for bi in interactions:
-                if bi.args:
-                    ts_vars |= bi.args[-1].get_free_variables()
             vrs = self._cur_state.bus_interaction_encoder.variable_range_checker
             coi_constraints = list(self.constraints())
             coi_constraints.extend(
                 c for c in vrs.encode() if c is not None
             )
 
-            if False:
-                coi = cone_of_influence(coi_constraints, ts_vars)
+            if True:
                 tracked_bools = set(match_vars.values())
-                learned = plain_memory_presolve(
-                    conjuncts, tracked_bools, context=coi
+                learned = plain_memory_presolve_incremental(
+                    conjuncts,
+                    tracked_bools,
+                    coi_constraints=coi_constraints,
+                    interactions=interactions,
+                    match_vars=match_vars,
                 )
                 if learned:
                     conjuncts = learned + [c for c in conjuncts if c not in learned]
 
-            if True:
+            else:
                 tracked_bools = set(match_vars.values())
-                learned = plain_memory_presolve_new(
+                learned = plain_memory_presolve_individual(
                     conjuncts,
                     tracked_bools,
                     coi_constraints=coi_constraints,
