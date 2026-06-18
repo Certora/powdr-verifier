@@ -7,6 +7,7 @@ from .memory_plain_utils import (
     cone_of_influence,
     plain_memory_const_key_io_hints,
     plain_memory_presolve,
+    plain_memory_presolve_new,
 )
 from ..smt.utils import *
 from ..utils.args import ARGS
@@ -785,13 +786,27 @@ class PermutationCheckMixin:
             coi_constraints.extend(
                 c for c in vrs.encode() if c is not None
             )
-            coi = cone_of_influence(coi_constraints, ts_vars)
-            tracked_bools = set(match_vars.values())
-            learned = plain_memory_presolve(
-                conjuncts, tracked_bools, context=coi
-            )
-            if learned:
-                conjuncts = learned + [c for c in conjuncts if c not in learned]
+
+            if False:
+                coi = cone_of_influence(coi_constraints, ts_vars)
+                tracked_bools = set(match_vars.values())
+                learned = plain_memory_presolve(
+                    conjuncts, tracked_bools, context=coi
+                )
+                if learned:
+                    conjuncts = learned + [c for c in conjuncts if c not in learned]
+
+            if True:
+                tracked_bools = set(match_vars.values())
+                learned = plain_memory_presolve_new(
+                    conjuncts,
+                    tracked_bools,
+                    coi_constraints=coi_constraints,
+                    interactions=interactions,
+                    match_vars=match_vars,
+                )
+                if learned:
+                    conjuncts = learned + [c for c in conjuncts if c not in learned]
         conjuncts = boolean_propagate(conjuncts)
         return (
             conjuncts,
