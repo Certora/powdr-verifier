@@ -217,6 +217,7 @@ def _fresh_is_valid(
     literals: list[FNode],
     *,
     log_prefix: str,
+    timeout: int,
 ) -> FNode | None:
     """Return the first literal in ``literals`` entailed by ``conjuncts``, if any."""
     if not literals:
@@ -225,10 +226,9 @@ def _fresh_is_valid(
         with Solver(
             logic=logics.ALL,
             name="z3",
-            incremental=True,
-            solver_options={"rlimit": 10000000},
+            incremental=True
         ) as s:
-            s.z3.set("timeout", 500)
+            s.z3.set("timeout", timeout)
             for c in conjuncts:
                 s.add_assertion(c)
             for lit in literals:
@@ -394,6 +394,7 @@ def plain_memory_presolve_new(
     pending = list(bool_vars)
     idx = 0
     iterations = 0
+    timeout = 10000 // len(bool_vars)
 
     def try_imply_unit(v: FNode) -> FNode | None:
         formula = coi_for_match_imply(
@@ -403,7 +404,7 @@ def plain_memory_presolve_new(
             var_to_indices[v],
             v,
         )
-        return _fresh_is_valid(formula, [Not(v), v], log_prefix=log_prefix)
+        return _fresh_is_valid(formula, [Not(v), v], log_prefix=log_prefix, timeout=timeout)
 
     def apply_propagation() -> None:
         working[:] = boolean_propagate(working)
