@@ -146,7 +146,7 @@ def parse_args(args=None):
     else:
         __ARGS, extra = parser.parse_known_args(args)
         if extra:
-            logging.warning(f"unknown arguments: {" ".join(extra)}")
+            logging.info(f"unknown arguments: {" ".join(extra)}")
 
     r = (__ARGS.run_id or "").strip()
     __ARGS.run_id = "" if (not r or r == "-") else f"-{r}"
