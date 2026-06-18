@@ -19,6 +19,25 @@ from .verify import SetInfos, SkolemPinKind
 from .verify.skolem_pins import derived_columns_skolem_setinfo, drop_mirrored_derived
 
 
+def _filter_mirrored_constraints(before, after):
+    """Return ``after`` with constraints removed that mirror ``before.constraints``."""
+    before_canon = {
+        strip_prefix_from_vars(c, f"{BEFORE_PREFIX}-") for c in before.constraints
+    }
+    kept: list[FNode] = []
+    dropped = 0
+    for c in after.constraints:
+        if strip_prefix_from_vars(c, f"{AFTER_PREFIX}-") in before_canon:
+            dropped += 1
+            logging.debug("filter-constraints: dropped mirrored constraint: %s", c)
+            continue
+        kept.append(c)
+    if dropped:
+        logging.info("filter-constraints: dropped %d mirrored constraint(s)", dropped)
+        return after._replace(constraints=kept)
+    return after
+
+
 def encoding(before, after, qvars, io_relation, additional_asserts=[]):
     """Build the verification formula without any encoder-side model map.
 
@@ -28,6 +47,8 @@ def encoding(before, after, qvars, io_relation, additional_asserts=[]):
     same-name) as ``Not(q = expr)`` disjuncts which ``simplify_lift_forall``
     hoists out as top-level assertions.
     """
+    if ARGS().filter_constraints:
+        after = _filter_mirrored_constraints(before, after)
     res = And(
         *before.constraints,
         ForAll(
