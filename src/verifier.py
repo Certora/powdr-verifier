@@ -59,6 +59,15 @@ def verify():
     before = load_apc_dump(ARGS().input_before)
     after = load_apc_dump(ARGS().input_after)
 
+    if ARGS().skip_trivial and before == after:
+        logging.info(
+            "inputs are identical; stripping constraints and bus interactions"
+        )
+        before["machine"]["constraints"] = []
+        before["machine"]["bus_interactions"] = []
+        after["machine"]["constraints"] = []
+        after["machine"]["bus_interactions"] = []
+
     if ARGS().inject is not None:
         old_before = copy.deepcopy(before)
         old_after = copy.deepcopy(after)
