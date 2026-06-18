@@ -394,7 +394,7 @@ def plain_memory_presolve_new(
     pending = list(bool_vars)
     idx = 0
     iterations = 0
-    timeout = 10000 // len(bool_vars)
+    timeout = 3000 // len(bool_vars)
 
     def try_imply_unit(v: FNode) -> FNode | None:
         formula = coi_for_match_imply(
