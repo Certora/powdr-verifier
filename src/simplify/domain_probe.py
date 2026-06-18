@@ -1,4 +1,4 @@
-"""SMT-backed strengthening for small finite integer domains (interval + or-eq)."""
+"""SMT-backed strengthening for small finite integer domains (choice/or-eq)."""
 from __future__ import annotations
 
 import logging
@@ -11,7 +11,7 @@ from ..smt.utils import *
 
 if TYPE_CHECKING:
     from ..report.action import Action
-from .intervals.domain import IntDomain, IntInterval
+from .intervals.domain import IntDomain
 from .intervals.reasoner import IntervalReasoner
 
 logger = logging.getLogger(__name__)
@@ -45,24 +45,21 @@ def _flag_local_assertions(
 
 def _small_domain_vars(
     assertions: list[FNode],
-    reasoner: "IntervalReasoner",
-    or_map: dict[FNode, set[int]],
+    choices: dict[FNode, list[int]],
     max_n: int,
 ) -> frozenset[FNode]:
-    """Int symbols with a known finite domain of <= ``max_n`` values (flag-like)."""
-    flags: set[FNode] = set()
-    seen: set[FNode] = set()
+    """All int symbols treated as small-domain for flag-local slicing."""
+    flags: set[FNode] = set(choices.keys())
     for a in assertions:
+        if not flags.intersection(a.get_free_variables()):
+            continue
+        reasoner = IntervalReasoner()
+        reasoner.assume_all([a])
         for v in a.get_free_variables():
-            if v in seen:
-                continue
-            seen.add(v)
-            if not (v.is_symbol() and v.get_type().is_int_type()):
+            if v in flags or not (v.is_symbol() and v.get_type().is_int_type()):
                 continue
             vs = _finite_values(reasoner.get_domain(v), max_n)
-            if (vs is not None and len(vs) <= max_n) or (
-                v in or_map and len(or_map[v]) <= max_n
-            ):
+            if vs is not None and len(vs) <= max_n:
                 flags.add(v)
     return frozenset(flags)
 
@@ -106,68 +103,60 @@ def _parse_or_equalities(f: FNode) -> Optional[tuple[FNode, tuple[int, ...]]]:
     return sym, tuple(sorted(set(vals)))
 
 
-def _walk_collect_or_eq(f: FNode, acc: dict[FNode, set[int]]) -> None:
-    stack = [f]
-    seen: set[int] = set()
-    while stack:
-        n = stack.pop()
-        if id(n) in seen:
-            continue
-        seen.add(id(n))
-        p = _parse_or_equalities(n)
+def _choices_in_assertion(f: FNode) -> list[tuple[FNode, FNode, tuple[int, ...]]]:
+    """Return ``(sym, or_node, values)`` for each choice constraint in ``f``."""
+    parsed = _parse_or_equalities(f)
+    if parsed is not None:
+        sym, vals = parsed
+        return [(sym, f, vals)]
+    if not f.is_and():
+        return []
+    or_parts: dict[FNode, tuple[FNode, tuple[int, ...]]] = {}
+    for arg in f.args():
+        p = _parse_or_equalities(arg)
         if p is not None:
             sym, vals = p
-            acc[sym].update(vals)
-        if n.is_quantifier():
-            stack.append(n.arg(0))
+            or_parts[sym] = (arg, vals)
+    return [(sym, or_node, vals) for sym, (or_node, vals) in or_parts.items()]
+
+
+def _choice_unit(sym: FNode, or_node: FNode, assertion: FNode) -> FNode:
+    if not assertion.is_and():
+        return or_node
+    bounds = [
+        arg
+        for arg in assertion.args()
+        if _parse_or_equalities(arg) is None and arg.get_free_variables() <= {sym}
+    ]
+    return And(or_node, *bounds) if bounds else or_node
+
+
+def _collect_choices(assertions: list[FNode], max_n: int) -> dict[FNode, list[int]]:
+    """Map each choice variable to probe candidate values (non-singleton, <= max_n)."""
+    raw: dict[FNode, list[int]] = {}
+    units: dict[FNode, list[FNode]] = defaultdict(list)
+    for a in assertions:
+        for sym, or_node, vals in _choices_in_assertion(a):
+            if not sym.is_symbol() or not sym.get_type().is_int_type():
+                continue
+            cur = raw.setdefault(sym, [])
+            for v in vals:
+                if v not in cur:
+                    cur.append(v)
+            cur.sort()
+            units[sym].append(_choice_unit(sym, or_node, a))
+
+    out: dict[FNode, list[int]] = {}
+    for sym, ovals in raw.items():
+        if len(ovals) <= 1 or len(ovals) > max_n:
             continue
-        stack.extend(n.args())
-
-
-def _collect_or_map(formulae: list[FNode]) -> dict[FNode, set[int]]:
-    or_map: dict[FNode, set[int]] = defaultdict(set)
-    for a in formulae:
-        _walk_collect_or_eq(a, or_map)
-    return or_map
-
-
-def _candidate_pairs(
-    reasoner: IntervalReasoner, or_map: dict[FNode, set[int]]
-) -> list[tuple[FNode, list[int]]]:
-    syms: set[FNode] = set(reasoner.env.keys()) | {s for s in or_map if s.is_symbol()}
-    out: list[tuple[FNode, list[int]]] = []
-    for sym in syms:
-        if not sym.is_symbol() or not sym.get_type().is_int_type():
+        reasoner = IntervalReasoner()
+        reasoner.assume_all(units[sym])
+        vs = _finite_values(reasoner.get_domain(sym), max_n) or ovals
+        if len(vs) <= 1 or len(vs) > max_n:
             continue
-        dom = reasoner.get_domain(sym)
-        if sym in or_map and len(or_map[sym]) <= _MAX_VALUES:
-            od = IntDomain.from_intervals(IntInterval.const(v) for v in sorted(or_map[sym]))
-            dom = dom.intersect(od)
-        vs = _finite_values(dom, _MAX_VALUES)
-        if not vs or len(vs) > _MAX_VALUES or len(vs) == 1:
-            continue
-        out.append((sym, vs))
+        out[sym] = vs
     return out
-
-
-def _rank_candidates(
-    pairs: list[tuple[FNode, list[int]]],
-    reasoner: IntervalReasoner,
-    or_syms: set[FNode],
-) -> list[tuple[FNode, list[int]]]:
-    """Prefer tightened int vars, then explicit (or (= v …)) sources, then smaller domains."""
-    tightened = reasoner.tightened_symbols
-
-    def rank(item: tuple[FNode, list[int]]) -> tuple[int, int, int, str]:
-        sym, vals = item
-        return (
-            0 if sym in tightened else 1,
-            0 if sym in or_syms else 1,
-            len(vals),
-            str(sym),
-        )
-
-    return sorted(pairs, key=rank)
 
 
 def _probe(solver: Solver, assumption: FNode) -> Optional[bool]:
@@ -201,35 +190,30 @@ def simplify_domain_probe(
 
         accumulated: list[FNode] = []
 
-        base_reasoner = IntervalReasoner()
-        base_reasoner.assume_all(assertions)
-        or_map = _collect_or_map(assertions)
-        or_syms = {s for s in or_map if s.is_symbol() and s.get_type().is_int_type()}
-        all_pairs = _candidate_pairs(base_reasoner, or_map)
-        ranked_all = _rank_candidates(all_pairs, base_reasoner, or_syms)
-        extra["ranked_candidate_pairs"] = len(ranked_all)
+        choices = _collect_choices(assertions, _MAX_VALUES)
+        extra["choice_symbols"] = len(choices)
 
         logger.info(
-            "domain_probe: start (%d base asserts, %d ranked candidate(s), "
+            "domain_probe: start (%d base asserts, %d candidate(s), "
             "max %d pair(s), solver rlimit %s)",
             len(assertions),
-            len(ranked_all),
+            len(choices),
             _MAX_PAIRS,
             _SOLVER_OPTS["rlimit"],
         )
 
-        if not ranked_all:
+        if not choices:
             logger.info("domain_probe: no candidates (non-singleton domains), done")
             extra["pairs_probed"] = 0
             return smt_script
 
-        pairs = ranked_all[:_MAX_PAIRS]
+        pairs = list(choices.items())[:_MAX_PAIRS]
         extra["pairs_probed"] = len(pairs)
-        if len(ranked_all) > len(pairs):
+        if len(choices) > len(pairs):
             logger.info(
-                "domain_probe: probing %d of %d ranked candidate pair(s)",
+                "domain_probe: probing %d of %d candidate pair(s)",
                 len(pairs),
-                len(ranked_all),
+                len(choices),
             )
 
         cand = ", ".join(
@@ -238,10 +222,7 @@ def simplify_domain_probe(
         )
         logger.info("domain_probe: %d pair(s): %s", len(pairs), cand)
 
-        # Flag-local slice: probe pins against constraints involving only
-        # small-domain vars (cubics + group one-hot/sum), not the wide bus
-        # interactions a flag gates. Same for every candidate, so compute once.
-        flag_vars = _small_domain_vars(assertions, base_reasoner, or_map, _MAX_VALUES)
+        flag_vars = _small_domain_vars(assertions, choices, _MAX_VALUES)
         flag_local = _flag_local_assertions(assertions, flag_vars)
         extra["flag_vars"] = len(flag_vars)
         extra["flag_local_asserts"] = len(flag_local)
@@ -261,7 +242,7 @@ def simplify_domain_probe(
                     len(rel),
                     len(assertions),
                 )
-                with Solver(logic=QF_UFNIA, solver_options=_SOLVER_OPTS) as solver:
+                with Solver(logic=ALL, solver_options=_SOLVER_OPTS) as solver:
                     for f in rel:
                         solver.add_assertion(f)
                     for v in vals:
