@@ -49,11 +49,10 @@ def test_flag_local_slice_keeps_flag_constraints_drops_wide_ones():
     drops those touching wide data columns, so a flag probe doesn't drag the
     nonlinear bus arithmetic into the solver (the 202s->3.5s win on 2105476)."""
     from src.simplify.domain_probe import (
-        _collect_or_map,
+        _collect_choices,
         _flag_local_assertions,
         _small_domain_vars,
     )
-    from src.simplify.intervals.reasoner import IntervalReasoner
 
     f = Symbol("opcode_and_flag", INT)  # small domain {0,1}
     a = Symbol("a__0_0", INT)  # wide, unbounded data column
@@ -61,10 +60,8 @@ def test_flag_local_slice_keeps_flag_constraints_drops_wide_ones():
     wide = Equals(Times(f, a), a)  # mentions wide a -> not flag-local
     asserts = [flag_dom, wide]
 
-    reasoner = IntervalReasoner()
-    reasoner.assume_all(asserts)
-    or_map = _collect_or_map(asserts)
-    flags = _small_domain_vars(asserts, reasoner, or_map, 3)
+    choices = _collect_choices(asserts, 3)
+    flags = _small_domain_vars(asserts, choices, 3)
 
     assert f in flags  # {0,1} -> flag-like
     assert a not in flags  # unbounded -> not flag-like
