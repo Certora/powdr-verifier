@@ -38,7 +38,7 @@ def simplify_model(smt_script: script.SmtLibScript, subaction=None) -> script.Sm
         qvars = [pysmt.walkers.IdentityDagWalker.walk_symbol(subs, v, args, **kwargs)
                      for v in formula.quantifier_vars()]
         qvars = [v for v in qvars if v not in substitutions]
-        res = subs.mgr.ForAll(qvars, tmp.substitute(args[0], substitutions))
+        res = subs.mgr.ForAll(qvars, substitute_no_validate(args[0], substitutions, tmp))
         return res
 
     subs.walk_forall = __walk_forall
@@ -48,7 +48,7 @@ def simplify_model(smt_script: script.SmtLibScript, subaction=None) -> script.Sm
     for cmd in smt_script:
         if cmd.name == "assert":
             old = cmd.args[0]
-            new = keep_comment(subs.substitute(old, substitutions), old)
+            new = keep_comment(substitute_no_validate(old, substitutions, subs), old)
             cmd.args[0] = new
             if new != old:
                 changed += 1
