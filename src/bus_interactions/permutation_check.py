@@ -12,6 +12,28 @@ from ..smt.utils import *
 from ..utils.args import ARGS
 
 
+def _plain_pairwise_match_impossible(interactions: list, i: int, j: int) -> bool:
+    """True when ``m(i,j)`` cannot hold: mult or arg data statically incompatible."""
+
+    def mult(ii: int) -> FNode:
+        return interactions[ii].mult
+
+    def flat_args(ii: int) -> list[FNode]:
+        raw = interactions[ii].args
+        if isinstance(raw, list):
+            return raw
+        a, ptr, data, t = raw
+        return [a, ptr, *data, t]
+
+    conseq = And(
+        field_eq(Plus(mult(i), mult(j))),
+        Not(field_eq(mult(i))),
+        Not(field_eq(mult(j))),
+        *(field_eq(x, y) for x, y in zip(flat_args(i), flat_args(j), strict=True)),
+    )
+    return conseq.simplify().is_false()
+
+
 def keyed_io_relation(
     name: str,
     interactions_a: list,
@@ -520,15 +542,21 @@ class PermutationCheckMixin:
             i: self._symbol(f"{self.NAME}_isdisabled_{i}", BOOL)
             for i in range(n)
         }
-        match_vars: dict[tuple[int, int], Any] = {
-            (i, j): self._symbol(f"{self.NAME}_match_{i}_{j}", BOOL)
-            for i in range(n)
-            for j in range(i, n)
-        }
+
+
+        match_vars: dict[tuple[int, int], Any] = {}
+        for i in range(n):
+            for j in range(i, n):
+                if i != j and _plain_pairwise_match_impossible(interactions, i, j):
+                    match_vars[(i, j)] = FALSE()
+                else:
+                    match_vars[(i, j)] = self._symbol(
+                        f"{self.NAME}_match_{i}_{j}", BOOL
+                    )
 
         def m(i: int, j: int) -> FNode:
             if i > j:
-                return m(j, i)
+                i, j = j, i
             return match_vars[(i, j)]
 
         def mult(i: int) -> FNode:
@@ -783,7 +811,7 @@ class PermutationCheckMixin:
             )
 
             if True:
-                tracked_bools = set(match_vars.values())
+                tracked_bools = {v for v in match_vars.values() if v.is_symbol()}
                 learned = plain_memory_presolve_incremental(
                     conjuncts,
                     tracked_bools,
@@ -795,7 +823,7 @@ class PermutationCheckMixin:
                     conjuncts = learned + [c for c in conjuncts if c not in learned]
 
             else:
-                tracked_bools = set(match_vars.values())
+                tracked_bools = {v for v in match_vars.values() if v.is_symbol()}
                 learned = plain_memory_presolve_individual(
                     conjuncts,
                     tracked_bools,
@@ -805,7 +833,12 @@ class PermutationCheckMixin:
                 )
                 if learned:
                     conjuncts = learned + [c for c in conjuncts if c not in learned]
-        conjuncts = boolean_propagate(conjuncts)
+        simplified: list[FNode] = []
+        for c in conjuncts:
+            s = c.simplify()
+            if not s.is_true():
+                simplified.append(keep_comment(s, c))
+        conjuncts = boolean_propagate(simplified)
         return (
             conjuncts,
             [is_inputs[i] for i in range(n)],
