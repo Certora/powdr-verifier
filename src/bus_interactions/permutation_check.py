@@ -153,7 +153,7 @@ def keyed_io_relation(
             )
         )
 
-    parts = boolean_propagate([keep_comment(p.simplify(), p) for p in parts])
+    parts = boolean_propagate(parts)
 
     introduced = frozenset(v for v in xmatch_vars.values() if v.is_symbol())
     return (And(*parts) if parts else TRUE(), introduced)
@@ -836,12 +836,7 @@ class PermutationCheckMixin:
                 )
                 if learned:
                     conjuncts = learned + [c for c in conjuncts if c not in learned]
-        simplified: list[FNode] = []
-        for c in conjuncts:
-            s = c.simplify()
-            if not s.is_true():
-                simplified.append(keep_comment(s, c))
-        conjuncts = boolean_propagate(simplified)
+        conjuncts = boolean_propagate(conjuncts)
         return (
             conjuncts,
             [is_inputs[i] for i in range(n)],
