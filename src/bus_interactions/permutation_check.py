@@ -77,11 +77,6 @@ def keyed_io_relation(
     """
     n, m = len(interactions_a), len(interactions_b)
     parts: list[FNode] = []
-    xmatch_vars: dict[tuple[int, int], FNode] = {
-        (i, j): Symbol(f"{xmatch_name_prefix}_xmatch_{i}_{j}", BOOL)
-        for i in range(n)
-        for j in range(m)
-    }
 
     def full_eq(i: int, j: int) -> FNode:
         """All args (key, data, timestamp) agree at indices ``i`` and ``j``."""
@@ -92,17 +87,25 @@ def keyed_io_relation(
             ]
         )
 
+    xmatch_vars: dict[tuple[int, int], FNode] = {}
     for i in range(n):
         for j in range(m):
+            io_and_eq = And(
+                Iff(isi_a[i], isi_b[j]),
+                Iff(iso_a[i], iso_b[j]),
+                full_eq(i, j),
+            )
+            if io_and_eq.simplify().is_false():
+                xmatch_vars[(i, j)] = FALSE()
+            else:
+                xmatch_vars[(i, j)] = Symbol(
+                    f"{xmatch_name_prefix}_xmatch_{i}_{j}", BOOL
+                )
             parts.append(
                 with_comment(
                     Implies(
                         xmatch_vars[(i, j)],
-                        And(
-                            Iff(isi_a[i], isi_b[j]),
-                            Iff(iso_a[i], iso_b[j]),
-                            full_eq(i, j)
-                        )
+                        io_and_eq,
                     ),
                     f"{name}: xmatch ({i},{j}) => I/O + full eq",
                 )
@@ -152,7 +155,7 @@ def keyed_io_relation(
 
     parts = boolean_propagate([keep_comment(p.simplify(), p) for p in parts])
 
-    introduced = frozenset(xmatch_vars.values())
+    introduced = frozenset(v for v in xmatch_vars.values() if v.is_symbol())
     return (And(*parts) if parts else TRUE(), introduced)
 
 
