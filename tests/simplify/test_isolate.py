@@ -44,6 +44,73 @@ def test_isolate_skolem_extracts_from_and_disjunct_with_other_free_vars():
     assert pins
 
 
+def test_isolate_pins_qvar_in_and_disjunct_with_outer_sibling_conjunct():
+    """The powdr ``remove_free`` shape: ``(P(x) ∧ Q(outer))``.
+
+    The qvar ``x`` lives only in conjunct ``P(x)`` of an ``And``-disjunct whose
+    sibling conjunct ``Q(y)`` mentions only the outer var ``y``. ``x`` and ``y``
+    never share an *atom* — only the ``And`` — so ``x`` is a closed sub-island
+    and must be pinned. Forall distributes:
+    ``∀x.(E ∨ (P(x) ∧ Q(y))) = E ∨ (Q(y) ∧ ∀x.P(x))`` — the witness search only
+    touches ``P``, and ``Q`` is dropped from the probe. Mirrors
+    ``before-diff_val_2@108`` on ``2106368`` 015→016 (journal 2026-06-18).
+    """
+    x = Symbol("free_x_in_and", INT)
+    y = Symbol("outer_y_sibling", INT)
+    # P(x): NOT(x <= 0)  (i.e. x > 0), falsifiable at x = 0
+    # Q(y): NOT(y <= 0)  — outer only
+    body = Or(
+        And(Not(LE(x, Int(0))), Not(LE(y, Int(0)))),
+        LT(y, Int(3)),
+    )
+    smt_script = _script(ForAll([x], body))
+
+    skolem = simplify_skolem(smt_script)
+    lifted = simplify_lift_forall(skolem)
+    out = lifted.commands[-1].args[0]
+
+    assert not out.is_forall()
+    pins = [
+        c.args[0]
+        for c in lifted.commands
+        if c.name == "assert" and c.args[0].is_equals() and c.args[0].arg(0) == x
+    ]
+    assert pins, "x should be pinned: its conjunct P(x) is outer-independent"
+    # the outer sibling var must NOT be pinned
+    ypins = [
+        c.args[0]
+        for c in lifted.commands
+        if c.name == "assert" and c.args[0].is_equals() and c.args[0].arg(0) == y
+    ]
+    assert not ypins, f"outer var y must not be pinned; got: {ypins}"
+
+
+def test_isolate_does_not_pin_qvar_coupled_inside_and_disjunct():
+    """Per-conjunct taint still rejects a qvar that shares an *atom* with an
+    outer var, even when that atom sits inside an ``And``-disjunct.
+
+    Here conjunct ``q = y`` mixes qvar ``q`` and outer ``y`` in one atom, so
+    ``R`` mentions ``y`` ∉ island ⇒ tainted. (Contrast the test above, where
+    the qvar and the outer var are in *separate* conjuncts.)
+    """
+    q = Symbol("coupled_q_in_and", INT)
+    y = Symbol("outer_y_in_and_atom", INT)
+    body = Or(
+        And(Equals(q, y), Not(LE(q, Int(0)))),
+        LT(y, Int(3)),
+    )
+    smt_script = _script(ForAll([q], body))
+
+    skolem = simplify_skolem(smt_script)
+    lifted = simplify_lift_forall(skolem)
+    pins = [
+        c.args[0]
+        for c in lifted.commands
+        if c.name == "assert" and c.args[0].is_equals() and c.args[0].arg(0) == q
+    ]
+    assert not pins, f"q shares an atom with outer y; must not be pinned; got: {pins}"
+
+
 def test_isolate_does_not_pin_with_outer_free_var():
     """Regression: a q-mentioning disjunct that *also* mentions an outer
     (non-qvar) free variable must disqualify the qvar from isolation.
