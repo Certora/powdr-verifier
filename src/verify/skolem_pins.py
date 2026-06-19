@@ -67,18 +67,13 @@ def _collect_all_symbols(formula: FNode) -> frozenset[FNode]:
     explicitly.
     """
     out: set[FNode] = set()
-
-    def visit(n: FNode):
+    for n in iter_unique_subnodes(formula):
         if n.is_symbol():
             out.add(n)
         if n.is_quantifier():
             for q in n.quantifier_vars():
                 if q.is_symbol():
                     out.add(q)
-        for a in n.args():
-            visit(a)
-
-    visit(formula)
     return frozenset(out)
 
 
