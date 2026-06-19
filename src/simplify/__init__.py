@@ -1,4 +1,6 @@
 """Glue and small passes used by ``simplifier``: model substitution, QF check, rewrite."""
+import time
+
 from ..utils.io import load_json
 from ..smt.utils import *
 from ..rewriter import rewrite
@@ -78,16 +80,26 @@ def simplify_rewrite(smt_script: script.SmtLibScript, subaction=None) -> script.
     """Rewrite each assertion independently with our internal rewriter."""
     changed = 0
     total = 0
+    per_assert_sec: list[float] = []
     for cmd in smt_script:
         if cmd.name == "assert":
             total += 1
             old = cmd.args[0]
+            t0 = time.perf_counter()
             new = keep_comment(rewrite(old).simplify(), old)
+            per_assert_sec.append(time.perf_counter() - t0)
             cmd.args[0] = new
             if new != old:
                 changed += 1
     if subaction is not None:
-        subaction += {"asserts": total, "asserts_changed": changed}
+        payload: dict = {"asserts": total, "asserts_changed": changed}
+        if per_assert_sec:
+            payload["per_assert_sec"] = {
+                "min": min(per_assert_sec),
+                "max": max(per_assert_sec),
+                "avg": sum(per_assert_sec) / len(per_assert_sec),
+            }
+        subaction += payload
     return smt_script
 
 def check_isqf(smt_script: script.SmtLibScript) -> bool:
