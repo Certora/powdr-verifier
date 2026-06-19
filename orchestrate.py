@@ -68,7 +68,7 @@ def parallelize(func):
         else:
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=_ARGS.jobs) as executor:
-                for t in args:
+                for t in reversed(args):
                     executor.submit(func, *t, **kwargs)
     return wrapped
 
