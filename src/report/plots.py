@@ -99,13 +99,59 @@ def basic_stats() -> str:
         LIMIT 5
         """
     )
-    smallest_timed_out = query(
+    timed_out_jobs = query(
         """
-        SELECT input1, input2, running_time, size_bytes
-        FROM verification_steps
-        WHERE status = 'timeout' AND size_bytes IS NOT NULL
-        ORDER BY size_bytes ASC, running_time ASC
-        LIMIT 5
+        WITH candidates AS (
+            SELECT id, input1, input2, running_time, size_bytes
+            FROM verification_steps
+            WHERE status = 'timeout'
+        ),
+        timeout_at AS (
+            WITH RECURSIVE tree AS (
+                SELECT id, verification_step_id, name, status, result, parent, 0 AS depth
+                FROM substeps
+                WHERE parent IS NULL
+                UNION ALL
+                SELECT s.id, s.verification_step_id, s.name, s.status, s.result, s.parent,
+                       t.depth + 1
+                FROM substeps s
+                JOIN tree t ON s.parent = t.id
+            ),
+            timed AS (
+                SELECT verification_step_id, name,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY verification_step_id
+                           ORDER BY depth DESC, name ASC
+                       ) AS rn
+                FROM tree
+                WHERE status = 'timeout' OR result = 'timeout'
+            )
+            SELECT verification_step_id, name AS timeout_step
+            FROM timed
+            WHERE rn = 1
+        ),
+        picked AS (
+            SELECT id, input1, input2, running_time, size_bytes
+            FROM (
+                SELECT id, input1, input2, running_time, size_bytes
+                FROM candidates
+                WHERE running_time IS NOT NULL
+                ORDER BY running_time ASC, size_bytes ASC
+                LIMIT 5
+            )
+            UNION ALL
+            SELECT id, input1, input2, running_time, size_bytes
+            FROM (
+                SELECT id, input1, input2, running_time, size_bytes
+                FROM candidates
+                WHERE size_bytes IS NOT NULL
+                ORDER BY size_bytes ASC, running_time ASC
+                LIMIT 5
+            )
+        )
+        SELECT p.input1, p.input2, p.running_time, p.size_bytes, t.timeout_step
+        FROM picked p
+        LEFT JOIN timeout_at t ON t.verification_step_id = p.id
         """
     )
     fastest_isqf_not_qf = query(
@@ -136,7 +182,7 @@ def basic_stats() -> str:
     selected_jobs = [
         *[("wrong", *row) for row in fastest_unexpected_sat],
         *[("unknown", *row) for row in fastest_unknown],
-        *[("timeout", *row) for row in smallest_timed_out],
+        *[("timeout", *row) for row in timed_out_jobs],
         *[("not-qf", *row) for row in fastest_isqf_not_qf],
         *[("error", *row) for row in fastest_errors],
     ]
@@ -220,9 +266,11 @@ def _render_selected_jobs_list(title: str, rows: list[tuple]) -> str:
             "</div></div>"
         )
     items = []
-    for idx, (kind, input1, input2, running_time, size_bytes) in enumerate(rows, start=1):
+    for idx, row in enumerate(rows, start=1):
+        kind, input1, input2, running_time, size_bytes = row[:5]
+        timeout_at = row[5] if len(row) > 5 else None
         job = html.escape(_job_name(str(input1), str(input2)))
-        kind_badge = _badge_kind(str(kind))
+        kind_badge = _badge_kind(str(kind), timeout_at)
         time_badge = _badge_time(running_time)
         size_badge = _badge_bytes(size_bytes)
         items.append(
@@ -263,7 +311,7 @@ def _format_bytes(size_bytes: int) -> str:
     return f"{size_bytes / (1024 * 1024):.1f} MB"
 
 
-def _badge_kind(kind: str) -> str:
+def _badge_kind(kind: str, timeout_at: object = None) -> str:
     if kind == "wrong":
         return f'<span class="badge text-bg-danger">{html.escape(kind)}</span>'
     if kind == "error":
@@ -273,7 +321,8 @@ def _badge_kind(kind: str) -> str:
         )
         return f'<span class="badge" style="{style}">{html.escape(kind)}</span>'
     if kind == "timeout":
-        return f'<span class="badge text-bg-warning">{html.escape(kind)}</span>'
+        label = kind if not timeout_at else f"{kind}@{timeout_at}"
+        return f'<span class="badge text-bg-warning">{html.escape(label)}</span>'
     if kind == "unknown":
         css = "text-bg-warning"
     elif kind == "not-qf":
