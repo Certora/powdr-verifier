@@ -38,7 +38,7 @@ def simplify_model(smt_script: script.SmtLibScript, subaction=None) -> script.Sm
         """Custom ``ForAll`` walk: substitute model values only into the inner matrix."""
         tmp = substituter.MGSubstituter(get_env())
         qvars = [pysmt.walkers.IdentityDagWalker.walk_symbol(subs, v, args, **kwargs)
-                     for v in formula.quantifier_vars()]
+                 for v in formula.quantifier_vars()]
         qvars = [v for v in qvars if v not in substitutions]
         res = subs.mgr.ForAll(qvars, substitute_no_validate(args[0], substitutions, tmp))
         return res
@@ -80,27 +80,43 @@ def simplify_rewrite(smt_script: script.SmtLibScript, subaction=None) -> script.
     """Rewrite each assertion independently with our internal rewriter."""
     changed = 0
     total = 0
-    per_assert_sec: list[float] = []
-    for cmd in smt_script:
-        if cmd.name == "assert":
+    pending = None
+    t0 = 0.0
+
+    if subaction is not None:
+        subaction += {
+            "slow_asserts": [],
+            "asserts": 0,
+            "asserts_changed": 0,
+        }
+
+    try:
+        for cmd in smt_script:
+            if cmd.name != "assert":
+                continue
             total += 1
             old = cmd.args[0]
+            entry = {"index": total - 1, "assert": str(old)[:240]}
+            if subaction is not None:
+                subaction += ("slow_asserts", entry)
+            pending = entry
             t0 = time.perf_counter()
             new = keep_comment(rewrite(old).simplify(), old)
-            per_assert_sec.append(time.perf_counter() - t0)
+            sec = time.perf_counter() - t0
+            entry["sec"] = sec
+            pending = None
+            if subaction is not None and sec < 0.05:
+                subaction.slow_asserts.pop()
             cmd.args[0] = new
             if new != old:
                 changed += 1
-    if subaction is not None:
-        payload: dict = {"asserts": total, "asserts_changed": changed}
-        if per_assert_sec:
-            payload["per_assert_sec"] = {
-                "min": min(per_assert_sec),
-                "max": max(per_assert_sec),
-                "avg": sum(per_assert_sec) / len(per_assert_sec),
-            }
-        subaction += payload
+    finally:
+        if pending is not None:
+            pending["sec"] = time.perf_counter() - t0
+        if subaction is not None:
+            subaction += {"asserts": total, "asserts_changed": changed}
     return smt_script
+
 
 def check_isqf(smt_script: script.SmtLibScript) -> bool:
     """Return whether every asserted formula is quantifier-free per the environment QF oracle."""
