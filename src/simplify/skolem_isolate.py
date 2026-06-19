@@ -24,6 +24,20 @@ from ..smt.utils import *
 _ISLAND_RLIMIT = 5_000_000
 
 
+def _qvar_conjuncts(d: FNode, cand: frozenset) -> list[FNode]:
+    """Top-level conjuncts of ``d`` that mention a candidate qvar.
+
+    A qvar inside an ``And``-disjunct is coupled to a sibling conjunct only if
+    they share an *atom*; conjuncts that mention no candidate qvar are separable
+    (they ride along multiplicatively, outside the ``∀x.R(x)`` factor of
+    ``∀x.(E ∨ (R(x) ∧ S(rest))) = E ∨ (S(rest) ∧ ∀x.R(x))``) and so are
+    irrelevant to the qvar's island. For a non-``And`` disjunct this returns
+    ``[d]``, i.e. the historical whole-disjunct behaviour.
+    """
+    conjs = d.args() if d.is_and() else (d,)
+    return [c for c in conjs if c.get_free_variables() & cand]
+
+
 def _model_value(model, var: FNode) -> FNode | None:
     """Look up ``var`` in a PySMT model mapping; ``None`` if absent."""
     for k, v in model:
@@ -62,40 +76,49 @@ def contribute(skolem_map, body: FNode) -> None:
 
     Soundness invariant
     --------------------
-    Group the unpinned int/bool qvars into connected components by
-    co-occurrence in a body disjunct. A component is a *closed island* iff no
-    disjunct mentioning any of its members also mentions a variable outside the
-    component (an outer free variable, an already-pinned qvar, or a
-    non-int/bool qvar). For a closed island ``S``:
+    For each body disjunct ``D_i`` keep only its **qvar-relevant conjuncts**
+    ``R_i`` (split ``D_i`` on top-level ``And``; drop conjuncts that mention no
+    candidate qvar). The dropped conjuncts ``S_i`` are outer-only and separable:
+    ``∀S.(E ∨ (R_i(S) ∧ S_i(rest))) = E ∨ (S_i(rest) ∧ ∀S.R_i(S))`` puts ``S_i``
+    *outside* the ``∀S.R_i`` factor, so it never affects whether the universal
+    collapses. Group qvars into components by co-occurrence across the ``R_i``.
+    A component is a *closed island* iff no ``R_i`` mentioning a member also
+    mentions a variable outside the component (an outer free variable, an
+    already-pinned qvar, or a non-int/bool qvar). For a closed island ``S``:
 
-        F unsat  ≡  ∀S, rest. ⋁_i D_i(S) ∨ E(rest)
+        F unsat  ≡  ∀S, rest. ⋁_i (R_i(S) ∧ S_i(rest)) ∨ E(rest)
 
-    where the ``D_i`` are exactly the island's disjuncts and (by closedness)
-    depend only on ``S`` — never on ``rest``. The existential ``∃S. ⋀_i
-    ¬D_i(S)`` therefore decouples from ``rest``: any one satisfying assignment
-    ``w`` of ``⋀_i ¬D_i`` is a uniform witness for *every* assignment of
-    ``rest``. Pinning every member of ``S`` to its value under ``w`` does not
-    lose unsat, and — because the island shares nothing with ``rest`` — does
-    not introduce a spurious sat either.
+    where (by closedness) each ``R_i`` depends only on ``S`` — never on
+    ``rest``. A satisfying assignment ``w`` of ``⋀_i ¬R_i(S)`` makes every
+    ``R_i(w)`` false, so the island's disjuncts vanish *for every* ``rest``
+    (``R_i(w) ∧ S_i = false`` regardless of ``S_i``) and ``∀S.R_i`` is false
+    (witnessed by ``w``). Pinning every member of ``S`` to its value under ``w``
+    is therefore exact: it neither loses unsat nor introduces a spurious sat.
+    Skolemization commits each qvar to a single value, so we need one model of
+    ``⋀_i ¬R_i`` — distributing ``∀`` over the conjunction does not let us pin
+    per-conjunct (each conjunct would want a different witness).
 
     This generalizes the historical single-variable rule (each disjunct
-    mentions exactly one qvar) to whole islands. The two failure modes the old
-    strict gate guarded against are exactly the *non-closed* cases and are
-    still rejected here:
+    mentions exactly one qvar) to whole islands, and the per-conjunct split
+    further admits qvars buried in an ``And`` alongside outer-only siblings
+    (the powdr ``remove_free`` shape: ``(P(x) ∧ Q(outer))``). The two failure
+    modes the old strict gate guarded against are exactly the *non-closed*
+    cases — where the qvar shares an **atom** (not merely an ``And``) with the
+    outside — and are still rejected here:
 
-    * A disjunct mentioning a qvar **and an outer free variable** ``x`` makes
-      ``D_i(q, x)`` depend on ``x``; the probe's one-shot model gives a witness
-      valid only for the ``x*`` it picked. The qvar is tainted ⇒ not pinned.
-      (Regression: ``after-memory-N-isinput`` on
+    * A qvar-relevant conjunct mentioning a qvar **and an outer free variable**
+      ``x`` makes ``R_i(q, x)`` depend on ``x``; the probe's one-shot model
+      gives a witness valid only for the ``x*`` it picked. The qvar is tainted
+      ⇒ not pinned. (Regression: ``after-memory-N-isinput`` on
       ``apc_candidate_2099512_031_low_degree_bus-…_032_inlining.completeness``.)
 
-    * A disjunct mentioning a qvar **and another qvar that is itself coupled to
-      the outside** (transitively reaches an outer var or a pinned qvar) is in
-      a tainted component ⇒ not pinned. A pin from one model would only
-      establish the body at the probe's choice of the other qvar, not the value
-      the rest of the formula forces on it.
+    * A qvar-relevant conjunct mentioning a qvar **and another qvar that is
+      itself coupled to the outside** (transitively reaches an outer var or a
+      pinned qvar) is in a tainted component ⇒ not pinned. A pin from one model
+      would only establish the body at the probe's choice of the other qvar,
+      not the value the rest of the formula forces on it.
 
-    Note that two qvars sharing a disjunct is *not* by itself disqualifying:
+    Note that two qvars sharing a conjunct is *not* by itself disqualifying:
     when their whole component is closed (the
     ``diff_marker__*`` / ``diff_val_*`` cluster left behind by powdr's
     ``remove_free``, for instance), they are pinned jointly from one model.
@@ -134,14 +157,20 @@ def contribute(skolem_map, body: FNode) -> None:
     tainted: set[FNode] = set()
     disj_cands: list[tuple[list[FNode], FNode]] = []
     for d in body.args():
-        fv = d.get_free_variables()
-        cset = [q for q in cand if q in fv]
+        cset = [q for q in cand if q in d.get_free_variables()]
         if not cset:
             continue
-        disj_cands.append((cset, d))
+        # Only the conjuncts that actually mention a candidate qvar matter for
+        # the island; outer-only sibling conjuncts (joined by AND) are separable
+        # and do not couple the qvar to the rest of the formula. We taint and
+        # solve over `rel = R(x)` rather than the whole disjunct `d`.
+        rel = _qvar_conjuncts(d, cand)
+        rel_fv = frozenset().union(*(c.get_free_variables() for c in rel))
+        relevant = And(*rel)
+        disj_cands.append((cset, relevant))
         for other in cset[1:]:
             union(cset[0], other)
-        if fv - cand:  # mentions an outer var / pinned qvar / non-int-bool qvar
+        if rel_fv - cand:  # a qvar-conjunct mentions an outer / pinned / non-int-bool var
             tainted.update(cset)
 
     if not disj_cands:
