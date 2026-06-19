@@ -1,12 +1,25 @@
 """Bidirectional PySMT ``FNode`` ↔ SymPy ``Expr`` conversion for the rewriter."""
+import functools
+
 import sympy
 
 from ..smt.utils import *
 
 
+@functools.lru_cache(maxsize=None)
 @simple_profile
 def to_sympy(expr: FNode) -> sympy.Expr:
-    """Convert a PySMT term into the equivalent SymPy expression."""
+    """Convert a PySMT term into the equivalent SymPy expression.
+
+    Memoized on the ``FNode``: pysmt deduplicates terms within a manager, so
+    identity-keyed caching is exact, and the conversion depends only on the
+    term's structure (never on the active environment), so a hit is always
+    sound. The rewriter converts thousands of post-lift asserts that share
+    heavy substructure, and building each SymPy node re-runs SymPy's
+    auto-canonicalization — so reconverting shared subterms was the dominant
+    cost of the ``rewrite`` pass. The recursive calls below hit this same
+    cache, so a subterm is converted at most once per process.
+    """
     if expr.is_symbol():
         return sympy.Symbol(expr.symbol_name())
     elif expr.get_type().is_bool_type():
