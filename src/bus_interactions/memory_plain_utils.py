@@ -76,37 +76,41 @@ def boolean_propagate(conjuncts: list[FNode]) -> list[FNode]:
     """Top-level bool unit conjuncts become substitutions applied to the rest (fixpoint)."""
     literals: list[FNode] = []
     remaining = [keep_comment(f.simplify(), f) for f in conjuncts]
-    substitutions: dict[FNode, FNode] = {}
+    seen: set[FNode] = set()
 
-    def record_literal(lit: FNode) -> bool:
+    def record_literal(lit: FNode, round_subs: dict[FNode, FNode]) -> bool:
         if lit.is_symbol(BOOL):
             sym, val = lit, TRUE()
         elif lit.is_not() and lit.arg(0).is_symbol(BOOL):
             sym, val = lit.arg(0), FALSE()
         else:
             return False
-        if sym in substitutions:
+        if sym in seen:
             return False
-        substitutions[sym] = val
+        seen.add(sym)
+        round_subs[sym] = val
         literals.append(lit)
         return True
 
     while True:
-        new_binding = False
         next_remaining: list[FNode] = []
+        # Only the bindings discovered this round need to be substituted:
+        # everything in ``remaining`` already had all earlier-round bindings
+        # applied by the previous iteration's substitute(). Passing the full
+        # accumulated dict here is pure waste -- pysmt's substitute() validates
+        # every entry in ``subs`` on every call (O(|subs|) per conjunct), which
+        # is quadratic in the number of bool units.
+        round_subs: dict[FNode, FNode] = {}
         for f in remaining:
             f = keep_comment(f.simplify(), f)
-            if record_literal(f):
-                new_binding = True
+            if record_literal(f, round_subs):
+                pass
             elif not f.is_true():
                 next_remaining.append(f)
-        remaining = (
-            [keep_comment(g.substitute(substitutions), g) for g in next_remaining]
-            if substitutions
-            else next_remaining
-        )
-        if not new_binding:
+        if not round_subs:
+            remaining = next_remaining
             break
+        remaining = [keep_comment(substitute_no_validate(g, round_subs), g) for g in next_remaining]
 
     return literals + remaining
 

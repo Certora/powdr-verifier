@@ -10,7 +10,30 @@ from ..smt_backends.pysmt import *
 from ..utils.io import open_file
 from ..utils.profiling import simple_profile
 
+# Imported after the backend's ``import *`` so its custom-operator and
+# type-checker setup runs first (importing this earlier breaks ``MOD``).
+from pysmt.environment import get_env
+
 SUPPORTS_COMMENTS = "comment" in FNode.__slots__
+
+
+def substitute_no_validate(formula, subs, substituter=None):
+    """Apply ``subs`` to ``formula`` skipping pysmt's per-call validation.
+
+    ``FNode.substitute`` (i.e. ``Substituter.substitute``) re-validates *every*
+    entry of ``subs`` on *every* call -- ``k.is_term()``, ``v.is_term()``,
+    ``k in manager``, ``v in manager`` -- which is ``O(|subs|)`` before any work
+    is done. Applying a large ``subs`` to many formulas in a loop is then
+    quadratic and can dominate runtime (see ``boolean_propagate`` and
+    ``simplify_model``). Our keys and values are always valid terms in the
+    active manager, so we drive the walker directly and skip the loop.
+
+    Pass ``substituter`` to reuse a configured instance (e.g. one with an
+    overridden ``walk_forall``); otherwise the environment's shared substituter
+    is used. Behaviour is otherwise identical to ``substituter.substitute``.
+    """
+    substituter = substituter if substituter is not None else get_env().substituter
+    return substituter.walk(formula, substitutions=subs, interpretations={})
 
 def strip_prefix_from_vars(f: FNode, prefix: str) -> FNode:
     if f is None:
