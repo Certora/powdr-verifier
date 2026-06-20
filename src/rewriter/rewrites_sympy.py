@@ -1,4 +1,6 @@
 """SymPy-only rewrites for modular equalities (no PySMT imports in rule bodies)."""
+import functools
+
 from sympy import *
 
 from ..utils.args import ARGS
@@ -45,9 +47,16 @@ def _solved_roots(factors: list, p: int):
     return x, values
 
 
+@functools.lru_cache(maxsize=None)
 @simple_profile
 def rewrite_choice(node: Expr) -> Expr:
     """Rewrite `Mod(f1*...*fn, p) == 0` into a disjunction of `Mod(fi, p) == 0` (best-effort).
+
+    Memoized on the SymPy ``node``: the rule is a pure function of the node and
+    the (run-constant) field modulus, and its ``factor()`` call is the most
+    expensive single step in the rewriter. With ``to_sympy`` memoized, identical
+    equalities reach this rule as the *same* SymPy object, so cross-assert
+    duplicates collapse to one ``factor()``.
 
     When every factor is linear in the same single symbol, the
     congruences are solved to root equalities with the implied interval
