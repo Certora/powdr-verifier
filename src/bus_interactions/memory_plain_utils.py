@@ -72,47 +72,82 @@ def coi_for_match_imply(
     return out
 
 
-def boolean_propagate(conjuncts: list[FNode]) -> list[FNode]:
-    """Top-level bool unit conjuncts become substitutions applied to the rest (fixpoint)."""
+def boolean_propagate(conjuncts: list[FNode], presimplify: bool = True) -> list[FNode]:
+    """Top-level bool unit conjuncts become substitutions applied to the rest (fixpoint).
+
+    Occurrence-list driven: instead of re-simplifying *every* remaining conjunct
+    on every propagation round, we index each bool symbol to the conjuncts that
+    mention it and, when a symbol's value is learned, only re-substitute and
+    re-simplify the conjuncts that actually contain it (via the fused, pruned
+    :func:`bool_substitute_simplify`). Each conjunct is touched once per learned
+    symbol it references, never per round -- so the work is O(sum of conjunct
+    sizes) rather than O(rounds * conjuncts). Behaviour is identical up to the
+    commutative ordering of And/Or arguments: the same fixpoint of unit literals
+    and logically-equivalent remaining conjuncts (boolean unit propagation is
+    confluent).
+
+    ``presimplify`` controls the initial pass: when ``True`` (default) each input
+    conjunct is run through :func:`bool_simplify` -- a *boolean-only* simplifier
+    that normalizes the boolean skeleton (so units surface) without descending
+    into or rebuilding theory atoms. Pass ``False`` when the caller has already
+    fully simplified the conjuncts (the common case in the permutation encoder),
+    avoiding a redundant re-walk. Either way theory atoms are never (re)simplified
+    here; that is the caller's responsibility.
+    """
     literals: list[FNode] = []
-    remaining = [keep_comment(f.simplify(), f) for f in conjuncts]
     seen: set[FNode] = set()
+    remaining: dict[int, FNode] = {}          # idx -> conjunct (insertion order)
+    occ: dict[FNode, set[int]] = {}           # bool symbol -> indices mentioning it
 
-    def record_literal(lit: FNode, round_subs: dict[FNode, FNode]) -> bool:
-        if lit.is_symbol(BOOL):
-            sym, val = lit, TRUE()
-        elif lit.is_not() and lit.arg(0).is_symbol(BOOL):
-            sym, val = lit.arg(0), FALSE()
-        else:
-            return False
-        if sym in seen:
-            return False
-        seen.add(sym)
-        round_subs[sym] = val
-        literals.append(lit)
-        return True
+    def as_unit(f: FNode):
+        if f.is_symbol(BOOL):
+            return f, TRUE()
+        if f.is_not() and f.arg(0).is_symbol(BOOL):
+            return f.arg(0), FALSE()
+        return None
 
-    while True:
-        next_remaining: list[FNode] = []
-        # Only the bindings discovered this round need to be substituted:
-        # everything in ``remaining`` already had all earlier-round bindings
-        # applied by the previous iteration's substitute(). Passing the full
-        # accumulated dict here is pure waste -- pysmt's substitute() validates
-        # every entry in ``subs`` on every call (O(|subs|) per conjunct), which
-        # is quadratic in the number of bool units.
-        round_subs: dict[FNode, FNode] = {}
-        for f in remaining:
-            f = keep_comment(f.simplify(), f)
-            if record_literal(f, round_subs):
-                pass
-            elif not f.is_true():
-                next_remaining.append(f)
-        if not round_subs:
-            remaining = next_remaining
-            break
-        remaining = [keep_comment(substitute_no_validate(g, round_subs), g) for g in next_remaining]
+    def place(idx: int, f: FNode, round_subs: dict[FNode, FNode]) -> None:
+        """Classify a (simplified) conjunct: learn it as a unit, drop trues, else keep + index."""
+        u = as_unit(f)
+        if u is not None and u[0] not in seen:
+            sym, val = u
+            seen.add(sym)
+            literals.append(f)
+            round_subs[sym] = val
+            return
+        if f.is_true():
+            return
+        remaining[idx] = f
+        for s in f.get_free_variables():
+            if s.is_symbol(BOOL):
+                occ.setdefault(s, set()).add(idx)
 
-    return literals + remaining
+    round_subs: dict[FNode, FNode] = {}
+    for idx, f in enumerate(conjuncts):
+        g = keep_comment(bool_simplify(f), f) if presimplify else f
+        place(idx, g, round_subs)
+
+    while round_subs:
+        # Only conjuncts mentioning a symbol learned this round can change; the rest
+        # are already fully simplified and stay untouched (occurrence-list filter).
+        affected: set[int] = set()
+        for sym in round_subs:
+            affected |= occ.pop(sym, set())
+        subs, round_subs = round_subs, {}
+        for idx in affected:
+            f = remaining.pop(idx, None)
+            if f is None:
+                continue
+            for s in f.get_free_variables():           # drop now-stale occ entries
+                if s in occ:
+                    occ[s].discard(idx)
+            # Fused, pruned substitute+simplify in one pass: the substituted symbols
+            # are booleans living only in the boolean skeleton, so this never walks
+            # the (already-simplified) arithmetic atoms -- the dominant cost of a
+            # plain substitute() which rebuilds the whole tree.
+            place(idx, keep_comment(bool_substitute_simplify(f, subs), f), round_subs)
+
+    return literals + [remaining[i] for i in sorted(remaining)]
 
 
 def plain_memory_const_key_io_hints(
