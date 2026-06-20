@@ -153,10 +153,6 @@ def keyed_io_relation(
             )
         )
 
-    parts = boolean_propagate(
-        [keep_comment(p.simplify(), p) for p in parts], presimplify=False
-    )
-
     if aligned_pairs:
         for i, j in aligned_pairs.items():
             v = xmatch_vars.get((i, j))
@@ -168,6 +164,10 @@ def keyed_io_relation(
                     f"{name}: prealigned xmatch ({i},{j})",
                 )
             )
+
+    parts = boolean_propagate(
+        [keep_comment(p.simplify(), p) for p in parts], presimplify=False
+    )
 
     introduced = frozenset(v for v in xmatch_vars.values() if v.is_symbol())
     return (And(*parts) if parts else TRUE(), introduced)
