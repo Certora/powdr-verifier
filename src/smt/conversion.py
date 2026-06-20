@@ -9,6 +9,7 @@ from typing import Any, Iterable, Optional
 from .. import bus_interactions
 from ..utils.basic_block import BasicBlock
 from ..utils.args import ARGS, BusInteractionHandlers
+from ..verify.preanalysis import DEFAULT_VERIFY_PREANALYSIS, VerifyPreanalysis
 from ..utils.profiling import simple_profile
 from .utils import *
 
@@ -37,12 +38,19 @@ class SmtConverter:
     """Convert JSON-like APC dumps (constraints + bus interactions) into SMT constraints and axioms."""
     UF_MOD_INV = Symbol("uf_mod_inv", FunctionType(INT, [INT]))
 
-    def __init__(self, name: Optional[str], basic_block: BasicBlock):
+    def __init__(
+        self,
+        name: Optional[str],
+        basic_block: BasicBlock,
+        *,
+        verify_preanalysis: VerifyPreanalysis = DEFAULT_VERIFY_PREANALYSIS,
+    ):
         """Create a converter that turns JSON-like dumps into SMT, namespacing symbols by `name`."""
         self.basic_block = basic_block
         self.constraints = []
         self.derived_columns = {}
         self.name = name
+        self.verify_preanalysis = verify_preanalysis
         self.symbols: set[FNode] = set()
         self.constraint_solver = Solver(solver_options={":timeout": 2000})
         type(self.constraint_solver).check_is_valid = _check_is_valid

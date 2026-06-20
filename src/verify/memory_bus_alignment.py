@@ -14,6 +14,7 @@ import time
 from collections.abc import Iterable, Iterator
 from itertools import product
 from dataclasses import dataclass
+from typing import Any
 
 from pathlib import Path
 
@@ -333,22 +334,9 @@ def analyze_memory_bus_partial_alignment_legacy(
     return MemoryBusPartialAlignment(nb, na, before_to_after)
 
 
-def analyze_memory_bus_partial_alignment(
-    before_data: dict,
-    after_data: dict,
-    before_conv: SmtConverter,
-    after_conv: SmtConverter,
-    *,
-    before_constraints: Iterable[FNode],
-    after_constraints: Iterable[FNode],
-    parent_action: Action,
-    smt_dump_base: Path | None = None,
-) -> MemoryBusPartialAlignment | None:
-    """Infer aligned Memory indices (monotone subsequence: no reorder, no insertions).
-
-    Same-length traces use ``i -> i``. Otherwise sweeps only window pairs
-    ``|i-j| <= n_before - n_after`` with singleton propagation between passes.
-    """
+def _memory_interaction_lists(
+    before_data: dict, after_data: dict
+) -> tuple[list, list]:
     mem_id = _memory_bus_id(before_data)
     assert mem_id is not None
     assert _memory_bus_id(after_data) == mem_id
@@ -359,6 +347,89 @@ def analyze_memory_bus_partial_alignment(
     after_list = [
         bi for bi in after_data["machine"]["bus_interactions"] if bi["id"] == mem_id
     ]
+    return before_list, after_list
+
+
+def _feasible_after_indices(
+    b: int,
+    nb: int,
+    na: int,
+    D: int,
+    before_to_after: dict[int, int],
+) -> list[int]:
+    lo_w = max(0, b - D)
+    hi_w = min(na - 1, b)
+    for bb in range(b - 1, -1, -1):
+        if bb in before_to_after:
+            lo_w = max(lo_w, before_to_after[bb] + 1)
+            break
+    for bb in range(b + 1, nb):
+        if bb in before_to_after:
+            hi_w = min(hi_w, before_to_after[bb] - 1)
+            break
+    used_a = set(before_to_after.values())
+    return [a for a in range(lo_w, hi_w + 1) if a not in used_a]
+
+
+def _syntax_sweep_memory_alignment(
+    nb: int,
+    na: int,
+    D: int,
+    before_json: dict[int, Any],
+    after_json: dict[int, Any],
+    before_to_after: dict[int, int],
+    counters: dict[str, int],
+) -> None:
+    for b in range(nb):
+        if b in before_to_after:
+            continue
+        for a in _feasible_after_indices(b, nb, na, D, before_to_after):
+            if before_json[b] == after_json[a]:
+                before_to_after[b] = a
+                counters["syntax-matches"] += 1
+                break
+
+
+def _singleton_sweep_memory_alignment(
+    nb: int,
+    na: int,
+    before_to_after: dict[int, int],
+    counters: dict[str, int],
+) -> None:
+    for b in range(nb):
+        if b in before_to_after:
+            continue
+        if b == 0 and 1 in before_to_after and before_to_after[1] == 1:
+            before_to_after[0] = 0
+            counters["singleton-matches"] += 1
+            continue
+        if b == nb - 1 and nb - 2 in before_to_after and before_to_after[nb - 2] == na - 2:
+            before_to_after[nb - 1] = na - 1
+            counters["singleton-matches"] += 1
+            continue
+        if b == 0 or b == nb - 1:
+            continue
+        if (
+            b - 1 in before_to_after
+            and b + 1 in before_to_after
+            and before_to_after[b - 1] + 2 == before_to_after[b + 1]
+        ):
+            before_to_after[b] = before_to_after[b - 1] + 1
+            counters["singleton-matches"] += 1
+
+
+
+def analyze_memory_bus_partial_alignment_first(
+    before_data: dict,
+    after_data: dict,
+    *,
+    parent_action: Action | None = None,
+) -> MemoryBusPartialAlignment | None:
+    """Infer partial Memory alignment from dump JSON only.
+
+    Handles the ``nb == na`` identity case, then syntax and singleton sweeps.
+    """
+    before_list, after_list = _memory_interaction_lists(before_data, after_data)
     nb, na = len(before_list), len(after_list)
     if nb == 0 or na == 0:
         return None
@@ -366,9 +437,8 @@ def analyze_memory_bus_partial_alignment(
 
     if nb == na:
         m = {i: i for i in range(nb)}
-        parent_action += {
-            "identity-shortcut": True,
-        }
+        if parent_action is not None:
+            parent_action += {"identity-shortcut": True}
         _LOG.info(
             "memory bus alignment (identity): n_before=%d n_after=%d aligned_pairs=%d",
             nb,
@@ -376,6 +446,38 @@ def analyze_memory_bus_partial_alignment(
             nb,
         )
         return MemoryBusPartialAlignment(nb, na, m)
+
+    counters = {"syntax-matches": 0, "singleton-matches": 0}
+    before_json = {i: before_list[i] for i in range(nb)}
+    after_json = {j: after_list[j] for j in range(na)}
+    before_to_after: dict[int, int] = {}
+    D = nb - na
+
+    _syntax_sweep_memory_alignment(
+        nb, na, D, before_json, after_json, before_to_after, counters
+    )
+    _singleton_sweep_memory_alignment(nb, na, before_to_after, counters)
+
+    if parent_action is not None:
+        parent_action += counters
+
+    return MemoryBusPartialAlignment(nb, na, before_to_after)
+
+
+def analyze_memory_bus_partial_alignment_second(
+    before_conv: SmtConverter,
+    after_conv: SmtConverter,
+    initial: MemoryBusPartialAlignment,
+    *,
+    before_constraints: Iterable[FNode],
+    after_constraints: Iterable[FNode],
+    parent_action: Action,
+    smt_dump_base: Path | None = None,
+) -> MemoryBusPartialAlignment:
+    """Extend a partial Memory alignment using encoder rows and SMT checks."""
+    nb, na = initial.n_before, initial.n_after
+    before_to_after = dict(initial.before_to_after)
+    D = nb - na
 
     bc_strip = tuple(
         strip_prefix_from_vars(c, f"{BEFORE_PREFIX}-")
@@ -387,8 +489,6 @@ def analyze_memory_bus_partial_alignment(
     )
 
     counters = {
-        "syntax-matches": 0,
-        "singleton-matches": 0,
         "bare-true": 0,
         "bare-false": 0,
         "bare-unknown": 0,
@@ -397,57 +497,8 @@ def analyze_memory_bus_partial_alignment(
         "context-false": 0,
         "context-unknown": 0,
         "context-time": 0.0,
+        "singleton-matches": 0,
     }
-
-    before_json = {i: before_list[i] for i in range(nb)}
-    after_json = {j: after_list[j] for j in range(na)}
-    before_to_after: dict[int, int] = {}
-    D = nb - na
-
-    def feasible_after(b: int) -> list[int]:
-        lo_w = max(0, b - D)
-        hi_w = min(na - 1, b)
-        for bb in range(b - 1, -1, -1):
-            if bb in before_to_after:
-                lo_w = max(lo_w, before_to_after[bb] + 1)
-                break
-        for bb in range(b + 1, nb):
-            if bb in before_to_after:
-                hi_w = min(hi_w, before_to_after[bb] - 1)
-                break
-        used_a = set(before_to_after.values())
-        return [a for a in range(lo_w, hi_w + 1) if a not in used_a]
-
-    def syntax_sweep() -> None:
-        for b in range(nb):
-            if b in before_to_after:
-                continue
-            for a in feasible_after(b):
-                if before_json[b] == after_json[a]:
-                    before_to_after[b] = a
-                    counters["syntax-matches"] += 1
-                    break
-
-    def singleton_sweep() -> None:
-        for b in range(nb):
-            if b in before_to_after:
-                continue
-            if b == 0 and 1 in before_to_after and before_to_after[1] == 1:
-                before_to_after[0] = 0
-                counters["singleton-matches"] += 1
-                continue
-            if b == nb-1 and nb-2 in before_to_after and before_to_after[nb-2] == na-2:
-                before_to_after[nb-1] = na-1
-                counters["singleton-matches"] += 1
-                continue
-            if b == 0 or b == nb - 1:
-                continue
-            if b-1 in before_to_after and b+1 in before_to_after and before_to_after[b-1] + 2 == before_to_after[b+1]:
-                before_to_after[b] = before_to_after[b-1] + 1
-                counters["singleton-matches"] += 1
-
-    syntax_sweep()
-    singleton_sweep()
 
     used_after = set(before_to_after.values())
     bk0 = sorted(b for b in range(nb) if b not in before_to_after)
@@ -473,7 +524,7 @@ def analyze_memory_bus_partial_alignment(
         for b in range(nb):
             if b in before_to_after:
                 continue
-            for a in feasible_after(b):
+            for a in _feasible_after_indices(b, nb, na, D, before_to_after):
                 match _check_equivalent_bare(
                     before_rows[b], after_rows[a], smt_dump_base=smt_dump_base
                 ):
@@ -495,11 +546,12 @@ def analyze_memory_bus_partial_alignment(
         for b in range(nb):
             if b in before_to_after:
                 continue
-            for a in feasible_after(b):
+            for a in _feasible_after_indices(b, nb, na, D, before_to_after):
                 if (b, a) in excluded:
                     continue
                 match _check_equivalent_contextual(
-                    before_rows[b], after_rows[a],
+                    before_rows[b],
+                    after_rows[a],
                     bc_strip,
                     ac_strip,
                     smt_dump_base=smt_dump_base,
@@ -515,9 +567,9 @@ def analyze_memory_bus_partial_alignment(
         counters["context-time"] += time.perf_counter() - t0
 
     bare_sweep()
-    singleton_sweep()
+    _singleton_sweep_memory_alignment(nb, na, before_to_after, counters)
     context_sweep()
-    singleton_sweep()
+    _singleton_sweep_memory_alignment(nb, na, before_to_after, counters)
 
     parent_action += counters
 
@@ -529,6 +581,42 @@ def analyze_memory_bus_partial_alignment(
     )
 
     return MemoryBusPartialAlignment(nb, na, before_to_after)
+
+
+def analyze_memory_bus_partial_alignment(
+    before_data: dict,
+    after_data: dict,
+    before_conv: SmtConverter,
+    after_conv: SmtConverter,
+    *,
+    before_constraints: Iterable[FNode],
+    after_constraints: Iterable[FNode],
+    parent_action: Action,
+    smt_dump_base: Path | None = None,
+    initial: MemoryBusPartialAlignment | None = None,
+) -> MemoryBusPartialAlignment | None:
+    """Infer aligned Memory indices (monotone subsequence: no reorder, no insertions).
+
+    Same-length traces use ``i -> i``. Otherwise sweeps only window pairs
+    ``|i-j| <= n_before - n_after`` with singleton propagation between passes.
+    """
+    if initial is None:
+        initial = analyze_memory_bus_partial_alignment_first(
+            before_data, after_data, parent_action=parent_action
+        )
+    if initial is None:
+        return None
+    if len(initial.before_to_after) == initial.n_after:
+        return initial
+    return analyze_memory_bus_partial_alignment_second(
+        before_conv,
+        after_conv,
+        initial,
+        before_constraints=before_constraints,
+        after_constraints=after_constraints,
+        parent_action=parent_action,
+        smt_dump_base=smt_dump_base,
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -616,6 +704,7 @@ def emit_memory_equalities(
     parent_action: Action,
     reverse: bool = False,
     smt_dump_base: Path | None = None,
+    initial_alignment: MemoryBusPartialAlignment | None = None,
 ) -> SetInfos:
     """Pair before/after memory symbols using alignment; record pin equations.
 
@@ -643,6 +732,7 @@ def emit_memory_equalities(
             after_constraints=after_constraints,
             parent_action=align_a,
             smt_dump_base=smt_dump_base,
+            initial=initial_alignment,
         )
     if alignment is None:
         _LOG.info("memory bus pins skipped (no alignment)")
