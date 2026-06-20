@@ -14,6 +14,7 @@ from .smt.utils import *
 from .utils.basic_block import BasicBlock
 from .utils.io import load_apc_dump, load_json
 from .verify.bug_injection import apply_injection
+from .verify.preanalysis import analyze_verify_preanalysis, apply_skip_trivial
 from .verify.memory_bus_alignment import BEFORE_PREFIX, AFTER_PREFIX, emit_memory_equalities
 from .verify import SetInfos, SkolemPinKind
 from .verify.skolem_pins import derived_columns_skolem_setinfo, drop_mirrored_derived
@@ -80,14 +81,8 @@ def verify():
     before = load_apc_dump(ARGS().input_before)
     after = load_apc_dump(ARGS().input_after)
 
-    if ARGS().skip_trivial and before == after:
-        logging.info(
-            "inputs are identical; stripping constraints and bus interactions"
-        )
-        before["machine"]["constraints"] = []
-        before["machine"]["bus_interactions"] = []
-        after["machine"]["constraints"] = []
-        after["machine"]["bus_interactions"] = []
+    apply_skip_trivial(before, after)
+    verify_preanalysis = analyze_verify_preanalysis(before, after)
 
     if ARGS().inject is not None:
         old_before = copy.deepcopy(before)
@@ -100,8 +95,8 @@ def verify():
 
     with (
         Action("verify-encode") as action,
-        SmtConverter(BEFORE_PREFIX, block) as before_conv,
-        SmtConverter(AFTER_PREFIX, block) as after_conv,
+        SmtConverter(BEFORE_PREFIX, block, verify_preanalysis=verify_preanalysis) as before_conv,
+        SmtConverter(AFTER_PREFIX, block, verify_preanalysis=verify_preanalysis) as after_conv,
     ):
         action += {"outputs": []}
         before_smt = before_conv.to_formula_with_axioms(before)
@@ -159,6 +154,7 @@ def verify():
                 reverse=reverse,
                 smt_dump_base=smt_outfile,
                 parent_action=action,
+                initial_alignment=verify_preanalysis.memory_bus_alignment,
             )
             return info
 

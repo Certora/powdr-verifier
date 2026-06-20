@@ -6,7 +6,6 @@ from .memory_plain_utils import (
     boolean_propagate,
     plain_memory_const_key_io_hints,
     plain_memory_presolve_incremental,
-    plain_memory_presolve_individual,
 )
 from ..smt.utils import *
 from ..utils.args import ARGS
@@ -44,6 +43,7 @@ def keyed_io_relation(
     iso_b: list[list[FNode]],
     *,
     xmatch_name_prefix: str,
+    aligned_pairs: dict[int, int] | None = None,
 ) -> tuple[FNode, frozenset[FNode]]:
     """Relate two sets of memory-bus I/O across independent encodings.
 
@@ -156,6 +156,18 @@ def keyed_io_relation(
     parts = boolean_propagate(
         [keep_comment(p.simplify(), p) for p in parts], presimplify=False
     )
+
+    if aligned_pairs:
+        for i, j in aligned_pairs.items():
+            v = xmatch_vars.get((i, j))
+            assert v is not None, (i, j)
+            assert v.is_symbol(), (i, j, v)
+            parts.append(
+                with_comment(
+                    Equals(v, TRUE()),
+                    f"{name}: prealigned xmatch ({i},{j})",
+                )
+            )
 
     introduced = frozenset(v for v in xmatch_vars.values() if v.is_symbol())
     return (And(*parts) if parts else TRUE(), introduced)
