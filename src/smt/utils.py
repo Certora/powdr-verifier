@@ -17,6 +17,28 @@ from pysmt.environment import get_env
 SUPPORTS_COMMENTS = "comment" in FNode.__slots__
 
 
+def iter_unique_subnodes(root: FNode):
+    """Yield each distinct subnode of ``root`` exactly once.
+
+    Iterative (explicit worklist) rather than recursive: asserted bodies are
+    deep *and* heavily share substructure, so a recursion would both risk a
+    ``RecursionError`` on the first descent and re-walk shared subterms a
+    tree-exponential number of times. The ``seen`` set memoizes over the DAG;
+    the worklist keeps stack depth bounded. This is the lightweight equivalent
+    of a ``DagWalker`` for callers that only need to scan nodes (no per-node
+    value to compute or rewrite).
+    """
+    seen: set[FNode] = set()
+    stack: list[FNode] = [root]
+    while stack:
+        node = stack.pop()
+        if node in seen:
+            continue
+        seen.add(node)
+        yield node
+        stack.extend(node.args())
+
+
 def substitute_no_validate(formula, subs, substituter=None):
     """Apply ``subs`` to ``formula`` skipping pysmt's per-call validation.
 

@@ -47,19 +47,14 @@ def _collect_forall_qvars(smt_script: script.SmtLibScript) -> dict[str, FNode]:
     cache so :func:`_parse_equation` can resolve them.
     """
     out: dict[str, FNode] = {}
-
-    def visit(node: FNode):
-        """Record forall-bound symbol names for parser cache population."""
-        if node.is_quantifier():
-            for q in node.quantifier_vars():
-                if q.is_symbol():
-                    out[q.symbol_name()] = q
-        for a in node.args():
-            visit(a)
-
     for cmd in smt_script:
-        if cmd.name == "assert":
-            visit(cmd.args[0])
+        if cmd.name != "assert":
+            continue
+        for node in iter_unique_subnodes(cmd.args[0]):
+            if node.is_quantifier():
+                for q in node.quantifier_vars():
+                    if q.is_symbol():
+                        out[q.symbol_name()] = q
     return out
 
 
@@ -170,6 +165,13 @@ def load_skolem_setinfos(smt_script: script.SmtLibScript) -> "SetInfos":
     declare_types = _declare_types_from_script(smt_script)
     equations: list[SkolemPin] = []
     kw_re = _skolem_pin_keyword_re()
+    # The parser cache mirrors the script's symbols, which do not change across
+    # pins, so build it once instead of rebuilding (and re-walking every
+    # asserted formula via ``_collect_forall_qvars``) for each of potentially
+    # thousands of ``:skolem-`` set-info entries. ``_prebind_pin_identifiers``
+    # only adds deterministic per-name bindings, so accumulating them across
+    # pins on a shared parser is harmless.
+    parser = None
     for cmd in smt_script:
         if cmd.name != "set-info":
             continue
@@ -185,7 +187,8 @@ def load_skolem_setinfos(smt_script: script.SmtLibScript) -> "SetInfos":
                 cmd.args[0],
             )
             continue
-        parser = _build_parser_with_cache(smt_script)
+        if parser is None:
+            parser = _build_parser_with_cache(smt_script)
         eq = _parse_equation(parser, cmd.args[1], declare_types=declare_types)
         if eq is not None:
             equations.append(SkolemPin(eq, pin_type))
