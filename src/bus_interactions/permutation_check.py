@@ -153,7 +153,9 @@ def keyed_io_relation(
             )
         )
 
-    parts = boolean_propagate([keep_comment(p.simplify(), p) for p in parts])
+    parts = boolean_propagate(
+        [keep_comment(p.simplify(), p) for p in parts], presimplify=False
+    )
 
     introduced = frozenset(v for v in xmatch_vars.values() if v.is_symbol())
     return (And(*parts) if parts else TRUE(), introduced)
@@ -841,7 +843,8 @@ class PermutationCheckMixin:
             s = c.simplify()
             if not s.is_true():
                 simplified.append(keep_comment(s, c))
-        conjuncts = boolean_propagate(simplified)
+        # ``simplified`` is already fully simplified, so skip BCP's presimplify pass.
+        conjuncts = boolean_propagate(simplified, presimplify=False)
         return (
             conjuncts,
             [is_inputs[i] for i in range(n)],

@@ -17,6 +17,87 @@ from pysmt.environment import get_env
 SUPPORTS_COMMENTS = "comment" in FNode.__slots__
 
 
+_BOOL_CONNECTIVES = frozenset(
+    {operators.AND, operators.OR, operators.NOT, operators.IMPLIES, operators.IFF}
+)
+
+
+def bool_simplify(formula: FNode) -> FNode:
+    """Simplify only the boolean skeleton, leaving theory atoms untouched.
+
+    Recurses through boolean connectives (And/Or/Not/Implies/Iff) applying pysmt's
+    own per-node simplify rules, but **stops at every non-connective node** (theory
+    atoms like ``field_eq``/mod-equalities, symbols, constants) and returns it as-is
+    -- it never descends into or rebuilds arithmetic. So this does NOT do deep
+    (theory) simplification, only boolean. Sound (boolean simplifications are
+    logically equivalent and atoms are returned unchanged); cheap (O(boolean
+    skeleton), not O(whole formula)). Used as a presimplifier when only boolean
+    unit structure matters and theory atoms are either already simplified or
+    irrelevant.
+    """
+    simp = get_env().simplifier
+    fns = simp.functions
+    memo: dict[FNode, FNode] = {}
+
+    def go(f: FNode) -> FNode:
+        cached = memo.get(f)
+        if cached is not None:
+            return cached
+        if f.node_type() in _BOOL_CONNECTIVES:
+            r = fns[f.node_type()](f, [go(a) for a in f.args()])
+        else:
+            r = f
+        memo[f] = r
+        return r
+
+    return go(formula)
+
+
+def bool_substitute_simplify(formula: FNode, subs: dict) -> FNode:
+    """Fused substitution + simplification in one pruned, bottom-up pass.
+
+    Replaces ``substitute(formula, subs).simplify()`` -- two full DAG walks -- with a
+    single pruned walk. ``substitute_no_validate``/``FNode.substitute`` rebuild the
+    *entire* tree regardless of where the keys occur, so replacing a boolean symbol
+    in a formula whose mass is large arithmetic atoms re-walks all that arithmetic
+    for nothing (measured ~57x overhead). Here:
+
+    * **Prune** -- a node whose (memoized) free vars are disjoint from the keys is
+      returned unchanged without recursing. When the keys are boolean symbols that
+      occur only in the boolean skeleton, recursion stops at every theory atom.
+    * **Fuse** -- as the boolean skeleton is rebuilt, each node is simplified in the
+      same pass by dispatching into the environment ``Simplifier``'s own per-node
+      ``walk_*`` rule (``simp.functions[node_type]``), so the boolean simplification
+      is *identical* to ``.simplify()`` (set-dedup, complement detection, constant
+      folding -- not just TRUE/FALSE folding).
+
+    Sound and equivalent to ``substitute(formula, subs).simplify()`` provided
+    ``formula`` is already simplified (so the pruned atoms are in simplest form) --
+    which is BCP's invariant. Keys must be booleans occurring only in boolean
+    position.
+    """
+    sub_vars = frozenset(subs)
+    simp = get_env().simplifier
+    fns = simp.functions
+    memo: dict[FNode, FNode] = {}
+
+    def go(f: FNode) -> FNode:
+        cached = memo.get(f)
+        if cached is not None:
+            return cached
+        if f.get_free_variables().isdisjoint(sub_vars):
+            memo[f] = f
+            return f
+        if f.is_symbol():
+            r = subs.get(f, f)
+        else:
+            r = fns[f.node_type()](f, [go(a) for a in f.args()])
+        memo[f] = r
+        return r
+
+    return go(formula)
+
+
 def substitute_no_validate(formula, subs, substituter=None):
     """Apply ``subs`` to ``formula`` skipping pysmt's per-call validation.
 
