@@ -5,5 +5,6 @@ data/
 reports/
 reports-cmp-old/
 report-*.html
+report-*.db
 benchmark-results.json
 cprofile.prof

@@ -250,9 +250,14 @@ def collect(basedir: Path):
     commit_db()
     return ttw, results
 
+def report_db_path(output: Path) -> Path:
+    return output.with_suffix(".db")
+
+
 def report():
     report_dir = ARGS().report_dir
-    connect_db(report_dir / "verification_results.db")
+    output = ARGS().output
+    connect_db(report_db_path(output))
     try:
         create_db()
         clear_verification_steps()
@@ -287,7 +292,8 @@ def report():
 </body>
 </html>
 """
-        ARGS().output.write_text(html, encoding="utf-8")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(html, encoding="utf-8")
     finally:
         close_db()
     #webbrowser.open(ARGS().output.resolve().as_uri())
