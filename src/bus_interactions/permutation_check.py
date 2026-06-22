@@ -1,6 +1,7 @@
 """Mixins and formulas for multiset permutation invariants and timestamp monotonicity."""
 from itertools import batched, pairwise
 import itertools
+from typing import Any, Callable
 
 from .memory_plain_utils import (
     boolean_propagate,
@@ -11,26 +12,72 @@ from ..smt.utils import *
 from ..utils.args import ARGS
 
 
-def _plain_pairwise_match_impossible(interactions: list, i: int, j: int) -> bool:
+def _plain_static_profile(
+    interactions: list,
+    p: int,
+) -> tuple[list[int | None], list[tuple[int | None, ...] | None]]:
+    """Per interaction: constant multiplicity mod p (or None) and per-limb constants."""
+    mult_const: list[int | None] = []
+    const_args: list[tuple[int | None, ...] | None] = []
+    for inter in interactions:
+        m = inter.mult
+        mult_const.append(m.constant_value() % p if m.is_int_constant() else None)
+        raw = inter.args
+        flat: list[FNode] = (
+            raw
+            if isinstance(raw, list)
+            else [raw[0], raw[1], *raw[2], raw[3]]
+        )
+        row = tuple(
+            x.constant_value() % p if x.is_int_constant() else None
+            for x in flat
+        )
+        const_args.append(None if not any(v is not None for v in row) else row)
+    return mult_const, const_args
+
+
+def _plain_pairwise_match_impossible_static(
+    i: int,
+    j: int,
+    mult_const: list[int | None],
+    const_args: list[tuple[int | None, ...] | None],
+    p: int,
+) -> bool:
     """True when ``m(i,j)`` cannot hold: mult or arg data statically incompatible."""
+    mi, mj = mult_const[i], mult_const[j]
+    ai, aj = const_args[i], const_args[j]
+    if mi is None and mj is None and (ai is None or aj is None):
+        return False
+    if mi == 0 or mj == 0:
+        return True
+    if mi is not None and mj is not None and (mi + mj) % p != 0:
+        return True
+    if ai is not None and aj is not None:
+        for vi, vj in zip(ai, aj, strict=True):
+            if vi is not None and vj is not None and vi != vj:
+                return True
+    return False
 
-    def mult(ii: int) -> FNode:
-        return interactions[ii].mult
 
-    def flat_args(ii: int) -> list[FNode]:
-        raw = interactions[ii].args
-        if isinstance(raw, list):
-            return raw
-        a, ptr, data, t = raw
-        return [a, ptr, *data, t]
+def _plain_build_match_vars(
+    interactions: list,
+    n: int,
+    symbol: Callable[[int, int], FNode],
+) -> dict[tuple[int, int], FNode]:
+    """Build ``memory_match_i_j`` variables for all ``i <= j``, using ``FALSE`` when static."""
+    p = ARGS().field_type.value
+    mult_const, const_args = _plain_static_profile(interactions, p)
+    match_vars: dict[tuple[int, int], FNode] = {}
 
-    conseq = And(
-        field_eq(Plus(mult(i), mult(j))),
-        Not(field_eq(mult(i))),
-        Not(field_eq(mult(j))),
-        *(field_eq(x, y) for x, y in zip(flat_args(i), flat_args(j), strict=True)),
-    )
-    return conseq.simplify().is_false()
+    for i in range(n):
+        for j in range(i, n):
+            if i != j and _plain_pairwise_match_impossible_static(
+                i, j, mult_const, const_args, p
+            ):
+                match_vars[(i, j)] = FALSE()
+            else:
+                match_vars[(i, j)] = symbol(i, j)
+    return match_vars
 
 
 def keyed_io_relation(
@@ -561,15 +608,11 @@ class PermutationCheckMixin:
         }
 
 
-        match_vars: dict[tuple[int, int], Any] = {}
-        for i in range(n):
-            for j in range(i, n):
-                if i != j and _plain_pairwise_match_impossible(interactions, i, j):
-                    match_vars[(i, j)] = FALSE()
-                else:
-                    match_vars[(i, j)] = self._symbol(
-                        f"{self.NAME}_match_{i}_{j}", BOOL
-                    )
+        match_vars = _plain_build_match_vars(
+            interactions,
+            n,
+            lambda i, j: self._symbol(f"{self.NAME}_match_{i}_{j}", BOOL),
+        )
 
         def m(i: int, j: int) -> FNode:
             if i > j:
