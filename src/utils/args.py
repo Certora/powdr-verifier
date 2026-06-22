@@ -105,11 +105,13 @@ def __build_parser(skip_subparsers=False):
     sub_simplify.add_argument("--timeout", type=float, default=60.0, metavar="SEC")
     sub_simplify.add_argument("--dump-steps", action="store_true")
     sub_simplify.add_argument("--with-model", type=Path)
+    sub_simplify.add_argument("--optimization-step", type=str, default=None, metavar="PASS")
 
     sub_verify = sub.add_parser("verify")
     sub_verify.add_argument("input_before", type=Path)
     sub_verify.add_argument("input_after", type=Path)
     sub_verify.add_argument("output", type=Path)
+    sub_verify.add_argument("--optimization-step", type=str, default=None, metavar="PASS")
     sub_verify.add_argument("--inject", nargs="?", default=None, const="random", metavar="SEED")
     sub_verify.add_argument("--skip-soundness", action="store_true")
     sub_verify.add_argument("--skip-completeness", action="store_true")

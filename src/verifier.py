@@ -93,12 +93,16 @@ def verify():
     block = BasicBlock(before["block"])
     assert block == BasicBlock(after["block"]), "The basic block has changed"
 
+    optimization_step = ARGS().optimization_step
+
     with (
         Action("verify-encode") as action,
         SmtConverter(BEFORE_PREFIX, block, verify_preanalysis=verify_preanalysis) as before_conv,
         SmtConverter(AFTER_PREFIX, block, verify_preanalysis=verify_preanalysis) as after_conv,
     ):
         action += {"outputs": []}
+        if optimization_step:
+            action += {"optimization_step": optimization_step}
         before_smt = before_conv.to_formula_with_axioms(before)
         after_smt = after_conv.to_formula_with_axioms(after)
 
