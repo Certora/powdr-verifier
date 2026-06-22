@@ -9,13 +9,13 @@ import re
 import shutil
 import subprocess
 import sys
-import time
 from io import StringIO
 from pathlib import Path
 from typing import Any, Optional
 
 from src.utils.io import load_json
 from src.utils.enums import XOrEncoding
+from src.utils.process import communicate_with_timeout
 from src.utils.utils import s2range
 from src.utils.profiling import Profile
 from src.report.action import Action
@@ -144,35 +144,6 @@ def parse_args():
     return _ARGS
 
 
-def __communicate_with_timeout(
-    proc: subprocess.Popen,
-    timeout: float,
-    term_grace: float = 5.0,
-) -> tuple[str | None, str | None, bool]:
-    """Wait for ``proc`` up to ``timeout`` seconds, then SIGTERM (with grace) before SIGKILL."""
-    deadline = time.monotonic() + timeout
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        try:
-            out = proc.communicate(timeout=min(0.2, remaining))
-            return out[0], out[1], False
-        except subprocess.TimeoutExpired:
-            if proc.poll() is not None:
-                out = proc.communicate()
-                return out[0], out[1], False
-
-    proc.terminate()
-    try:
-        out = proc.communicate(timeout=term_grace)
-        return out[0], out[1], True
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        out = proc.communicate()
-        return out[0], out[1], True
-
-
 def __run_main(
     command,
     *args,
@@ -203,9 +174,7 @@ def __run_main(
             stderr=subprocess.PIPE,
             text=True,
         )
-        stdout, stderr, timed_out = __communicate_with_timeout(proc, timeout)
-        if stderr:
-            sys.stderr.write(stderr)
+        stdout, stderr, timed_out = communicate_with_timeout(proc, timeout)
         if timed_out:
             logging.error(f"timed out running {cmdstr}")
             return Action(command, result="timeout")
@@ -221,10 +190,8 @@ def __run_main(
                 result="invalid-json",
                 error_message=(stdout[:400] if stdout else ""),
             )
-    proc = subprocess.Popen(cmd)
-    _, stderr, timed_out = __communicate_with_timeout(proc, timeout)
-    if stderr:
-        sys.stderr.write(stderr)
+    proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)
+    _, _, timed_out = communicate_with_timeout(proc, timeout)
     if timed_out:
         logging.error(f"timed out running {cmdstr}")
     elif proc.returncode != 0:
