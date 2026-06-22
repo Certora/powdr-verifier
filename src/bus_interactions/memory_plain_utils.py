@@ -4,6 +4,7 @@
 ``plain_memory_const_key_io_hints`` adds first/last-occurrence input/output pins
 for constant (address_space, pointer) keys. ``plain_memory_presolve_incremental`` alternates boolean unit propagation and
 incremental SMT checks: full timestamp COI from ``coi_constraints`` in the solver base,
+a single SAT call over all conjuncts to guide polarity checks on true match variables,
 then per match variable a pushed one-step COI from the conjuncts before checking polarities.
 ``plain_memory_presolve_individual`` does the same but uses a fresh solver per literal, with
 full timestamp COI from ``coi_constraints`` and a one-step match-variable COI from
@@ -259,6 +260,37 @@ def _all_timestamp_vars(interactions: list[Any]) -> set[FNode]:
     return ts_vars
 
 
+def _implied_from_true_in_sat_model(
+    solver: Solver,
+    bool_vars: set[FNode],
+    *,
+    log_prefix: str,
+) -> list[FNode]:
+    """With full context already asserted: SAT, then prove true model match vars are fixed."""
+    assert solver.solve(), f"{log_prefix}: expected sat for full context"
+    model = solver.get_model()
+    out: list[FNode] = []
+    for v in bool_vars:
+        if not model[v].is_true():
+            continue
+        solver.push()
+        solver.add_assertion(Not(v))
+        entailed = False
+        try:
+            if not solver.solve():
+                entailed = True
+        except SolverReturnedUnknownResultError:
+            logging.info("%s: model-guided is_valid unknown for %s", log_prefix, v)
+        except Exception:
+            logging.info("%s: model-guided is_valid failed for %s", log_prefix, v)
+        finally:
+            solver.pop()
+        if entailed:
+            out.append(v)
+            logging.info("%s: model-guided implied unit %s", log_prefix, v)
+    return out
+
+
 def _first_valid_literal(
     solver: Solver,
     literals: list[FNode],
@@ -318,6 +350,7 @@ def _collect_implied_top_level_literals(
     if not bool_vars:
         return []
     out: list[FNode] = []
+    proved: set[FNode] = set()
     with Solver(
         logic=logics.ALL,
         name="z3",
@@ -327,7 +360,24 @@ def _collect_implied_top_level_literals(
         s.z3.set("timeout", timeout)
         for c in full_ts_coi:
             s.add_assertion(c)
+        s.push()
+        for c in working:
+            s.add_assertion(c)
+        for lit in _implied_from_true_in_sat_model(
+            s, bool_vars, log_prefix=log_prefix
+        ):
+            k = _unit_bool_key(lit)
+            if k is None:
+                continue
+            sym, _ = k
+            out.append(lit)
+            proved.add(sym)
+        s.pop()
+        for lit in out:
+            s.add_assertion(lit)
         for v in list(bool_vars):
+            if v in proved:
+                continue
             s.push()
             for c in cone_of_influence_one_step(working, {v}):
                 s.add_assertion(c)
