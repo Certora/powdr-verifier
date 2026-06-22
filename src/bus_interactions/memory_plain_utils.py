@@ -267,7 +267,16 @@ def _implied_from_true_in_sat_model(
     log_prefix: str,
 ) -> list[FNode]:
     """With full context already asserted: SAT, then prove true model match vars are fixed."""
-    assert solver.solve(), f"{log_prefix}: expected sat for full context"
+    try:
+        if not solver.solve():
+            logging.info("%s: full-context sat check returned unsat", log_prefix)
+            return []
+    except SolverReturnedUnknownResultError:
+        logging.info("%s: full-context sat check unknown (timeout?)", log_prefix)
+        return []
+    except Exception:
+        logging.info("%s: full-context sat check failed", log_prefix)
+        return []
     model = solver.get_model()
     out: list[FNode] = []
     for v in bool_vars:
