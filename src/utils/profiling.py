@@ -1,6 +1,7 @@
 """Lightweight wall-time profiling decorator for hot simplification paths."""
 import functools
 import logging
+import pstats
 import sys
 import tabulate
 import time
@@ -42,6 +43,17 @@ class Profile:
     def __exit__(self, exc_type, exc_value, traceback):
         took = (time.perf_counter_ns() - self.start_time) / 1000000000
         logging.warning(f"{self.name} took {took:.3f} s")
+
+
+def dump_cprofile(profiler, path: str = "cprofile.prof", print_stats: int = 40) -> None:
+    """Write cProfile stats to ``path`` and print a summary to stderr."""
+    profiler.disable()
+    profiler.dump_stats(path)
+    logging.warning("cProfile written to %s", path)
+    if print_stats > 0:
+        stats = pstats.Stats(path, stream=sys.stderr)
+        stats.sort_stats("cumtime")
+        stats.print_stats(print_stats)
 
 
 def print_profile():

@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from io import StringIO
 from pathlib import Path
 from typing import Any, Optional
@@ -143,6 +144,35 @@ def parse_args():
     return _ARGS
 
 
+def __communicate_with_timeout(
+    proc: subprocess.Popen,
+    timeout: float,
+    term_grace: float = 5.0,
+) -> tuple[str | None, str | None, bool]:
+    """Wait for ``proc`` up to ``timeout`` seconds, then SIGTERM (with grace) before SIGKILL."""
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            out = proc.communicate(timeout=min(0.2, remaining))
+            return out[0], out[1], False
+        except subprocess.TimeoutExpired:
+            if proc.poll() is not None:
+                out = proc.communicate()
+                return out[0], out[1], False
+
+    proc.terminate()
+    try:
+        out = proc.communicate(timeout=term_grace)
+        return out[0], out[1], True
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out = proc.communicate()
+        return out[0], out[1], True
+
+
 def __run_main(
     command,
     *args,
@@ -167,32 +197,38 @@ def __run_main(
     ]
     cmdstr = " ".join(map(str, cmd))
     if parse_output:
-        try:
-            result = subprocess.run(
-                cmd,
-                check=True,
-                stdout=subprocess.PIPE,
-                text=True,
-                timeout=timeout,
-            )
-            return load_json(StringIO(result.stdout))
-        except subprocess.TimeoutExpired:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout, stderr, timed_out = __communicate_with_timeout(proc, timeout)
+        if stderr:
+            sys.stderr.write(stderr)
+        if timed_out:
             logging.error(f"timed out running {cmdstr}")
             return Action(command, result="timeout")
-        except subprocess.CalledProcessError as e:
-            logging.error("command failed (exit %s): %s", e.returncode, cmdstr)
-            return Action(command, result="error", error_message=str(e))
+        if proc.returncode != 0:
+            logging.error("command failed (exit %s): %s", proc.returncode, cmdstr)
+            return Action(command, result="error", error_message=stderr or str(proc.returncode))
+        try:
+            return load_json(StringIO(stdout or ""))
         except json.JSONDecodeError:
-            logging.error(f"failed to parse output of {cmdstr}:\n{result.stdout}")
+            logging.error(f"failed to parse output of {cmdstr}:\n{stdout}")
             return Action(
                 command,
                 result="invalid-json",
-                error_message=(result.stdout[:400] if result.stdout else ""),
+                error_message=(stdout[:400] if stdout else ""),
             )
-    try:
-        subprocess.run(cmd, check=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
+    proc = subprocess.Popen(cmd)
+    _, stderr, timed_out = __communicate_with_timeout(proc, timeout)
+    if stderr:
+        sys.stderr.write(stderr)
+    if timed_out:
         logging.error(f"timed out running {cmdstr}")
+    elif proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, cmd)
     return None
 
 def __do_simplify(input, output, optimization_step: str | None = None):

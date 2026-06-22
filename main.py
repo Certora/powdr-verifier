@@ -3,6 +3,7 @@
 from io import StringIO
 import cProfile
 import logging
+import signal
 import sys
 
 from src.checker import check
@@ -10,7 +11,7 @@ from src.evaluator import evaluate
 from src.smt_backends.pysmt import disable_typecheck
 from src.utils.args import parse_args, ARGS
 from src.utils.io import dump_json, load_apc_dump, load_json
-from src.utils.profiling import print_profile
+from src.utils.profiling import dump_cprofile, print_profile
 from src.tracer import trace
 from src.verifier import verify
 from src.diff import diff
@@ -74,17 +75,17 @@ if __name__ == '__main__':
 
     profiler = cProfile.Profile() if ARGS().cprofile else None
     if profiler is not None:
+        def _terminate_for_profile(signum, _frame):
+            raise SystemExit(128 + signum)
+
+        signal.signal(signal.SIGTERM, _terminate_for_profile)
         profiler.enable()
 
     try:
         res = run()
-    except Exception as e:
-        raise e
     finally:
         if profiler is not None:
-            profiler.disable()
-            profiler.dump_stats("cprofile.prof")
-            logging.warning("cProfile written to cprofile.prof")
+            dump_cprofile(profiler)
         print_profile()
     
     if res is not None:
