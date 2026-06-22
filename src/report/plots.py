@@ -647,10 +647,10 @@ def simplifier_pass_stats_bar() -> str:
         by_name[str(name)] = {"timeouts": int(n_to), "skipped": int(n_sk), "n_ok": int(n_ok)}
     for name, _rt in time_rows:
         by_name.setdefault(str(name), {"timeouts": 0, "skipped": 0, "n_ok": 0})
-    from orchestrate import _DEFAULT_TACTIC
+    from src.simplifier import DEFAULT_TACTIC
 
     rank: dict[str, int] = {}
-    for i, raw in enumerate(_DEFAULT_TACTIC.split(":")):
+    for i, raw in enumerate(DEFAULT_TACTIC.split(":")):
         rank.setdefault(raw, i)
     tail = len(rank) + 1
     ordered = sorted(by_name, key=lambda n: (rank.get(n, tail), n))

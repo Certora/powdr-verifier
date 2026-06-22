@@ -44,6 +44,22 @@ from .simplify import (
 
 _T = TypeVar("_T")
 
+DEFAULT_TACTIC = (
+    "nnf:evaluator:skolem:lift:witness:demod:z3-propagate-values:flatten_outer_array:isqf:bounds:rewrite:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod:pretty"
+)
+
+# Custom colon-separated pipelines keyed by powdr optimization pass name (e.g. ``remove_free``).
+STEP_TACTICS: dict[str, str] = {}
+
+
+def resolve_tactic(tactic: str, optimization_step: str | None = None) -> str:
+    """Resolve ``default`` and per-step overrides to a colon-separated pipeline."""
+    if tactic != "default":
+        return tactic
+    if optimization_step and optimization_step in STEP_TACTICS:
+        return STEP_TACTICS[optimization_step]
+    return DEFAULT_TACTIC
+
 
 class _PassTimeout(Exception):
     pass
@@ -174,10 +190,12 @@ def simplify_smt_script(
     timeout: float,
     output: Path | None = None,
     parent_action: Action | None = None,
+    optimization_step: str | None = None,
 ) -> script.SmtLibScript:
     """Run colon-separated tactics on ``smt_script`` (mutated in place)."""
     parent = parent_action or Action("simplify-programmatic")
-    tactics = tactic.split(":")
+    resolved = resolve_tactic(tactic, optimization_step)
+    tactics = resolved.split(":")
     deadline = time.monotonic() + float(timeout)
     for step_index, raw_tactic in enumerate(tactics):
         step_no = step_index + 1
@@ -229,11 +247,16 @@ def simplify_smt_script(
 def simplify():
     """Read SMT2, run selected simplification passes, and write to output (or overwrite input)."""
 
+    optimization_step = ARGS().optimization_step
+
     with Action("simplifier") as action:
         action += {
             "inputs": [ARGS().input],
             "outputs": [ARGS().output],
+            "tactic": ARGS().tactic,
         }
+        if optimization_step:
+            action += {"optimization_step": optimization_step}
         with action.action("load"):
             with open_file(ARGS().input, "r") as f:
                 parser = SmtLibParser()
@@ -246,6 +269,7 @@ def simplify():
             timeout=float(ARGS().timeout),
             output=ARGS().output,
             parent_action=action,
+            optimization_step=optimization_step,
         )
         with action.action("dump"):
             with open_file(ARGS().output, "w") as out:

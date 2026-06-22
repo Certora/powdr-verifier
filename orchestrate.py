@@ -195,22 +195,23 @@ def __run_main(
         logging.error(f"timed out running {cmdstr}")
     return None
 
-_DEFAULT_TACTIC = (
-    "nnf:evaluator:skolem:lift:witness:demod:z3-propagate-values:flatten_outer_array:isqf:bounds:rewrite:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod:pretty"
-)
-
-
-def __do_simplify(input, output, tactic=None):
-    if tactic is None:
-        tactic = _DEFAULT_TACTIC
-    logging.info(f"simplifying with {tactic} {input.relative_to(Path.cwd())}")
+def __do_simplify(input, output, optimization_step: str | None = None):
+    logging.info(f"simplifying {input.relative_to(Path.cwd())} (step={optimization_step or 'default'})")
     return __run_main(
         "simplify",
         input,
-        tactic,
+        "default",
         output,
         parse_output=True,
-        extra_args=["--timeout", str(TIMEOUT_SIMPLIFY_SEC - 5)],
+        extra_args=[
+            *(
+                ["--optimization-step", optimization_step]
+                if optimization_step
+                else []
+            ),
+            "--timeout",
+            str(TIMEOUT_SIMPLIFY_SEC - 5),
+        ],
         timeout=TIMEOUT_SIMPLIFY_SEC,
     )
 
@@ -331,15 +332,30 @@ def run_verify_opt(files: dict, pairs):
 
 @parallelize
 def run_verify(a, b):
+    _, optimization_step = _parse_step_and_pass(b)
     with ActionDumper("verify", _ARGS.test, a, b) as a_verify:
         logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
         first = data_path_for_dump(a, f"verify-{a.stem}-{b.stem}.smt2")
-        res_verify = __run_main("verify", a, b, first, parse_output=True, timeout=TIMEOUT_ENCODING_SEC)
+        res_verify = __run_main(
+            "verify",
+            a,
+            b,
+            first,
+            parse_output=True,
+            timeout=TIMEOUT_ENCODING_SEC,
+            extra_args=(
+                ["--optimization-step", optimization_step] if optimization_step else []
+            ),
+        )
         res_verify.name = "verify-encode"
         a_verify += res_verify
         for file in sorted(res_verify.outputs or []):
             with a_verify.action("check", inputs=[file]) as a_check:
-                res_simp = __do_simplify(file, file.with_suffix(".rewrite.smt2"))
+                res_simp = __do_simplify(
+                    file,
+                    file.with_suffix(".rewrite.smt2"),
+                    optimization_step=optimization_step or None,
+                )
                 a_check += res_simp
                 for rewritten in (res_simp.outputs or []):
                     a_check += __run_main(
