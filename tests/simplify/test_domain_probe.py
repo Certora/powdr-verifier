@@ -48,14 +48,12 @@ def test_domain_probe_strengthens_binary_disjunction():
     assert len(asserts) == 1
 
 
-def test_flag_local_slice_keeps_flag_constraints_drops_wide_ones():
-    """Flag-local slicing keeps constraints over small-domain (flag) vars and
-    drops those touching wide data columns, so a flag probe doesn't drag the
-    nonlinear bus arithmetic into the solver (the 202s->3.5s win on 2105476)."""
+def test_flag_cluster_slice_keeps_flag_constraints_drops_wide_ones():
+    """Per-seed clusters keep constraints over flag vars and drop wide columns."""
     from src.simplify.domain_probe import (
+        _cluster_assertions,
         _collect_choices,
-        _flag_local_assertions,
-        _small_domain_vars,
+        _flag_cluster,
     )
 
     f = Symbol("opcode_and_flag", INT)  # small domain {0,1}
@@ -65,13 +63,29 @@ def test_flag_local_slice_keeps_flag_constraints_drops_wide_ones():
     asserts = [flag_dom, wide]
 
     choices = _collect_choices(asserts, 3)
-    flags = _small_domain_vars(asserts, choices, 3)
+    cluster = _flag_cluster(f, asserts, choices)
 
-    assert f in flags  # {0,1} -> flag-like
-    assert a not in flags  # unbounded -> not flag-like
-    sliced = _flag_local_assertions(asserts, flags)
-    assert flag_dom in sliced  # flag-only constraint kept
-    assert wide not in sliced  # data-touching constraint dropped
+    assert f in cluster
+    assert a not in cluster
+    sliced = _cluster_assertions(asserts, cluster)
+    assert flag_dom in sliced
+    assert wide not in sliced
+
+
+def test_flag_cluster_links_pinned_aux_vars():
+    from src.simplify.domain_probe import _collect_choices, _flag_cluster
+
+    x = Symbol("x", INT)
+    y = Symbol("y", INT)
+    asserts = [
+        And(
+            Or(Equals(x, Int(0)), Equals(x, Int(1))),
+            Equals(y, Int(0)),
+        )
+    ]
+    choices = _collect_choices(asserts, 3)
+    cluster = _flag_cluster(x, asserts, choices)
+    assert cluster == frozenset({x, y})
 
 
 def test_domain_probe_subaction_added_facts():
