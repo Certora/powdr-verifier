@@ -45,7 +45,7 @@ from .simplify import (
 _T = TypeVar("_T")
 
 DEFAULT_TACTIC = (
-    "nnf:evaluator:skolem:lift:witness:demod:z3-propagate-values:flatten_outer_array:isqf:bounds:rewrite:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod:pretty"
+    "nnf:evaluator:skolem:lift:witness:demod:z3-propagate-values:flatten_outer_array:isqf:bounds:demod:normalize:rewrite:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod:pretty"
 )
 
 # Custom colon-separated pipelines keyed by powdr optimization pass name (e.g. ``remove_free``).
