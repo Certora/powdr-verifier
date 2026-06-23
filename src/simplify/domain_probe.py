@@ -15,48 +15,61 @@ _MAX_VALUES = 3
 _MAX_PAIRS = 20
 _SOLVER_OPTS = {"rlimit": 1000000}
 
-# TODO: hacky filter for specific variables
-
-def _flag_local_assertions(
-    assertions: list[FNode], flag_vars: frozenset[FNode]
+def _cluster_assertions(
+    assertions: list[FNode], cluster: frozenset[FNode]
 ) -> list[FNode]:
-    """Constraints whose free variables are *all* small-domain ("flag-local").
-
-    A flag's pinned value is determined by its flag-local polynomial structure
-    — the domain cubic ``f·(f-1)·(f-2) ≡ 0`` (or ``f·(f-1) ≡ 0``) and the
-    group's one-hot / sum constraint — not by the wide bus interactions the
-    flag gates (those mention data columns ``a/b/c`` and pull a 178s nonlinear
-    solve into each probe). Slicing to constraints whose free vars are all
-    flag-like keeps exactly the structural-lever system (cf.
-    ``flag-pinning-structural-lever``) and makes each probe tiny.
-
-    Sound w.r.t. pinning: probing a *subset* of constraints can only return
-    ``unsat`` when the full set is ``unsat`` (sound pin) and otherwise declines
-    to pin (conservative). Flags determined only by global interaction are
-    missed — but those are precisely the probes that are too expensive anyway.
-    """
-    return [a for a in assertions if a.get_free_variables() <= flag_vars]
+    return [a for a in assertions if a.get_free_variables() <= cluster]
 
 
-def _small_domain_vars(
+def _const_pinned_in(f: FNode) -> set[FNode]:
+    if f.is_equals():
+        a, b = f.args()
+        if a.is_symbol() and a.get_type().is_int_type() and b.is_int_constant():
+            return {a}
+        if b.is_symbol() and b.get_type().is_int_type() and a.is_int_constant():
+            return {b}
+        return set()
+    if f.is_and():
+        out: set[FNode] = set()
+        for arg in f.args():
+            out |= _const_pinned_in(arg)
+        return out
+    return set()
+
+
+def _flag_cluster(
+    seed: FNode,
     assertions: list[FNode],
     choices: dict[FNode, list[int]],
-    max_n: int,
 ) -> frozenset[FNode]:
-    """All int symbols treated as small-domain for flag-local slicing."""
-    flags: set[FNode] = set(choices.keys())
-    for a in assertions:
-        if not flags.intersection(a.get_free_variables()):
-            continue
-        for arg in (a.args() if a.is_and() else [a]):
-            if not arg.is_equals():
+    """Flag variables connected to ``seed`` via choice/pinned-only assertions."""
+    cluster: set[FNode] = {seed}
+    choice_syms = set(choices.keys())
+    changed = True
+    while changed:
+        changed = False
+        for a in assertions:
+            if not cluster.intersection(a.get_free_variables()):
                 continue
-            x, y = arg.args()
-            if x.is_symbol() and x.get_type().is_int_type() and y.is_int_constant():
-                flags.add(x)
-            elif y.is_symbol() and y.get_type().is_int_type() and x.is_int_constant():
-                flags.add(y)
-    return frozenset(flags)
+            new_pins = _const_pinned_in(a)
+            if not new_pins <= cluster:
+                cluster |= new_pins
+                changed = True
+        for a in assertions:
+            fvs = {
+                v
+                for v in a.get_free_variables()
+                if v.is_symbol() and v.get_type().is_int_type()
+            }
+            if not cluster.intersection(fvs):
+                continue
+            extras = fvs - cluster
+            if extras <= choice_syms:
+                new = extras - cluster
+                if new:
+                    cluster |= new
+                    changed = True
+    return frozenset(cluster)
 
 
 def _parse_or_equalities(f: FNode) -> Optional[tuple[FNode, tuple[int, ...]]]:
@@ -128,6 +141,25 @@ def _probe(solver: Solver, assumption: FNode) -> Optional[bool]:
         solver.pop()
 
 
+def _probe_cluster(
+    solver: Solver,
+    cluster_choices: dict[FNode, list[int]],
+    batch: list[FNode],
+) -> None:
+    for sym, vals in sorted(cluster_choices.items(), key=lambda kv: str(kv[0])):
+        for v in vals:
+            eq = Equals(sym, Int(v))
+            r = _probe(solver, eq)
+            tag = {True: "sat", False: "unsat", None: "unknown"}[r]
+            logger.info("domain_probe: probe (= %s %s) -> %s", sym, v, tag)
+            if r is False:
+                ne = Not(eq)
+                if ne not in batch:
+                    batch.append(ne)
+                    solver.add_assertion(ne)
+                    logger.info("domain_probe: exclude -> assert %s", ne)
+
+
 def simplify_domain_probe(
     smt_script: script.SmtLibScript,
     subaction: Action,
@@ -142,109 +174,98 @@ def simplify_domain_probe(
     choices = _collect_choices(assertions, _MAX_VALUES)
     subaction += {"choice_symbols": len(choices)}
     if not choices:
-        subaction += {"pairs_probed": 0}
+        subaction += {"pairs_probed": 0, "clusters_probed": 0}
         return smt_script
 
     try:
-
         insert_at = next(
             (i for i, c in enumerate(smt_script.commands) if c.name == "check-sat"),
             len(smt_script.commands),
         )
-
-        accumulated: list[FNode] = []
+        remaining = set(choices.keys())
+        symbols_probed = 0
+        clusters_probed = 0
+        flag_vars_total = 0
+        flag_local_total = 0
 
         logger.info(
             "domain_probe: start (%d base asserts, %d candidate(s), "
-            "max %d pair(s), solver rlimit %s)",
+            "max %d symbol(s), solver rlimit %s)",
             len(assertions),
             len(choices),
             _MAX_PAIRS,
             _SOLVER_OPTS["rlimit"],
         )
 
-        pairs = list(choices.items())[:_MAX_PAIRS]
-        subaction += {"pairs_probed": len(pairs)}
-        if len(choices) > len(pairs):
+        batch: list[FNode] = []
+        while remaining and symbols_probed < _MAX_PAIRS:
+            seed = min(remaining, key=str)
+            cluster = _flag_cluster(seed, assertions, choices)
+            remaining -= cluster
+            cluster_choices = {s: choices[s] for s in cluster if s in choices}
+            if not cluster_choices:
+                continue
+
+            n_syms = len(cluster_choices)
+            if symbols_probed + n_syms > _MAX_PAIRS:
+                cluster_choices = dict(
+                    sorted(cluster_choices.items(), key=lambda kv: str(kv[0]))[
+                        : _MAX_PAIRS - symbols_probed
+                    ]
+                )
+
+            rel = _cluster_assertions(assertions, cluster)
+            clusters_probed += 1
+            symbols_probed += len(cluster_choices)
+            flag_vars_total += len(cluster)
+            flag_local_total = len(rel)
+
             logger.info(
-                "domain_probe: probing %d of %d candidate pair(s)",
-                len(pairs),
-                len(choices),
+                "domain_probe: cluster %d seed %s vars %s (%d assert(s))",
+                clusters_probed,
+                seed,
+                sorted(map(str, cluster)),
+                len(rel),
             )
 
-        cand = ", ".join(
-            f"{sym} in {{{','.join(map(str, vals))}}}"
-            for sym, vals in pairs
-        )
-        logger.info("domain_probe: %d pair(s): %s", len(pairs), cand)
+            with Solver(logic=ALL, solver_options=_SOLVER_OPTS) as solver:
+                for f in rel:
+                    solver.add_assertion(f)
+                _probe_cluster(solver, cluster_choices, batch)
 
-        flag_vars = _small_domain_vars(assertions, choices, _MAX_VALUES)
-        flag_local = _flag_local_assertions(assertions, flag_vars)
         subaction += {
-            "flag_vars": len(flag_vars),
-            "flag_local_asserts": len(flag_local),
+            "pairs_probed": symbols_probed,
+            "clusters_probed": clusters_probed,
+            "flag_vars": flag_vars_total,
+            "flag_local_asserts": flag_local_total,
         }
-        logger.info(
-            "domain_probe: flag-local slice = %d assert(s) over %d flag var(s)",
-            len(flag_local),
-            len(flag_vars),
-        )
+        if len(choices) > symbols_probed:
+            logger.info(
+                "domain_probe: probed %d of %d candidate symbol(s) in %d cluster(s)",
+                symbols_probed,
+                len(choices),
+                clusters_probed,
+            )
 
-        try:
-            batch: list[FNode] = []
-            for sym, vals in pairs:
-                rel = flag_local
-                logger.info(
-                    "domain_probe: symbol %s: %d flag-local of %d assert(s)",
-                    sym,
-                    len(rel),
-                    len(assertions),
+        if batch:
+            for f in batch:
+                smt_script.commands.insert(
+                    insert_at,
+                    script.SmtLibCommand(name="assert", args=[f]),
                 )
-                with Solver(logic=ALL, solver_options=_SOLVER_OPTS) as solver:
-                    for f in rel:
-                        solver.add_assertion(f)
-                    for v in vals:
-                        eq = Equals(sym, Int(v))
-                        r = _probe(solver, eq)
-                        tag = {True: "sat", False: "unsat", None: "unknown"}[r]
-                        logger.info(
-                            "domain_probe: probe (= %s %s) -> %s",
-                            sym,
-                            v,
-                            tag,
-                        )
-                        if r is False:
-                            ne = Not(eq)
-                            if not any(ne == x for x in batch + accumulated):
-                                batch.append(ne)
-                                solver.add_assertion(ne)
-                                logger.info(
-                                    "domain_probe: exclude -> assert %s",
-                                    ne,
-                                )
-            if batch:
-                for f in batch:
-                    smt_script.commands.insert(
-                        insert_at,
-                        script.SmtLibCommand(name="assert", args=[f]),
-                    )
-                    insert_at += 1
-                    accumulated.append(f)
-                total_added += len(batch)
-                logger.info(
-                    "domain_probe: inserted %d assert(s)",
-                    len(batch),
-                )
-            else:
-                logger.info("domain_probe: no new facts")
-        except Exception as e:
-            logger.info("domain_probe: solver error, stopping: %s", e)
+                insert_at += 1
+            total_added += len(batch)
+            logger.info("domain_probe: inserted %d assert(s)", len(batch))
+        else:
+            logger.info("domain_probe: no new facts")
 
         logger.info(
             "domain_probe: done (%d new assert(s) in script)",
             total_added,
         )
-
+        return smt_script
+    except Exception as e:
+        logger.info("domain_probe: solver error, stopping: %s", e)
         return smt_script
     finally:
         subaction += {"added_facts": total_added}
