@@ -47,6 +47,42 @@ def cone_of_influence_one_step(
     ]
 
 
+def cone_of_influence_via_frontier(
+    constraints: list[FNode],
+    seed: set[FNode],
+    frontier_vars: set[FNode],
+) -> list[FNode]:
+    """COI fixpoint that only expands its frontier through ``frontier_vars``.
+
+    Picks every constraint touching the active set, but grows the active set
+    *only* by the ``frontier_vars`` (e.g. match bools) those constraints
+    mention -- never their arithmetic variables. Proving a match var is forced
+    is a cardinality argument over its *sibling* matches (the ones sharing an
+    interaction), whose disambiguating facts live in the siblings' own
+    definitions; those mention the sibling match var, not the seed, so a
+    one-step COI never reaches them. Walking the match-variable coupling graph
+    pulls them in while staying bounded to the local matching region instead of
+    the whole formula.
+    """
+    active: set[FNode] = set(seed)
+    picked: set[FNode] = set()
+    changed = True
+    while changed:
+        changed = False
+        for c in constraints:
+            if c in picked:
+                continue
+            fvs = c.get_free_variables()
+            if active.isdisjoint(fvs):
+                continue
+            picked.add(c)
+            new_frontier = (fvs & frontier_vars) - active
+            if new_frontier:
+                active |= new_frontier
+                changed = True
+    return [c for c in constraints if c in picked]
+
+
 def coi_for_match_imply(
     coi_constraints: list[FNode],
     conjuncts: list[FNode],
@@ -356,6 +392,61 @@ def _fresh_is_valid(
     return None
 
 
+def _match_frontiers(
+    conjuncts: list[FNode],
+    match_vars: dict[tuple[int, int], FNode],
+) -> dict[FNode, set[FNode]]:
+    """Per match-var COI frontier scoped to its aliasing cluster.
+
+    Proving a match var forced is a cardinality argument over the *sibling*
+    matches sharing one of its interactions plus the per-interaction flags; a
+    one-step COI misses those. But a global permutation/balance constraint
+    mentions every match var, so a naive bool-closure frontier would expand
+    across all clusters and blow up the slice. We bound expansion to the
+    connected component of the statically-matchable graph (``match_vars``
+    already prunes cross-address pairs to ``FALSE``) plus all non-match bools
+    (flags are per-interaction, so they never bridge clusters). The global
+    balance constraint still enters the slice but cannot pull in other
+    clusters' match vars, since those are absent from the frontier.
+    """
+    sym_pairs = {p: v for p, v in match_vars.items() if v.is_symbol()}
+    all_match_syms = set(sym_pairs.values())
+    non_match_bools = {
+        v
+        for c in conjuncts
+        for v in c.get_free_variables()
+        if v.is_symbol() and v.get_type().is_bool_type() and v not in all_match_syms
+    }
+    # connected components of the matchable graph over interaction indices
+    adj: dict[int, set[int]] = {}
+    for (i, j) in sym_pairs:
+        adj.setdefault(i, set())
+        adj.setdefault(j, set())
+        if i != j:
+            adj[i].add(j)
+            adj[j].add(i)
+    comp_of: dict[int, int] = {}
+    cid = 0
+    for start in adj:
+        if start in comp_of:
+            continue
+        stack = [start]
+        while stack:
+            n = stack.pop()
+            if n in comp_of:
+                continue
+            comp_of[n] = cid
+            stack.extend(adj[n] - comp_of.keys())
+        cid += 1
+    comp_match_syms: dict[int, set[FNode]] = {}
+    for (i, j), v in sym_pairs.items():
+        comp_match_syms.setdefault(comp_of[i], set()).add(v)
+    return {
+        v: comp_match_syms[comp_of[i]] | non_match_bools
+        for (i, j), v in sym_pairs.items()
+    }
+
+
 def _collect_implied_top_level_literals(
     full_ts_coi: list[FNode],
     working: list[FNode],
@@ -363,6 +454,7 @@ def _collect_implied_top_level_literals(
     *,
     log_prefix: str,
     timeout: int,
+    frontier_by_var: dict[FNode, set[FNode]] | None = None,
 ) -> list[FNode]:
     """Entailed match literals via incremental checks with layered COI."""
     if not bool_vars:
@@ -379,7 +471,6 @@ def _collect_implied_top_level_literals(
         s.z3.set("timeout", timeout)
         for c in full_ts_coi:
             s.add_assertion(c)
-            logging.info("adding full_ts_coi: %s", c)
         
         if ARGS().memory_presolve == MemoryPresolve.WITH_SAT:
             s.push()
@@ -403,7 +494,12 @@ def _collect_implied_top_level_literals(
             if v in proved:
                 continue
             s.push()
-            for c in cone_of_influence_one_step(working, {v}):
+            v_frontier = (
+                frontier_by_var.get(v, {v})
+                if frontier_by_var is not None
+                else bool_vars
+            )
+            for c in cone_of_influence_via_frontier(working, {v}, v_frontier):
                 s.add_assertion(c)
             lit = _first_valid_literal(s, [Not(v), v], log_prefix=log_prefix)
             s.pop()
@@ -424,8 +520,8 @@ def plain_memory_presolve_incremental(
     match_vars: dict[tuple[int, int], FNode],
 ) -> list[FNode]:
     """Learn unit bool facts for match variables; mutates ``bool_vars`` in place."""
-    _ = match_vars
     log_prefix = "plain_memory_presolve_incremental"
+    frontier_by_var = _match_frontiers(conjuncts, match_vars)
     full_ts_coi = cone_of_influence(
         coi_constraints, _all_timestamp_vars(interactions)
     )
@@ -454,6 +550,7 @@ def plain_memory_presolve_incremental(
             bool_vars,
             log_prefix=log_prefix,
             timeout=timeout,
+            frontier_by_var=frontier_by_var,
         )
         for lit in new_lits:
             k = _unit_bool_key(lit)
