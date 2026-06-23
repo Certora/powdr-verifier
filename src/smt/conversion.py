@@ -10,7 +10,6 @@ from .. import bus_interactions
 from ..utils.basic_block import BasicBlock
 from ..utils.args import ARGS, BusInteractionHandlers
 from ..verify.preanalysis import DEFAULT_VERIFY_PREANALYSIS, VerifyPreanalysis
-from ..utils.profiling import simple_profile
 from .utils import *
 
 FormulaWithAxioms = collections.namedtuple(
@@ -131,7 +130,6 @@ class SmtConverter:
                     logging.error(f"Unsupported derived column: {derived}")
                     continue
 
-    @simple_profile
     def convert_manual(self, data: Any) -> Any:
         """Convert a JSON-like dump fragment (expression, machine, or interaction) into SMT terms."""
         match data:
@@ -198,7 +196,6 @@ class SmtConverter:
             for k, v in data
         }
 
-    @simple_profile
     def to_formula_with_axioms(self, data: Any) -> FormulaWithAxioms:
         """Convert input data and return constraints, interactions, axioms, derived columns, and globals."""
         logging.debug(f"{self.name}: converting")

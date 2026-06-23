@@ -5,7 +5,6 @@ from sympy import *
 
 from ..utils.args import ARGS
 
-from ..utils.profiling import simple_profile
 from .utils import unpack_modeq
 
 ### This is sympy land! Do not use pysmt here!
@@ -48,7 +47,6 @@ def _solved_roots(factors: list, p: int):
 
 
 @functools.lru_cache(maxsize=None)
-@simple_profile
 def rewrite_choice(node: Expr) -> Expr:
     """Rewrite `Mod(f1*...*fn, p) == 0` into a disjunction of `Mod(fi, p) == 0` (best-effort).
 
@@ -82,7 +80,6 @@ def rewrite_choice(node: Expr) -> Expr:
     return None
 
 
-@simple_profile
 def rewrite_mod_equality(node: Expr) -> Expr:
     """Rewrite simple modular equalities like `s - c == 0 (mod p)` into `s == c mod p`."""
     match unpack_modeq(node):

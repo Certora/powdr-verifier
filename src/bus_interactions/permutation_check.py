@@ -225,7 +225,6 @@ def keyed_io_relation(
 class TimestampCheckMixin:
     """Mixin providing axioms that enforce monotonic timestamps over bus interactions."""
 
-    @simple_profile
     def ordered_timestamp_check(self) -> FNode:
         """Constrain timestamps of consecutive interaction pairs to be strictly increasing."""
         res = []
@@ -246,7 +245,6 @@ class TimestampCheckMixin:
 class PermutationCheckMixin:
     """Mixin providing permutation-check encodings (pairwise and array-based) for bus interactions."""
 
-    @simple_profile
     def ordered_permutation_check(self) -> FNode:
         """
         Encodes a permutation check for the given list of interactions. We assume
@@ -269,7 +267,6 @@ class PermutationCheckMixin:
 
         return And(*encode())
 
-    @simple_profile
     def array_permutation_check(
         self,
         keywidth: int,
@@ -584,7 +581,6 @@ class PermutationCheckMixin:
         inputs = inputs[1:] # remove hadinput variables
         return conjuncts, outputs, intermediates, inputs, isinputs
     
-    @simple_profile
     def plain_permutation_check(
         self,
         interactions: list,
@@ -908,7 +904,6 @@ class PermutationCheckMixin:
             [is_outputs[i] for i in range(n)],
         )
 
-    @simple_profile
     def busat_permutation_check(
         self,
         interactions: list,

@@ -7,7 +7,6 @@ from ..smt.utils import *
 
 
 @functools.lru_cache(maxsize=None)
-@simple_profile
 def to_sympy(expr: FNode) -> sympy.Expr:
     """Convert a PySMT term into the equivalent SymPy expression.
 
@@ -67,7 +66,6 @@ def to_sympy(expr: FNode) -> sympy.Expr:
         assert False, f"Unknown expression type: {expr}"
 
 
-@simple_profile
 def to_smt(expr: sympy.Expr) -> FNode:
     """Convert a SymPy expression into an equivalent PySMT term."""
     if expr == sympy.true:

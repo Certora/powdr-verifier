@@ -24,7 +24,6 @@ REWRITES_SYMPY = {
 MAX_REWRITE_COUNT = 5
 
 
-@simple_profile
 def rewrite_one(node_type: int, args: list[FNode], rewrites) -> FNode:
     """Apply the first matching rewrite rule to a single SymPy node."""
     for r in rewrites:
@@ -34,7 +33,6 @@ def rewrite_one(node_type: int, args: list[FNode], rewrites) -> FNode:
     return None
 
 
-@simple_profile
 def rewrite_one_sympy(node: sympy.Expr, rewrites) -> sympy.Expr:
     """Apply the first matching rewrite rule to a single SymPy node."""
     for r in rewrites:
@@ -91,7 +89,6 @@ class RelationRewriter(substituter.Substituter):
         )
 
 
-@simple_profile
 def rewrite(input: FNode) -> FNode:
     """Rewrite a formula (or list of formulas) by repeatedly applying equality rewrites."""
     if ARGS().skip_rewriting:

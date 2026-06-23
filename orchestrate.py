@@ -17,7 +17,6 @@ from src.utils.io import load_json
 from src.utils.enums import XOrEncoding
 from src.utils.process import communicate_with_timeout
 from src.utils.utils import s2range
-from src.utils.profiling import Profile
 from src.report.action import Action
 from src.report.dumpers import ActionDumper, set_report_dir
 from src.paths import (
