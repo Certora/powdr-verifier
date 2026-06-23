@@ -1,27 +1,10 @@
 """PySMT-side rewrite rules for equalities and modular products (field arithmetic)."""
 import logging
+from collections.abc import Iterator
 from sympy import isprime
 
 from ..utils.args import ARGS
 from ..smt.utils import *
-
-
-def _flatten_times_factors(expr: FNode) -> list[FNode] | None:
-    """If `expr` is a (possibly nested) product, return its leaf factors; else None.
-    Returns None when there are fewer than two factors."""
-    if not expr.is_times():
-        return None
-    factors: list[FNode] = []
-
-    def collect(n: FNode) -> None:
-        if n.is_times():
-            for a in n.args():
-                collect(a)
-        else:
-            factors.append(n)
-
-    collect(expr)
-    return factors if len(factors) >= 2 else None
 
 
 def is_mul_by_minus_one(node: FNode) -> Optional[FNode]:
@@ -161,6 +144,174 @@ def _solved_quadratic(expr: FNode, p: int) -> Optional[tuple[FNode, set[int]]]:
     return x, _quadratic_roots_mod(a, c1, c0, p)
 
 
+Poly = dict[tuple[int, ...], int]
+
+
+def _poly_add_mv(a: Poly, b: Poly, p: int) -> Poly:
+    out: Poly = {}
+    for e in a.keys() | b.keys():
+        v = (a.get(e, 0) + b.get(e, 0)) % p
+        if v:
+            out[e] = v
+    return out
+
+
+def _poly_mul_mv(
+    a: Poly, b: Poly, nvars: int, p: int, max_deg: int
+) -> Optional[Poly]:
+    out: Poly = {}
+    for e1, c1 in a.items():
+        for e2, c2 in b.items():
+            e = tuple(e1[i] + e2[i] for i in range(nvars))
+            if sum(e) > max_deg:
+                return None
+            v = (out.get(e, 0) + c1 * c2) % p
+            if v:
+                out[e] = v
+            elif e in out:
+                del out[e]
+    return out
+
+
+def _expr_to_poly_mv(
+    e: FNode,
+    var_index: dict[FNode, int],
+    nvars: int,
+    p: int,
+    max_deg: int = 32,
+) -> Optional[Poly]:
+    if e.is_int_constant():
+        c = int(e.constant_value()) % p
+        return {(0,) * nvars: c} if c else {}
+    if e.is_symbol():
+        if e not in var_index:
+            return None
+        exp = [0] * nvars
+        exp[var_index[e]] = 1
+        return {tuple(exp): 1}
+    if e.is_plus():
+        acc: Poly = {}
+        for a in e.args():
+            pa = _expr_to_poly_mv(a, var_index, nvars, p, max_deg)
+            if pa is None:
+                return None
+            acc = _poly_add_mv(acc, pa, p)
+        return acc
+    if e.is_minus():
+        if len(e.args()) != 2:
+            return None
+        pa = _expr_to_poly_mv(e.arg(0), var_index, nvars, p, max_deg)
+        pb = _expr_to_poly_mv(e.arg(1), var_index, nvars, p, max_deg)
+        if pa is None or pb is None:
+            return None
+        return _poly_add_mv(pa, {e: (-c) % p for e, c in pb.items()}, p)
+    if e.is_times():
+        acc: Poly = {(0,) * nvars: 1}
+        for a in e.args():
+            pa = _expr_to_poly_mv(a, var_index, nvars, p, max_deg)
+            if pa is None:
+                return None
+            acc = _poly_mul_mv(acc, pa, nvars, p, max_deg)
+            if acc is None:
+                return None
+        return acc
+    return None
+
+
+def _poly_to_expr(poly: Poly, syms: tuple[FNode, ...], p: int) -> FNode:
+    parts: list[FNode] = []
+    for exp, c in poly.items():
+        c %= p
+        if c == 0:
+            continue
+        term: FNode | None = None
+        for i, e in enumerate(exp):
+            if e == 0:
+                continue
+            sym = syms[i]
+            factor: FNode = sym
+            for _ in range(e - 1):
+                factor = Times(factor, sym)
+            term = factor if term is None else Times(term, factor)
+        if term is None:
+            parts.append(Int(c))
+        elif c == 1:
+            parts.append(term)
+        else:
+            parts.append(Times(Int(c), term))
+    if not parts:
+        return Int(0)
+    return parts[0] if len(parts) == 1 else Plus(*parts)
+
+
+def _factor_out_vars(expr: FNode, p: int) -> tuple[list[FNode], FNode]:
+    """Return peeled variables and the remaining factor of ``expr``."""
+    syms = tuple(
+        sorted(
+            (v for v in expr.get_free_variables() if v.is_symbol()),
+            key=lambda s: s.serialize(),
+        )
+    )
+    if not syms:
+        return [], expr
+    var_index = {s: i for i, s in enumerate(syms)}
+    poly = _expr_to_poly_mv(expr, var_index, len(syms), p)
+    if poly is None:
+        return [], expr
+    vars_out: list[FNode] = []
+    changed = True
+    while changed:
+        changed = False
+        for i, sym in enumerate(syms):
+            if not poly:
+                break
+            if not all(exp[i] > 0 for exp in poly):
+                continue
+            vars_out.append(sym)
+            new_poly: Poly = {}
+            for exp, c in poly.items():
+                new_exp = list(exp)
+                new_exp[i] -= 1
+                ne = tuple(new_exp)
+                new_poly[ne] = (new_poly.get(ne, 0) + c) % p
+            poly = {e: c for e, c in new_poly.items() if c % p != 0}
+            changed = True
+            break
+    if not vars_out:
+        return [], expr
+    rest = _poly_to_expr(poly, syms, p) if poly else Int(0)
+    return vars_out, rest
+
+
+def _quadratic_linear_factors(term: FNode, p: int) -> list[FNode] | None:
+    """Linear factors ``(x - r)`` from quadratic roots, or ``[]`` if none exist."""
+    solved = _solved_quadratic(term, p)
+    if solved is None:
+        return None
+    x, roots = solved
+    if not roots:
+        return []
+    return [Plus(x, Int((-r) % p)) for r in sorted(roots)]
+
+
+def _choice_factors(term: FNode, p: int) -> Iterator[FNode]:
+    """Yield multiplicative factors of ``term`` for choice rewriting."""
+    if term.is_times():
+        for arg in term.args():
+            yield from _choice_factors(arg, p)
+        return
+    if term.is_symbol() or term.is_int_constant():
+        yield term
+        return
+    vars_out, rest = _factor_out_vars(term, p)
+    yield from vars_out
+    linear = _quadratic_linear_factors(rest, p)
+    if linear is not None:
+        yield from linear
+        return
+    yield rest
+
+
 def _solved_roots(factors: list[FNode], p: int) -> Optional[tuple[FNode, set[int]]]:
     """``(x, roots)`` when every factor is linear in the same single symbol.
 
@@ -227,18 +378,14 @@ def rewrite_choice_simple(node_type: int, args: list[FNode]) -> FNode:
         return None
     p = ARGS().field_type.value
     assert isprime(p), f"field modulus must be prime for rewrite_choice_simple, got {p}"
-    factors = _flatten_times_factors(expr)
-    if factors is not None:
+    factors = list(_choice_factors(expr, p))
+    if not factors:
+        return FALSE()
+    if len(factors) >= 2:
         solved = _solved_roots(factors, p)
         if solved is not None:
             return roots_with_range(*solved)
         return Or(*[Equals(Mod(f, modulus), Int(0)) for f in factors])
-    solved = _solved_quadratic(expr, p)
-    if solved is not None:
-        x, values = solved
-        if not values:
-            return FALSE()
-        return roots_with_range(x, values)
     return None
 
 
