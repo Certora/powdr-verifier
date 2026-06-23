@@ -2,17 +2,12 @@
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 from pysmt.exceptions import SolverReturnedUnknownResultError
 
+from ..report.action import Action
 from ..smt.utils import *
-
-if TYPE_CHECKING:
-    from ..report.action import Action
-from .intervals.domain import IntDomain
-from .intervals.reasoner import IntervalReasoner
 
 logger = logging.getLogger(__name__)
 
@@ -53,29 +48,15 @@ def _small_domain_vars(
     for a in assertions:
         if not flags.intersection(a.get_free_variables()):
             continue
-        reasoner = IntervalReasoner()
-        reasoner.assume_all([a])
-        for v in a.get_free_variables():
-            if v in flags or not (v.is_symbol() and v.get_type().is_int_type()):
+        for arg in (a.args() if a.is_and() else [a]):
+            if not arg.is_equals():
                 continue
-            vs = _finite_values(reasoner.get_domain(v), max_n)
-            if vs is not None and len(vs) <= max_n:
-                flags.add(v)
+            x, y = arg.args()
+            if x.is_symbol() and x.get_type().is_int_type() and y.is_int_constant():
+                flags.add(x)
+            elif y.is_symbol() and y.get_type().is_int_type() and x.is_int_constant():
+                flags.add(y)
     return frozenset(flags)
-
-
-def _finite_values(dom: IntDomain, max_n: int) -> Optional[list[int]]:
-    if dom.is_bottom():
-        return None
-    out: list[int] = []
-    for iv in dom.parts:
-        if iv.lo is None or iv.hi is None:
-            return None
-        for x in range(iv.lo, iv.hi + 1):
-            out.append(x)
-            if len(out) > max_n:
-                return None
-    return out
 
 
 def _parse_or_equalities(f: FNode) -> Optional[tuple[FNode, tuple[int, ...]]]:
@@ -120,23 +101,11 @@ def _choices_in_assertion(f: FNode) -> list[tuple[FNode, FNode, tuple[int, ...]]
     return [(sym, or_node, vals) for sym, (or_node, vals) in or_parts.items()]
 
 
-def _choice_unit(sym: FNode, or_node: FNode, assertion: FNode) -> FNode:
-    if not assertion.is_and():
-        return or_node
-    bounds = [
-        arg
-        for arg in assertion.args()
-        if _parse_or_equalities(arg) is None and arg.get_free_variables() <= {sym}
-    ]
-    return And(or_node, *bounds) if bounds else or_node
-
-
 def _collect_choices(assertions: list[FNode], max_n: int) -> dict[FNode, list[int]]:
     """Map each choice variable to probe candidate values (non-singleton, <= max_n)."""
     raw: dict[FNode, list[int]] = {}
-    units: dict[FNode, list[FNode]] = defaultdict(list)
     for a in assertions:
-        for sym, or_node, vals in _choices_in_assertion(a):
+        for sym, _, vals in _choices_in_assertion(a):
             if not sym.is_symbol() or not sym.get_type().is_int_type():
                 continue
             cur = raw.setdefault(sym, [])
@@ -144,19 +113,7 @@ def _collect_choices(assertions: list[FNode], max_n: int) -> dict[FNode, list[in
                 if v not in cur:
                     cur.append(v)
             cur.sort()
-            units[sym].append(_choice_unit(sym, or_node, a))
-
-    out: dict[FNode, list[int]] = {}
-    for sym, ovals in raw.items():
-        if len(ovals) <= 1 or len(ovals) > max_n:
-            continue
-        reasoner = IntervalReasoner()
-        reasoner.assume_all(units[sym])
-        vs = _finite_values(reasoner.get_domain(sym), max_n) or ovals
-        if len(vs) <= 1 or len(vs) > max_n:
-            continue
-        out[sym] = vs
-    return out
+    return {sym: vals for sym, vals in raw.items() if 1 < len(vals) <= max_n}
 
 
 def _probe(solver: Solver, assumption: FNode) -> Optional[bool]:
@@ -173,15 +130,22 @@ def _probe(solver: Solver, assumption: FNode) -> Optional[bool]:
 
 def simplify_domain_probe(
     smt_script: script.SmtLibScript,
-    subaction: Optional["Action"] = None,
+    subaction: Action,
 ) -> script.SmtLibScript:
     total_added = 0
-    extra: dict = {}
+
+    assertions = [cmd.args[0] for cmd in smt_script if cmd.name == "assert"]
+    subaction += {"base_asserts": len(assertions)}
+    if not assertions:
+        return smt_script
+
+    choices = _collect_choices(assertions, _MAX_VALUES)
+    subaction += {"choice_symbols": len(choices)}
+    if not choices:
+        subaction += {"pairs_probed": 0}
+        return smt_script
+
     try:
-        assertions = [cmd.args[0] for cmd in smt_script if cmd.name == "assert"]
-        extra["base_asserts"] = len(assertions)
-        if not assertions:
-            return smt_script
 
         insert_at = next(
             (i for i, c in enumerate(smt_script.commands) if c.name == "check-sat"),
@@ -189,9 +153,6 @@ def simplify_domain_probe(
         )
 
         accumulated: list[FNode] = []
-
-        choices = _collect_choices(assertions, _MAX_VALUES)
-        extra["choice_symbols"] = len(choices)
 
         logger.info(
             "domain_probe: start (%d base asserts, %d candidate(s), "
@@ -202,13 +163,8 @@ def simplify_domain_probe(
             _SOLVER_OPTS["rlimit"],
         )
 
-        if not choices:
-            logger.info("domain_probe: no candidates (non-singleton domains), done")
-            extra["pairs_probed"] = 0
-            return smt_script
-
         pairs = list(choices.items())[:_MAX_PAIRS]
-        extra["pairs_probed"] = len(pairs)
+        subaction += {"pairs_probed": len(pairs)}
         if len(choices) > len(pairs):
             logger.info(
                 "domain_probe: probing %d of %d candidate pair(s)",
@@ -224,8 +180,10 @@ def simplify_domain_probe(
 
         flag_vars = _small_domain_vars(assertions, choices, _MAX_VALUES)
         flag_local = _flag_local_assertions(assertions, flag_vars)
-        extra["flag_vars"] = len(flag_vars)
-        extra["flag_local_asserts"] = len(flag_local)
+        subaction += {
+            "flag_vars": len(flag_vars),
+            "flag_local_asserts": len(flag_local),
+        }
         logger.info(
             "domain_probe: flag-local slice = %d assert(s) over %d flag var(s)",
             len(flag_local),
@@ -289,5 +247,4 @@ def simplify_domain_probe(
 
         return smt_script
     finally:
-        if subaction is not None:
-            subaction += {"added_facts": total_added, **extra}
+        subaction += {"added_facts": total_added}

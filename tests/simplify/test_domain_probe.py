@@ -1,3 +1,4 @@
+from src.report.action import Action
 from src.simplify.domain_probe import simplify_domain_probe
 from src.smt.utils import *
 
@@ -8,7 +9,7 @@ def _script(*asserts):
     return smt_script
 
 
-def test_domain_probe_skips_singleton_interval_domain():
+def test_domain_probe_excludes_singleton_via_bounds():
     x = Symbol("x", INT)
     f = And(
         Or(Equals(x, Int(0)), Equals(x, Int(1))),
@@ -16,9 +17,10 @@ def test_domain_probe_skips_singleton_interval_domain():
         LE(x, Int(1)),
     )
     smt = _script(f)
-    simplify_domain_probe(smt)
+    with Action("domain_probe") as subaction:
+        simplify_domain_probe(smt, subaction)
     asserts = [c.args[0] for c in smt if c.name == "assert"]
-    assert len(asserts) == 1
+    assert any(a == Not(Equals(x, Int(0))) for a in asserts)
 
 
 def test_domain_probe_excludes_via_nonlinear_constraint():
@@ -30,7 +32,8 @@ def test_domain_probe_excludes_via_nonlinear_constraint():
         Equals(y, Int(0)),
     )
     smt = _script(f)
-    simplify_domain_probe(smt)
+    with Action("domain_probe") as subaction:
+        simplify_domain_probe(smt, subaction)
     asserts = [c.args[0] for c in smt if c.name == "assert"]
     assert any(a == Not(Equals(x, Int(0))) for a in asserts)
 
@@ -39,7 +42,8 @@ def test_domain_probe_strengthens_binary_disjunction():
     x = Symbol("x", INT)
     f = Or(Equals(x, Int(0)), Equals(x, Int(1)))
     smt = _script(f)
-    simplify_domain_probe(smt)
+    with Action("domain_probe") as subaction:
+        simplify_domain_probe(smt, subaction)
     asserts = [c.args[0] for c in smt if c.name == "assert"]
     assert len(asserts) == 1
 
@@ -71,8 +75,6 @@ def test_flag_local_slice_keeps_flag_constraints_drops_wide_ones():
 
 
 def test_domain_probe_subaction_added_facts():
-    from src.report.action import Action
-
     x = Symbol("x", INT)
     y = Symbol("y", INT)
     f = And(
@@ -81,6 +83,6 @@ def test_domain_probe_subaction_added_facts():
         Equals(y, Int(0)),
     )
     smt = _script(f)
-    with Action("domain_probe") as a:
-        simplify_domain_probe(smt, a)
-    assert a.added_facts == 1
+    with Action("domain_probe") as subaction:
+        simplify_domain_probe(smt, subaction)
+    assert subaction.added_facts == 1
