@@ -15,9 +15,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from verifier.src.utils.enums import MemoryPresolve
-
 from ..utils.args import ARGS
+from ..utils.enums import MemoryPresolve
 from ..smt.utils import *
 
 

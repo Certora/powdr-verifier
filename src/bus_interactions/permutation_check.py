@@ -3,8 +3,6 @@ from itertools import batched, pairwise
 import itertools
 from typing import Any, Callable
 
-from verifier.src.utils.enums import MemoryPresolve
-
 from .memory_plain_utils import (
     boolean_propagate,
     plain_memory_const_key_io_hints,
@@ -13,6 +11,7 @@ from .memory_plain_utils import (
 )
 from ..smt.utils import *
 from ..utils.args import ARGS
+from ..utils.enums import MemoryPresolve
 
 
 def _plain_static_profile(
