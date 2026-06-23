@@ -80,3 +80,35 @@ def test_rewrite_choice_simple_quadratic_no_roots():
         [Mod(expr, Int(p)), Int(0)],
     )
     assert rew is not None and rew.is_false()
+
+
+def test_rewrite_choice_simple_factors_out_multiple_vars():
+    parse_args(["check", "x"])
+    p = ARGS().field_type.value
+    x, y = Symbol("vx", INT), Symbol("vy", INT)
+    # x^2*y + x*y^2 = x*y*(x + y)
+    expr = Plus(Times(Times(x, x), y), Times(x, Times(y, y)))
+    rew = rewrite_choice_simple(
+        operators.EQUALS,
+        [Mod(expr, Int(p)), Int(0)],
+    )
+    assert rew is not None and rew.is_or() and len(rew.args()) == 3
+    factor_lhs = {a.arg(0).arg(0).serialize() for a in rew.args()}
+    assert factor_lhs == {"vx", "vy", "(vy + vx)"}
+
+
+def test_rewrite_choice_simple_factors_out_x():
+    parse_args(["check", "x"])
+    p = ARGS().field_type.value
+    x = Symbol("x", INT)
+    # x^2 + 3x = x(x+3), sum form without top-level *
+    expr = Plus(Times(x, x), Times(Int(3), x))
+    rew = rewrite_choice_simple(
+        operators.EQUALS,
+        [Mod(expr, Int(p)), Int(0)],
+    )
+    assert rew is not None and rew.is_and()
+    disj = rew.arg(0)
+    assert disj.is_or() and len(disj.args()) == 2
+    roots = {d.arg(1).constant_value() for d in disj.args()}
+    assert roots == {0, p - 3}
