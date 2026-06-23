@@ -38,3 +38,15 @@ class XOrEncoding(Enum):
     def __str__(self) -> str:
         """Return the string representation for this XOR encoding."""
         return self.value
+
+
+class MemoryPresolve(Enum):
+    """Plain memory permutation presolve modes (combinable except ``none``)."""
+
+    NONE = "none"
+    INCREMENTAL = "incremental"
+    INDIVIDUAL = "individual"
+    WITH_SAT = "with-sat"
+
+    def __str__(self) -> str:
+        return self.value

@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from .enums import BusInteractionHandlers, FieldTypes, XOrEncoding
+from .enums import BusInteractionHandlers, FieldTypes, MemoryPresolve, XOrEncoding
 
 __ARGS: Optional[argparse.Namespace] = None
 
@@ -43,6 +43,12 @@ def __build_parser(skip_subparsers=False):
         type=str,
         choices=["array", "busat", "plain", "none"],
         default="array",
+    )
+    parser.add_argument(
+        "--memory-presolve",
+        type=MemoryPresolve,
+        default=MemoryPresolve.NONE,
+        choices=list(MemoryPresolve),
     )
     parser.add_argument("--dump-smt", action="store_true")
     parser.add_argument("--check", action="store_true")
@@ -152,6 +158,9 @@ def parse_args(args=None):
 
     r = (__ARGS.run_id or "").strip()
     __ARGS.run_id = "" if (not r or r == "-") else f"-{r}"
+
+    if __ARGS.memory_presolve is None:
+        __ARGS.memory_presolve = [MemoryPresolve.NONE]
 
     ARGS().V = ARGS().V + 2 * ARGS().VV + ARGS().v * [""] + 2 * ARGS().vv * [""]
     def make_verbose(logger: logging.Logger):
