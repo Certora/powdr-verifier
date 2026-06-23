@@ -47,7 +47,7 @@ def __build_parser(skip_subparsers=False):
     parser.add_argument(
         "--memory-presolve",
         type=MemoryPresolve,
-        default=MemoryPresolve.NONE,
+        default=MemoryPresolve.INCREMENTAL,
         choices=list(MemoryPresolve),
     )
     parser.add_argument("--dump-smt", action="store_true")
