@@ -45,7 +45,6 @@ class SingleInteractionEncoder:
     def _symbol(self, name: str, sort, **kwargs) -> FNode:
         return self._cur_state._symbol(name, sort, **kwargs)
 
-    @simple_profile
     def add(self, mult: FNode, *args: Any) -> FNode:
         """Add a single interaction (skipping it if `mult` is provably zero)."""
         #if self.solver().check_is_valid(Equals(mult, Int(0))):

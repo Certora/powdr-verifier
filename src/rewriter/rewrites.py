@@ -3,7 +3,6 @@ import logging
 from sympy import isprime
 
 from ..utils.args import ARGS
-from ..utils.profiling import simple_profile
 from ..smt.utils import *
 
 
@@ -79,7 +78,6 @@ def roots_with_range(x: FNode, values: set[int]) -> FNode:
     )
 
 
-@simple_profile
 def rewrite_choice_simple(node_type: int, args: list[FNode]) -> FNode:
     """Rewrite `Mod(e, p) = 0` with field modulus `p` when `e` is a plain product into a disjunction of factor congruences.
 
@@ -111,14 +109,12 @@ def rewrite_choice_simple(node_type: int, args: list[FNode]) -> FNode:
     return Or(*[Equals(Mod(f, modulus), Int(0)) for f in factors])
 
 
-@simple_profile
 def rewrite_z3simplify(node_type: int, args: list[FNode]) -> FNode:
     node = get_env().formula_manager.create_node(node_type, tuple(args))
     res = z3_simplify(node)
     return res if res != node else None
 
 
-@simple_profile
 def rewrite_simplify(node_type: int, args: list[FNode]) -> FNode:
     node = get_env().formula_manager.create_node(node_type, tuple(args))
     res = simplify(node)
@@ -145,7 +141,6 @@ class IntConstantReducer(substituter.Substituter):
         return formula
 
 
-@simple_profile
 def rewrite_mod(node_type: int, args: list[FNode]) -> FNode:
     assert node_type == operators.MOD
     expr, modulus = args

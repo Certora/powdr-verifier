@@ -1,4 +1,4 @@
-"""Shared PySMT helpers: comments, models, field axioms, SMT-LIB I/O, and profiling."""
+"""Shared PySMT helpers: comments, models, field axioms, and SMT-LIB I/O."""
 import functools
 import itertools
 import logging
@@ -8,8 +8,6 @@ from types import GeneratorType
 
 from ..smt_backends.pysmt import *
 from ..utils.io import open_file
-from ..utils.profiling import simple_profile
-
 # Imported after the backend's ``import *`` so its custom-operator and
 # type-checker setup runs first (importing this earlier breaks ``MOD``).
 from pysmt.environment import get_env

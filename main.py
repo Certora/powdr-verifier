@@ -11,7 +11,7 @@ from src.evaluator import evaluate
 from src.smt_backends.pysmt import disable_typecheck
 from src.utils.args import parse_args, ARGS
 from src.utils.io import dump_json, load_apc_dump, load_json
-from src.utils.profiling import dump_cprofile, print_profile
+from src.utils.profiling import dump_cprofile
 from src.tracer import trace
 from src.verifier import verify
 from src.diff import diff
@@ -86,7 +86,6 @@ if __name__ == '__main__':
     finally:
         if profiler is not None:
             dump_cprofile(profiler)
-        print_profile()
     
     if res is not None:
         dump_json(res, indent=4)

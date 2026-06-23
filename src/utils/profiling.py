@@ -32,6 +32,7 @@ def simple_profile(func):
 
     return wrapper_timer
 
+
 class Profile:
     def __init__(self, name: str):
         self.name = name

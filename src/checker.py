@@ -12,7 +12,6 @@ from pathlib import Path
 from .report.action import Action, classify_expected_vs_result
 from .smt.utils import *
 from .utils.args import ARGS
-from .utils.profiling import simple_profile
 
 
 def _get_reason_unknown(solver):
@@ -291,7 +290,6 @@ def check_smt_script(
     return res
 
 
-@simple_profile
 def check():
     """Check the smt2 file."""
 
