@@ -129,6 +129,30 @@ def test_demod_folds_mod_of_two_constants():
     assert Equals(Int(2), Int(2)) in asserts
 
 
+def test_demod_rewrites_mod_linear_ax_plus_b_equal_zero():
+    p = int(ARGS().field_type.value)
+    a, b = 3, 5
+    x_val = (-b * pow(a, -1, p)) % p
+    parser = SmtLibParser()
+    smt_script = parser.get_script(
+        StringIO(
+            dedent(
+                f"""
+                (set-logic ALL)
+                (declare-fun x () Int)
+                (assert (= (mod (+ (* {a} x) {b}) {p}) 0))
+                (check-sat)
+                """
+            ).strip()
+            + "\n"
+        )
+    )
+    simplified = simplify_demod(smt_script)
+    asserts = [cmd.args[0] for cmd in simplified if cmd.name == "assert"]
+    x = Symbol("x", INT)
+    assert Equals(x, Int(x_val)) in asserts or Equals(x, wrap_mod(Int(x_val))) in asserts
+
+
 def test_demod_rewrites_mod_minus_int_equal_zero_to_congruence():
     """``Mod(x - c, p) = 0`` (field ``p``) becomes ``x = c`` after demod (congruence + mod fold)."""
     p = int(ARGS().field_type.value)
