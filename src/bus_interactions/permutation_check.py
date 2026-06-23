@@ -121,6 +121,10 @@ def keyed_io_relation(
         isi_a, iso_a: Per-interaction input/output flags on side A (lists of length ``n``).
         isi_b, iso_b: Same on side B (length ``m``).
         xmatch_name_prefix: Bus name used in ``{prefix}_xmatch_i_j`` stems.
+        aligned_pairs: Optional before-index → after-index map from memory
+            prealignment. When present, matching pairs become ``TRUE()``,
+            conflicting pairs ``FALSE()``, and only unmapped pairs fall back to
+            the ``io_and_eq`` constant-folding check.
 
     Returns ``(conjunction, introduced)`` where ``introduced`` are the xmatch symbols.
     """
@@ -136,26 +140,43 @@ def keyed_io_relation(
             ]
         )
 
+    def io_and_eq(i: int, j: int) -> FNode:
+        return And(
+            Iff(isi_a[i], isi_b[j]),
+            Iff(iso_a[i], iso_b[j]),
+            full_eq(i, j),
+        )
+
+    pairs = aligned_pairs or {}
+    aligned_after = set(pairs.values())
+
     xmatch_vars: dict[tuple[int, int], FNode] = {}
     for i in range(n):
         for j in range(m):
-            io_and_eq = And(
-                Iff(isi_a[i], isi_b[j]),
-                Iff(iso_a[i], iso_b[j]),
-                full_eq(i, j),
-            )
-            if io_and_eq.simplify().is_false():
-                xmatch_vars[(i, j)] = FALSE()
-            else:
-                xmatch_vars[(i, j)] = Symbol(
-                    f"{xmatch_name_prefix}_xmatch_{i}_{j}", BOOL
+            mapped = pairs.get(i)
+            if mapped == j:
+                xmatch_vars[(i, j)] = TRUE()
+                parts.append(
+                    with_comment(
+                        io_and_eq(i, j),
+                        f"{name}: xmatch ({i},{j}) => I/O + full eq",
+                    )
                 )
+                continue
+            if mapped is not None or j in aligned_after:
+                xmatch_vars[(i, j)] = FALSE()
+                continue
+
+            eq = io_and_eq(i, j)
+            if eq.simplify().is_false():
+                xmatch_vars[(i, j)] = FALSE()
+                continue
+
+            xmatch = Symbol(f"{xmatch_name_prefix}_xmatch_{i}_{j}", BOOL)
+            xmatch_vars[(i, j)] = xmatch
             parts.append(
                 with_comment(
-                    Implies(
-                        xmatch_vars[(i, j)],
-                        io_and_eq,
-                    ),
+                    Implies(xmatch, eq),
                     f"{name}: xmatch ({i},{j}) => I/O + full eq",
                 )
             )
@@ -201,18 +222,6 @@ def keyed_io_relation(
                 f"{name}: column {j} I/O iff some xmatch",
             )
         )
-
-    if aligned_pairs:
-        for i, j in aligned_pairs.items():
-            v = xmatch_vars.get((i, j))
-            assert v is not None, (i, j)
-            assert v.is_symbol(), (i, j, v)
-            parts.append(
-                with_comment(
-                    Equals(v, TRUE()),
-                    f"{name}: prealigned xmatch ({i},{j})",
-                )
-            )
 
     parts = boolean_propagate(
         [keep_comment(p.simplify(), p) for p in parts], presimplify=False
