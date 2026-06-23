@@ -16,6 +16,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..utils.args import ARGS
+from ..utils.enums import MemoryPresolve
 from ..smt.utils import *
 
 
@@ -265,18 +266,26 @@ def _implied_from_true_in_sat_model(
     bool_vars: set[FNode],
     *,
     log_prefix: str,
+    timeout: int,
+    rlimit: int,
 ) -> list[FNode]:
     """With full context already asserted: SAT, then prove true model match vars are fixed."""
+    solver.z3.set("rlimit", 50_000_000)
+    solver.z3.set("timeout", 5000)
     try:
-        if not solver.solve():
-            logging.info("%s: full-context sat check returned unsat", log_prefix)
+        try:
+            if not solver.solve():
+                logging.info("%s: full-context sat check returned unsat", log_prefix)
+                return []
+        except SolverReturnedUnknownResultError:
+            logging.info("%s: full-context sat check unknown (timeout?)", log_prefix)
             return []
-    except SolverReturnedUnknownResultError:
-        logging.info("%s: full-context sat check unknown (timeout?)", log_prefix)
-        return []
-    except Exception:
-        logging.info("%s: full-context sat check failed", log_prefix)
-        return []
+        except Exception:
+            logging.info("%s: full-context sat check failed", log_prefix)
+            return []
+    finally:
+        solver.z3.set("timeout", timeout)
+        solver.z3.set("rlimit", rlimit)
     model = solver.get_model()
     out: list[FNode] = []
     for v in bool_vars:
@@ -360,30 +369,36 @@ def _collect_implied_top_level_literals(
         return []
     out: list[FNode] = []
     proved: set[FNode] = set()
+    rlimit = 10_000_000
     with Solver(
         logic=logics.ALL,
         name="z3",
         incremental=True,
-        solver_options={"rlimit": 10000000},
+        solver_options={"rlimit": rlimit},
     ) as s:
         s.z3.set("timeout", timeout)
         for c in full_ts_coi:
             s.add_assertion(c)
-        s.push()
-        for c in working:
-            s.add_assertion(c)
-        for lit in _implied_from_true_in_sat_model(
-            s, bool_vars, log_prefix=log_prefix
-        ):
-            k = _unit_bool_key(lit)
-            if k is None:
-                continue
-            sym, _ = k
-            out.append(lit)
-            proved.add(sym)
-        s.pop()
-        for lit in out:
-            s.add_assertion(lit)
+            logging.info("adding full_ts_coi: %s", c)
+        
+        if ARGS().memory_presolve == MemoryPresolve.WITH_SAT:
+            s.push()
+            for c in working:
+                pass
+                #s.add_assertion(c)
+                #logging.info("adding working: %s", c)
+            for lit in _implied_from_true_in_sat_model(
+                s, bool_vars, log_prefix=log_prefix, timeout=timeout, rlimit=rlimit
+            ):
+                k = _unit_bool_key(lit)
+                if k is None:
+                    continue
+                sym, _ = k
+                out.append(lit)
+                proved.add(sym)
+            s.pop()
+            for lit in out:
+                s.add_assertion(lit)
         for v in list(bool_vars):
             if v in proved:
                 continue

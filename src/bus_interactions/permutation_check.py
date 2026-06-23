@@ -7,9 +7,11 @@ from .memory_plain_utils import (
     boolean_propagate,
     plain_memory_const_key_io_hints,
     plain_memory_presolve_incremental,
+    plain_memory_presolve_individual,
 )
 from ..smt.utils import *
 from ..utils.args import ARGS
+from ..utils.enums import MemoryPresolve
 
 
 def _plain_static_profile(
@@ -863,14 +865,14 @@ class PermutationCheckMixin:
                 )
             )
 
-        if True:
+        if ARGS().memory_presolve != MemoryPresolve.NONE:
             vrs = self._cur_state.bus_interaction_encoder.variable_range_checker
             coi_constraints = list(self.constraints())
             coi_constraints.extend(
                 c for c in vrs.encode() if c is not None
             )
 
-            if True:
+            if ARGS().memory_presolve in [MemoryPresolve.INCREMENTAL, MemoryPresolve.WITH_SAT]:
                 tracked_bools = {v for v in match_vars.values() if v.is_symbol()}
                 learned = plain_memory_presolve_incremental(
                     conjuncts,
@@ -882,7 +884,7 @@ class PermutationCheckMixin:
                 if learned:
                     conjuncts = learned + [c for c in conjuncts if c not in learned]
 
-            else:
+            elif ARGS().memory_presolve == MemoryPresolve.INDIVIDUAL:
                 tracked_bools = {v for v in match_vars.values() if v.is_symbol()}
                 learned = plain_memory_presolve_individual(
                     conjuncts,
