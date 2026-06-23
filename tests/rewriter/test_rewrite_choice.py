@@ -50,3 +50,33 @@ def test_rewrite_choice_simple_keeps_multivar_products_as_congruences():
         [Mod(Times(x, y), Int(p)), Int(0)],
     )
     assert rew is not None and rew.is_or() and len(rew.args()) == 2
+
+
+def test_rewrite_choice_simple_solves_quadratic_sum_form():
+    parse_args(["check", "x"])
+    p = ARGS().field_type.value
+    x = Symbol("x", INT)
+    # x^2 + 3x + 2 = (x+1)(x+2) = 0 mod p
+    expr = Plus(Plus(Times(x, x), Times(Int(3), x)), Int(2))
+    rew = rewrite_choice_simple(
+        operators.EQUALS,
+        [Mod(expr, Int(p)), Int(0)],
+    )
+    assert rew is not None and rew.is_and()
+    disj = rew.arg(0)
+    assert disj.is_or() and len(disj.args()) == 2
+    roots = {d.arg(1).constant_value() for d in disj.args()}
+    assert roots == {p - 1, p - 2}
+
+
+def test_rewrite_choice_simple_quadratic_no_roots():
+    parse_args(["check", "x"])
+    p = ARGS().field_type.value
+    x = Symbol("x", INT)
+    # 3x^2 + x + 1 has no roots mod the configured field prime
+    expr = Plus(Plus(Times(Int(3), Times(x, x)), x), Int(1))
+    rew = rewrite_choice_simple(
+        operators.EQUALS,
+        [Mod(expr, Int(p)), Int(0)],
+    )
+    assert rew is not None and rew.is_false()

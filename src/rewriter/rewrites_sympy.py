@@ -15,6 +15,38 @@ def normalize(e: Expr) -> Expr:
     return expand(e, modulus=ARGS().field_type.value)
 
 
+def _quadratic_roots_mod(a: int, b: int, c: int, p: int) -> set:
+    """Roots of ``a*x^2 + b*x + c == 0 (mod p)``; empty when none exist."""
+    a %= p
+    b %= p
+    c %= p
+    if a == 0:
+        return set()
+    disc = (b * b - 4 * a * c) % p
+    if disc == 0:
+        return {(-b * pow(2 * a, -1, p)) % p}
+    sqrt_disc = sqrt_mod(disc, p)
+    if sqrt_disc is None:
+        return set()
+    inv = pow(2 * a, -1, p)
+    return {((-b + sqrt_disc) * inv) % p, ((-b - sqrt_disc) * inv) % p}
+
+
+def _solved_quadratic(e: Expr, p: int):
+    """``(x, roots)`` when ``e`` is a quadratic univariate polynomial."""
+    if not e.free_symbols or len(e.free_symbols) != 1:
+        return None
+    sym = next(iter(e.free_symbols))
+    poly = e.as_poly(sym)
+    if poly is None or poly.degree() != 2:
+        return None
+    a, b, c = (int(v) for v in poly.all_coeffs())
+    if a % p == 0:
+        return None
+    roots = _quadratic_roots_mod(a, b, c, p)
+    return sym, roots
+
+
 def _solved_roots(factors: list, p: int):
     """``(x, roots)`` when every factor is linear in one symbol (Pow allowed)."""
     p = int(p)
@@ -77,6 +109,16 @@ def rewrite_choice(node: Expr) -> Expr:
                             Le(x, Integer(max(values))),
                         )
                     return Or(*[Eq(Mod(normalize(f), c), 0) for f in factors])
+            solved = _solved_quadratic(e, c)
+            if solved is not None:
+                x, values = solved
+                if not values:
+                    return False
+                return And(
+                    Or(*[Eq(x, Integer(v)) for v in sorted(values)]),
+                    Le(Integer(min(values)), x),
+                    Le(x, Integer(max(values))),
+                )
     return None
 
 

@@ -34,6 +34,133 @@ def is_mul_by_minus_one(node: FNode) -> Optional[FNode]:
     return None
 
 
+def _mod_sqrt(n: int, p: int) -> Optional[int]:
+    """Modular square root of ``n`` mod prime ``p``, or ``None`` if none exists."""
+    n %= p
+    if n == 0:
+        return 0
+    if pow(n, (p - 1) // 2, p) != 1:
+        return None
+    if p % 4 == 3:
+        return pow(n, (p + 1) // 4, p)
+    q = p - 1
+    s = 0
+    while q % 2 == 0:
+        q //= 2
+        s += 1
+    z = 2
+    while pow(z, (p - 1) // 2, p) != p - 1:
+        z += 1
+    m = s
+    c = pow(z, q, p)
+    t = pow(n, q, p)
+    r = pow(n, (q + 1) // 2, p)
+    while t != 1:
+        i = 1
+        t2 = (t * t) % p
+        while t2 != 1:
+            t2 = (t2 * t2) % p
+            i += 1
+            if i == m:
+                return None
+        b = pow(c, 1 << (m - i - 1), p)
+        m = i
+        c = (b * b) % p
+        t = (t * c) % p
+        r = (r * b) % p
+    return r
+
+
+def _add_univariate_poly(a: list[int], b: list[int], p: int) -> list[int]:
+    n = max(len(a), len(b))
+    out = [(a[i] if i < len(a) else 0) + (b[i] if i < len(b) else 0) for i in range(n)]
+    while len(out) > 1 and out[-1] % p == 0:
+        out.pop()
+    return [c % p for c in out]
+
+
+def _mul_univariate_poly(
+    a: list[int], b: list[int], p: int, max_deg: int
+) -> Optional[list[int]]:
+    if not a or not b:
+        return [0]
+    deg = len(a) + len(b) - 2
+    if deg > max_deg:
+        return None
+    out = [0] * (deg + 1)
+    for i, ca in enumerate(a):
+        for j, cb in enumerate(b):
+            out[i + j] = (out[i + j] + ca * cb) % p
+    while len(out) > 1 and out[-1] % p == 0:
+        out.pop()
+    return out
+
+
+def _poly_in_var(e: FNode, x: FNode, p: int, max_deg: int = 2) -> Optional[list[int]]:
+    """Coeffs ``[c0, c1, …]`` for ``c0 + c1*x + …`` in ``x``, or ``None``."""
+    if e.is_int_constant():
+        return [int(e.constant_value()) % p]
+    if e.is_symbol():
+        return [0, 1] if e == x else None
+    if e.is_plus():
+        acc: list[int] = [0]
+        for a in e.args():
+            pa = _poly_in_var(a, x, p, max_deg)
+            if pa is None:
+                return None
+            acc = _add_univariate_poly(acc, pa, p)
+        return acc
+    if e.is_minus():
+        if len(e.args()) != 2:
+            return None
+        pa = _poly_in_var(e.arg(0), x, p, max_deg)
+        pb = _poly_in_var(e.arg(1), x, p, max_deg)
+        if pa is None or pb is None:
+            return None
+        return _add_univariate_poly(pa, [(-c) % p for c in pb], p)
+    if e.is_times():
+        acc = [1]
+        for a in e.args():
+            pa = _poly_in_var(a, x, p, max_deg)
+            if pa is None:
+                return None
+            acc = _mul_univariate_poly(acc, pa, p, max_deg)
+            if acc is None:
+                return None
+        return acc
+    return None
+
+
+def _quadratic_roots_mod(a: int, b: int, c: int, p: int) -> set[int]:
+    """Roots of ``a*x^2 + b*x + c == 0 (mod p)``; empty when none exist."""
+    a %= p
+    b %= p
+    c %= p
+    if a == 0:
+        return set()
+    disc = (b * b - 4 * a * c) % p
+    if disc == 0:
+        return {(-b * pow(2 * a, -1, p)) % p}
+    sqrt_disc = _mod_sqrt(disc, p)
+    if sqrt_disc is None:
+        return set()
+    inv = pow(2 * a, -1, p)
+    return {((-b + sqrt_disc) * inv) % p, ((-b - sqrt_disc) * inv) % p}
+
+
+def _solved_quadratic(expr: FNode, p: int) -> Optional[tuple[FNode, set[int]]]:
+    """``(x, roots)`` when ``expr`` is a quadratic univariate polynomial."""
+    syms = [v for v in expr.get_free_variables() if v.is_symbol()]
+    if len(syms) != 1:
+        return None
+    x = syms[0]
+    coeffs = _poly_in_var(expr, x, p, max_deg=2)
+    if coeffs is None or len(coeffs) != 3 or coeffs[2] % p == 0:
+        return None
+    c0, c1, a = coeffs[0], coeffs[1], coeffs[2]
+    return x, _quadratic_roots_mod(a, c1, c0, p)
+
+
 def _solved_roots(factors: list[FNode], p: int) -> Optional[tuple[FNode, set[int]]]:
     """``(x, roots)`` when every factor is linear in the same single symbol.
 
@@ -101,12 +228,18 @@ def rewrite_choice_simple(node_type: int, args: list[FNode]) -> FNode:
     p = ARGS().field_type.value
     assert isprime(p), f"field modulus must be prime for rewrite_choice_simple, got {p}"
     factors = _flatten_times_factors(expr)
-    if factors is None:
-        return None
-    solved = _solved_roots(factors, p)
+    if factors is not None:
+        solved = _solved_roots(factors, p)
+        if solved is not None:
+            return roots_with_range(*solved)
+        return Or(*[Equals(Mod(f, modulus), Int(0)) for f in factors])
+    solved = _solved_quadratic(expr, p)
     if solved is not None:
-        return roots_with_range(*solved)
-    return Or(*[Equals(Mod(f, modulus), Int(0)) for f in factors])
+        x, values = solved
+        if not values:
+            return FALSE()
+        return roots_with_range(x, values)
+    return None
 
 
 def rewrite_z3simplify(node_type: int, args: list[FNode]) -> FNode:
