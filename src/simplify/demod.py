@@ -88,50 +88,26 @@ def _normalize_arith_under_mod(e: FNode, m: int) -> FNode:
     return e
 
 
-def _is_mul_by_minus_one(node: FNode) -> FNode | None:
-    if node.is_times() and len(node.args()) == 2:
-        a, b = node.args()
-        p = int(ARGS().field_type.value)
-        if a.is_int_constant(-1) or a.is_int_constant(p - 1):
-            return b
-        if b.is_int_constant(-1) or b.is_int_constant(p - 1):
-            return a
-    return None
-
-
 def _demod_rewrite_eqmod_zero_equals(lhs: FNode, rhs: FNode) -> FNode | None:
-    """Replaces ``Mod(e, p) = 0`` (field ``p``) with a defining equality on ``e``.
-
-    Mirrors the former ``rewrite_eqmod`` rewriter rule (``Plus`` / ``Minus`` /
-    ``Times(-1,…)`` shapes only).
-    """
+    """Replaces ``Mod(a*x + b, p) = 0`` (field ``p``) with ``x = (-b/a) mod p``."""
     if not lhs.is_mod() or not rhs.is_zero():
         return None
     expr, modulus = lhs.args()
-    if (
-        not modulus.is_int_constant()
-        or modulus.constant_value() != ARGS().field_type.value
-    ):
+    p = int(ARGS().field_type.value)
+    if not modulus.is_int_constant() or int(modulus.constant_value()) != p:
         return None
-    if expr.is_plus() and len(expr.args()) == 2:
-        a, b = expr.args()
-        if a.is_int_constant() and b.is_symbol():
-            return Equals(b, wrap_mod(Int(-a.constant_value())))
-        if a.is_symbol() and b.is_int_constant():
-            return Equals(a, wrap_mod(Int(-b.constant_value())))
-        minusa = _is_mul_by_minus_one(a)
-        if minusa is not None and (b.is_symbol() or b.is_int_constant()):
-            return Equals(b, wrap_mod(minusa))
-        minusb = _is_mul_by_minus_one(b)
-        if minusb is not None and (a.is_symbol() or a.is_int_constant()):
-            return Equals(a, wrap_mod(minusb))
-    if expr.is_minus() and len(expr.args()) == 2:
-        a, b = expr.args()
-        if a.is_int_constant() and b.is_symbol():
-            return Equals(b, wrap_mod(Int(a.constant_value())))
-        if a.is_symbol() and b.is_int_constant():
-            return Equals(a, wrap_mod(Int(b.constant_value())))
-    return None
+    lf = linear_form(expr)
+    if lf is None:
+        return None
+    terms, const = lf
+    terms = {s: a % p for s, a in terms.items() if a % p != 0}
+    if len(terms) != 1:
+        return None
+    sym, a = next(iter(terms.items()))
+    if a == 0 or (a == 1 and const % p == 0):
+        return None
+    val = (-const * pow(a, -1, p)) % p
+    return Equals(sym, wrap_mod(Int(val)))
 
 
 class _EqModZeroWalker(IdentityDagWalker):
