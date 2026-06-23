@@ -119,7 +119,7 @@ class SmtConverter:
         """Convert derived-column definitions into symbolic equalities (stored for later use)."""
         for derived in data:
             match derived:
-                case [bool(new), str(name), cm]:
+                case [bool(_), str(name), cm] | [str(name), cm]:
                     sym = self._symbol(name, INT)
                     assert sym not in self.derived_columns
                     self.derived_columns[sym] = with_comment(
