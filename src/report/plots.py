@@ -69,77 +69,7 @@ def basic_stats() -> str:
         "SELECT COUNT(DISTINCT passname) FROM verification_steps "
         "WHERE passname IS NOT NULL AND passname != ''"
     )
-    fastest_unexpected_sat = query(
-        """
-        SELECT v.input1, v.input2, v.running_time, v.size_bytes
-        FROM verification_steps v
-        WHERE v.running_time IS NOT NULL
-          AND EXISTS (
-              SELECT 1
-              FROM substeps s
-              WHERE s.verification_step_id = v.id
-                AND s.expected IN ('sat', 'unsat')
-                AND s.result IN ('sat', 'unsat')
-                AND s.result != s.expected
-          )
-        ORDER BY v.running_time ASC
-        LIMIT 5
-        """
-    )
-    fastest_unknown = query(
-        """
-        SELECT v.input1, v.input2, v.running_time, v.size_bytes
-        FROM verification_steps v
-        WHERE v.running_time IS NOT NULL
-          AND EXISTS (
-              SELECT 1 FROM substeps s
-              WHERE s.verification_step_id = v.id
-                AND s.name = 'check'
-                AND s.status = 'error'
-                AND (s.result = 'unknown' OR s.result LIKE 'unknown-%')
-          )
-        ORDER BY v.running_time ASC
-        LIMIT 5
-        """
-    )
-    timed_out_jobs = _jobs_with_outcome("timeout")
-    memout_jobs = _jobs_with_outcome("memout")
-    fastest_isqf_not_qf = query(
-        """
-        SELECT v.input1, v.input2, v.running_time, v.size_bytes
-        FROM verification_steps v
-        WHERE v.running_time IS NOT NULL
-          AND EXISTS (
-              SELECT 1
-              FROM substeps s
-              WHERE s.verification_step_id = v.id
-                AND s.name = 'isqf'
-                AND s.status = 'not-qf'
-          )
-        ORDER BY v.running_time ASC
-        LIMIT 5
-        """
-    )
-    fastest_errors = query(
-        """
-        SELECT input1, input2, running_time, size_bytes
-        FROM verification_steps
-        WHERE status = 'error' AND running_time IS NOT NULL
-        ORDER BY running_time ASC
-        LIMIT 5
-        """
-    )
-    selected_jobs = [
-        *[("wrong", *row) for row in fastest_unexpected_sat],
-        *[("unknown", *row) for row in fastest_unknown],
-        *[("timeout", *row) for row in timed_out_jobs],
-        *[("memout", *row) for row in memout_jobs],
-        *[("not-qf", *row) for row in fastest_isqf_not_qf],
-        *[("error", *row) for row in fastest_errors],
-    ]
-    selected_jobs.sort(
-        key=lambda r: float(r[3]) if r[3] is not None else float("-inf"),
-    )
+    selected_jobs = _jobs_of_interest()
     selected_jobs_list = _render_selected_jobs_list("Jobs of interest", selected_jobs)
     steps_rows = [
         ("checked", n_checked or 0),
@@ -171,13 +101,64 @@ def basic_stats() -> str:
 """
 
 
-def _jobs_with_outcome(outcome: str) -> list[tuple]:
-    return query(
-        f"""
-        WITH candidates AS (
-            SELECT id, input1, input2, running_time, size_bytes
-            FROM verification_steps
-            WHERE status = '{outcome}'
+def _jobs_of_interest() -> list[tuple]:
+    rows = query(
+        """
+        WITH interested AS (
+            SELECT
+                v.id,
+                v.input1,
+                v.input2,
+                v.running_time,
+                v.size_bytes,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM substeps s
+                        WHERE s.verification_step_id = v.id
+                          AND s.expected IN ('sat', 'unsat')
+                          AND s.result IN ('sat', 'unsat')
+                          AND s.result != s.expected
+                    ) THEN 'wrong'
+                    WHEN v.status = 'error' THEN 'error'
+                    WHEN EXISTS (
+                        SELECT 1 FROM substeps s
+                        WHERE s.verification_step_id = v.id
+                          AND s.name = 'check'
+                          AND s.status = 'error'
+                          AND (s.result = 'unknown' OR s.result LIKE 'unknown-%')
+                    ) THEN 'unknown'
+                    WHEN v.status = 'timeout' THEN 'timeout'
+                    WHEN v.status = 'memout' THEN 'memout'
+                    WHEN EXISTS (
+                        SELECT 1 FROM substeps s
+                        WHERE s.verification_step_id = v.id
+                          AND s.name = 'isqf'
+                          AND s.status = 'not-qf'
+                    ) THEN 'not-qf'
+                END AS kind
+            FROM verification_steps v
+            WHERE
+                EXISTS (
+                    SELECT 1 FROM substeps s
+                    WHERE s.verification_step_id = v.id
+                      AND s.expected IN ('sat', 'unsat')
+                      AND s.result IN ('sat', 'unsat')
+                      AND s.result != s.expected
+                )
+                OR v.status IN ('error', 'timeout', 'memout')
+                OR EXISTS (
+                    SELECT 1 FROM substeps s
+                    WHERE s.verification_step_id = v.id
+                      AND s.name = 'check'
+                      AND s.status = 'error'
+                      AND (s.result = 'unknown' OR s.result LIKE 'unknown-%')
+                )
+                OR EXISTS (
+                    SELECT 1 FROM substeps s
+                    WHERE s.verification_step_id = v.id
+                      AND s.name = 'isqf'
+                      AND s.status = 'not-qf'
+                )
         ),
         outcome_at AS (
             WITH RECURSIVE tree AS (
@@ -190,43 +171,36 @@ def _jobs_with_outcome(outcome: str) -> list[tuple]:
                 FROM substeps s
                 JOIN tree t ON s.parent = t.id
             ),
+            matches AS (
+                SELECT verification_step_id, name, depth,
+                       CASE
+                           WHEN status = 'timeout' OR result = 'timeout' THEN 'timeout'
+                           WHEN status = 'memout' OR result = 'memout' THEN 'memout'
+                       END AS outcome
+                FROM tree
+                WHERE status IN ('timeout', 'memout') OR result IN ('timeout', 'memout')
+            ),
             picked AS (
-                SELECT verification_step_id, name,
+                SELECT verification_step_id, outcome, name AS outcome_step,
                        ROW_NUMBER() OVER (
-                           PARTITION BY verification_step_id
+                           PARTITION BY verification_step_id, outcome
                            ORDER BY depth DESC, name ASC
                        ) AS rn
-                FROM tree
-                WHERE status = '{outcome}' OR result = '{outcome}'
+                FROM matches
+                WHERE outcome IS NOT NULL
             )
-            SELECT verification_step_id, name AS outcome_step
+            SELECT verification_step_id, outcome, outcome_step
             FROM picked
             WHERE rn = 1
-        ),
-        limited AS (
-            SELECT id, input1, input2, running_time, size_bytes
-            FROM (
-                SELECT id, input1, input2, running_time, size_bytes
-                FROM candidates
-                WHERE running_time IS NOT NULL
-                ORDER BY running_time ASC, size_bytes ASC
-                LIMIT 5
-            )
-            UNION ALL
-            SELECT id, input1, input2, running_time, size_bytes
-            FROM (
-                SELECT id, input1, input2, running_time, size_bytes
-                FROM candidates
-                WHERE size_bytes IS NOT NULL
-                ORDER BY size_bytes ASC, running_time ASC
-                LIMIT 5
-            )
         )
-        SELECT p.input1, p.input2, p.running_time, p.size_bytes, t.outcome_step
-        FROM limited p
-        LEFT JOIN outcome_at t ON t.verification_step_id = p.id
+        SELECT i.kind, i.input1, i.input2, i.running_time, i.size_bytes, o.outcome_step
+        FROM interested i
+        LEFT JOIN outcome_at o
+            ON o.verification_step_id = i.id AND o.outcome = i.kind
+        ORDER BY i.running_time IS NULL, i.running_time ASC, i.size_bytes ASC
         """
     )
+    return [tuple(row) for row in rows]
 
 
 def _job_name(input1: str, input2: str) -> str:
@@ -267,6 +241,24 @@ def _render_stat_card_detail(
     )
 
 
+_JOBS_LIST_PREVIEW = 10
+
+
+def _render_job_list_item(idx: int, row: tuple) -> str:
+    kind, input1, input2, running_time, size_bytes = row[:5]
+    at_step = row[5] if len(row) > 5 else None
+    job = html.escape(_job_name(str(input1), str(input2)))
+    kind_badge = _badge_kind(str(kind), at_step)
+    time_badge = _badge_time(running_time)
+    size_badge = _badge_bytes(size_bytes)
+    return (
+        '<li class="list-group-item px-0 d-flex align-items-center">'
+        f"<span><span class='text-body-secondary me-2'>{idx}.</span><code>{job}</code></span>"
+        f"<span class='ms-auto'>{kind_badge} {time_badge} {size_badge}</span>"
+        "</li>"
+    )
+
+
 def _render_selected_jobs_list(title: str, rows: list[tuple]) -> str:
     if not rows:
         return (
@@ -275,24 +267,27 @@ def _render_selected_jobs_list(title: str, rows: list[tuple]) -> str:
             '<span class="text-body-secondary">None</span>'
             "</div></div>"
         )
-    items = []
-    for idx, row in enumerate(rows, start=1):
-        kind, input1, input2, running_time, size_bytes = row[:5]
-        at_step = row[5] if len(row) > 5 else None
-        job = html.escape(_job_name(str(input1), str(input2)))
-        kind_badge = _badge_kind(str(kind), at_step)
-        time_badge = _badge_time(running_time)
-        size_badge = _badge_bytes(size_bytes)
-        items.append(
-            '<li class="list-group-item px-0 d-flex align-items-center">'
-            f"<span><span class='text-body-secondary me-2'>{idx}.</span><code>{job}</code></span>"
-            f"<span class='ms-auto'>{kind_badge} {time_badge} {size_badge}</span>"
-            "</li>"
+    preview = rows[:_JOBS_LIST_PREVIEW]
+    rest = rows[_JOBS_LIST_PREVIEW:]
+    list_html = (
+        f"<ul class='list-group list-group-flush'>"
+        f"{''.join(_render_job_list_item(i, row) for i, row in enumerate(preview, start=1))}"
+        "</ul>"
+    )
+    if rest:
+        n_more = len(rest)
+        list_html += (
+            '<details class="mt-1">'
+            f'<summary class="small text-body-secondary">'
+            f"Show {n_more} more</summary>"
+            f"<ul class='list-group list-group-flush mt-1'>"
+            f"{''.join(_render_job_list_item(i, row) for i, row in enumerate(rest, start=len(preview) + 1))}"
+            "</ul></details>"
         )
     return (
         '<div class="card h-100 shadow-sm"><div class="card-body py-2 px-3">'
         f'<h6 class="mb-2">{html.escape(title)}</h6>'
-        f"<ul class='list-group list-group-flush'>{''.join(items)}</ul>"
+        f"{list_html}"
         "</div></div>"
     )
 
