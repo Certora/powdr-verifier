@@ -63,7 +63,6 @@ def basic_stats() -> str:
         ORDER BY (COUNT(*) - SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END)) DESC,
                  COUNT(*) DESC,
                  block ASC
-        LIMIT 6
         """
     )
     n_passes = query_single_value(
@@ -82,7 +81,6 @@ def basic_stats() -> str:
         ORDER BY (COUNT(*) - SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END)) DESC,
                  COUNT(*) DESC,
                  passname ASC
-        LIMIT 6
         """
     )
     selected_jobs = _jobs_of_interest()
@@ -112,9 +110,9 @@ def basic_stats() -> str:
     return f"""
 <section class="container-fluid py-3">
   <div class="row g-2 mb-3">
-    {_render_stat_card_detail("#verification steps", n_steps, steps_rows)}
-    {_render_stat_card_detail("#blocks", n_blocks, blocks_detail)}
-    {_render_stat_card_detail("#passes", n_passes, passes_detail)}
+    {_render_stat_card_detail(f"{n_steps or 0} verification steps", steps_rows)}
+    {_render_stat_card_detail(f"{n_blocks or 0} blocks", blocks_detail, preview_limit=_STAT_CARD_PREVIEW)}
+    {_render_stat_card_detail(f"{n_passes or 0} passes", passes_detail, preview_limit=_STAT_CARD_PREVIEW)}
   </div>
   <div class="row g-3">
     <div class="col-12">{selected_jobs_list}</div>
@@ -260,28 +258,45 @@ def _render_stat_card(label: str, value: object) -> str:
     )
 
 
-def _render_stat_card_detail(
-    label: str, headline: object, rows: list[tuple[str, object]]
-) -> str:
-    sub = "".join(
+_STAT_CARD_PREVIEW = 6
+_JOBS_LIST_PREVIEW = 10
+
+
+def _render_stat_detail_row(key: str, value: object) -> str:
+    return (
         '<div class="d-flex justify-content-between small mt-1">'
-        f'<span class="text-body-secondary">{html.escape(k)}</span>'
-        f'<span class="fw-medium">{html.escape(str(v))}</span>'
+        f'<span class="text-body-secondary">{html.escape(key)}</span>'
+        f'<span class="fw-medium">{html.escape(str(value))}</span>'
         "</div>"
-        for k, v in rows
     )
+
+
+def _render_stat_card_detail(
+    headline: str,
+    rows: list[tuple[str, object]],
+    *,
+    preview_limit: int | None = None,
+) -> str:
+    if preview_limit is not None and len(rows) > preview_limit:
+        preview = rows[:preview_limit]
+        rest = rows[preview_limit:]
+        sub = "".join(_render_stat_detail_row(k, v) for k, v in preview)
+        sub += (
+            '<details class="mt-1">'
+            f'<summary class="small text-body-secondary">Show {len(rest)} more</summary>'
+            + "".join(_render_stat_detail_row(k, v) for k, v in rest)
+            + "</details>"
+        )
+    else:
+        sub = "".join(_render_stat_detail_row(k, v) for k, v in rows)
     return (
         '<div class="col-12 col-md-4">'
         '<div class="card h-100 shadow-sm">'
         '<div class="card-body py-2 px-3">'
-        f'<div class="small text-body-secondary">{html.escape(str(label))}</div>'
-        f'<div class="fs-5 fw-semibold">{html.escape(str(headline))}</div>'
+        f'<div class="fs-5 fw-semibold">{html.escape(headline)}</div>'
         f'<div class="mt-2 pt-2 border-top">{sub}</div>'
         "</div></div></div>"
     )
-
-
-_JOBS_LIST_PREVIEW = 10
 
 
 def _render_job_list_item(idx: int, row: tuple) -> str:

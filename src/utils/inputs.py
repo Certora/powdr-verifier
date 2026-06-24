@@ -11,6 +11,14 @@ def parse_filename(file: pathlib.Path) -> tuple[int, int, str]:
         return int(m.group(1)), int(m.group(2)), m.group(3) or ""
     return None
 
+
+def format_passname(step: int, suffix: str) -> str:
+    """Build a pass label like ``003_solver`` from step index and filename suffix."""
+    name = suffix.lstrip("_")
+    if name:
+        return f"{step:03d}_{name}"
+    return f"{step:03d}"
+
 def load_files_by_block(basedir: pathlib.Path):
     """Index all ``apc_candidate_*.json`` under ``basedir`` by block id then candidate index."""
     files = defaultdict(dict)
@@ -39,6 +47,10 @@ def load_verification_steps(basedir: pathlib.Path):
         assert 0 in blocks[block]
         i = 1
         while i in blocks[block]:
-            res[(blocks[block][i-1][0], blocks[block][i][0])] = (block, blocks[block][i][1])
+            _, suffix = blocks[block][i]
+            res[(blocks[block][i-1][0], blocks[block][i][0])] = (
+                block,
+                format_passname(i, suffix),
+            )
             i += 1
     return res
