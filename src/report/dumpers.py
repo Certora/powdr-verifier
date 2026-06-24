@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 
 from .action import Action
-from ..utils.args import ARGS
 from ..utils.io import dump_json
 
 BASE_REPORT_DIR = None
@@ -33,5 +32,4 @@ class ActionDumper(Action):
         ):
             self += {"result": "error", "error_message": str(exc_value)}
         inputs = [i.stem for i in self.inputs]
-        sub = f"{self.test}{ARGS().run_id}"
-        self.dump_to(BASE_REPORT_DIR / sub / f"{self.name}-{"-".join(inputs)}.json")
+        self.dump_to(BASE_REPORT_DIR / self.test / f"{self.name}-{"-".join(inputs)}.json")

@@ -33,7 +33,7 @@ from src.paths import (
     dump_cmd_parts,
     ensure_layout,
 )
-from src.utils.args import ARGS, parse_args as verifier_parse_args
+from src.utils.args import parse_args as verifier_parse_args
 
 ensure_layout()
 set_report_dir(REPORTS_DIR)
@@ -120,14 +120,10 @@ def parse_args():
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--with-patch", type=Path, default=None)
     parser.add_argument("-j", "--jobs", type=int, default=1)
-    parser.add_argument("--run-id", default="", metavar="ID")
 
     global _ARGS
     _ARGS, leftover = parser.parse_known_args()
     verifier_parse_args([])
-    ARGS().run_id = _ARGS.run_id
-    r = (ARGS().run_id or "").strip()
-    ARGS().run_id = "" if (not r or r == "-") else f"-{r}"
     _ARGS._main_args, _ARGS._sub_args = __split_args_for_main(leftover)
     _ARGS._additional_args = []
 
@@ -150,12 +146,9 @@ def parse_args():
 
 
 def __orchestrate_cmd(*k_frag: str) -> str:
-    rid = (_ARGS.run_id or "").strip()
-    run_id_frag = [] if (not rid or rid == "-") else ["--run-id", rid]
     parts: list = [
         ORCHESTRATE_SCRIPT,
         *map(arg_for_dump, _ARGS._main_args),
-        *run_id_frag,
     ]
     if _ARGS.jobs != 1:
         parts += ["-j", str(_ARGS.jobs)]
@@ -175,7 +168,7 @@ def __orchestrate_verify_cmd(a: Path, b: Path) -> str:
 
 
 def __job_report_path(test: str) -> Path:
-    return REPORTS_DIR / f"{test}{ARGS().run_id}" / "job.json"
+    return REPORTS_DIR / test / "job.json"
 
 
 def __dump_job_report(test: str, command: str, *, started_at: str, started: float) -> None:
@@ -202,15 +195,12 @@ def __run_main(
 ) -> Optional[Any]:
     """Run ``main.py`` as a subprocess. With ``parse_output=True``, capture stdout and return ``load_json`` of it."""
     extra = list(extra_args or [])
-    rid = (_ARGS.run_id or "").strip()
-    run_id_frag = [] if (not rid or rid == "-") else ["--run-id", rid]
     cmd = [
         *memory_limit_cmd_prefix(_ARGS.jobs),
         PYTHON,
         VERIFIER_DIR / "main.py",
         *_ARGS._additional_args,
         *_ARGS._main_args,
-        *run_id_frag,
         command,
         *args,
         *extra,
