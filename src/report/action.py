@@ -101,20 +101,18 @@ class Action:
                 return None
             if len(sub) == 1:
                 return list(sub)[0]
-            if "error" in sub:
-                return "error"
             if "wrong" in sub:
                 return "wrong"
             if "memout" in sub:
                 return "memout"
             if "timeout" in sub:
                 return "timeout"
+            if "error" in sub:
+                return "error"
             if "unknown" in sub:
                 return "unknown"
             return "success"
 
-        if self.error_message:
-            return "error"
         r = self.result
         if "expected" in self.properties:
             return classify_expected_vs_result(
@@ -122,10 +120,10 @@ class Action:
                 expected=self.expected,
                 result=r,
             )
-        if r == "timeout":
-            return "timeout"
-        if r == "memout":
-            return "memout"
+        if r in ("timeout", "memout"):
+            return r
+        if self.error_message:
+            return "error"
         if r in ("invalid-json",) or (isinstance(r, str) and r.startswith("error")):
             return "error"
         return r

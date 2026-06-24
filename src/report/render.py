@@ -49,7 +49,7 @@ class TreeNode:
     result: Optional[str] = None
     expected: Optional[str] = None
     error_message: Optional[str] = None
-    status: str = "pending"                # pending | running | success | error | skipped
+    status: str = "pending"                # pending | running | success | error | memout | skipped
     children: list = dataclasses.field(default_factory=list)
     block: Optional[int] = None
     passname: Optional[str] = None
@@ -60,6 +60,7 @@ class TreeTableWidget:
         "running":  ("↻", "#004085", "#cce5ff"),
         "wrong":    ("≠", "#856404", "#fff3cd"),
         "timeout":  ("⏱", "#856404", "#ffeeba"),
+        "memout":   ("M", "#9a3412", "#ffedd5"),
         "unknown":  ("?", "#664d03", "#fff3cd"),
         "error":    ("✗", "#721c24", "#f8d7da"),
         "pending":  ("·", "#6c757d", "#f8f9fa"),

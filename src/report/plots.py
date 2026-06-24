@@ -25,6 +25,9 @@ def basic_stats() -> str:
     n_timeouts = query_single_value(
         "SELECT COUNT(*) FROM verification_steps WHERE status = 'timeout'"
     )
+    n_memouts = query_single_value(
+        "SELECT COUNT(*) FROM verification_steps WHERE status = 'memout'"
+    )
     n_not_qf = query_single_value(
         """
         SELECT COUNT(DISTINCT v.id) FROM verification_steps v
@@ -99,61 +102,8 @@ def basic_stats() -> str:
         LIMIT 5
         """
     )
-    timed_out_jobs = query(
-        """
-        WITH candidates AS (
-            SELECT id, input1, input2, running_time, size_bytes
-            FROM verification_steps
-            WHERE status = 'timeout'
-        ),
-        timeout_at AS (
-            WITH RECURSIVE tree AS (
-                SELECT id, verification_step_id, name, status, result, parent, 0 AS depth
-                FROM substeps
-                WHERE parent IS NULL
-                UNION ALL
-                SELECT s.id, s.verification_step_id, s.name, s.status, s.result, s.parent,
-                       t.depth + 1
-                FROM substeps s
-                JOIN tree t ON s.parent = t.id
-            ),
-            timed AS (
-                SELECT verification_step_id, name,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY verification_step_id
-                           ORDER BY depth DESC, name ASC
-                       ) AS rn
-                FROM tree
-                WHERE status = 'timeout' OR result = 'timeout'
-            )
-            SELECT verification_step_id, name AS timeout_step
-            FROM timed
-            WHERE rn = 1
-        ),
-        picked AS (
-            SELECT id, input1, input2, running_time, size_bytes
-            FROM (
-                SELECT id, input1, input2, running_time, size_bytes
-                FROM candidates
-                WHERE running_time IS NOT NULL
-                ORDER BY running_time ASC, size_bytes ASC
-                LIMIT 5
-            )
-            UNION ALL
-            SELECT id, input1, input2, running_time, size_bytes
-            FROM (
-                SELECT id, input1, input2, running_time, size_bytes
-                FROM candidates
-                WHERE size_bytes IS NOT NULL
-                ORDER BY size_bytes ASC, running_time ASC
-                LIMIT 5
-            )
-        )
-        SELECT p.input1, p.input2, p.running_time, p.size_bytes, t.timeout_step
-        FROM picked p
-        LEFT JOIN timeout_at t ON t.verification_step_id = p.id
-        """
-    )
+    timed_out_jobs = _jobs_with_outcome("timeout")
+    memout_jobs = _jobs_with_outcome("memout")
     fastest_isqf_not_qf = query(
         """
         SELECT v.input1, v.input2, v.running_time, v.size_bytes
@@ -183,6 +133,7 @@ def basic_stats() -> str:
         *[("wrong", *row) for row in fastest_unexpected_sat],
         *[("unknown", *row) for row in fastest_unknown],
         *[("timeout", *row) for row in timed_out_jobs],
+        *[("memout", *row) for row in memout_jobs],
         *[("not-qf", *row) for row in fastest_isqf_not_qf],
         *[("error", *row) for row in fastest_errors],
     ]
@@ -193,6 +144,7 @@ def basic_stats() -> str:
     steps_rows = [
         ("checked", n_checked or 0),
         ("timeouts", n_timeouts or 0),
+        ("memouts", n_memouts or 0),
         ("errors", n_errors or 0),
         ("not-qf", n_not_qf or 0),
         ("wrongs", n_wrongs or 0),
@@ -217,6 +169,64 @@ def basic_stats() -> str:
 </section>
 
 """
+
+
+def _jobs_with_outcome(outcome: str) -> list[tuple]:
+    return query(
+        f"""
+        WITH candidates AS (
+            SELECT id, input1, input2, running_time, size_bytes
+            FROM verification_steps
+            WHERE status = '{outcome}'
+        ),
+        outcome_at AS (
+            WITH RECURSIVE tree AS (
+                SELECT id, verification_step_id, name, status, result, parent, 0 AS depth
+                FROM substeps
+                WHERE parent IS NULL
+                UNION ALL
+                SELECT s.id, s.verification_step_id, s.name, s.status, s.result, s.parent,
+                       t.depth + 1
+                FROM substeps s
+                JOIN tree t ON s.parent = t.id
+            ),
+            picked AS (
+                SELECT verification_step_id, name,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY verification_step_id
+                           ORDER BY depth DESC, name ASC
+                       ) AS rn
+                FROM tree
+                WHERE status = '{outcome}' OR result = '{outcome}'
+            )
+            SELECT verification_step_id, name AS outcome_step
+            FROM picked
+            WHERE rn = 1
+        ),
+        limited AS (
+            SELECT id, input1, input2, running_time, size_bytes
+            FROM (
+                SELECT id, input1, input2, running_time, size_bytes
+                FROM candidates
+                WHERE running_time IS NOT NULL
+                ORDER BY running_time ASC, size_bytes ASC
+                LIMIT 5
+            )
+            UNION ALL
+            SELECT id, input1, input2, running_time, size_bytes
+            FROM (
+                SELECT id, input1, input2, running_time, size_bytes
+                FROM candidates
+                WHERE size_bytes IS NOT NULL
+                ORDER BY size_bytes ASC, running_time ASC
+                LIMIT 5
+            )
+        )
+        SELECT p.input1, p.input2, p.running_time, p.size_bytes, t.outcome_step
+        FROM limited p
+        LEFT JOIN outcome_at t ON t.verification_step_id = p.id
+        """
+    )
 
 
 def _job_name(input1: str, input2: str) -> str:
@@ -268,9 +278,9 @@ def _render_selected_jobs_list(title: str, rows: list[tuple]) -> str:
     items = []
     for idx, row in enumerate(rows, start=1):
         kind, input1, input2, running_time, size_bytes = row[:5]
-        timeout_at = row[5] if len(row) > 5 else None
+        at_step = row[5] if len(row) > 5 else None
         job = html.escape(_job_name(str(input1), str(input2)))
-        kind_badge = _badge_kind(str(kind), timeout_at)
+        kind_badge = _badge_kind(str(kind), at_step)
         time_badge = _badge_time(running_time)
         size_badge = _badge_bytes(size_bytes)
         items.append(
@@ -311,7 +321,7 @@ def _format_bytes(size_bytes: int) -> str:
     return f"{size_bytes / (1024 * 1024):.1f} MB"
 
 
-def _badge_kind(kind: str, timeout_at: object = None) -> str:
+def _badge_kind(kind: str, at_step: object = None) -> str:
     if kind == "wrong":
         return f'<span class="badge text-bg-danger">{html.escape(kind)}</span>'
     if kind == "error":
@@ -321,8 +331,12 @@ def _badge_kind(kind: str, timeout_at: object = None) -> str:
         )
         return f'<span class="badge" style="{style}">{html.escape(kind)}</span>'
     if kind == "timeout":
-        label = kind if not timeout_at else f"{kind}@{timeout_at}"
+        label = kind if not at_step else f"{kind}@{at_step}"
         return f'<span class="badge text-bg-warning">{html.escape(label)}</span>'
+    if kind == "memout":
+        label = kind if not at_step else f"{kind}@{at_step}"
+        style = "background:#ffedd5;color:#9a3412;border:1px solid #fdba74"
+        return f'<span class="badge" style="{style}">{html.escape(label)}</span>'
     if kind == "unknown":
         css = "text-bg-warning"
     elif kind == "not-qf":
@@ -623,7 +637,7 @@ def simplifier_pass_stats_bar() -> str:
         FROM substeps s
         JOIN substeps p ON s.parent = p.id AND p.name = 'simplifier'
         WHERE s.name NOT IN ('load', 'dump')
-          AND (s.result IS NULL OR s.result NOT IN ('skipped', 'timeout'))
+          AND (s.result IS NULL OR s.result NOT IN ('skipped', 'timeout', 'memout'))
           AND s.running_time IS NOT NULL
         """
     )
@@ -631,8 +645,9 @@ def simplifier_pass_stats_bar() -> str:
         """
         SELECT s.name,
                SUM(CASE WHEN s.result = 'timeout' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN s.result = 'memout' THEN 1 ELSE 0 END),
                SUM(CASE WHEN s.result = 'skipped' THEN 1 ELSE 0 END),
-               SUM(CASE WHEN s.result IS NULL OR s.result NOT IN ('skipped', 'timeout')
+               SUM(CASE WHEN s.result IS NULL OR s.result NOT IN ('skipped', 'timeout', 'memout')
                         THEN 1 ELSE 0 END)
         FROM substeps s
         JOIN substeps p ON s.parent = p.id AND p.name = 'simplifier'
@@ -643,10 +658,15 @@ def simplifier_pass_stats_bar() -> str:
     if not count_rows and not time_rows:
         return ""
     by_name: dict[str, dict[str, int]] = {}
-    for name, n_to, n_sk, n_ok in count_rows:
-        by_name[str(name)] = {"timeouts": int(n_to), "skipped": int(n_sk), "n_ok": int(n_ok)}
+    for name, n_to, n_mo, n_sk, n_ok in count_rows:
+        by_name[str(name)] = {
+            "timeouts": int(n_to),
+            "memouts": int(n_mo),
+            "skipped": int(n_sk),
+            "n_ok": int(n_ok),
+        }
     for name, _rt in time_rows:
-        by_name.setdefault(str(name), {"timeouts": 0, "skipped": 0, "n_ok": 0})
+        by_name.setdefault(str(name), {"timeouts": 0, "memouts": 0, "skipped": 0, "n_ok": 0})
     from src.simplifier import DEFAULT_TACTIC
 
     rank: dict[str, int] = {}
@@ -659,7 +679,7 @@ def simplifier_pass_stats_bar() -> str:
         cols=2,
         horizontal_spacing=0.06,
         column_widths=[0.55, 0.45],
-        subplot_titles=("Wall time (completed runs)", "Timeouts / skipped"),
+        subplot_titles=("Wall time (completed runs)", "Timeouts / memouts / skipped"),
     )
     if time_rows:
         tdf = pandas.DataFrame(time_rows, columns=["name", "running_time"])
@@ -676,6 +696,7 @@ def simplifier_pass_stats_bar() -> str:
             col=1,
         )
     timeouts = [by_name[n]["timeouts"] for n in ordered]
+    memouts = [by_name[n]["memouts"] for n in ordered]
     skipped = [by_name[n]["skipped"] for n in ordered]
     fig.add_trace(
         go.Bar(
@@ -692,17 +713,29 @@ def simplifier_pass_stats_bar() -> str:
     fig.add_trace(
         go.Bar(
             x=ordered,
-            y=skipped,
-            name="skipped",
-            marker_color="#FFA15A",
+            y=memouts,
+            name="memouts",
+            marker_color="#F97316",
             offsetgroup=1,
             legendgroup="c",
         ),
         row=1,
         col=2,
     )
+    fig.add_trace(
+        go.Bar(
+            x=ordered,
+            y=skipped,
+            name="skipped",
+            marker_color="#FFA15A",
+            offsetgroup=2,
+            legendgroup="c",
+        ),
+        row=1,
+        col=2,
+    )
     fig.update_layout(
-        title="Simplifier passes: time distribution vs timeout/skip counts",
+        title="Simplifier passes: time distribution vs timeout/memout/skip counts",
         barmode="group",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
