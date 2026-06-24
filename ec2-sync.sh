@@ -21,6 +21,18 @@ else
 fi
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+benchmarks_dir="$(cd -- "$script_dir/../powdr-verifier-benchmarks" && pwd)"
+
+archive_report() {
+    local src="$1"
+    local stem name
+    stem="$(basename "${src%.html}")"
+    name="${stem}-${report_ts}"
+    mkdir -p "$benchmarks_dir"
+    cp -- "$src" "$benchmarks_dir/${name}.html"
+    cp -- "${src%.html}.db" "$benchmarks_dir/${name}.db"
+    echo "archived ${name}.html and ${name}.db -> powdr-verifier-benchmarks/"
+}
 
 download() {
     local remote_powdr_dumps="$1"
@@ -70,14 +82,19 @@ case "$scenario" in
         if [ -n "$drsuf" ]; then
             main_run=(--run-id "$run_id")
         fi
+        report_ts="$(date +%Y%m%d-%H%M%S)"
         echo "report guest-keccak"
         python3 "$script_dir/main.py" "${main_run[@]}" report "$script_dir/reports/guest-keccak${drsuf}" "$script_dir/report-keccak${drsuf}.html"
+        archive_report "$script_dir/report-keccak${drsuf}.html"
         echo "report guest-keccak-selection"
         python3 "$script_dir/main.py" "${main_run[@]}" report "$script_dir/reports/guest-keccak-selection${drsuf}" "$script_dir/report-keccak-selection${drsuf}.html"
+        archive_report "$script_dir/report-keccak-selection${drsuf}.html"
         echo "report guest-pairing-selection"
         python3 "$script_dir/main.py" "${main_run[@]}" report "$script_dir/reports/guest-pairing-selection${drsuf}" "$script_dir/report-pairing${drsuf}.html"
+        archive_report "$script_dir/report-pairing${drsuf}.html"
         echo "report reth-selection"
         python3 "$script_dir/main.py" "${main_run[@]}" report "$script_dir/reports/reth-selection${drsuf}" "$script_dir/report-reth${drsuf}.html"
+        archive_report "$script_dir/report-reth${drsuf}.html"
         ;;
     *)
         echo "unknown scenario: $scenario" >&2
