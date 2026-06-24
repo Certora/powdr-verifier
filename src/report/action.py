@@ -34,6 +34,8 @@ def classify_expected_vs_result(*, name: str, expected: str | None, result: str 
         return result if result is not None else "error"
     if result == "timeout":
         return "timeout"
+    if result == "memout":
+        return "memout"
     if result in ("invalid-json",) or (isinstance(result, str) and result.startswith("error")):
         return "error"
     if result in ("sat", "unsat"):
@@ -103,6 +105,8 @@ class Action:
                 return "error"
             if "wrong" in sub:
                 return "wrong"
+            if "memout" in sub:
+                return "memout"
             if "timeout" in sub:
                 return "timeout"
             if "unknown" in sub:
@@ -120,6 +124,8 @@ class Action:
             )
         if r == "timeout":
             return "timeout"
+        if r == "memout":
+            return "memout"
         if r in ("invalid-json",) or (isinstance(r, str) and r.startswith("error")):
             return "error"
         return r
