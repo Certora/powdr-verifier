@@ -219,11 +219,16 @@ def __run_main(
             logging.error(f"timed out running {cmdstr}")
             return Action(command, result="timeout")
         if proc.returncode != 0:
-            result = "memout" if is_subprocess_memout(proc.returncode, stderr) else "error"
+            if is_subprocess_memout(proc.returncode, stderr):
+                return Action(
+                    command,
+                    result="memout",
+                    error_message=stderr or str(proc.returncode),
+                )
             logging.error("command failed (exit %s): %s", proc.returncode, cmdstr)
             return Action(
                 command,
-                result=result,
+                result="error",
                 error_message=stderr or str(proc.returncode),
             )
         try:

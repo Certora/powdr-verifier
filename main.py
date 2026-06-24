@@ -6,8 +6,6 @@ import errno
 import logging
 import signal
 import sys
-import traceback
-
 from src.checker import check
 from src.evaluator import evaluate
 from src.smt_backends.pysmt import disable_typecheck
@@ -31,8 +29,12 @@ def _is_memout(exc: BaseException) -> bool:
 
 
 def _report_memout(exc: BaseException) -> None:
-    for line in traceback.format_exception(type(exc), exc, exc.__traceback__, limit=-1):
-        sys.stderr.write(line)
+    logging.error("out of memory running %s", " ".join(sys.argv))
+    tb = exc.__traceback__
+    if tb is not None:
+        while tb.tb_next is not None:
+            tb = tb.tb_next
+        logging.error("%s:%d", tb.tb_frame.f_code.co_filename, tb.tb_lineno)
 
 
 if __name__ == '__main__':
