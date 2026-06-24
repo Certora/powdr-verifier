@@ -498,6 +498,25 @@ def pretty_print_formula(f: FNode) -> str:
         printer.printer(f)
         return s.getvalue()
 
+_GENERATED_SOURCE_PREFIX = "generated "
+
+def _generated_source_value() -> str:
+    return f"{_GENERATED_SOURCE_PREFIX}{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
+def _touch_generated_source(smtlib: script.SmtLibScript) -> None:
+    for cmd in smtlib.commands:
+        if (
+            cmd.name == "set-info"
+            and cmd.args[0] == ":source"
+            and str(cmd.args[1]).startswith(_GENERATED_SOURCE_PREFIX)
+        ):
+            cmd.args[1] = _generated_source_value()
+            return
+    smtlib.commands.insert(
+        0,
+        script.SmtLibCommand(name="set-info", args=[":source", _generated_source_value()]),
+    )
+
 def script_with_sorted_declarefuns(smtlib: script.SmtLibScript) -> script.SmtLibScript:
     cmds = smtlib.commands
     newcmds = []
@@ -545,7 +564,6 @@ def convert_to_smt_script(f: FNode, status=None, pin_info=None) -> script.SmtLib
 
     smtlib.commands[0].args[0] = "ALL"
 
-    smtlib.commands.insert(0, script.SmtLibCommand(name='set-info', args=[':source', f'generated {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}']))
     # add model production and model retrieval
     #smtlib.commands.insert(2, script.SmtLibCommand(name='set-option', args=[':produce-models', 'true']))
     #smtlib.commands.insert(3, script.SmtLibCommand(name='set-option', args=[':produce-unsat-cores', 'true']))
@@ -573,6 +591,7 @@ def convert_to_smt_script(f: FNode, status=None, pin_info=None) -> script.SmtLib
 
 
 def write_smtlib_script(smtlib: script.SmtLibScript, file: TextIO) -> None:
+    _touch_generated_source(smtlib)
     if ARGS().pretty:
         pretty_print_smtlib(smtlib, file)
     else:
