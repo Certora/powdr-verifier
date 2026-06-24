@@ -607,14 +607,23 @@ class PermutationCheckMixin:
     
     def plain_permutation_check(
         self,
-        interactions: list,
-        is_memory: bool = True
+        interactions: list
     ) -> tuple[list[FNode], list[FNode], list[FNode]]:
         """Encodes a permutation check in the spirit of busat."""
+
         conjuncts = []
         n = len(interactions)
         if n == 0:
             return [], [], []
+        alignment = self._cur_state.verify_preanalysis.memory_bus_alignment
+        skip_matches = (
+            ARGS().optimization_step != "memory"
+            and alignment is not None
+            and alignment.n_before == alignment.n_after == n
+            and all(alignment.before_to_after.get(i) == i for i in range(n))
+        )
+        if skip_matches:
+            logging.info("skipping matches for %s", self.NAME)
         # provide match variables for all pairs i <= j
         is_inputs: dict[int, Any] = {
             i: self._symbol(f"{self.NAME}_isinput_{i}", BOOL)
@@ -769,13 +778,14 @@ class PermutationCheckMixin:
                 )
 
         # every interaction has exactly one match
-        for i in range(n):
-            conjuncts.append(
-                with_comment(
-                    ExactlyOne(*[m(i, j) for j in range(n)]),
-                    f"interaction {i} has exactly one match"
+        if not skip_matches:
+            for i in range(n):
+                conjuncts.append(
+                    with_comment(
+                        ExactlyOne(*[m(i, j) for j in range(n)]),
+                        f"interaction {i} has exactly one match"
+                    )
                 )
-            )
 
         # no two inputs or two outputs have the same address space and pointer
         for i in range(n):
