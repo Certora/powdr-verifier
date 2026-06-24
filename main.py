@@ -2,9 +2,11 @@
 
 from io import StringIO
 import cProfile
+import errno
 import logging
 import signal
 import sys
+import traceback
 
 from src.checker import check
 from src.evaluator import evaluate
@@ -20,6 +22,17 @@ from src.converter import convert_and_print
 from src.encoding_analysis import analyze_aliases
 from src.visualizer import visualize
 from src.powdr_opt import run_powdr_opt
+
+
+def _is_memout(exc: BaseException) -> bool:
+    if isinstance(exc, MemoryError):
+        return True
+    return isinstance(exc, OSError) and exc.errno == errno.ENOMEM
+
+
+def _report_memout(exc: BaseException) -> None:
+    for line in traceback.format_exception(type(exc), exc, exc.__traceback__, limit=-1):
+        sys.stderr.write(line)
 
 
 if __name__ == '__main__':
@@ -83,6 +96,11 @@ if __name__ == '__main__':
 
     try:
         res = run()
+    except BaseException as exc:
+        if _is_memout(exc):
+            _report_memout(exc)
+            sys.exit(1)
+        raise
     finally:
         if profiler is not None:
             dump_cprofile(profiler)
