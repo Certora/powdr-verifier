@@ -23,11 +23,14 @@ from src.utils.utils import s2range
 from src.report.action import Action
 from src.report.dumpers import ActionDumper, set_report_dir
 from src.paths import (
+    ORCHESTRATE_SCRIPT,
     POWDR_DIR,
     POWDR_DUMPS_DIR,
     REPORTS_DIR,
     VERIFIER_DIR,
+    arg_for_dump,
     data_path_for_dump,
+    dump_cmd_parts,
     ensure_layout,
 )
 from src.utils.args import ARGS, parse_args as verifier_parse_args
@@ -149,18 +152,17 @@ def parse_args():
 def __orchestrate_cmd(*k_frag: str) -> str:
     rid = (_ARGS.run_id or "").strip()
     run_id_frag = [] if (not rid or rid == "-") else ["--run-id", rid]
-    cmd: list = [
-        PYTHON,
-        VERIFIER_DIR / "orchestrate.py",
-        *_ARGS._main_args,
+    parts: list = [
+        ORCHESTRATE_SCRIPT,
+        *map(arg_for_dump, _ARGS._main_args),
         *run_id_frag,
     ]
     if _ARGS.jobs != 1:
-        cmd += ["-j", str(_ARGS.jobs)]
+        parts += ["-j", str(_ARGS.jobs)]
     if _ARGS.with_patch is not None:
-        cmd += ["--with-patch", _ARGS.with_patch]
-    cmd += [_ARGS.command, _ARGS.test, *k_frag, *_ARGS._sub_args]
-    return " ".join(map(str, cmd))
+        parts += ["--with-patch", arg_for_dump(_ARGS.with_patch)]
+    parts += [_ARGS.command, _ARGS.test, *k_frag, *map(arg_for_dump, _ARGS._sub_args)]
+    return shlex.join(parts)
 
 
 def __orchestrate_verify_cmd(a: Path, b: Path) -> str:
@@ -182,7 +184,7 @@ def __dump_job_report(test: str, command: str, *, started_at: str, started: floa
     payload = {
         "command": command,
         "test": test,
-        "command_line": shlex.join(sys.argv),
+        "command_line": dump_cmd_parts(sys.argv),
         "started_at": started_at,
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "running_time": time.perf_counter() - started,
@@ -225,7 +227,7 @@ def __run_main(
         stdout, stderr, timed_out = communicate_with_timeout(proc, timeout)
         if timed_out:
             logging.error(f"timed out running {cmdstr}")
-            return Action(command, result="timeout", command_line=cmdstr)
+            return Action(command, result="timeout")
         if proc.returncode != 0:
             result = "memout" if is_subprocess_memout(proc.returncode, stderr) else "error"
             logging.error("command failed (exit %s): %s", proc.returncode, cmdstr)
@@ -233,20 +235,15 @@ def __run_main(
                 command,
                 result=result,
                 error_message=stderr or str(proc.returncode),
-                command_line=cmdstr,
             )
         try:
-            res = load_json(StringIO(stdout or ""))
-            if isinstance(res, Action):
-                res += {"command_line": cmdstr}
-            return res
+            return load_json(StringIO(stdout or ""))
         except json.JSONDecodeError:
             logging.error(f"failed to parse output of {cmdstr}:\n{stdout}")
             return Action(
                 command,
                 result="invalid-json",
                 error_message=(stdout[:400] if stdout else ""),
-                command_line=cmdstr,
             )
     proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)
     _, _, timed_out = communicate_with_timeout(proc, timeout)
