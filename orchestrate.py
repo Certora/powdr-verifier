@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 from src.utils.io import load_json
 from src.utils.enums import XOrEncoding
-from src.utils.process import communicate_with_timeout
+from src.utils.process import communicate_with_timeout, memory_limit_cmd_prefix
 from src.utils.utils import s2range
 from src.report.action import Action
 from src.report.dumpers import ActionDumper, set_report_dir
@@ -155,6 +155,7 @@ def __run_main(
     rid = (_ARGS.run_id or "").strip()
     run_id_frag = [] if (not rid or rid == "-") else ["--run-id", rid]
     cmd = [
+        *memory_limit_cmd_prefix(_ARGS.jobs),
         PYTHON,
         VERIFIER_DIR / "main.py",
         *_ARGS._additional_args,
