@@ -42,7 +42,7 @@ def __build_parser(skip_subparsers=False):
         "--memory-encoding",
         type=str,
         choices=["array", "busat", "plain", "none"],
-        default="array",
+        default="plain",
     )
     parser.add_argument(
         "--memory-presolve",
