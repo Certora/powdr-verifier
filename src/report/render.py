@@ -321,8 +321,12 @@ def collect(basedir: Path):
     inputdir = (POWDR_DUMPS_DIR / name).resolve()
     data = []
     for file in sorted(basedir.glob("**/*.json")):
+        if file.name == "job.json":
+            continue
         try:
             res = load_json(file)
+            if not isinstance(res, Action):
+                continue
             data.append(res)
         except Exception as e:
             continue
