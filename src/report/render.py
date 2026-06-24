@@ -3,6 +3,7 @@ import dataclasses
 import html
 import tempfile
 import webbrowser
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +28,7 @@ from .plots import (
     verified_over_time,
 )
 from .action import Action
+from .html_utils import copy_command_badge
 from ..paths import DATA_DIR, POWDR_DUMPS_DIR
 from ..utils.args import ARGS
 from ..utils.io import load_json
@@ -41,6 +43,82 @@ def report_data_dir(report_dir: Path) -> Path:
     return (DATA_DIR / report_dir.name).resolve()
 
 
+def _format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    if seconds < 3600:
+        m, s = divmod(seconds, 60)
+        return f"{int(m)}m {s:.0f}s"
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{int(h)}h {int(m)}m {s:.0f}s"
+
+
+def _format_job_timestamp(iso: str) -> str:
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return iso
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def job_banner(report_dir: Path) -> str:
+    job_file = report_dir / "job.json"
+    if not job_file.is_file():
+        return ""
+    job = load_json(job_file)
+    command = html.escape(str(job.get("command", "")))
+    test = html.escape(str(job.get("test", "")))
+    started = _format_job_timestamp(str(job.get("started_at", "")))
+    finished = _format_job_timestamp(str(job.get("finished_at", "")))
+    running_time = job.get("running_time")
+    duration = _format_duration(float(running_time)) if running_time is not None else "—"
+    command_line = job.get("command_line")
+    cmd_html = (
+        f'<code class="d-block text-break user-select-all" style="font-size:0.85em">'
+        f"{html.escape(command_line)}</code>"
+        if command_line
+        else '<span class="text-body-secondary">—</span>'
+    )
+    copy_badge = copy_command_badge(command_line)
+    return f"""
+<section class="container-fluid py-3 pb-0">
+  <div class="card shadow-sm">
+    <div class="card-body py-3">
+      <div class="row g-3 mb-3">
+        <div class="col-6 col-md-3">
+          <div class="small text-body-secondary">Job</div>
+          <div class="fw-semibold"><code>{command}</code> <code>{test}</code></div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="small text-body-secondary">Started</div>
+          <div>{html.escape(started)}</div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="small text-body-secondary">Finished</div>
+          <div>{html.escape(finished)}</div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="small text-body-secondary">Duration</div>
+          <div class="fw-semibold">{html.escape(duration)}</div>
+        </div>
+      </div>
+      <div class="d-flex align-items-start gap-2">
+        <div class="flex-grow-1 min-width-0">
+          <div class="small text-body-secondary mb-1">Command</div>
+          {cmd_html}
+        </div>
+        <div class="pt-4">{copy_badge}</div>
+      </div>
+    </div>
+  </div>
+</section>
+"""
+
+
 @dataclasses.dataclass
 class TreeNode:
     name: str
@@ -53,6 +131,7 @@ class TreeNode:
     children: list = dataclasses.field(default_factory=list)
     block: Optional[int] = None
     passname: Optional[str] = None
+    command_line: Optional[str] = None
 
 class TreeTableWidget:
     _STATUS = {
@@ -86,11 +165,12 @@ class TreeTableWidget:
   .ttt-cell  {{ overflow: hidden; text-overflow: ellipsis;
                white-space: nowrap; vertical-align: middle;
                text-align: left; }}
-  .ttt-n     {{ width: 25%; }}
-  .ttt-i     {{ width: 50%; }}
-  .ttt-t     {{ width: 10%; text-align: right;
+  .ttt-n     {{ width: 18%; }}
+  .ttt-i     {{ width: 28%; }}
+  .ttt-t     {{ width: 8%; text-align: right;
                font-variant-numeric: tabular-nums; }}
-  .ttt-s     {{ width: 15%; }}
+  .ttt-s     {{ width: 12%; }}
+  .ttt-c     {{ width: 34%; font-family: monospace; font-size: 0.78em; }}
   .ttt-badge {{ border-radius: 10px; padding: 1px 8px; font-size: 0.82em;
                border: 1px solid; white-space: nowrap; }}
   .ttt-btn   {{ background: none; border: none; font-size: 10px;
@@ -101,7 +181,7 @@ class TreeTableWidget:
 </style>
 <table class="ttt-wrap">
   <colgroup>
-    <col class="ttt-n"><col class="ttt-i"><col class="ttt-t"><col class="ttt-s">
+    <col class="ttt-n"><col class="ttt-i"><col class="ttt-t"><col class="ttt-s"><col class="ttt-c">
   </colgroup>
   <thead>
     <tr>
@@ -109,6 +189,7 @@ class TreeTableWidget:
       <th class="ttt-hcell ttt-i">Inputs</th>
       <th class="ttt-hcell ttt-t">Time</th>
       <th class="ttt-hcell ttt-s">Status</th>
+      <th class="ttt-hcell ttt-c">Command</th>
     </tr>
   </thead>
   <tbody>
@@ -149,6 +230,15 @@ class TreeTableWidget:
         if node.error_message:
             status_str = f"{status_str} — {node.error_message}"
 
+        if node.command_line:
+            cmd_esc = html.escape(node.command_line)
+            cmd_cell = (
+                f'<span{_title_attr(node.command_line)}>{cmd_esc}</span>'
+                f' {copy_command_badge(node.command_line)}'
+            )
+        else:
+            cmd_cell = "—"
+
         row = (
             f'<tr class="ttt-row" style="background:{row_bg}">'
             f'  <td class="ttt-cell ttt-n" style="background:{row_bg}"{_title_attr(node.name)}>'
@@ -162,6 +252,7 @@ class TreeTableWidget:
             f'      {icon} {shown_result}'
             f'    </span>'
             f'  </td>'
+            f'  <td class="ttt-cell ttt-c" style="background:{row_bg}">{cmd_cell}</td>'
             f'</tr>'
         )
 
@@ -172,9 +263,9 @@ class TreeTableWidget:
                 for c in node.children
             )
             row += (
-                f'<tr id="{node_id}" {hidden}><td colspan="4" class="ttt-nesttd">'
+                f'<tr id="{node_id}" {hidden}><td colspan="5" class="ttt-nesttd">'
                 f'<table class="ttt-nested"><colgroup>'
-                f'<col class="ttt-n"><col class="ttt-i"><col class="ttt-t"><col class="ttt-s">'
+                f'<col class="ttt-n"><col class="ttt-i"><col class="ttt-t"><col class="ttt-s"><col class="ttt-c">'
                 f'</colgroup><tbody>{children}</tbody></table>'
                 f'</td></tr>'
             )
@@ -205,6 +296,7 @@ def normalize_substep_tree(node: TreeNode) -> TreeNode:
         children=[normalize_substep_tree(child) for child in node.children],
         block=node.block,
         passname=node.passname,
+        command_line=node.command_line,
     )
 
 
@@ -217,7 +309,8 @@ def to_tree_node(data: Action) -> TreeNode:
         expected=data.properties.get("expected"),
         error_message=data.properties.get("error_message"),
         status=data.status(),
-        children=[to_tree_node(c) for c in data.actions]
+        children=[to_tree_node(c) for c in data.actions],
+        command_line=data.properties.get("command_line"),
     )
 
 def collect(basedir: Path):
@@ -273,6 +366,8 @@ def report():
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@latest/plotly.min.js"></script>
 </head>
 <body>
+{job_banner(report_dir)}
+
 {basic_stats()}
 
 {verified_over_time()}

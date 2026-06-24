@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from .database import query, query_single_value
+from .html_utils import copy_command_badge
 
 
 def _fig_html(fig) -> str:
@@ -111,6 +112,7 @@ def _jobs_of_interest() -> list[tuple]:
                 v.input2,
                 v.running_time,
                 v.size_bytes,
+                v.command_line,
                 CASE
                     WHEN EXISTS (
                         SELECT 1 FROM substeps s
@@ -193,7 +195,23 @@ def _jobs_of_interest() -> list[tuple]:
             FROM picked
             WHERE rn = 1
         )
-        SELECT i.kind, i.input1, i.input2, i.running_time, i.size_bytes, o.outcome_step
+        SELECT
+            i.kind,
+            i.input1,
+            i.input2,
+            i.running_time,
+            i.size_bytes,
+            o.outcome_step,
+            COALESCE(
+                (
+                    SELECT s.command_line FROM substeps s
+                    WHERE s.verification_step_id = i.id
+                      AND o.outcome_step IS NOT NULL
+                      AND s.name = o.outcome_step
+                    LIMIT 1
+                ),
+                i.command_line
+            ) AS command_line
         FROM interested i
         LEFT JOIN outcome_at o
             ON o.verification_step_id = i.id AND o.outcome = i.kind
@@ -247,14 +265,17 @@ _JOBS_LIST_PREVIEW = 10
 def _render_job_list_item(idx: int, row: tuple) -> str:
     kind, input1, input2, running_time, size_bytes = row[:5]
     at_step = row[5] if len(row) > 5 else None
+    command_line = row[6] if len(row) > 6 else None
     job = html.escape(_job_name(str(input1), str(input2)))
     kind_badge = _badge_kind(str(kind), at_step)
     time_badge = _badge_time(running_time)
     size_badge = _badge_bytes(size_bytes)
+    copy_badge = copy_command_badge(command_line)
     return (
         '<li class="list-group-item px-0 d-flex align-items-center">'
         f"<span><span class='text-body-secondary me-2'>{idx}.</span><code>{job}</code></span>"
-        f"<span class='ms-auto'>{kind_badge} {time_badge} {size_badge}</span>"
+        f"<span class='ms-auto d-flex align-items-center gap-1'>"
+        f"{kind_badge} {time_badge} {size_badge}{copy_badge}</span>"
         "</li>"
     )
 

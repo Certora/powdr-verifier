@@ -6,14 +6,17 @@ import functools
 import json
 import logging
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 from typing import Any, Optional
 
-from src.utils.io import load_json
+from src.utils.io import dump_json, load_json
 from src.utils.enums import XOrEncoding
 from src.utils.process import communicate_with_timeout, is_subprocess_memout, memory_limit_cmd_prefix
 from src.utils.utils import s2range
@@ -143,6 +146,51 @@ def parse_args():
     return _ARGS
 
 
+def __orchestrate_cmd(*k_frag: str) -> str:
+    rid = (_ARGS.run_id or "").strip()
+    run_id_frag = [] if (not rid or rid == "-") else ["--run-id", rid]
+    cmd: list = [
+        PYTHON,
+        VERIFIER_DIR / "orchestrate.py",
+        *_ARGS._main_args,
+        *run_id_frag,
+    ]
+    if _ARGS.jobs != 1:
+        cmd += ["-j", str(_ARGS.jobs)]
+    if _ARGS.with_patch is not None:
+        cmd += ["--with-patch", _ARGS.with_patch]
+    cmd += [_ARGS.command, _ARGS.test, *k_frag, *_ARGS._sub_args]
+    return " ".join(map(str, cmd))
+
+
+def __orchestrate_verify_cmd(a: Path, b: Path) -> str:
+    k_frag: list[str] = []
+    m_a = __FILENAMERE.match(a.name)
+    m_b = __FILENAMERE.match(b.name)
+    if m_a and m_b and m_a.group(1) == m_b.group(1):
+        k_frag = [m_a.group(1), f"{int(m_a.group(2))}-{int(m_b.group(2))}"]
+    return __orchestrate_cmd(*k_frag)
+
+
+def __job_report_path(test: str) -> Path:
+    return REPORTS_DIR / f"{test}{ARGS().run_id}" / "job.json"
+
+
+def __dump_job_report(test: str, command: str, *, started_at: str, started: float) -> None:
+    path = __job_report_path(test)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "command": command,
+        "test": test,
+        "command_line": shlex.join(sys.argv),
+        "started_at": started_at,
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "running_time": time.perf_counter() - started,
+    }
+    with open(path, "w") as f:
+        dump_json(payload, f, indent=4)
+
+
 def __run_main(
     command,
     *args,
@@ -177,19 +225,28 @@ def __run_main(
         stdout, stderr, timed_out = communicate_with_timeout(proc, timeout)
         if timed_out:
             logging.error(f"timed out running {cmdstr}")
-            return Action(command, result="timeout")
+            return Action(command, result="timeout", command_line=cmdstr)
         if proc.returncode != 0:
             result = "memout" if is_subprocess_memout(proc.returncode, stderr) else "error"
             logging.error("command failed (exit %s): %s", proc.returncode, cmdstr)
-            return Action(command, result=result, error_message=stderr or str(proc.returncode))
+            return Action(
+                command,
+                result=result,
+                error_message=stderr or str(proc.returncode),
+                command_line=cmdstr,
+            )
         try:
-            return load_json(StringIO(stdout or ""))
+            res = load_json(StringIO(stdout or ""))
+            if isinstance(res, Action):
+                res += {"command_line": cmdstr}
+            return res
         except json.JSONDecodeError:
             logging.error(f"failed to parse output of {cmdstr}:\n{stdout}")
             return Action(
                 command,
                 result="invalid-json",
                 error_message=(stdout[:400] if stdout else ""),
+                command_line=cmdstr,
             )
     proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)
     _, _, timed_out = communicate_with_timeout(proc, timeout)
@@ -338,6 +395,7 @@ def run_verify_opt(files: dict, pairs):
 def run_verify(a, b):
     _, optimization_step = _parse_step_and_pass(b)
     with ActionDumper("verify", _ARGS.test, a, b) as a_verify:
+        a_verify += {"command_line": __orchestrate_verify_cmd(a, b)}
         logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
         first = data_path_for_dump(a, f"verify-{a.stem}-{b.stem}.smt2")
         res_verify = __run_main(
@@ -372,52 +430,54 @@ def run_verify(a, b):
 
 if __name__ == '__main__':
     args = parse_args()
-
-    match args.command:
-        case 'powdr':
-            if args.clean:
-                shutil.rmtree(POWDR_DUMPS_DIR / args.test, ignore_errors=True)
-            run_powdr(args.test)
-            exit(0)
-        case 'powdr-guest':
-            if args.clean:
-                shutil.rmtree(POWDR_DUMPS_DIR / args.test, ignore_errors=True)
-            run_powdr_guest(args.test)
-            exit(0)
-    
-    all_files = load_files_by_block(args)
-
-    if not all_files:
-        logging.warning(f"no files found for {args.test}, did you run powdr?")
+    job_started = time.perf_counter()
+    job_started_at = datetime.now(timezone.utc).isoformat()
 
     try:
-        for i,(block,files) in enumerate(sorted(all_files.items())):
-            logging.warning(f"processing block {i+1} of {len(all_files)}")
-            args._additional_args = []
-            if 0 in files:
-                args._additional_args += ["--base-dump", files[0]]
-            if "substitutions" in files:
-                args._additional_args += ["--substitutions", files["substitutions"]]
+        match args.command:
+            case 'powdr':
+                if args.clean:
+                    shutil.rmtree(POWDR_DUMPS_DIR / args.test, ignore_errors=True)
+                run_powdr(args.test)
+            case 'powdr-guest':
+                if args.clean:
+                    shutil.rmtree(POWDR_DUMPS_DIR / args.test, ignore_errors=True)
+                run_powdr_guest(args.test)
+            case _:
+                all_files = load_files_by_block(args)
 
-            match args.command:
-                case 'trace':
-                    run_trace(*parse_range(files, args.steps))
-                case 'diff':
-                    run_diff(*parse_paired_range(files, args.steps))
-                case 'evaluate':
-                    run_evaluate(files[0], *parse_range(files, args.steps))
-                case 'eval':
-                    run_eval(*parse_range(files, args.steps))
-                case 'verify':
-                    run_verify(*parse_paired_range(files, args.steps))
-                case 'verify-opt':
-                    run_verify_opt(files, parse_paired_range(files, args.steps))
+                if not all_files:
+                    logging.warning(f"no files found for {args.test}, did you run powdr?")
 
-                case _:
-                    logging.error(f"unknown command: {args.command}")
-                    exit(1)
+                for i,(block,files) in enumerate(sorted(all_files.items())):
+                    logging.warning(f"processing block {i+1} of {len(all_files)}")
+                    args._additional_args = []
+                    if 0 in files:
+                        args._additional_args += ["--base-dump", files[0]]
+                    if "substitutions" in files:
+                        args._additional_args += ["--substitutions", files["substitutions"]]
+
+                    match args.command:
+                        case 'trace':
+                            run_trace(*parse_range(files, args.steps))
+                        case 'diff':
+                            run_diff(*parse_paired_range(files, args.steps))
+                        case 'evaluate':
+                            run_evaluate(files[0], *parse_range(files, args.steps))
+                        case 'eval':
+                            run_eval(*parse_range(files, args.steps))
+                        case 'verify':
+                            run_verify(*parse_paired_range(files, args.steps))
+                        case 'verify-opt':
+                            run_verify_opt(files, parse_paired_range(files, args.steps))
+
+                        case _:
+                            logging.error(f"unknown command: {args.command}")
+                            exit(1)
 
     except subprocess.CalledProcessError as e:
         logging.error("%s", e)
     except KeyboardInterrupt:
         pass
+    finally:
+        __dump_job_report(args.test, args.command, started_at=job_started_at, started=job_started)

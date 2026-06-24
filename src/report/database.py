@@ -42,6 +42,7 @@ def create_db() -> None:
             running_time REAL,
             result TEXT,
             status TEXT,
+            command_line TEXT,
             UNIQUE(input1, input2)
         )
         """
@@ -57,6 +58,7 @@ def create_db() -> None:
             result TEXT,
             expected TEXT,
             status TEXT,
+            command_line TEXT,
             FOREIGN KEY (verification_step_id) REFERENCES verification_steps(id) ON DELETE CASCADE,
             FOREIGN KEY (parent) REFERENCES substeps(id) ON DELETE CASCADE
         )
@@ -87,8 +89,9 @@ def insert_verification_row(i1, i2, val) -> int:
         cur = __DB.execute(
             """
             INSERT INTO verification_steps (
-                input1, input2, size_bytes, block, passname, running_time, result, status
-            ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL)
+                input1, input2, size_bytes, block, passname, running_time, result, status,
+                command_line
+            ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)
             """,
             (p1, p2, size_bytes, block, passname),
         )
@@ -102,8 +105,9 @@ def insert_verification_row(i1, i2, val) -> int:
         cur = __DB.execute(
             """
             INSERT INTO verification_steps (
-                input1, input2, size_bytes, block, passname, running_time, result, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                input1, input2, size_bytes, block, passname, running_time, result, status,
+                command_line
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 p1,
@@ -114,6 +118,7 @@ def insert_verification_row(i1, i2, val) -> int:
                 val.running_time,
                 combined_result,
                 val.status,
+                getattr(val, "command_line", None),
             ),
         )
     return int(cur.lastrowid)
@@ -140,9 +145,10 @@ def _insert_substep(
     cur = __DB.execute(
         """
         INSERT INTO substeps (
-            verification_step_id, parent, name, running_time, result, expected, status
+            verification_step_id, parent, name, running_time, result, expected, status,
+            command_line
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             verification_step_id,
@@ -152,6 +158,7 @@ def _insert_substep(
             combined_result,
             step.expected,
             step.status,
+            step.command_line,
         ),
     )
     substep_id = int(cur.lastrowid)
