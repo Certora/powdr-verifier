@@ -300,11 +300,7 @@ def to_tree_node(data: Action) -> TreeNode:
     )
 
 def collect(basedir: Path):
-    name = basedir.name
-    rid = ARGS().run_id or ""
-    if rid and name.endswith(rid):
-        name = name[: -len(rid)]
-    inputdir = (POWDR_DUMPS_DIR / name).resolve()
+    inputdir = (POWDR_DUMPS_DIR / basedir.name).resolve()
     data = []
     for file in sorted(basedir.glob("**/*.json")):
         if file.name == "job.json":

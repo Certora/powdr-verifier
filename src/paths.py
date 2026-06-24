@@ -7,8 +7,6 @@ import shutil
 import sys
 from pathlib import Path
 
-from src.utils.args import ARGS
-
 VERIFIER_DIR = Path(__file__).resolve().parent.parent
 WORKSPACE_DIR = VERIFIER_DIR.parent
 POWDR_DIR = WORKSPACE_DIR / "powdr"
@@ -75,14 +73,13 @@ def dump_dir(test: str) -> Path:
 
 
 def data_dir(test: str) -> Path:
-    path = DATA_DIR / f"{test}{ARGS().run_id}"
+    path = DATA_DIR / test
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def data_path_for_dump(dump: Path, name: str) -> Path:
     rel = dump.relative_to(POWDR_DUMPS_DIR)
-    key = f"{rel.parent.as_posix()}{ARGS().run_id}"
-    out = DATA_DIR / key / name
+    out = DATA_DIR / rel.parent.as_posix() / name
     out.parent.mkdir(parents=True, exist_ok=True)
     return out

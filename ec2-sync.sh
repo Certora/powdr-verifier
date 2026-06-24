@@ -3,22 +3,11 @@
 set -euo pipefail
 
 if [ "$#" -lt 1 ]; then
-    echo "usage: $0 <upload-reth|keccak|keccak-selection|pairing|reth|reports> [<run_id|->]" >&2
-    echo "  optional run_id; '-' unsuffixed. A second word starting with '-' (except '-') is ignored as run_id." >&2
+    echo "usage: $0 <upload-reth|keccak|keccak-selection|pairing|reth|reports>" >&2
     exit 1
 fi
 
 scenario="$1"
-if [ "$#" -ge 2 ] && { [ "$2" = "-" ] || [[ "$2" != -* ]]; }; then
-    run_id="$2"
-    if [ "$run_id" = "-" ]; then
-        drsuf=""
-    else
-        drsuf="-${run_id}"
-    fi
-else
-    drsuf=""
-fi
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 benchmarks_dir="$(cd -- "$script_dir/../powdr-verifier-benchmarks" && pwd)"
@@ -62,53 +51,49 @@ download() {
 
 case "$scenario" in
     upload-reth)
-        rsync -avP --delete "$script_dir/data/reth-selection${drsuf}/" "ec2-powdr-rsync:verifier/data/reth-selection${drsuf}/"
+        rsync -avP --delete "$script_dir/data/reth-selection/" "ec2-powdr-rsync:verifier/data/reth-selection/"
         ;;
     keccak)
         download \
             "verifier/powdr-dumps/guest-keccak/" \
-            "verifier/reports/guest-keccak${drsuf}/" \
+            "verifier/reports/guest-keccak/" \
             "$script_dir/powdr-dumps/guest-keccak" \
-            "$script_dir/reports/guest-keccak${drsuf}"
+            "$script_dir/reports/guest-keccak"
         ;;
     keccak-selection)
         download \
             "verifier/powdr-dumps/guest-keccak-selection/" \
-            "verifier/reports/guest-keccak-selection${drsuf}/" \
+            "verifier/reports/guest-keccak-selection/" \
             "$script_dir/powdr-dumps/guest-keccak-selection" \
-            "$script_dir/reports/guest-keccak-selection${drsuf}"
+            "$script_dir/reports/guest-keccak-selection"
         ;;
     pairing)
         download \
             "verifier/powdr-dumps/guest-pairing-selection/" \
-            "verifier/reports/guest-pairing-selection${drsuf}/" \
+            "verifier/reports/guest-pairing-selection/" \
             "$script_dir/powdr-dumps/guest-pairing-selection" \
-            "$script_dir/reports/guest-pairing-selection${drsuf}"
+            "$script_dir/reports/guest-pairing-selection"
         ;;
     reth)
         download \
             "verifier/powdr-dumps/reth-selection/" \
-            "verifier/reports/reth-selection${drsuf}/" \
+            "verifier/reports/reth-selection/" \
             "$script_dir/powdr-dumps/reth-selection" \
-            "$script_dir/reports/reth-selection${drsuf}"
+            "$script_dir/reports/reth-selection"
         ;;
     reports)
-        main_run=()
-        if [ -n "$drsuf" ]; then
-            main_run=(--run-id "$run_id")
-        fi
         echo "report guest-keccak"
-        python3 "$script_dir/main.py" "${main_run[@]}" report "$script_dir/reports/guest-keccak${drsuf}" "$script_dir/report-keccak${drsuf}.html"
-        archive_report "$script_dir/report-keccak${drsuf}.html" "$script_dir/reports/guest-keccak${drsuf}"
+        #python3 "$script_dir/main.py" report "$script_dir/reports/guest-keccak" "$script_dir/report-keccak.html"
+        #archive_report "$script_dir/report-keccak.html" "$script_dir/reports/guest-keccak"
         echo "report guest-keccak-selection"
-        python3 "$script_dir/main.py" "${main_run[@]}" report "$script_dir/reports/guest-keccak-selection${drsuf}" "$script_dir/report-keccak-selection${drsuf}.html"
-        archive_report "$script_dir/report-keccak-selection${drsuf}.html" "$script_dir/reports/guest-keccak-selection${drsuf}"
+        python3 "$script_dir/main.py" report "$script_dir/reports/guest-keccak-selection" "$script_dir/report-keccak-selection.html"
+        archive_report "$script_dir/report-keccak-selection.html" "$script_dir/reports/guest-keccak-selection"
         echo "report guest-pairing-selection"
-        python3 "$script_dir/main.py" "${main_run[@]}" report "$script_dir/reports/guest-pairing-selection${drsuf}" "$script_dir/report-pairing${drsuf}.html"
-        archive_report "$script_dir/report-pairing${drsuf}.html" "$script_dir/reports/guest-pairing-selection${drsuf}"
+        #python3 "$script_dir/main.py" report "$script_dir/reports/guest-pairing-selection" "$script_dir/report-pairing.html"
+        #archive_report "$script_dir/report-pairing.html" "$script_dir/reports/guest-pairing-selection"
         echo "report reth-selection"
-        python3 "$script_dir/main.py" "${main_run[@]}" report "$script_dir/reports/reth-selection${drsuf}" "$script_dir/report-reth${drsuf}.html"
-        archive_report "$script_dir/report-reth${drsuf}.html" "$script_dir/reports/reth-selection${drsuf}"
+        #python3 "$script_dir/main.py" report "$script_dir/reports/reth-selection" "$script_dir/report-reth.html"
+        #archive_report "$script_dir/report-reth.html" "$script_dir/reports/reth-selection"
         ;;
     *)
         echo "unknown scenario: $scenario" >&2
