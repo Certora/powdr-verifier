@@ -623,7 +623,7 @@ class PermutationCheckMixin:
             and all(alignment.before_to_after.get(i) == i for i in range(n))
         )
         if skip_matches:
-            logging.warning("skipping matches for %s", self.NAME)
+            logging.info("skipping matches for %s", self.NAME)
         # provide match variables for all pairs i <= j
         is_inputs: dict[int, Any] = {
             i: self._symbol(f"{self.NAME}_isinput_{i}", BOOL)
