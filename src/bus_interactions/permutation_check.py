@@ -1,6 +1,7 @@
 """Mixins and formulas for multiset permutation invariants and timestamp monotonicity."""
 from itertools import batched, pairwise
 import itertools
+import logging
 from typing import Any, Callable
 
 from .memory_plain_utils import (
@@ -65,11 +66,15 @@ def _plain_build_match_vars(
     interactions: list,
     n: int,
     symbol: Callable[[int, int], FNode],
+    *,
+    log_prefix: str | None = None,
 ) -> dict[tuple[int, int], FNode]:
     """Build ``memory_match_i_j`` variables for all ``i <= j``, using ``FALSE`` when static."""
     p = ARGS().field_type.value
     mult_const, const_args = _plain_static_profile(interactions, p)
     match_vars: dict[tuple[int, int], FNode] = {}
+    static_false = 0
+    symbols = 0
 
     for i in range(n):
         for j in range(i, n):
@@ -77,8 +82,18 @@ def _plain_build_match_vars(
                 i, j, mult_const, const_args, p
             ):
                 match_vars[(i, j)] = FALSE()
+                static_false += 1
             else:
                 match_vars[(i, j)] = symbol(i, j)
+                symbols += 1
+
+    prefix = f"{log_prefix} " if log_prefix else ""
+    logging.info(
+        "%splain_build_match_vars: %d symbols / %d false",
+        prefix,
+        symbols,
+        static_false,
+    )
     return match_vars
 
 
@@ -619,6 +634,7 @@ class PermutationCheckMixin:
             interactions,
             n,
             lambda i, j: self._symbol(f"{self.NAME}_match_{i}_{j}", BOOL),
+            log_prefix=self.NAME,
         )
 
         def m(i: int, j: int) -> FNode:
