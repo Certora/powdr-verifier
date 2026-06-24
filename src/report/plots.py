@@ -63,12 +63,27 @@ def basic_stats() -> str:
         ORDER BY (COUNT(*) - SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END)) DESC,
                  COUNT(*) DESC,
                  block ASC
-        LIMIT 4
+        LIMIT 6
         """
     )
     n_passes = query_single_value(
         "SELECT COUNT(DISTINCT passname) FROM verification_steps "
         "WHERE passname IS NOT NULL AND passname != ''"
+    )
+    worst_passes = query(
+        """
+        SELECT passname,
+               COUNT(*) AS n_total,
+               SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS n_ok
+        FROM verification_steps
+        WHERE passname IS NOT NULL AND passname != ''
+        GROUP BY passname
+        HAVING COUNT(*) > 0
+        ORDER BY (COUNT(*) - SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END)) DESC,
+                 COUNT(*) DESC,
+                 passname ASC
+        LIMIT 6
+        """
     )
     selected_jobs = _jobs_of_interest()
     selected_jobs_list = _render_selected_jobs_list("Jobs of interest", selected_jobs)
@@ -87,12 +102,19 @@ def basic_stats() -> str:
         blocks_detail.append((f"block {blk}", f"{n_fail} failed / {n_total} steps"))
     if not blocks_detail:
         blocks_detail.append(("—", "no block data"))
+    passes_detail: list[tuple[str, object]] = []
+    for row in worst_passes or []:
+        pname, n_total, n_ok = row[0], int(row[1]), int(row[2])
+        n_fail = n_total - n_ok
+        passes_detail.append((str(pname), f"{n_fail} failed / {n_total} steps"))
+    if not passes_detail:
+        passes_detail.append(("—", "no pass data"))
     return f"""
 <section class="container-fluid py-3">
   <div class="row g-2 mb-3">
     {_render_stat_card_detail("#verification steps", n_steps, steps_rows)}
     {_render_stat_card_detail("#blocks", n_blocks, blocks_detail)}
-    {_render_stat_card("#passes", n_passes)}
+    {_render_stat_card_detail("#passes", n_passes, passes_detail)}
   </div>
   <div class="row g-3">
     <div class="col-12">{selected_jobs_list}</div>
