@@ -31,6 +31,23 @@ def memory_limit_cmd_prefix(jobs: int) -> list[str]:
     return [_PRLIMIT, f"--as={_limit_bytes}"]
 
 
+_MEMOUT_MARKERS = (
+    "MemoryError",
+    "Cannot allocate memory",
+    "std::bad_alloc",
+    "out of memory",
+)
+
+
+def is_subprocess_memout(returncode: int | None, stderr: str | None) -> bool:
+    if returncode is None or returncode == 0:
+        return False
+    err = (stderr or "").lower()
+    if any(marker.lower() in err for marker in _MEMOUT_MARKERS):
+        return True
+    return returncode == -9 and _limit_bytes is not None and _limit_bytes > 0
+
+
 def _pump_pipes(
     proc: subprocess.Popen,
     stdout_chunks: list[str],

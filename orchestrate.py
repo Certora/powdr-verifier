@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 from src.utils.io import load_json
 from src.utils.enums import XOrEncoding
-from src.utils.process import communicate_with_timeout, memory_limit_cmd_prefix
+from src.utils.process import communicate_with_timeout, is_subprocess_memout, memory_limit_cmd_prefix
 from src.utils.utils import s2range
 from src.report.action import Action
 from src.report.dumpers import ActionDumper, set_report_dir
@@ -179,8 +179,9 @@ def __run_main(
             logging.error(f"timed out running {cmdstr}")
             return Action(command, result="timeout")
         if proc.returncode != 0:
+            result = "memout" if is_subprocess_memout(proc.returncode, stderr) else "error"
             logging.error("command failed (exit %s): %s", proc.returncode, cmdstr)
-            return Action(command, result="error", error_message=stderr or str(proc.returncode))
+            return Action(command, result=result, error_message=stderr or str(proc.returncode))
         try:
             return load_json(StringIO(stdout or ""))
         except json.JSONDecodeError:
