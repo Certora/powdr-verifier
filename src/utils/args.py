@@ -125,7 +125,9 @@ def __build_parser(skip_subparsers=False):
     sub_check = sub.add_parser("check")
     sub_check.add_argument("input", type=Path)
     sub_check.add_argument("--dump-model", type=Path, default=None)
-    sub_check.add_argument("--solve-chunked", action="store_true")
+    sub_check.add_argument(
+        "--solve-chunked", action=argparse.BooleanOptionalAction, default=True
+    )
 
     sub_aliasing = sub.add_parser("aliasing")
     sub_aliasing.add_argument("input", type=Path)
