@@ -93,31 +93,36 @@ def basic_stats() -> str:
         ("not-qf", n_not_qf or 0),
         ("wrongs", n_wrongs or 0),
     ]
-    blocks_detail: list[tuple[str, object]] = []
+    blocks_detail: list[tuple[str, object, int]] = []
     for row in worst_blocks or []:
         blk, n_total, n_ok = row[0], int(row[1]), int(row[2])
         n_fail = n_total - n_ok
-        blocks_detail.append((f"block {blk}", f"{n_fail} failed / {n_total} steps"))
+        blocks_detail.append((f"block {blk}", f"{n_fail} failed / {n_total} steps", n_fail))
     if not blocks_detail:
-        blocks_detail.append(("—", "no block data"))
-    passes_detail: list[tuple[str, object]] = []
+        blocks_detail.append(("—", "no block data", 0))
+    passes_detail: list[tuple[str, object, int]] = []
     for row in worst_passes or []:
         pname, n_total, n_ok = row[0], int(row[1]), int(row[2])
         n_fail = n_total - n_ok
-        passes_detail.append((str(pname), f"{n_fail} failed / {n_total} steps"))
+        passes_detail.append((str(pname), f"{n_fail} failed / {n_total} steps", n_fail))
     if not passes_detail:
-        passes_detail.append(("—", "no pass data"))
+        passes_detail.append(("—", "no pass data", 0))
     return f"""
 <section class="container-fluid py-3">
   <div class="row g-2 mb-3">
     {_render_stat_card_detail(f"{n_steps or 0} verification steps", steps_rows)}
-    {_render_stat_card_detail(f"{n_blocks or 0} blocks", blocks_detail, preview_limit=_STAT_CARD_PREVIEW)}
-    {_render_stat_card_detail(f"{n_passes or 0} passes", passes_detail, preview_limit=_STAT_CARD_PREVIEW)}
+    {_render_stat_card_detail(
+        f"{n_blocks or 0} blocks", blocks_detail, preview_limit=_STAT_CARD_PREVIEW, sortable=True
+    )}
+    {_render_stat_card_detail(
+        f"{n_passes or 0} passes", passes_detail, preview_limit=_STAT_CARD_PREVIEW, sortable=True
+    )}
   </div>
   <div class="row g-3">
     <div class="col-12">{selected_jobs_list}</div>
   </div>
 </section>
+{_SORT_SCRIPT}
 
 """
 
@@ -262,55 +267,286 @@ _STAT_CARD_PREVIEW = 6
 _JOBS_LIST_PREVIEW = 10
 
 
-def _render_stat_detail_row(key: str, value: object) -> str:
+def _render_sort_links(
+    keys: list[tuple[str, str]], *, active: str, direction: str = "asc"
+) -> str:
+    parts: list[str] = []
+    for i, (key, label) in enumerate(keys):
+        if i:
+            parts.append('<span class="mx-1">·</span>')
+        is_active = key == active
+        active_cls = " stat-sort-active" if is_active else ""
+        dir_attr = f' data-stat-sort-dir="{direction}"' if is_active else ""
+        if is_active:
+            glyph = "↑" if direction == "asc" else "↓"
+        else:
+            glyph = "↕"
+        parts.append(
+            f'<a href="#" class="stat-sort-link{active_cls}" data-stat-sort="{key}"{dir_attr}>'
+            f'<span class="me-1 stat-sort-glyph" aria-hidden="true">{glyph}</span>'
+            f"{html.escape(label)}</a>"
+        )
+    return '<div class="small text-nowrap text-body-secondary">' + "".join(parts) + "</div>"
+
+
+def _render_stat_detail_row(
+    key: str,
+    value: object,
+    *,
+    sort_fails: int | None = None,
+) -> str:
+    attrs = ""
+    if sort_fails is not None:
+        attrs = (
+            ' class="sortable-item d-flex justify-content-between small mt-1"'
+            f' data-sort-name="{html.escape(key, quote=True)}"'
+            f' data-sort-fails="{sort_fails}"'
+        )
+    else:
+        attrs = ' class="d-flex justify-content-between small mt-1"'
     return (
-        '<div class="d-flex justify-content-between small mt-1">'
+        f"<div{attrs}>"
         f'<span class="text-body-secondary">{html.escape(key)}</span>'
         f'<span class="fw-medium">{html.escape(str(value))}</span>'
         "</div>"
     )
 
 
+_SORT_SCRIPT = """<style>
+.stat-sort-link {
+  color: var(--bs-secondary-color);
+  text-decoration: none;
+}
+.stat-sort-link:hover {
+  color: var(--bs-body-color);
+}
+.stat-sort-link.stat-sort-active {
+  color: var(--bs-body-color);
+  font-weight: 600;
+}
+</style>
+<script>
+(function () {
+  var DEFAULT_DIR = {name: "asc", kind: "asc", fails: "desc", time: "asc", size: "asc"};
+
+  function compareRows(a, b, sortBy) {
+    if (sortBy === "name" || sortBy === "kind") {
+      var attr = sortBy === "name" ? "data-sort-name" : "data-sort-kind";
+      return a.getAttribute(attr).localeCompare(b.getAttribute(attr));
+    }
+    if (sortBy === "fails") {
+      return Number(a.getAttribute("data-sort-fails"))
+        - Number(b.getAttribute("data-sort-fails"));
+    }
+    var key = sortBy === "time" ? "data-sort-time" : "data-sort-size";
+    var av = Number(a.getAttribute(key));
+    var bv = Number(b.getAttribute(key));
+    if (av < 0 && bv < 0) return 0;
+    if (av < 0) return 1;
+    if (bv < 0) return -1;
+    return av - bv;
+  }
+
+  function updateSortLinks(card, activeLink, dir) {
+    card.querySelectorAll("[data-stat-sort]").forEach(function (l) {
+      var glyph = l.querySelector(".stat-sort-glyph");
+      if (l === activeLink) {
+        l.classList.add("stat-sort-active");
+        l.setAttribute("data-stat-sort-dir", dir);
+        if (glyph) glyph.textContent = dir === "asc" ? "↑" : "↓";
+      } else {
+        l.classList.remove("stat-sort-active");
+        l.removeAttribute("data-stat-sort-dir");
+        if (glyph) glyph.textContent = "↕";
+      }
+    });
+  }
+
+  function renumberJobs(container) {
+    var items = container.querySelectorAll(".sortable-item");
+    Array.prototype.forEach.call(items, function (item, i) {
+      var idx = item.querySelector(".job-list-idx");
+      if (idx) idx.textContent = (i + 1) + ".";
+    });
+  }
+
+  function applyPreview(container) {
+    var limit = Number(container.getAttribute("data-preview-limit"));
+    if (!limit) return;
+    var listType = container.getAttribute("data-list-type");
+    var more = container.querySelector(".stat-detail-more");
+    var rows = Array.prototype.slice.call(
+      container.querySelectorAll(".sortable-item")
+    );
+    if (more) more.remove();
+    if (listType === "ul") {
+      var ul = container.querySelector("ul");
+      if (!ul) {
+        ul = document.createElement("ul");
+        ul.className = "list-group list-group-flush";
+        container.appendChild(ul);
+      }
+      rows.forEach(function (row) {
+        ul.appendChild(row);
+      });
+    } else {
+      rows.forEach(function (row) {
+        container.appendChild(row);
+      });
+    }
+    var visible = rows.slice(0, limit);
+    var hidden = rows.slice(limit);
+    if (listType === "ul") {
+      var visibleUl = container.querySelector("ul");
+      visible.forEach(function (row) {
+        visibleUl.appendChild(row);
+      });
+      renumberJobs(container);
+      if (!hidden.length) return;
+      more = document.createElement("details");
+      more.className = "stat-detail-more mt-1";
+      var summary = document.createElement("summary");
+      summary.className = "small text-body-secondary";
+      summary.textContent = "Show " + hidden.length + " more";
+      more.appendChild(summary);
+      var hiddenUl = document.createElement("ul");
+      hiddenUl.className = "list-group list-group-flush mt-1";
+      hidden.forEach(function (row) {
+        hiddenUl.appendChild(row);
+      });
+      more.appendChild(hiddenUl);
+      container.appendChild(more);
+      return;
+    }
+    if (!hidden.length) return;
+    more = document.createElement("details");
+    more.className = "stat-detail-more mt-1";
+    var summary = document.createElement("summary");
+    summary.className = "small text-body-secondary";
+    summary.textContent = "Show " + hidden.length + " more";
+    more.appendChild(summary);
+    hidden.forEach(function (row) {
+      more.appendChild(row);
+    });
+    container.appendChild(more);
+  }
+
+  document.addEventListener("click", function (e) {
+    var link = e.target.closest("[data-stat-sort]");
+    if (!link) return;
+    e.preventDefault();
+    var card = link.closest(".card-body");
+    if (!card) return;
+    var container = card.querySelector(".sortable-rows");
+    if (!container) return;
+    var sortBy = link.getAttribute("data-stat-sort");
+    var dir;
+    if (link.classList.contains("stat-sort-active")) {
+      dir = link.getAttribute("data-stat-sort-dir") === "asc" ? "desc" : "asc";
+    } else {
+      dir = DEFAULT_DIR[sortBy] || "asc";
+    }
+    var rows = Array.prototype.slice.call(
+      container.querySelectorAll(".sortable-item")
+    );
+    rows.sort(function (a, b) {
+      var cmp = compareRows(a, b, sortBy);
+      return dir === "desc" ? -cmp : cmp;
+    });
+    var more = container.querySelector(".stat-detail-more");
+    if (more) more.remove();
+    if (container.getAttribute("data-list-type") === "ul") {
+      var ul = container.querySelector("ul");
+      rows.forEach(function (row) {
+        ul.appendChild(row);
+      });
+    } else {
+      rows.forEach(function (row) {
+        container.appendChild(row);
+      });
+    }
+    applyPreview(container);
+    updateSortLinks(card, link, dir);
+  });
+})();
+</script>"""
+
+
 def _render_stat_card_detail(
     headline: str,
-    rows: list[tuple[str, object]],
+    rows: list[tuple[str, object] | tuple[str, object, int]],
     *,
     preview_limit: int | None = None,
+    sortable: bool = False,
 ) -> str:
+    def render_row(row: tuple) -> str:
+        key, value = row[0], row[1]
+        fails = int(row[2]) if len(row) >= 3 else None
+        return _render_stat_detail_row(key, value, sort_fails=fails if sortable else None)
+
     if preview_limit is not None and len(rows) > preview_limit:
         preview = rows[:preview_limit]
         rest = rows[preview_limit:]
-        sub = "".join(_render_stat_detail_row(k, v) for k, v in preview)
+        sub = "".join(render_row(r) for r in preview)
         sub += (
-            '<details class="mt-1">'
+            '<details class="stat-detail-more mt-1">'
             f'<summary class="small text-body-secondary">Show {len(rest)} more</summary>'
-            + "".join(_render_stat_detail_row(k, v) for k, v in rest)
+            + "".join(render_row(r) for r in rest)
             + "</details>"
         )
     else:
-        sub = "".join(_render_stat_detail_row(k, v) for k, v in rows)
+        sub = "".join(render_row(r) for r in rows)
+
+    if sortable:
+        preview_attr = (
+            f' data-preview-limit="{preview_limit}"' if preview_limit is not None else ""
+        )
+        sub = f'<div class="sortable-rows"{preview_attr}>{sub}</div>'
+        title = (
+            '<div class="d-flex justify-content-between align-items-baseline gap-2">'
+            f'<div class="fs-5 fw-semibold">{html.escape(headline)}</div>'
+            f'{_render_sort_links([("name", "name"), ("fails", "fails")], active="fails", direction="desc")}'
+            "</div>"
+        )
+    else:
+        title = f'<div class="fs-5 fw-semibold">{html.escape(headline)}</div>'
+
     return (
         '<div class="col-12 col-md-4">'
         '<div class="card h-100 shadow-sm">'
         '<div class="card-body py-2 px-3">'
-        f'<div class="fs-5 fw-semibold">{html.escape(headline)}</div>'
+        f"{title}"
         f'<div class="mt-2 pt-2 border-top">{sub}</div>'
         "</div></div></div>"
     )
 
 
-def _render_job_list_item(idx: int, row: tuple) -> str:
+def _render_job_list_item(idx: int, row: tuple, *, sortable: bool = False) -> str:
     kind, input1, input2, running_time, size_bytes = row[:5]
     at_step = row[5] if len(row) > 5 else None
     command_line = row[6] if len(row) > 6 else None
-    job = html.escape(_job_name(str(input1), str(input2)))
+    job_name = _job_name(str(input1), str(input2))
+    job = html.escape(job_name)
     kind_badge = _badge_kind(str(kind), at_step)
     time_badge = _badge_time(running_time)
     size_badge = _badge_bytes(size_bytes)
     copy_badge = copy_command_badge(command_line)
+    if sortable:
+        time_val = float(running_time) if running_time is not None else -1
+        size_val = int(size_bytes) if size_bytes is not None else -1
+        item_attrs = (
+            ' class="list-group-item px-0 d-flex align-items-center sortable-item"'
+            f' data-sort-name="{html.escape(job_name, quote=True)}"'
+            f' data-sort-kind="{html.escape(str(kind), quote=True)}"'
+            f' data-sort-time="{time_val}"'
+            f' data-sort-size="{size_val}"'
+        )
+    else:
+        item_attrs = ' class="list-group-item px-0 d-flex align-items-center"'
     return (
-        '<li class="list-group-item px-0 d-flex align-items-center">'
-        f"<span><span class='text-body-secondary me-2'>{idx}.</span><code>{job}</code></span>"
+        f"<li{item_attrs}>"
+        f"<span><span class='text-body-secondary me-2 job-list-idx'>{idx}.</span>"
+        f"<code>{job}</code></span>"
         f"<span class='ms-auto d-flex align-items-center gap-1'>"
         f"{kind_badge} {time_badge} {size_badge}{copy_badge}</span>"
         "</li>"
@@ -328,24 +564,32 @@ def _render_selected_jobs_list(title: str, rows: list[tuple]) -> str:
     preview = rows[:_JOBS_LIST_PREVIEW]
     rest = rows[_JOBS_LIST_PREVIEW:]
     list_html = (
+        f'<div class="sortable-rows" data-preview-limit="{_JOBS_LIST_PREVIEW}"'
+        f' data-list-type="ul">'
         f"<ul class='list-group list-group-flush'>"
-        f"{''.join(_render_job_list_item(i, row) for i, row in enumerate(preview, start=1))}"
+        f"{''.join(_render_job_list_item(i, row, sortable=True) for i, row in enumerate(preview, start=1))}"
         "</ul>"
     )
     if rest:
         n_more = len(rest)
         list_html += (
-            '<details class="mt-1">'
+            '<details class="stat-detail-more mt-1">'
             f'<summary class="small text-body-secondary">'
             f"Show {n_more} more</summary>"
             f"<ul class='list-group list-group-flush mt-1'>"
-            f"{''.join(_render_job_list_item(i, row) for i, row in enumerate(rest, start=len(preview) + 1))}"
+            f"{''.join(_render_job_list_item(i, row, sortable=True) for i, row in enumerate(rest, start=len(preview) + 1))}"
             "</ul></details>"
         )
+    list_html += "</div>"
+    header = (
+        '<div class="d-flex justify-content-between align-items-baseline gap-2 mb-2">'
+        f'<h6 class="mb-0">{html.escape(title)}</h6>'
+        f'{_render_sort_links([("name", "name"), ("kind", "type"), ("time", "time"), ("size", "size")], active="time", direction="asc")}'
+        "</div>"
+    )
     return (
         '<div class="card h-100 shadow-sm"><div class="card-body py-2 px-3">'
-        f'<h6 class="mb-2">{html.escape(title)}</h6>'
-        f"{list_html}"
+        f"{header}{list_html}"
         "</div></div>"
     )
 
