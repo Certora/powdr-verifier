@@ -1,9 +1,34 @@
 """Subprocess I/O with line-based tee of stderr, capture, and graceful timeout."""
+import logging
 import select
+import shutil
 import subprocess
 import sys
 import time
 from typing import TextIO
+
+import psutil
+
+_MEMORY_CHUNK_BYTES = 512 * 1024 * 1024
+_PRLIMIT = shutil.which("prlimit")
+_limit_bytes: int | None = None
+
+
+def memory_limit_cmd_prefix(jobs: int) -> list[str]:
+    global _limit_bytes
+    if _limit_bytes is None:
+        _limit_bytes = (
+            int(0.9 * psutil.virtual_memory().total / jobs) // _MEMORY_CHUNK_BYTES
+        ) * _MEMORY_CHUNK_BYTES
+        if _limit_bytes > 0:
+            logging.info(
+                "main.py subprocess memory limit: %.1f GiB per job (%d jobs)",
+                _limit_bytes / (1024**3),
+                jobs,
+            )
+    if _limit_bytes <= 0 or _PRLIMIT is None:
+        return []
+    return [_PRLIMIT, f"--as={_limit_bytes}"]
 
 
 def _pump_pipes(
