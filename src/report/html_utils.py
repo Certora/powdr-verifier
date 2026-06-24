@@ -1,6 +1,5 @@
 """Small HTML fragments shared across report views."""
 import html
-import json
 
 
 def copy_command_badge(cmd: str | None, *, title: str = "Copy command") -> str:
@@ -9,6 +8,7 @@ def copy_command_badge(cmd: str | None, *, title: str = "Copy command") -> str:
     return (
         f'<button type="button" class="badge text-bg-light border copy-cmd-badge" '
         f'title="{html.escape(title, quote=True)}" '
-        f'onclick="navigator.clipboard.writeText({json.dumps(cmd)}).catch(()=>{{}})" '
+        f'data-copy-cmd="{html.escape(cmd, quote=True)}" '
+        f'onclick="navigator.clipboard.writeText(this.dataset.copyCmd).catch(()=>{{}})" '
         f'style="cursor:pointer;font-size:0.82em">⧉</button>'
     )
