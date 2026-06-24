@@ -73,45 +73,31 @@ def job_banner(report_dir: Path) -> str:
     command = html.escape(str(job.get("command", "")))
     test = html.escape(str(job.get("test", "")))
     started = _format_job_timestamp(str(job.get("started_at", "")))
-    finished = _format_job_timestamp(str(job.get("finished_at", "")))
     running_time = job.get("running_time")
     duration = _format_duration(float(running_time)) if running_time is not None else "—"
     command_line = job.get("command_line")
     cmd_html = (
-        f'<code class="d-block text-break user-select-all" style="font-size:0.85em">'
+        f'<code class="text-break user-select-all flex-grow-1 min-width-0" style="font-size:0.82em">'
         f"{html.escape(command_line)}</code>"
         if command_line
         else '<span class="text-body-secondary">—</span>'
     )
+    timing = (
+        f'<span class="fw-semibold">{html.escape(duration)}</span>'
+        f'<span class="text-body-secondary"> @ {html.escape(started)}</span>'
+    )
     copy_badge = copy_command_badge(command_line)
     return f"""
-<section class="container-fluid py-3 pb-0">
+<section class="container-fluid py-2 pb-0">
   <div class="card shadow-sm">
-    <div class="card-body py-3">
-      <div class="row g-3 mb-3">
-        <div class="col-6 col-md-3">
-          <div class="small text-body-secondary">Job</div>
-          <div class="fw-semibold"><code>{command}</code> <code>{test}</code></div>
-        </div>
-        <div class="col-6 col-md-3">
-          <div class="small text-body-secondary">Started</div>
-          <div>{html.escape(started)}</div>
-        </div>
-        <div class="col-6 col-md-3">
-          <div class="small text-body-secondary">Finished</div>
-          <div>{html.escape(finished)}</div>
-        </div>
-        <div class="col-6 col-md-3">
-          <div class="small text-body-secondary">Duration</div>
-          <div class="fw-semibold">{html.escape(duration)}</div>
-        </div>
+    <div class="card-body py-2 px-3">
+      <div class="d-flex align-items-center justify-content-between gap-3 mb-1" style="font-size:0.9em">
+        <span class="fw-semibold"><code>{command}</code> <code>{test}</code></span>
+        <span class="text-end text-nowrap">{timing}</span>
       </div>
-      <div class="d-flex align-items-start gap-2">
-        <div class="flex-grow-1 min-width-0">
-          <div class="small text-body-secondary mb-1">Command</div>
-          {cmd_html}
-        </div>
-        <div class="pt-4">{copy_badge}</div>
+      <div class="d-flex align-items-center gap-2 min-width-0">
+        {cmd_html}
+        {copy_badge}
       </div>
     </div>
   </div>
