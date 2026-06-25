@@ -160,11 +160,13 @@ def build_sweep(
     labels: dict[str, str],
     lo: int | None = None,
     hi: int | None = None,
+    with_diff: bool = False,
 ) -> list[StepRow]:
     """Compute a StepRow per entry whose NNN is within ``[lo, hi]``.
 
-    Each emitted row carries a diff summary vs the previous emitted row, when
-    both share a representation (else ``"xrep"``).
+    When ``with_diff`` is set, each emitted row carries a diff summary vs the
+    previous emitted row (same representation only, else ``"xrep"``). Diffing is
+    off by default because it is expensive on large blocks.
     """
     rows: list[StepRow] = []
     prev: tuple | None = None   # (data, fmt) of the previous emitted step
@@ -175,7 +177,7 @@ def build_sweep(
             continue
         data = load(e.path)
         s = DumpStats.from_data(data, labels)
-        delta = _step_delta(prev, data, s.fmt, labels)
+        delta = _step_delta(prev, data, s.fmt, labels) if with_diff else None
         rows.append(StepRow(
             nnn=e.nnn,
             pass_name=e.pass_name,

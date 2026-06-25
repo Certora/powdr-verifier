@@ -72,6 +72,9 @@ def _build_parser() -> argparse.ArgumentParser:
                           choices=["cons0", "consF", "steps", "mem0", "memF",
                                    "size", "red"],
                           help="sort key for 'all' (default cons0, desc)")
+    sp_sweep.add_argument("--diff", action="store_true",
+                          help="add per-step diff summary (dcons/dbus); "
+                               "slower on big blocks")
 
     sp_subs = sub.add_parser(
         "subs", parents=[common],
@@ -126,8 +129,9 @@ def _run_sweep(args, mode: str) -> None:
     directory = resolve.group_dir(group, args.root)
     entries = resolve.index_block(directory, block)
     labels = load_bus_map(resolve.base_dump_path(directory, block))
-    rows = build_sweep(entries, labels, args.lo, args.hi)
-    print(render.render_sweep(rows, group, resolve.normalize_block(block), mode))
+    rows = build_sweep(entries, labels, args.lo, args.hi, with_diff=args.diff)
+    print(render.render_sweep(rows, group, resolve.normalize_block(block),
+                              mode, with_diff=args.diff))
 
 
 def _run_diff(args, mode: str) -> int:

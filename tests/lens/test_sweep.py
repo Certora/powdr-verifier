@@ -59,26 +59,35 @@ def test_abbrev_label():
     assert abbrev_label("Memory") == "Mem"
 
 
-def _rows(tmp_path, lo=None, hi=None):
+def _rows(tmp_path, lo=None, hi=None, with_diff=False):
     d = resolve.group_dir("keccak", tmp_path)
     labels = load_bus_map(resolve.base_dump_path(d, "111"))
-    return build_sweep(resolve.index_block(d, "111"), labels, lo, hi)
+    return build_sweep(resolve.index_block(d, "111"), labels, lo, hi,
+                       with_diff=with_diff)
+
+
+def test_build_sweep_delta_off_by_default(tmp_path):
+    _make_block(tmp_path)
+    assert all(r.delta is None for r in _rows(tmp_path))  # not computed
 
 
 def test_build_sweep_delta_vs_prev(tmp_path):
     _make_block(tmp_path)
-    rows = _rows(tmp_path)
+    rows = _rows(tmp_path, with_diff=True)
     assert rows[0].delta is None            # first row: no prev
     assert rows[1].delta == "xrep"          # 001 (C) vs 000 (M): not comparable
     # 002 (C) vs 001 (C): identical constraints/bus -> all-zero delta
     assert rows[2].delta == ((0, 0, 0), (0, 0, 0))
 
 
-def test_render_sweep_delta_columns(tmp_path):
+def test_render_sweep_delta_columns_only_with_diff(tmp_path):
     _make_block(tmp_path)
-    text = render_sweep(_rows(tmp_path), "keccak", "111", PLAIN)
-    assert "dcons" in text and "dbus" in text
-    assert "—" in text                       # the cross-representation row
+    plain = render_sweep(_rows(tmp_path), "keccak", "111", PLAIN)
+    assert "dcons" not in plain  # off by default
+    with_d = render_sweep(_rows(tmp_path, with_diff=True), "keccak", "111",
+                          PLAIN, with_diff=True)
+    assert "dcons" in with_d and "dbus" in with_d
+    assert "—" in with_d         # the cross-representation row
 
 
 def test_build_sweep_markers_memory_and_sym(tmp_path):

@@ -222,18 +222,20 @@ def _compare_rich(diff: DumpDiff, ta: Target, tb: Target) -> str:
 # --------------------------------------------------------------------------- #
 # sweep
 # --------------------------------------------------------------------------- #
-def render_sweep(rows, group: str, block: str, mode: str) -> str:
+def render_sweep(rows, group: str, block: str, mode: str,
+                 with_diff: bool = False) -> str:
     from .sweep import abbrev_label
 
     if mode == JSON:
-        return json.dumps(
-            {"group": group, "block": block,
-             "steps": [r.as_dict() for r in rows]},
-            indent=2,
-        )
+        steps = [r.as_dict() for r in rows]
+        if not with_diff:
+            for s in steps:
+                s.pop("diff", None)
+        return json.dumps({"group": group, "block": block, "steps": steps},
+                          indent=2)
     if mode == RICH:
-        return _sweep_rich(rows, group, block, abbrev_label)
-    return _sweep_plain(rows, group, block, abbrev_label)
+        return _sweep_rich(rows, group, block, abbrev_label, with_diff)
+    return _sweep_plain(rows, group, block, abbrev_label, with_diff)
 
 
 def _sym_cell(row, abbrev) -> str:
@@ -258,24 +260,30 @@ def _delta_cells(delta) -> tuple[str, str]:
     return (_rac(cons), _rac(bus))
 
 
-def _sweep_plain(rows, group, block, abbrev) -> str:
-    out = [f"# {group}/{block}   {_FMT_LEGEND}   (dcons/dbus = -rem+add~chg vs prev)"]
+def _sweep_plain(rows, group, block, abbrev, with_diff=False) -> str:
+    legend = _FMT_LEGEND + ("   (dcons/dbus = -rem+add~chg vs prev)"
+                            if with_diff else "")
+    out = [f"# {group}/{block}   {legend}"]
     pw = max((len(r.pass_name) for r in rows), default=4)
+    dcol = f"{'dcons':>9} {'dbus':>7} " if with_diff else ""
     out.append(f"{'NNN':>3} {'pass':<{pw}} f {'cons':>4} {'bus':>4} "
                f"{'mem':>3} {'der':>3} {'deg':>3} {'cols':>4} "
-               f"{'dcons':>9} {'dbus':>7}  sym-busses")
+               f"{dcol} sym-busses")
     for r in rows:
-        dcons, dbus = _delta_cells(r.delta)
+        dcell = ""
+        if with_diff:
+            dcons, dbus = _delta_cells(r.delta)
+            dcell = f"{dcons:>9} {dbus:>7} "
         out.append(
             f"{r.nnn:03d} {r.pass_name:<{pw}} {FMT_MARK.get(r.fmt, '?')} "
             f"{r.n_constraints:>4} {r.n_bus_interactions:>4} {r.n_memory:>3} "
             f"{r.n_derived_columns:>3} {r.max_degree:>3} "
-            f"{r.distinct_columns:>4} {dcons:>9} {dbus:>7}  {_sym_cell(r, abbrev)}"
+            f"{r.distinct_columns:>4} {dcell} {_sym_cell(r, abbrev)}"
         )
     return "\n".join(out)
 
 
-def _sweep_rich(rows, group, block, abbrev) -> str:
+def _sweep_rich(rows, group, block, abbrev, with_diff=False) -> str:
     from rich.console import Console
     from rich.table import Table
 
@@ -292,21 +300,25 @@ def _sweep_rich(rows, group, block, abbrev) -> str:
         t.add_column("der", justify="right")
         t.add_column("deg", justify="right")
         t.add_column("cols", justify="right")
-        t.add_column("dcons", justify="right")
-        t.add_column("dbus", justify="right")
+        if with_diff:
+            t.add_column("dcons", justify="right")
+            t.add_column("dbus", justify="right")
         t.add_column("sym-busses")
         for r in rows:
             mark = FMT_MARK.get(r.fmt, "?")
             mark = f"[magenta]{mark}[/]" if r.fmt == "machine" else mark
             sym = _sym_cell(r, abbrev)
             sym = f"[yellow]{sym}[/]" if r.sym_busses else f"[dim]{sym}[/]"
-            dcons, dbus = _delta_cells(r.delta)
-            t.add_row(
+            cells = [
                 f"{r.nnn:03d}", r.pass_name, mark, str(r.n_constraints),
                 str(r.n_bus_interactions), str(r.n_memory),
                 str(r.n_derived_columns), str(r.max_degree),
-                str(r.distinct_columns), dcons, dbus, sym,
-            )
+                str(r.distinct_columns),
+            ]
+            if with_diff:
+                cells.extend(_delta_cells(r.delta))
+            cells.append(sym)
+            t.add_row(*cells)
         console.print(t)
     return cap.get().rstrip("\n")
 
@@ -726,7 +738,8 @@ lens — statistics over powdr APC JSON dumps.
 SUBCOMMANDS
   show    <group> <block> <step>        stats for one dump
   compare <group> <block> <stepA> <stepB>   A->B deltas (same block)
-  sweep   <group> <block> [--from N] [--to N]   per-step trail, 1 row/step
+  sweep   <group> <block> [--from N] [--to N] [--diff]   per-step trail,
+            1 row/step (--diff adds dcons/dbus; slower on big blocks)
   sweep   all [<group>] [--sort KEY]   1 row PER BLOCK (group auto-picked
             if only one). KEY: cons0(default) consF steps mem0 memF size red
   subs    <group> <block>   list var -> definition (signed-normalized)
@@ -779,9 +792,10 @@ JSON FIELDS (compare)
   op_hist{op:{a,b,delta}}  degree_mean{a,b,delta}
 
 SWEEP COLUMNS / JSON (one row per step)
-  NNN pass  f  cons bus mem der deg cols  dcons dbus  sym-busses
-  dcons/dbus = -rem+add~chg of constraints/busses vs the previous step
-    (only when same representation; "—" across M/C; blank on first row)
+  NNN pass  f  cons bus mem der deg cols  [dcons dbus]  sym-busses
+  dcons/dbus (only with --diff; slower on big blocks) = -rem+add~chg of
+    constraints/busses vs the previous step (same representation only;
+    "—" across M/C; blank on first row)
   f = format marker: M=machine C=constraints
   cons=n_constraints bus=n_bus_interactions mem=Memory-bus count
   der=n_derived_columns deg=max degree cols=distinct columns
