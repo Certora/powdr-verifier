@@ -139,6 +139,19 @@ def basic_stats() -> str:
 """
 
 
+def _parse_job_kinds(kinds_csv: str | None) -> list[tuple[str, str | None]]:
+    if not kinds_csv:
+        return []
+    kinds: list[tuple[str, str | None]] = []
+    for part in kinds_csv.split(","):
+        if "@" in part:
+            kind, step = part.split("@", 1)
+            kinds.append((kind, step or None))
+        else:
+            kinds.append((part, None))
+    return kinds
+
+
 def _jobs_of_interest() -> list[tuple]:
     rows = query(
         """
@@ -150,31 +163,7 @@ def _jobs_of_interest() -> list[tuple]:
                 v.running_time,
                 v.size_bytes,
                 v.command_line,
-                CASE
-                    WHEN EXISTS (
-                        SELECT 1 FROM substeps s
-                        WHERE s.verification_step_id = v.id
-                          AND s.expected IN ('sat', 'unsat')
-                          AND s.result IN ('sat', 'unsat')
-                          AND s.result != s.expected
-                    ) THEN 'wrong'
-                    WHEN v.status = 'error' THEN 'error'
-                    WHEN EXISTS (
-                        SELECT 1 FROM substeps s
-                        WHERE s.verification_step_id = v.id
-                          AND s.name = 'check'
-                          AND s.status = 'error'
-                          AND (s.result = 'unknown' OR s.result LIKE 'unknown-%')
-                    ) THEN 'unknown'
-                    WHEN v.status = 'timeout' THEN 'timeout'
-                    WHEN v.status = 'memout' THEN 'memout'
-                    WHEN EXISTS (
-                        SELECT 1 FROM substeps s
-                        WHERE s.verification_step_id = v.id
-                          AND s.name = 'isqf'
-                          AND s.status = 'not-qf'
-                    ) THEN 'not-qf'
-                END AS kind
+                v.status
             FROM verification_steps v
             WHERE
                 EXISTS (
@@ -231,31 +220,93 @@ def _jobs_of_interest() -> list[tuple]:
             SELECT verification_step_id, outcome, outcome_step
             FROM picked
             WHERE rn = 1
+        ),
+        job_kinds AS (
+            SELECT i.id, 'wrong' AS kind, NULL AS step, 1 AS ord
+            FROM interested i
+            WHERE EXISTS (
+                SELECT 1 FROM substeps s
+                WHERE s.verification_step_id = i.id
+                  AND s.expected IN ('sat', 'unsat')
+                  AND s.result IN ('sat', 'unsat')
+                  AND s.result != s.expected
+            )
+            UNION ALL
+            SELECT i.id, 'error', NULL, 2
+            FROM interested i
+            WHERE i.status = 'error'
+            UNION ALL
+            SELECT i.id, 'unknown', NULL, 3
+            FROM interested i
+            WHERE EXISTS (
+                SELECT 1 FROM substeps s
+                WHERE s.verification_step_id = i.id
+                  AND s.name = 'check'
+                  AND s.status = 'error'
+                  AND (s.result = 'unknown' OR s.result LIKE 'unknown-%')
+            )
+            UNION ALL
+            SELECT i.id, 'timeout', o.outcome_step, 4
+            FROM interested i
+            JOIN outcome_at o
+                ON o.verification_step_id = i.id AND o.outcome = 'timeout'
+            WHERE i.status = 'timeout'
+            UNION ALL
+            SELECT i.id, 'memout', o.outcome_step, 5
+            FROM interested i
+            JOIN outcome_at o
+                ON o.verification_step_id = i.id AND o.outcome = 'memout'
+            WHERE i.status = 'memout'
+            UNION ALL
+            SELECT i.id, 'not-qf', NULL, 6
+            FROM interested i
+            WHERE EXISTS (
+                SELECT 1 FROM substeps s
+                WHERE s.verification_step_id = i.id
+                  AND s.name = 'isqf'
+                  AND s.status = 'not-qf'
+            )
         )
         SELECT
-            i.kind,
+            (
+                SELECT GROUP_CONCAT(
+                    jk.kind || COALESCE('@' || jk.step, ''),
+                    ',' ORDER BY jk.ord
+                )
+                FROM job_kinds jk
+                WHERE jk.id = i.id
+            ) AS kinds,
             i.input1,
             i.input2,
             i.running_time,
             i.size_bytes,
-            o.outcome_step,
             COALESCE(
                 (
                     SELECT s.command_line FROM substeps s
+                    JOIN outcome_at o ON o.verification_step_id = i.id
                     WHERE s.verification_step_id = i.id
-                      AND o.outcome_step IS NOT NULL
                       AND s.name = o.outcome_step
+                      AND o.outcome IN ('timeout', 'memout')
+                    ORDER BY CASE o.outcome WHEN 'timeout' THEN 1 ELSE 2 END
                     LIMIT 1
                 ),
                 i.command_line
             ) AS command_line
         FROM interested i
-        LEFT JOIN outcome_at o
-            ON o.verification_step_id = i.id AND o.outcome = i.kind
         ORDER BY i.running_time IS NULL, i.running_time ASC, i.size_bytes ASC
         """
     )
-    return [tuple(row) for row in rows]
+    return [
+        (
+            _parse_job_kinds(kinds_csv),
+            input1,
+            input2,
+            running_time,
+            size_bytes,
+            command_line,
+        )
+        for kinds_csv, input1, input2, running_time, size_bytes, command_line in rows
+    ]
 
 
 def _job_name(input1: str, input2: str) -> str:
@@ -551,10 +602,13 @@ def _render_stat_card_detail(
     )
 
 
+def _render_kind_badges(kinds: list[tuple[str, str | None]]) -> str:
+    return "".join(_badge_kind(kind, at_step) for kind, at_step in kinds)
+
+
 def _render_job_list_item(idx: int, row: tuple, *, sortable: bool = False) -> str:
-    kind, input1, input2, running_time, size_bytes = row[:5]
-    at_step = row[5] if len(row) > 5 else None
-    command_line = row[6] if len(row) > 6 else None
+    kinds, input1, input2, running_time, size_bytes = row[:5]
+    command_line = row[5] if len(row) > 5 else None
     job_name = _job_name(str(input1), str(input2))
     job = html.escape(job_name)
     identical_badge = (
@@ -562,17 +616,20 @@ def _render_job_list_item(idx: int, row: tuple, *, sortable: bool = False) -> st
         if _inputs_byte_identical(str(input1), str(input2))
         else ""
     )
-    kind_badge = _badge_kind(str(kind), at_step)
+    kind_badges = _render_kind_badges(kinds)
     time_badge = _badge_time(running_time)
     size_badge = _badge_bytes(size_bytes)
     copy_badge = copy_command_badge(command_line)
+    kind_sort = ",".join(
+        kind if not at_step else f"{kind}@{at_step}" for kind, at_step in kinds
+    )
     if sortable:
         time_val = float(running_time) if running_time is not None else -1
         size_val = int(size_bytes) if size_bytes is not None else -1
         item_attrs = (
             ' class="list-group-item px-0 d-flex align-items-center sortable-item"'
             f' data-sort-name="{html.escape(job_name, quote=True)}"'
-            f' data-sort-kind="{html.escape(str(kind), quote=True)}"'
+            f' data-sort-kind="{html.escape(kind_sort, quote=True)}"'
             f' data-sort-time="{time_val}"'
             f' data-sort-size="{size_val}"'
         )
@@ -583,7 +640,7 @@ def _render_job_list_item(idx: int, row: tuple, *, sortable: bool = False) -> st
         f"<span><span class='text-body-secondary me-2 job-list-idx'>{idx}.</span>"
         f"<code>{job}</code></span>"
         f"<span class='ms-auto d-flex align-items-center gap-1'>"
-        f"{identical_badge}{kind_badge} {time_badge} {size_badge}{copy_badge}</span>"
+        f"{identical_badge}{kind_badges} {time_badge} {size_badge}{copy_badge}</span>"
         "</li>"
     )
 
