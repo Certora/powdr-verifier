@@ -163,7 +163,10 @@ def __orchestrate_verify_cmd(a: Path, b: Path) -> str:
     m_a = __FILENAMERE.match(a.name)
     m_b = __FILENAMERE.match(b.name)
     if m_a and m_b and m_a.group(1) == m_b.group(1):
-        k_frag = [m_a.group(1), f"{int(m_a.group(2))}-{int(m_b.group(2))}"]
+        step_a = int(m_a.group(2))
+        step_b = int(m_b.group(2))
+        step_frag = str(step_a) if step_b == step_a + 1 else f"{step_a}:{step_b}"
+        k_frag = [m_a.group(1), step_frag]
     return __orchestrate_cmd(*k_frag)
 
 
