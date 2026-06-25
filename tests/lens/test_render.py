@@ -35,6 +35,7 @@ def test_show_json_schema():
     assert out["buses"][0]["label"] == "Memory"
     assert set(out["buses"][0]) == {
         "id", "label", "count", "send", "recv", "sym", "other", "args_nodes",
+        "key_sym",
     }
 
 

@@ -133,6 +133,16 @@ def mult_kind(mult: Any) -> str:
     return "send" if v == 1 else "recv" if v == NEG_ONE else "other"
 
 
+def mem_key_symbolic(bi: dict) -> bool:
+    """True if a Memory interaction's key (address_space, pointer) is symbolic.
+
+    The key is ``args[0]`` (address space) and ``args[1]`` (pointer); it is
+    symbolic when either references a column, concrete otherwise.
+    """
+    args = bi.get("args", [])
+    return any(analyze_expr(a).columns for a in args[:2])
+
+
 @dataclass
 class Spread:
     """min / mean / max summary of a numeric series (zeros when empty)."""
@@ -163,6 +173,7 @@ class BusRow:
     sym: int = 0
     other: int = 0
     args_nodes: int = 0
+    key_sym: int = 0   # memory only: interactions with a symbolic (addr,ptr)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -174,6 +185,7 @@ class BusRow:
             "sym": self.sym,
             "other": self.other,
             "args_nodes": self.args_nodes,
+            "key_sym": self.key_sym,
         }
 
 
@@ -202,6 +214,11 @@ class DumpStats:
     def memory_count(self) -> int:
         """Number of Memory bus interactions (label ``Memory``)."""
         return sum(r.count for r in self.buses if r.label == "Memory")
+
+    @property
+    def memory_key_sym(self) -> int:
+        """Number of Memory interactions whose key (addr, ptr) is symbolic."""
+        return sum(r.key_sym for r in self.buses if r.label == "Memory")
 
     def sym_bus_labels(self) -> list[str]:
         """Labels of busses carrying any symbolic multiplicity, by count desc."""
@@ -241,6 +258,8 @@ class DumpStats:
             row.count += 1
             kind = mult_kind(bi.get("mult"))
             setattr(row, kind, getattr(row, kind) + 1)
+            if bi.get("id") == 1 and mem_key_symbolic(bi):  # Memory key
+                row.key_sym += 1
             for arg in bi.get("args", []):
                 row.args_nodes += analyze_expr(arg).nodes
         s.buses = sorted(rows.values(), key=lambda r: (-r.count, r.id))

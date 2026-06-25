@@ -153,6 +153,7 @@ def test_render_sweep_plain(tmp_path):
     _make_block(tmp_path)
     text = render_sweep(_rows(tmp_path), "keccak", "111", PLAIN)
     assert "M=machine C=constraints" in text
+    assert "mkey" in text  # memory-key-symbolic column
     lines = text.splitlines()
     assert lines[2].startswith("000 unopt") and " M " in lines[2]
     assert "Mem" in lines[2]  # abbreviated sym label
@@ -254,6 +255,7 @@ def test_render_sweep_all_plain(tmp_path):
     _make_multiblock(tmp_path)
     text = render_sweep_all(_all_rows(tmp_path), "keccak", "cons0", PLAIN)
     assert "2 blocks" in text
+    assert "memKey" in text  # memory-key-symbolic column
     lines = text.splitlines()
     assert lines[2].split()[:4] == ["111", "2", "5", "1"]  # block steps cons0 consF
 

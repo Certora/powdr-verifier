@@ -73,11 +73,12 @@ def _show_plain(s: DumpStats, t: Target) -> str:
             f"submachines\t{len(s.submachine_polys)} "
             f"polys={s.submachine_polys}"
         )
-    out.append("# buses\tid\tlabel\tcount\tsend\trecv\tsym\tother\targs_nodes")
+    out.append("# buses\tid\tlabel\tcount\tsend\trecv\tsym\tother"
+               "\tkeysym\targs_nodes")
     for r in s.buses:
         out.append(
             f"bus\t{r.id}\t{r.label}\t{r.count}\t{r.send}\t{r.recv}\t"
-            f"{r.sym}\t{r.other}\t{r.args_nodes}"
+            f"{r.sym}\t{r.other}\t{r.key_sym}\t{r.args_nodes}"
         )
     return "\n".join(out)
 
@@ -128,11 +129,14 @@ def _show_rich(s: DumpStats, t: Target) -> str:
         bus.add_column("recv", justify="right")
         bus.add_column("sym", justify="right")
         bus.add_column("other", justify="right")
+        bus.add_column("keysym", justify="right")
         bus.add_column("args_nodes", justify="right")
         for r in s.buses:
             bus.add_row(
                 r.id, r.label, str(r.count), str(r.send), str(r.recv),
-                str(r.sym), str(r.other), str(r.args_nodes),
+                str(r.sym), str(r.other),
+                str(r.key_sym) if r.label == "Memory" else "·",
+                str(r.args_nodes),
             )
         console.print(bus)
     return cap.get().rstrip("\n")
@@ -242,6 +246,10 @@ def _sym_cell(row, abbrev) -> str:
     return ",".join(abbrev(b) for b in row.sym_busses) if row.sym_busses else "·"
 
 
+def _count_or_dot(n) -> str:
+    return str(n) if n else "·"
+
+
 def _rac(t) -> str:
     """Format a (removed, added, changed) triple as -r+a~c, or · if all zero."""
     r, a, c = t
@@ -267,7 +275,7 @@ def _sweep_plain(rows, group, block, abbrev, with_diff=False) -> str:
     pw = max((len(r.pass_name) for r in rows), default=4)
     dcol = f"{'dcons':>9} {'dmem':>7} {'dbus':>7} " if with_diff else ""
     out.append(f"{'NNN':>3} {'pass':<{pw}} f {'cons':>4} {'bus':>4} "
-               f"{'mem':>3} {'der':>3} {'deg':>3} {'cols':>4} "
+               f"{'mem':>3} {'mkey':>4} {'der':>3} {'deg':>3} {'cols':>4} "
                f"{dcol} sym-busses")
     for r in rows:
         dcell = ""
@@ -277,6 +285,7 @@ def _sweep_plain(rows, group, block, abbrev, with_diff=False) -> str:
         out.append(
             f"{r.nnn:03d} {r.pass_name:<{pw}} {FMT_MARK.get(r.fmt, '?')} "
             f"{r.n_constraints:>4} {r.n_bus_interactions:>4} {r.n_memory:>3} "
+            f"{_count_or_dot(r.mem_key_sym):>4} "
             f"{r.n_derived_columns:>3} {r.max_degree:>3} "
             f"{r.distinct_columns:>4} {dcell} {_sym_cell(r, abbrev)}"
         )
@@ -297,6 +306,7 @@ def _sweep_rich(rows, group, block, abbrev, with_diff=False) -> str:
         t.add_column("cons", justify="right")
         t.add_column("bus", justify="right")
         t.add_column("mem", justify="right")
+        t.add_column("mkey", justify="right")
         t.add_column("der", justify="right")
         t.add_column("deg", justify="right")
         t.add_column("cols", justify="right")
@@ -310,9 +320,11 @@ def _sweep_rich(rows, group, block, abbrev, with_diff=False) -> str:
             mark = f"[magenta]{mark}[/]" if r.fmt == "machine" else mark
             sym = _sym_cell(r, abbrev)
             sym = f"[yellow]{sym}[/]" if r.sym_busses else f"[dim]{sym}[/]"
+            mkey = (f"[yellow]{r.mem_key_sym}[/]" if r.mem_key_sym
+                    else "[dim]·[/]")
             cells = [
                 f"{r.nnn:03d}", r.pass_name, mark, str(r.n_constraints),
-                str(r.n_bus_interactions), str(r.n_memory),
+                str(r.n_bus_interactions), str(r.n_memory), mkey,
                 str(r.n_derived_columns), str(r.max_degree),
                 str(r.distinct_columns),
             ]
@@ -347,12 +359,13 @@ def _sweep_all_plain(rows, group, sort) -> str:
     out = [f"# {group} · sort={sort} desc · {len(rows)} blocks"]
     out.append(f"{'block':>8} {'steps':>5} {'cons0':>6} {'consF':>5} "
                f"{'red%':>4} {'mem0':>4} {'memF':>4} {'degF':>4} "
-               f"{'memSym':>6} {'othSym':>6} {'kb':>8}")
+               f"{'memSym':>6} {'memKey':>6} {'othSym':>6} {'kb':>8}")
     for r in rows:
         out.append(
             f"{r.block:>8} {r.n_steps:>5} {r.cons0:>6} {r.consF:>5} "
             f"{_red_str(r):>4} {r.mem0:>4} {r.memF:>4} {r.max_degree_final:>4} "
             f"{('sym' if r.mem_sym_final else '·'):>6} "
+            f"{('sym' if r.mem_key_sym_final else '·'):>6} "
             f"{('sym' if r.other_sym_final else '·'):>6} {r.kb0:>8.1f}"
         )
     return "\n".join(out)
@@ -371,6 +384,7 @@ def _sweep_all_rich(rows, group, sort) -> str:
         for col in ("steps", "cons0", "consF", "red%", "mem0", "memF", "degF"):
             t.add_column(col, justify="right")
         t.add_column("memSym", justify="center")
+        t.add_column("memKey", justify="center")
         t.add_column("othSym", justify="center")
         t.add_column("kb", justify="right")
 
@@ -382,7 +396,8 @@ def _sweep_all_rich(rows, group, sort) -> str:
                 r.block, str(r.n_steps), str(r.cons0), str(r.consF),
                 _red_str(r), str(r.mem0), str(r.memF),
                 str(r.max_degree_final), flag(r.mem_sym_final),
-                flag(r.other_sym_final), f"{r.kb0:.1f}",
+                flag(r.mem_key_sym_final), flag(r.other_sym_final),
+                f"{r.kb0:.1f}",
             )
         console.print(t)
     return cap.get().rstrip("\n")
@@ -835,10 +850,12 @@ JSON FIELDS (show)
   distinct_columns:int
   degree{min,mean,max}  degree_hist{deg:count}
   nodes{min,mean,max}  depth{min,mean,max}  op_hist{"+":n,"-":n,"*":n}
-  buses[ {id,label,count,send,recv,sym,other,args_nodes} ]
+  buses[ {id,label,count,send,recv,sym,other,key_sym,args_nodes} ]
   derived_forms{form:count}
   n_blocks,n_instructions,submachine_polys[]   (base/unopt dump only)
   degree = polynomial degree (const 0, col 1, +/- max, * sum)
+  sym = interactions with symbolic multiplicity; key_sym (Memory only) =
+    interactions whose key (address_space, pointer) is symbolic
 
 JSON FIELDS (compare)
   a{...} b{...} (targets)  format{a,b}
@@ -846,28 +863,31 @@ JSON FIELDS (compare)
   op_hist{op:{a,b,delta}}  degree_mean{a,b,delta}
 
 SWEEP COLUMNS / JSON (one row per step)
-  NNN pass  f  cons bus mem der deg cols  [dcons dmem dbus]  sym-busses
+  NNN pass  f  cons bus mem mkey der deg cols  [dcons dmem dbus]  sym-busses
   dcons/dmem/dbus (only with --diff; slower on big blocks) = -rem+add~chg of
     constraints / Memory-bus / other-bus vs the previous step (same
     representation only; "—" across M/C; blank on first row)
   f = format marker: M=machine C=constraints
   cons=n_constraints bus=n_bus_interactions mem=Memory-bus count
+  mkey=Memory interactions with symbolic (addr,ptr) key (· if none)
   der=n_derived_columns deg=max degree cols=distinct columns
   sym-busses = abbreviated labels of busses with symbolic mult, else ·
   JSON: {group,block,steps:[{nnn,pass,format,n_constraints,
     n_bus_interactions,n_memory,n_derived_columns,max_degree,
-    distinct_columns,sym_busses[],
+    distinct_columns,sym_busses[],mem_key_sym,
     diff: null | {cross_representation:true} | {constraints:{r,a,chg},
       memory:{r,a,chg}, bus:{r,a,chg}}}]}  (only with --diff)
 
 SWEEP ALL COLUMNS / JSON (one row per block, sorted by KEY desc)
-  block steps cons0 consF red% mem0 memF degF memSym othSym kb
+  block steps cons0 consF red% mem0 memF degF memSym memKey othSym kb
   cons0/consF=initial/final n_constraints  red%=reduction
   mem0/memF=initial/final Memory-bus count  degF=final max degree
-  memSym=Memory bus has symbolic mult in final dump (special-cased)
+  memSym=Memory bus has symbolic mult in final dump
+  memKey=Memory bus has symbolic (addr,ptr) key in final dump
   othSym=any non-Memory bus symbolic in final  kb=initial dump size
   JSON: {group,sort,blocks:[{block,n_steps,cons0,consF,reduction_pct,
-    mem0,memF,max_degree_final,mem_sym_final,other_sym_final,kb0,bytes0}]}
+    mem0,memF,max_degree_final,mem_sym_final,mem_key_sym_final,
+    other_sym_final,kb0,bytes0}]}
 
 EXAMPLES
   lens show keccak 2106412 011 --json

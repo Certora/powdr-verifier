@@ -41,6 +41,7 @@ class StepRow:
     max_degree: int
     distinct_columns: int
     sym_busses: list[str]
+    mem_key_sym: int = 0   # Memory interactions with a symbolic (addr,ptr) key
     # diff vs the previous step: None (first), "xrep" (cross-representation,
     # not comparable), or (cons, mem, bus) each a (rem, add, chg) triple.
     delta: Any = None
@@ -73,6 +74,7 @@ class StepRow:
             "max_degree": self.max_degree,
             "distinct_columns": self.distinct_columns,
             "sym_busses": self.sym_busses,
+            "mem_key_sym": self.mem_key_sym,
             "diff": self._delta_dict(),
         }
 
@@ -91,6 +93,7 @@ class BlockRow:
     max_degree_final: int
     mem_sym_final: bool
     other_sym_final: bool
+    mem_key_sym_final: bool
     bytes0: int
 
     @property
@@ -109,6 +112,7 @@ class BlockRow:
             "max_degree_final": self.max_degree_final,
             "mem_sym_final": self.mem_sym_final,
             "other_sym_final": self.other_sym_final,
+            "mem_key_sym_final": self.mem_key_sym_final,
             "kb0": self.kb0,
             "bytes0": self.bytes0,
         }
@@ -153,6 +157,7 @@ def build_sweep_all(
             max_degree_final=sf.degree.max,
             mem_sym_final="Memory" in sym_labels,
             other_sym_final=any(lbl != "Memory" for lbl in sym_labels),
+            mem_key_sym_final=sf.memory_key_sym > 0,
             bytes0=entries[0].path.stat().st_size,
         ))
     keyfn = _SORT_KEYS.get(sort_key, _SORT_KEYS["cons0"])
@@ -198,6 +203,7 @@ def build_sweep(
             max_degree=s.degree.max,
             distinct_columns=s.distinct_columns,
             sym_busses=s.sym_bus_labels(),
+            mem_key_sym=s.memory_key_sym,
             delta=delta,
         ))
     return rows

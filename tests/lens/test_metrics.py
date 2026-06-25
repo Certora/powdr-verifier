@@ -1,6 +1,8 @@
 """Expression-tree metrics and multiplicity classification."""
 from src.lens.loader import detect_format
-from src.lens.metrics import NEG_ONE, DumpStats, analyze_expr, mult_kind
+from src.lens.metrics import (
+    NEG_ONE, DumpStats, analyze_expr, mem_key_symbolic, mult_kind,
+)
 
 
 def test_constant_and_column():
@@ -115,6 +117,33 @@ def test_dumpstats_format_field():
         {"block": {"blocks": []}, "subs": [], "machine": _machine([], [])}, {}
     )
     assert base.fmt == "machine"
+
+
+def test_mem_key_symbolic():
+    # symbolic pointer -> key symbolic
+    assert mem_key_symbolic({"id": 1, "args": [1, "ptr@2", "d@3", "ts@4"]})
+    # constant addr + pointer -> concrete key (data/ts symbolic is irrelevant)
+    assert not mem_key_symbolic({"id": 1, "args": [1, 40, "d@3", "ts@4"]})
+    # symbolic address space also counts
+    assert mem_key_symbolic({"id": 1, "args": ["as@0", 40, "d@3"]})
+
+
+def test_dumpstats_memory_key_sym_count():
+    data = _machine(
+        constraints=[],
+        bus=[
+            {"id": 1, "mult": 1, "args": [1, "p@9", "d@1", "ts@2"]},   # sym key
+            {"id": 1, "mult": 1, "args": [1, 40, "d@3", "ts@4"]},      # concrete
+            {"id": 3, "mult": 1, "args": ["x@0", 17]},                  # not memory
+        ],
+    )
+    s = DumpStats.from_data(data, {"1": "Memory", "3": "VariableRangeChecker"})
+    assert s.memory_key_sym == 1
+    mem = next(r for r in s.buses if r.label == "Memory")
+    assert mem.key_sym == 1
+    # non-memory rows never get key_sym
+    rc = next(r for r in s.buses if r.label == "VariableRangeChecker")
+    assert rc.key_sym == 0
 
 
 def test_dumpstats_base_extras():
