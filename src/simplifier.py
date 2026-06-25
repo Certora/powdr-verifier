@@ -16,6 +16,7 @@ from .smt.utils import *
 from .smt_backends.pysmt import write_smtlib_script
 from .utils.args import ARGS
 from .utils.io import open_file
+from .utils.stats import init_stats_run, set_stats_tag, stats_enabled, stats_tag_from_path
 
 from .simplify.witness import simplify_witnesses
 from .simplify.domain_probe import simplify_domain_probe
@@ -255,6 +256,10 @@ def simplify():
     """Read SMT2, run selected simplification passes, and write to output (or overwrite input)."""
 
     optimization_step = ARGS().optimization_step
+
+    if stats_enabled():
+        init_stats_run(wipe=False)
+        set_stats_tag(getattr(ARGS(), "stats_tag", None) or stats_tag_from_path(ARGS().input))
 
     with Action("simplifier") as action:
         action += {

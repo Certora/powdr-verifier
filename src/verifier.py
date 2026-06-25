@@ -13,6 +13,7 @@ from .smt.conversion import SmtConverter
 from .smt.utils import *
 from .utils.basic_block import BasicBlock
 from .utils.io import load_apc_dump, load_json
+from .utils.stats import init_stats_run, set_stats_tag, stats_enabled
 from .verify.bug_injection import apply_injection
 from .verify.preanalysis import analyze_verify_preanalysis, apply_skip_trivial
 from .verify.memory_bus_alignment import BEFORE_PREFIX, AFTER_PREFIX, emit_memory_equalities
@@ -77,6 +78,10 @@ def encoding(before, after, qvars, io_relation, additional_asserts=[]):
 
 def verify():
     """Verify our versions of equivalence."""
+
+    if stats_enabled():
+        init_stats_run(wipe=True)
+        set_stats_tag("encode")
 
     before = load_apc_dump(ARGS().input_before)
     after = load_apc_dump(ARGS().input_after)
