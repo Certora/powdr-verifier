@@ -50,6 +50,7 @@ DEFAULT_TACTIC = (
 
 # Custom colon-separated pipelines keyed by powdr optimization pass name (e.g. ``remove_free``).
 STEP_TACTICS: dict[str, str] = {
+    "exec_bus": "nnf:evaluator:skolem:lift:witness:demod:z3-propagate-values:flatten_outer_array:isqf:bounds:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod:pretty",
     "loop_iteration": "nnf:evaluator:skolem:lift:witness:demod:z3-propagate-values:flatten_outer_array:isqf:bounds:demod:normalize:bitwise:mod_inv:demod:z3-propagate-values:normalize:demod:pretty",
 }
 
