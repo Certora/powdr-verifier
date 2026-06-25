@@ -55,6 +55,7 @@ def __build_parser(skip_subparsers=False):
     parser.add_argument("--substitutions", type=Path, default=None)
     parser.add_argument("--solver", type=str, default="z3-nightly")
     parser.add_argument("--skip-rewriting", action="store_true")
+    parser.add_argument("--with-sympy", action="store_true")
     parser.add_argument("--elim-with-model", type=Path, default=None)
     parser.add_argument("--cprofile", action="store_true")
     parser.add_argument("--no-typecheck", action="store_true")
