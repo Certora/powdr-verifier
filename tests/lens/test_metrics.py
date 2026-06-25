@@ -91,19 +91,30 @@ def test_dumpstats_counts_and_buses():
 
 
 def test_detect_format():
-    assert detect_format({"block": {}, "machine": {}, "subs": []}) == "circuit"
-    assert detect_format({"subs": []}) == "circuit"
-    assert detect_format({"constraints": [], "bus_interactions": []}) == "constraints"
+    # base dump (block/subs) -> machine (algebraic, with context)
+    assert detect_format({"block": {}, "machine": {}, "subs": []}) == "machine"
+    assert detect_format({"subs": []}) == "machine"
+    # step with a "-" operator (algebraic encoding) -> machine
+    assert detect_format(
+        {"constraints": [["f@0", "-", 1]], "bus_interactions": []}) == "machine"
+    # step with only field residue, no "-" -> constraints (grouped)
+    assert detect_format(
+        {"constraints": [["f@0", "+", 2013265920]], "bus_interactions": []}
+    ) == "constraints"
+    # the substitutions list artifact
+    assert detect_format([["x@0", 1], ["y@1", 2]]) == "substitutions"
     assert detect_format({}) == "unknown"
 
 
 def test_dumpstats_format_field():
-    step = DumpStats.from_data(_machine([], []), {})
+    # grouped step (residue, no "-") -> constraints
+    step = DumpStats.from_data(
+        _machine([["f@0", "+", 2013265920]], []), {})
     assert step.fmt == "constraints"
     base = DumpStats.from_data(
         {"block": {"blocks": []}, "subs": [], "machine": _machine([], [])}, {}
     )
-    assert base.fmt == "circuit"
+    assert base.fmt == "machine"
 
 
 def test_dumpstats_base_extras():

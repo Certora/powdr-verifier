@@ -152,6 +152,13 @@ def base_dump_path(directory: Path, block: str) -> Path | None:
     return cand if cand.is_file() else None
 
 
+def substitutions_path(directory: Path, block: str) -> Path | None:
+    """Path to the block's ``*_substitutions.json`` (var -> definition list)."""
+    bid = normalize_block(block)
+    cand = directory / f"apc_candidate_{bid}_substitutions.json"
+    return cand if cand.is_file() else None
+
+
 def resolve(group: str, block: str, step: str, root: Path | None = None) -> StepEntry:
     """Convenience: resolve a single ``(group, block, step)`` to a StepEntry."""
     directory = group_dir(group, root)

@@ -3,7 +3,10 @@ import json
 
 from src.lens import resolve
 from src.lens.loader import load_bus_map
-from src.lens.render import JSON, PLAIN, render_sweep, render_sweep_all
+from src.lens.normalize import normalize_constants
+from src.lens.render import (
+    JSON, PLAIN, render_subs, render_sweep, render_sweep_all,
+)
 from src.lens.sweep import abbrev_label, build_sweep, build_sweep_all
 
 
@@ -66,8 +69,8 @@ def test_build_sweep_markers_memory_and_sym(tmp_path):
     _make_block(tmp_path)
     rows = _rows(tmp_path)
     assert [r.nnn for r in rows] == [0, 1, 2]
-    assert rows[0].fmt == "circuit" and rows[1].fmt == "constraints"
-    # circuit step: Memory mult symbolic; constraints steps: concrete
+    assert rows[0].fmt == "machine" and rows[1].fmt == "constraints"
+    # machine step: Memory mult symbolic; constraints steps: concrete
     assert rows[0].sym_busses == ["Memory"]
     assert rows[1].sym_busses == []
     # Memory bus count (id 1): 1 in circuit, 2 in the constraints dumps
@@ -98,7 +101,7 @@ def test_render_sweep_json(tmp_path):
 def test_render_sweep_plain(tmp_path):
     _make_block(tmp_path)
     text = render_sweep(_rows(tmp_path), "keccak", "111", PLAIN)
-    assert "M=machine/circuit C=constraints" in text
+    assert "M=machine C=constraints" in text
     lines = text.splitlines()
     assert lines[2].startswith("000 unopt") and " M " in lines[2]
     assert "Mem" in lines[2]  # abbreviated sym label
@@ -202,3 +205,16 @@ def test_render_sweep_all_plain(tmp_path):
     assert "2 blocks" in text
     lines = text.splitlines()
     assert lines[2].split()[:4] == ["111", "2", "5", "1"]  # block steps cons0 consF
+
+
+# --------------------------------------------------------------------------- #
+# subs
+# --------------------------------------------------------------------------- #
+def test_render_subs_signs_constants():
+    raw = [["x@0", 2013265920], ["y@1", [[2013265920, "*", "z@2"], "+", 1]]]
+    subs = [(v, normalize_constants(d)) for v, d in raw]
+    text = render_subs(subs, "keccak", "111", PLAIN)
+    assert "x@0 = -1" in text
+    assert "y@1 = ((-1 * z@2) + 1)" in text
+    out = json.loads(render_subs(subs, "keccak", "111", JSON))
+    assert out["substitutions"][0] == {"var": "x@0", "def": -1}

@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from .metrics import DumpDiff, DumpStats
 
 RICH, PLAIN, JSON = "rich", "plain", "json"
-FMT_MARK = {"circuit": "M", "constraints": "C", "unknown": "?"}
-_FMT_LEGEND = "f: M=machine/circuit C=constraints"
+FMT_MARK = {"machine": "M", "constraints": "C",
+            "substitutions": "S", "unknown": "?"}
+_FMT_LEGEND = "f: M=machine C=constraints"
 
 
 @dataclass
@@ -274,7 +275,7 @@ def _sweep_rich(rows, group, block, abbrev) -> str:
         t.add_column("sym-busses")
         for r in rows:
             mark = FMT_MARK.get(r.fmt, "?")
-            mark = f"[magenta]{mark}[/]" if r.fmt == "circuit" else mark
+            mark = f"[magenta]{mark}[/]" if r.fmt == "machine" else mark
             sym = _sym_cell(r, abbrev)
             sym = f"[yellow]{sym}[/]" if r.sym_busses else f"[dim]{sym}[/]"
             t.add_row(
@@ -352,6 +353,48 @@ def _sweep_all_rich(rows, group, sort) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# subs (substitutions: var -> definition)
+# --------------------------------------------------------------------------- #
+def _expr_str(node) -> str:
+    """Compact infix string for a (signed-normalized) expression tree."""
+    if isinstance(node, list):
+        if node and node[0] == "-" and len(node) == 2:
+            return f"-{_expr_str(node[1])}"
+        parts = [_expr_str(x) if i % 2 == 0 else str(x) for i, x in enumerate(node)]
+        return "(" + " ".join(parts) + ")"
+    return str(node)
+
+
+def render_subs(subs, group: str, block: str, mode: str) -> str:
+    """Render substitutions (already constant-normalized) var = definition."""
+    if mode == JSON:
+        return json.dumps(
+            {"group": group, "block": block,
+             "substitutions": [{"var": v, "def": d} for v, d in subs]},
+            indent=2,
+        )
+    if mode == RICH:
+        from rich.console import Console
+        from rich.table import Table
+
+        console = Console()
+        with console.capture() as cap:
+            console.rule(f"[bold]{group}/{block}[/] substitutions "
+                         f"[dim]({len(subs)})[/]")
+            t = Table(show_edge=False)
+            t.add_column("variable", style="green")
+            t.add_column("=")
+            t.add_column("definition")
+            for v, d in subs:
+                t.add_row(str(v), "=", _expr_str(d))
+            console.print(t)
+        return cap.get().rstrip("\n")
+    out = [f"# {group}/{block} substitutions ({len(subs)})"]
+    out += [f"{v} = {_expr_str(d)}" for v, d in subs]
+    return "\n".join(out)
+
+
+# --------------------------------------------------------------------------- #
 # agent guide
 # --------------------------------------------------------------------------- #
 def agent_guide() -> str:
@@ -368,6 +411,7 @@ SUBCOMMANDS
   sweep   <group> <block> [--from N] [--to N]   per-step trail, 1 row/step
   sweep   all [<group>] [--sort KEY]   1 row PER BLOCK (group auto-picked
             if only one). KEY: cons0(default) consF steps mem0 memF size red
+  subs    <group> <block>   list var -> definition (signed-normalized)
 
 GLOBAL FLAGS
   --root DIR     dumps root (default: powdr-dumps)
@@ -383,16 +427,21 @@ RESOLUTION
           pass names repeat (memory at 011/022/033): disambiguate with
           memory@2 (1-based) or use the NNN. Ambiguous bare names error.
 
-FORMAT (powdr emits two dump types; lens auto-detects)
-  circuit      Apc/SymbolicMachine (AlgebraicExpression): base _000_unopt
-               dump. Has block/subs; uses real - and unary ["-",e].
-  constraints  ConstraintSystem (GroupedExpression): per-pass dumps. Only
-               +/*; subtraction lowered to + (p-1)*x. Discriminator: no
-               block/subs key.
-  comparing across formats flags operator-delta artifacts.
+FORMAT (powdr emits three artifacts; lens auto-detects)
+  machine        SymbolicMachine/AlgebraicExpression: uses real - and unary
+                 ["-",e]; negatives signed. The _000_unopt base dump (has
+                 block/subs) AND the outer steps (loop_iteration, inlining,
+                 range_constraints, post-inline rule_based/trivial_simp).
+  constraints    ConstraintSystem/GroupedExpression: NO -; negatives are
+                 field residues (2013265920=p-1). The inner passes.
+  substitutions  the _substitutions.json list of [var, definition] pairs.
+  discriminator: any - operator => machine; else residue => constraints.
+  normalization: constants are signed toward negative, p=2013265921
+  (2013265920 -> -1). `lens subs` prints definitions in this form.
+  comparing across encodings flags operator-delta artifacts.
 
 JSON FIELDS (show)
-  target{group,block,label,path}  format:"circuit"|"constraints"
+  target{group,block,label,path}  format:"machine"|"constraints"
   n_constraints:int  n_bus_interactions:int  n_derived_columns:int
   distinct_columns:int
   degree{min,mean,max}  degree_hist{deg:count}
@@ -409,7 +458,7 @@ JSON FIELDS (compare)
 
 SWEEP COLUMNS / JSON (one row per step)
   NNN pass  f  cons bus mem der deg cols  sym-busses
-  f = format marker: M=machine/circuit C=constraints
+  f = format marker: M=machine C=constraints
   cons=n_constraints bus=n_bus_interactions mem=Memory-bus count
   der=n_derived_columns deg=max degree cols=distinct columns
   sym-busses = abbreviated labels of busses with symbolic mult, else ·
@@ -435,4 +484,5 @@ EXAMPLES
   lens sweep keccak 2099512 --from 11 --to 23 --json
   lens sweep all
   lens sweep all keccak --sort consF --json
+  lens subs keccak 2099512
 """

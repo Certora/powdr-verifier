@@ -6,6 +6,7 @@ from pathlib import Path
 from . import render, resolve
 from .loader import load, load_bus_map
 from .metrics import DumpDiff, DumpStats
+from .normalize import normalize_constants
 from .render import Target
 from .sweep import build_sweep, build_sweep_all
 
@@ -71,6 +72,12 @@ def _build_parser() -> argparse.ArgumentParser:
                                    "size", "red"],
                           help="sort key for 'all' (default cons0, desc)")
 
+    sp_subs = sub.add_parser(
+        "subs", parents=[common],
+        help="list a block's variable substitutions (signed-normalized)")
+    sp_subs.add_argument("group")
+    sp_subs.add_argument("block")
+
     return p
 
 
@@ -112,6 +119,19 @@ def _run_sweep(args, mode: str) -> None:
     print(render.render_sweep(rows, group, resolve.normalize_block(block), mode))
 
 
+def _run_subs(args, mode: str) -> None:
+    """`subs <group> <block>`: list var -> definition, constants signed."""
+    directory = resolve.group_dir(args.group, args.root)
+    path = resolve.substitutions_path(directory, args.block)
+    if path is None:
+        raise resolve.ResolveError(
+            f"no substitutions file for block {resolve.normalize_block(args.block)}")
+    raw = load(path)
+    subs = [(v, normalize_constants(d)) for v, d in raw]
+    print(render.render_subs(subs, args.group,
+                             resolve.normalize_block(args.block), mode))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
@@ -126,6 +146,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "sweep":
             _run_sweep(args, mode)
+            return 0
+
+        if args.command == "subs":
+            _run_subs(args, mode)
             return 0
 
         directory = resolve.group_dir(args.group, args.root)
