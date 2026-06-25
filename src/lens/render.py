@@ -734,7 +734,46 @@ def agent_guide() -> str:
 
 
 AGENT_GUIDE = """
-lens — statistics over powdr APC JSON dumps.
+lens — explore the powdr APC optimizer dumps.
+
+WHAT / WHY
+  The powdr autoprecompile optimizer writes a JSON snapshot after each pass:
+  powdr-dumps/<group>/apc_candidate_<id>_<NNN>_<pass>.json. A "block" is one
+  candidate id; its steps NNN=000..N are the trail through the optimizer.
+  lens reads these to answer: how big/complex is a block, what did each pass
+  do, how was a variable eliminated, which block is the hardest.
+  One trap it handles for you: between adjacent passes the *encoding* flips
+  (machine <-> constraints, see FORMAT). A constraint like f*(f-1) is written
+  ["f","*",["f","-",1]] in machine form and ["f","*",["f","+",2013265920]] in
+  constraints form — identical math, different bytes. lens normalizes this and
+  REFUSES to diff across the flip, so you always compare like with like.
+
+DECIDE (goal -> command)
+  stats / shape of one dump            -> show <g> <b> <step>
+  how a block evolves across passes    -> sweep <g> <b>
+  what each pass changed (counts)      -> sweep <g> <b> --diff
+  exactly what one pass changed        -> diff <g> <b> <stepA> <stepB>
+  which block is biggest / least-opt   -> sweep all [<g>] [--sort KEY]
+  how a variable was eliminated        -> subs <g> <b>
+  raw count delta between two steps    -> compare <g> <b> <stepA> <stepB>
+  feed another tool / script           -> add --json to any of the above
+
+TYPICAL SESSION
+  # 1. survey the group: which blocks carry the most work?
+  lens sweep all keccak --sort consF
+  # 2. walk one block's optimization trail (format flips, counts per step)
+  lens sweep keccak 2104492
+  # 3. attribute the change to each pass (counts; opt-in, slower)
+  lens sweep keccak 2104492 --diff
+  # 4. drill into one transition — same representation only
+  lens diff keccak 2104492 010 011
+  # 5. a step pair that flips M<->C is refused; pick two same-rep steps,
+  #    e.g. skip the machine-encoded loop_iteration between two C steps
+  lens diff keccak 2104492 011 014
+  # 6. explain an eliminated variable seen in a diff's columns
+  lens subs keccak 2104492 | grep <var>
+  # 7. full detail on a single dump
+  lens show keccak 2104492 011 --json
 
 SUBCOMMANDS
   show    <group> <block> <step>        stats for one dump
@@ -762,6 +801,20 @@ RESOLUTION
   step    NNN integer (11 or 011) | pass name (memory) | unopt|base (000)
           pass names repeat (memory at 011/022/033): disambiguate with
           memory@2 (1-based) or use the NNN. Ambiguous bare names error.
+
+EXIT CODES
+  0   success (incl. an empty diff / zero changes)
+  2   resolution error (unknown group/block/step, ambiguous pass name) OR a
+      refused diff (M-vs-C, or a non-constraint dump). Message on stderr.
+  argparse usage errors exit 2 as well (stderr usage line).
+
+PERFORMANCE
+  Most blocks are sub-second. Cost is dominated by JSON parsing, which scales
+  with the unopt dump size (see `sweep all` kb column). The big outlier is
+  2100224 (~28k initial constraints, 12 MB unopt): `sweep` ~8s; `sweep --diff`
+  ~16s (canonicalization adds ~2x); plain `diff` of a single huge pair is
+  similar. Prefer --diff / diff on specific steps or smaller blocks; sweep
+  without --diff stays cheap.
 
 FORMAT (powdr emits three artifacts; lens auto-detects)
   machine        SymbolicMachine/AlgebraicExpression: uses real - and unary

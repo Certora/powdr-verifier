@@ -32,8 +32,19 @@ def _add_common(parser: argparse.ArgumentParser, suppress: bool) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="lens",
-        description="Statistics over powdr APC JSON dumps. "
-        "Run `lens --agent` for an agent-oriented usage guide.",
+        description="Statistics and diffs over powdr APC optimizer dumps "
+        "(powdr-dumps/<group>/apc_candidate_<id>_<NNN>_<pass>.json).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "examples:\n"
+            "  lens sweep all keccak --sort consF   # which blocks carry work\n"
+            "  lens sweep keccak 2104492            # one block's trail\n"
+            "  lens diff keccak 2104492 010 011     # what a pass changed\n"
+            "  lens show keccak 2104492 011         # one dump in detail\n"
+            "  lens subs keccak 2104492             # how vars were eliminated\n"
+            "\nRun `lens --agent` for the agent-oriented guide "
+            "(decide table, typical session, JSON schemas, exit codes)."
+        ),
     )
     p.add_argument("--agent", action="store_true",
                    help="print a dense agent-oriented usage guide and exit")
