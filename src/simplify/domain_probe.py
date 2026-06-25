@@ -146,19 +146,28 @@ def _probe_cluster(
     solver: Solver,
     cluster_choices: dict[FNode, list[int]],
     batch: list[FNode],
-) -> None:
+) -> dict[str, int]:
+    outcomes = {"probes_sat": 0, "probes_unsat": 0, "probes_unknown": 0, "excluded": 0}
     for sym, vals in sorted(cluster_choices.items(), key=lambda kv: str(kv[0])):
         for v in vals:
             eq = Equals(sym, Int(v))
             r = _probe(solver, eq)
             tag = {True: "sat", False: "unsat", None: "unknown"}[r]
             logger.info("domain_probe: probe (= %s %s) -> %s", sym, v, tag)
+            if tag == "sat":
+                outcomes["probes_sat"] += 1
+            elif tag == "unsat":
+                outcomes["probes_unsat"] += 1
+            else:
+                outcomes["probes_unknown"] += 1
             if r is False:
                 ne = Not(eq)
                 if ne not in batch:
                     batch.append(ne)
                     solver.add_assertion(ne)
+                    outcomes["excluded"] += 1
                     logger.info("domain_probe: exclude -> assert %s", ne)
+    return outcomes
 
 
 def simplify_domain_probe(
@@ -201,6 +210,7 @@ def simplify_domain_probe(
         )
 
         batch: list[FNode] = []
+        cluster_stats: list[dict] = []
         while remaining and symbols_probed < _MAX_PAIRS:
             seed = min(remaining, key=str)
             cluster = _flag_cluster(seed, assertions, choices)
@@ -234,13 +244,21 @@ def simplify_domain_probe(
             with Solver(logic=ALL, solver_options=_SOLVER_OPTS) as solver:
                 for f in rel:
                     solver.add_assertion(f)
-                _probe_cluster(solver, cluster_choices, batch)
+                cluster_outcomes = _probe_cluster(solver, cluster_choices, batch)
+            cluster_stats.append({
+                "index": clusters_probed,
+                "n_vars": len(cluster_choices),
+                "n_flag_vars": len(cluster),
+                "n_asserts": len(rel),
+                **cluster_outcomes,
+            })
 
         probe_stats.update({
             "pairs_probed": symbols_probed,
             "clusters_probed": clusters_probed,
             "flag_vars": flag_vars_total,
             "flag_local_asserts": flag_local_total,
+            "clusters": cluster_stats,
         })
         if len(choices) > symbols_probed:
             logger.info(

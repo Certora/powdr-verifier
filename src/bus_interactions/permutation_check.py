@@ -13,6 +13,7 @@ from .memory_plain_utils import (
 from ..smt.utils import *
 from ..utils.args import ARGS
 from ..utils.enums import MemoryPresolve
+from ..utils.stats import profile
 
 
 def _plain_static_profile(
@@ -97,6 +98,7 @@ def _plain_build_match_vars(
     return match_vars
 
 
+@profile
 def keyed_io_relation(
     name: str,
     interactions_a: list,
