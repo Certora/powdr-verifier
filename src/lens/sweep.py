@@ -68,7 +68,8 @@ class BlockRow:
     mem0: int
     memF: int
     max_degree_final: int
-    sym_final: bool
+    mem_sym_final: bool
+    other_sym_final: bool
     bytes0: int
 
     @property
@@ -85,7 +86,8 @@ class BlockRow:
             "mem0": self.mem0,
             "memF": self.memF,
             "max_degree_final": self.max_degree_final,
-            "sym_final": self.sym_final,
+            "mem_sym_final": self.mem_sym_final,
+            "other_sym_final": self.other_sym_final,
             "kb0": self.kb0,
             "bytes0": self.bytes0,
         }
@@ -118,6 +120,7 @@ def build_sweep_all(
         sf = DumpStats.from_data(load(entries[-1].path), labels)
         red = None if s0.n_constraints == 0 else round(
             100 * (1 - sf.n_constraints / s0.n_constraints))
+        sym_labels = sf.sym_bus_labels()
         rows.append(BlockRow(
             block=bid,
             n_steps=len(entries),
@@ -127,7 +130,8 @@ def build_sweep_all(
             mem0=s0.memory_count,
             memF=sf.memory_count,
             max_degree_final=sf.degree.max,
-            sym_final=bool(sf.sym_bus_labels()),
+            mem_sym_final="Memory" in sym_labels,
+            other_sym_final=any(lbl != "Memory" for lbl in sym_labels),
             bytes0=entries[0].path.stat().st_size,
         ))
     keyfn = _SORT_KEYS.get(sort_key, _SORT_KEYS["cons0"])

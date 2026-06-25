@@ -309,13 +309,14 @@ def _red_str(r) -> str:
 def _sweep_all_plain(rows, group, sort) -> str:
     out = [f"# {group} · sort={sort} desc · {len(rows)} blocks"]
     out.append(f"{'block':>8} {'steps':>5} {'cons0':>6} {'consF':>5} "
-               f"{'red%':>4} {'mem0':>4} {'memF':>4} {'degF':>4} {'symF':>4} "
-               f"{'kb':>8}")
+               f"{'red%':>4} {'mem0':>4} {'memF':>4} {'degF':>4} "
+               f"{'memSym':>6} {'othSym':>6} {'kb':>8}")
     for r in rows:
         out.append(
             f"{r.block:>8} {r.n_steps:>5} {r.cons0:>6} {r.consF:>5} "
             f"{_red_str(r):>4} {r.mem0:>4} {r.memF:>4} {r.max_degree_final:>4} "
-            f"{('sym' if r.sym_final else '·'):>4} {r.kb0:>8.1f}"
+            f"{('sym' if r.mem_sym_final else '·'):>6} "
+            f"{('sym' if r.other_sym_final else '·'):>6} {r.kb0:>8.1f}"
         )
     return "\n".join(out)
 
@@ -332,14 +333,19 @@ def _sweep_all_rich(rows, group, sort) -> str:
         t.add_column("block", justify="right")
         for col in ("steps", "cons0", "consF", "red%", "mem0", "memF", "degF"):
             t.add_column(col, justify="right")
-        t.add_column("symF", justify="center")
+        t.add_column("memSym", justify="center")
+        t.add_column("othSym", justify="center")
         t.add_column("kb", justify="right")
+
+        def flag(on):
+            return "[yellow]sym[/]" if on else "[dim]·[/]"
+
         for r in rows:
-            sym = "[yellow]sym[/]" if r.sym_final else "[dim]·[/]"
             t.add_row(
                 r.block, str(r.n_steps), str(r.cons0), str(r.consF),
                 _red_str(r), str(r.mem0), str(r.memF),
-                str(r.max_degree_final), sym, f"{r.kb0:.1f}",
+                str(r.max_degree_final), flag(r.mem_sym_final),
+                flag(r.other_sym_final), f"{r.kb0:.1f}",
             )
         console.print(t)
     return cap.get().rstrip("\n")
@@ -412,12 +418,13 @@ SWEEP COLUMNS / JSON (one row per step)
     distinct_columns,sym_busses[]}]}
 
 SWEEP ALL COLUMNS / JSON (one row per block, sorted by KEY desc)
-  block steps cons0 consF red% mem0 memF degF symF kb
+  block steps cons0 consF red% mem0 memF degF memSym othSym kb
   cons0/consF=initial/final n_constraints  red%=reduction
   mem0/memF=initial/final Memory-bus count  degF=final max degree
-  symF=final dump has symbolic bus mults  kb=initial dump size
+  memSym=Memory bus has symbolic mult in final dump (special-cased)
+  othSym=any non-Memory bus symbolic in final  kb=initial dump size
   JSON: {group,sort,blocks:[{block,n_steps,cons0,consF,reduction_pct,
-    mem0,memF,max_degree_final,sym_final,kb0,bytes0}]}
+    mem0,memF,max_degree_final,mem_sym_final,other_sym_final,kb0,bytes0}]}
 
 EXAMPLES
   lens show keccak 2106412 011 --json

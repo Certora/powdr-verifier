@@ -112,11 +112,12 @@ def _bus(bid, mult, n):
     return [{"id": bid, "mult": mult, "args": []} for _ in range(n)]
 
 
-def _write_block(group, bid, cons0, consF, mem0, memF, final_sym=False):
+def _write_block(group, bid, cons0, consF, mem0, memF,
+                 final_sym_mem=False, final_sym_other=False):
     base = {
         "block": {"blocks": [{"instructions": [[1]]}]},
         "subs": [[0, 1]],
-        "bus_map": {"bus_ids": {"1": "Memory"}},
+        "bus_map": {"bus_ids": {"1": "Memory", "6": {"Other": "BitwiseLookup"}}},
         "machine": {
             "constraints": [["f@0", "*", ["f@0", "-", 1]]] * cons0,
             "bus_interactions": _bus(1, "sel@9", mem0),  # symbolic in circuit
@@ -125,8 +126,10 @@ def _write_block(group, bid, cons0, consF, mem0, memF, final_sym=False):
     }
     (group / f"apc_candidate_{bid}_000_unopt.json").write_text(json.dumps(base))
     fbus = _bus(1, 1, memF)
-    if final_sym:
+    if final_sym_mem:  # symbolic Memory (id 1) mult
         fbus.append({"id": 1, "mult": ["x@0", "+", "y@1"], "args": []})
+    if final_sym_other:  # symbolic non-Memory (BitwiseLookup id 6) mult
+        fbus.append({"id": 6, "mult": ["a@0", "+", "b@1"], "args": []})
     final = {
         "constraints": [["f@0", "*", ["f@0", "+", 2013265920]]] * consF,
         "bus_interactions": fbus,
@@ -138,9 +141,12 @@ def _write_block(group, bid, cons0, consF, mem0, memF, final_sym=False):
 def _make_multiblock(tmp_path):
     group = tmp_path / "guest-keccak"
     group.mkdir()
-    # block 111: cons0=5 consF=1 ; block 222: cons0=3 consF=2 (final symbolic)
-    _write_block(group, "111", cons0=5, consF=1, mem0=4, memF=2)
-    _write_block(group, "222", cons0=3, consF=2, mem0=3, memF=3, final_sym=True)
+    # 111: cons0=5, final has a non-Memory symbolic bus (othSym only)
+    # 222: cons0=3, final has a symbolic Memory bus (memSym only)
+    _write_block(group, "111", cons0=5, consF=1, mem0=4, memF=2,
+                 final_sym_other=True)
+    _write_block(group, "222", cons0=3, consF=2, mem0=3, memF=3,
+                 final_sym_mem=True)
     return tmp_path
 
 
@@ -164,9 +170,12 @@ def test_build_sweep_all_default_sort_and_fields(tmp_path):
     assert (r.cons0, r.consF, r.n_steps) == (5, 1, 2)
     assert (r.mem0, r.memF) == (4, 2)
     assert r.reduction_pct == 80  # 1 - 1/5
-    assert r.sym_final is False and r.bytes0 > 0
-    # block 222 final has a column-bearing mult -> symbolic
-    assert rows[1].sym_final is True
+    # 111: non-Memory bus symbolic at final, Memory concrete
+    assert r.mem_sym_final is False and r.other_sym_final is True
+    assert r.bytes0 > 0
+    # 222: Memory bus symbolic at final, no other symbolic
+    assert rows[1].mem_sym_final is True
+    assert rows[1].other_sym_final is False
     assert rows[1].reduction_pct == 33  # 1 - 2/3
 
 
@@ -182,7 +191,8 @@ def test_render_sweep_all_json(tmp_path):
     assert out["group"] == "keccak" and out["sort"] == "cons0"
     assert len(out["blocks"]) == 2
     for key in ("block", "n_steps", "cons0", "consF", "reduction_pct",
-                "mem0", "memF", "max_degree_final", "sym_final", "kb0", "bytes0"):
+                "mem0", "memF", "max_degree_final", "mem_sym_final",
+                "other_sym_final", "kb0", "bytes0"):
         assert key in out["blocks"][0]
 
 
