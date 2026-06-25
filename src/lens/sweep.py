@@ -7,7 +7,7 @@ from typing import Any
 
 from pathlib import Path
 
-from .diff import DiffError, build_diff
+from .diff import counts_from_keys, dump_keys
 from .loader import load
 from .metrics import DumpStats
 from .resolve import StepEntry, index_block, list_blocks
@@ -42,18 +42,23 @@ class StepRow:
     distinct_columns: int
     sym_busses: list[str]
     # diff vs the previous step: None (first), "xrep" (cross-representation,
-    # not comparable), or ((c_rem, c_add, c_chg), (b_rem, b_add, b_chg)).
+    # not comparable), or (cons, mem, bus) each a (rem, add, chg) triple.
     delta: Any = None
+
+    @staticmethod
+    def _rac(t) -> dict:
+        return {"removed": t[0], "added": t[1], "changed": t[2]}
 
     def _delta_dict(self) -> Any:
         if self.delta is None:
             return None
         if self.delta == "xrep":
             return {"cross_representation": True}
-        (cr, ca, cc), (br, ba, bc) = self.delta
+        cons, mem, bus = self.delta
         return {
-            "constraints": {"removed": cr, "added": ca, "changed": cc},
-            "bus": {"removed": br, "added": ba, "changed": bc},
+            "constraints": self._rac(cons),
+            "memory": self._rac(mem),
+            "bus": self._rac(bus),
         }
 
     def as_dict(self) -> dict[str, Any]:
@@ -169,7 +174,7 @@ def build_sweep(
     off by default because it is expensive on large blocks.
     """
     rows: list[StepRow] = []
-    prev: tuple | None = None   # (data, fmt) of the previous emitted step
+    prev: tuple | None = None   # (keys, fmt) of the previous emitted step
     for e in entries:
         if lo is not None and e.nnn < lo:
             continue
@@ -177,7 +182,11 @@ def build_sweep(
             continue
         data = load(e.path)
         s = DumpStats.from_data(data, labels)
-        delta = _step_delta(prev, data, s.fmt, labels) if with_diff else None
+        delta = None
+        if with_diff:
+            keys = dump_keys(data)              # canonicalize this step once
+            delta = _step_delta(prev, keys, s.fmt)
+            prev = (keys, s.fmt)
         rows.append(StepRow(
             nnn=e.nnn,
             pass_name=e.pass_name,
@@ -191,22 +200,18 @@ def build_sweep(
             sym_busses=s.sym_bus_labels(),
             delta=delta,
         ))
-        prev = (data, s.fmt)
     return rows
 
 
-def _step_delta(prev, data, fmt, labels):
-    """Diff summary of `data` vs `prev` (data, fmt), or None / 'xrep'."""
+def _step_delta(prev, keys, fmt):
+    """Counts-only diff of precomputed `keys` vs `prev` (keys, fmt).
+
+    Returns None (no prev), "xrep" (cross-representation), or (cons, mem, bus).
+    """
     if prev is None:
         return None
-    pdata, pfmt = prev
+    pkeys, pfmt = prev
     if pfmt != fmt or fmt not in ("machine", "constraints"):
         return "xrep"
-    try:
-        d = build_diff(pdata, data, labels=labels)
-    except DiffError:
-        return "xrep"
-    return (
-        (len(d.removed), len(d.added), len(d.changed)),
-        (len(d.bus_removed), len(d.bus_added), len(d.bus_changed)),
-    )
+    c = counts_from_keys(pkeys, keys)
+    return (c["cons"], c["mem"], c["bus"])

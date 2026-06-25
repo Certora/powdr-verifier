@@ -66,6 +66,11 @@ def _rows(tmp_path, lo=None, hi=None, with_diff=False):
                        with_diff=with_diff)
 
 
+def _m_bi(ptr):
+    """A Memory bus interaction at (as=1, ptr) with one data limb + timestamp."""
+    return {"id": 1, "mult": 1, "args": [1, ptr, f"d{ptr}@1", "ts@2"]}
+
+
 def test_build_sweep_delta_off_by_default(tmp_path):
     _make_block(tmp_path)
     assert all(r.delta is None for r in _rows(tmp_path))  # not computed
@@ -76,8 +81,29 @@ def test_build_sweep_delta_vs_prev(tmp_path):
     rows = _rows(tmp_path, with_diff=True)
     assert rows[0].delta is None            # first row: no prev
     assert rows[1].delta == "xrep"          # 001 (C) vs 000 (M): not comparable
-    # 002 (C) vs 001 (C): identical constraints/bus -> all-zero delta
-    assert rows[2].delta == ((0, 0, 0), (0, 0, 0))
+    # 002 (C) vs 001 (C): identical -> all-zero (cons, mem, bus) triples
+    assert rows[2].delta == ((0, 0, 0), (0, 0, 0), (0, 0, 0))
+
+
+def test_build_sweep_delta_memory_separated(tmp_path):
+    # two C steps; second drops a memory cell -> dmem removed, dbus untouched
+    group = tmp_path / "guest-keccak"
+    group.mkdir()
+    base = _circuit_dump()
+    (group / "apc_candidate_111_000_unopt.json").write_text(json.dumps(base))
+    a = {"constraints": [], "derived_columns": [],
+         "bus_interactions": [_m_bi(40), _m_bi(44),
+                              {"id": 6, "mult": 1, "args": ["x@0", "y@1", 0, 0]}]}
+    b = {"constraints": [], "derived_columns": [],
+         "bus_interactions": [_m_bi(40),
+                              {"id": 6, "mult": 1, "args": ["x@0", "y@1", 0, 0]}]}
+    (group / "apc_candidate_111_001_solver.json").write_text(json.dumps(a))
+    (group / "apc_candidate_111_002_memory.json").write_text(json.dumps(b))
+    rows = _rows(tmp_path, with_diff=True)
+    cons, mem, bus = rows[2].delta
+    assert mem == (1, 0, 0)   # one memory cell removed
+    assert bus == (0, 0, 0)   # bitwise unchanged
+    assert cons == (0, 0, 0)
 
 
 def test_render_sweep_delta_columns_only_with_diff(tmp_path):
@@ -86,7 +112,7 @@ def test_render_sweep_delta_columns_only_with_diff(tmp_path):
     assert "dcons" not in plain  # off by default
     with_d = render_sweep(_rows(tmp_path, with_diff=True), "keccak", "111",
                           PLAIN, with_diff=True)
-    assert "dcons" in with_d and "dbus" in with_d
+    assert "dcons" in with_d and "dmem" in with_d and "dbus" in with_d
     assert "—" in with_d         # the cross-representation row
 
 

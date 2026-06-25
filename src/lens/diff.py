@@ -142,6 +142,94 @@ def _greedy_match(removed, added, keyfn, threshold):
     return changed, lr, la
 
 
+def _canon_cols(node, out: set) -> None:
+    """Collect column names (``('v', name)`` leaves) from a canon tuple."""
+    if not isinstance(node, tuple):
+        return
+    tag = node[0]
+    if tag == "v":
+        out.add(node[1])
+    elif tag in ("+", "*"):
+        for child in node[1]:
+            _canon_cols(child, out)
+
+
+def _count_diff(keys_a: list, keys_b: list, groupfn) -> tuple:
+    """Counts-only (removed, added, changed) for two multisets of canon keys.
+
+    "changed" pairs residuals by ``groupfn(key)`` equality (O(n) via grouping),
+    not the O(n²) greedy similarity used by the detailed diff. Within a sweep's
+    consecutive steps this is exact for the cases that occur (reassociation =
+    same group; pure add/remove = no spurious pairing).
+    """
+    ka = Counter(keys_a)
+    kb = Counter(keys_b)
+    rr, ra = ka - kb, kb - ka
+    gr: Counter = Counter()
+    ga: Counter = Counter()
+    for k, n in rr.items():
+        gr[groupfn(k)] += n
+    for k, n in ra.items():
+        ga[groupfn(k)] += n
+    changed = sum(min(gr[g], ga[g]) for g in gr.keys() & ga.keys())
+    return (sum(rr.values()) - changed, sum(ra.values()) - changed, changed)
+
+
+def _cons_group(k) -> frozenset:
+    cols: set = set()
+    _canon_cols(k, cols)
+    return frozenset(cols)
+
+
+def _bus_group(k) -> tuple:
+    if k[0] == 1:  # memory: (address_space, pointer) cell
+        return ("mem", k[2][0], k[2][1]) if len(k[2]) >= 2 else ("mem", k[2])
+    cols: set = set()
+    _canon_cols(k[1], cols)
+    for a in k[2]:
+        _canon_cols(a, cols)
+    return (k[0], frozenset(cols))
+
+
+def dump_keys(data: Any) -> tuple:
+    """Precompute (constraint canon keys, bus exact keys) for fast diffing.
+
+    Canonicalizing is the bulk of the diff cost; computing keys once per dump
+    lets a sweep reuse each step's keys for both of its adjacent pairs.
+    """
+    m = machine_of(data)
+    return (
+        [canon_constraint(c) for c in m.get("constraints", [])],
+        [_bus_exact_key(bi) for bi in m.get("bus_interactions", [])],
+    )
+
+
+def counts_from_keys(a_keys: tuple, b_keys: tuple) -> dict:
+    """(cons, mem, bus) (removed, added, changed) triples from precomputed keys."""
+    ca, ba = a_keys
+    cb, bb = b_keys
+    return {
+        "cons": _count_diff(ca, cb, _cons_group),
+        "mem": _count_diff([k for k in ba if k[0] == 1],
+                           [k for k in bb if k[0] == 1], _bus_group),
+        "bus": _count_diff([k for k in ba if k[0] != 1],
+                           [k for k in bb if k[0] != 1], _bus_group),
+    }
+
+
+def diff_counts(a_data: Any, b_data: Any) -> dict:
+    """Fast counts-only diff for summaries (no originals, annotations, O(n²)).
+
+    Returns ``{cons, mem, bus}``, each a ``(removed, added, changed)`` triple;
+    ``mem`` is the Memory bus (id 1), ``bus`` the rest. Raises DiffError unless
+    both dumps are the same representation.
+    """
+    fa, fb = detect_format(a_data), detect_format(b_data)
+    if fa not in _DIFFABLE or fb not in _DIFFABLE or fa != fb:
+        raise DiffError(f"not comparable (A={fa}, B={fb})")
+    return counts_from_keys(dump_keys(a_data), dump_keys(b_data))
+
+
 def _bus_exact_key(bi: dict) -> tuple:
     """Full identity of a bus interaction (for exact/unchanged matching)."""
     return (bi.get("id"), canon_constraint(bi.get("mult")),

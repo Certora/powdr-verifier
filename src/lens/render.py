@@ -250,30 +250,30 @@ def _rac(t) -> str:
     return (f"-{r}" if r else "") + (f"+{a}" if a else "") + (f"~{c}" if c else "")
 
 
-def _delta_cells(delta) -> tuple[str, str]:
-    """(dcons, dbus) display strings for a StepRow.delta."""
+def _delta_cells(delta) -> tuple[str, str, str]:
+    """(dcons, dmem, dbus) display strings for a StepRow.delta."""
     if delta is None:
-        return ("", "")
+        return ("", "", "")
     if delta == "xrep":
-        return ("—", "—")
-    cons, bus = delta
-    return (_rac(cons), _rac(bus))
+        return ("—", "—", "—")
+    cons, mem, bus = delta
+    return (_rac(cons), _rac(mem), _rac(bus))
 
 
 def _sweep_plain(rows, group, block, abbrev, with_diff=False) -> str:
-    legend = _FMT_LEGEND + ("   (dcons/dbus = -rem+add~chg vs prev)"
+    legend = _FMT_LEGEND + ("   (d* = -rem+add~chg vs prev)"
                             if with_diff else "")
     out = [f"# {group}/{block}   {legend}"]
     pw = max((len(r.pass_name) for r in rows), default=4)
-    dcol = f"{'dcons':>9} {'dbus':>7} " if with_diff else ""
+    dcol = f"{'dcons':>9} {'dmem':>7} {'dbus':>7} " if with_diff else ""
     out.append(f"{'NNN':>3} {'pass':<{pw}} f {'cons':>4} {'bus':>4} "
                f"{'mem':>3} {'der':>3} {'deg':>3} {'cols':>4} "
                f"{dcol} sym-busses")
     for r in rows:
         dcell = ""
         if with_diff:
-            dcons, dbus = _delta_cells(r.delta)
-            dcell = f"{dcons:>9} {dbus:>7} "
+            dcons, dmem, dbus = _delta_cells(r.delta)
+            dcell = f"{dcons:>9} {dmem:>7} {dbus:>7} "
         out.append(
             f"{r.nnn:03d} {r.pass_name:<{pw}} {FMT_MARK.get(r.fmt, '?')} "
             f"{r.n_constraints:>4} {r.n_bus_interactions:>4} {r.n_memory:>3} "
@@ -302,6 +302,7 @@ def _sweep_rich(rows, group, block, abbrev, with_diff=False) -> str:
         t.add_column("cols", justify="right")
         if with_diff:
             t.add_column("dcons", justify="right")
+            t.add_column("dmem", justify="right")
             t.add_column("dbus", justify="right")
         t.add_column("sym-busses")
         for r in rows:
@@ -792,10 +793,10 @@ JSON FIELDS (compare)
   op_hist{op:{a,b,delta}}  degree_mean{a,b,delta}
 
 SWEEP COLUMNS / JSON (one row per step)
-  NNN pass  f  cons bus mem der deg cols  [dcons dbus]  sym-busses
-  dcons/dbus (only with --diff; slower on big blocks) = -rem+add~chg of
-    constraints/busses vs the previous step (same representation only;
-    "—" across M/C; blank on first row)
+  NNN pass  f  cons bus mem der deg cols  [dcons dmem dbus]  sym-busses
+  dcons/dmem/dbus (only with --diff; slower on big blocks) = -rem+add~chg of
+    constraints / Memory-bus / other-bus vs the previous step (same
+    representation only; "—" across M/C; blank on first row)
   f = format marker: M=machine C=constraints
   cons=n_constraints bus=n_bus_interactions mem=Memory-bus count
   der=n_derived_columns deg=max degree cols=distinct columns
@@ -803,8 +804,8 @@ SWEEP COLUMNS / JSON (one row per step)
   JSON: {group,block,steps:[{nnn,pass,format,n_constraints,
     n_bus_interactions,n_memory,n_derived_columns,max_degree,
     distinct_columns,sym_busses[],
-    diff: null | {cross_representation:true} |
-      {constraints:{removed,added,changed}, bus:{removed,added,changed}}}]}
+    diff: null | {cross_representation:true} | {constraints:{r,a,chg},
+      memory:{r,a,chg}, bus:{r,a,chg}}}]}  (only with --diff)
 
 SWEEP ALL COLUMNS / JSON (one row per block, sorted by KEY desc)
   block steps cons0 consF red% mem0 memF degF memSym othSym kb
