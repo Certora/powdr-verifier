@@ -3,7 +3,7 @@ import json
 import sys
 from dataclasses import dataclass
 
-from .metrics import DumpDiff, DumpStats
+from .metrics import DumpDiff, DumpStats, mult_kind
 
 RICH, PLAIN, JSON = "rich", "plain", "json"
 FMT_MARK = {"machine": "M", "constraints": "C",
@@ -402,6 +402,26 @@ def _signed_str(c) -> str:
     return _expr_str(normalize_constants(c))
 
 
+_MULT_SIGN = {"send": "+", "recv": "-", "sym": "?", "other": "."}
+
+
+def _bus_str(entry) -> str:
+    """Render a (label, bi) bus entry compactly with a send/recv sign."""
+    label, bi = entry
+    sign = _MULT_SIGN.get(mult_kind(bi.get("mult")), "?")
+    args = [_signed_str(a) for a in bi.get("args", [])]
+    if bi.get("id") == 1 and len(args) >= 2:  # memory: surface as/ptr
+        body = ", ".join(args[2:])
+        return f"{label}({sign}) [as={args[0]}, ptr={args[1]}] ({body})"
+    return f"{label}({sign}) ({', '.join(args)})"
+
+
+def _mem_n(entries, pair=False) -> int:
+    if pair:
+        return sum(1 for (lb, _), _ in entries if lb == "Memory")
+    return sum(1 for lb, _ in entries if lb == "Memory")
+
+
 def _capped(items, limit):
     """Yield up to `limit` items; returns (shown_list, n_truncated)."""
     if limit is None or len(items) <= limit:
@@ -438,6 +458,17 @@ def render_diff(diff, ta: Target, tb: Target, mode: str, limit: int = 20) -> str
                 "removed": [{"name": n, "def": _signed_str(d) if d is not None else None}
                             for n, d in diff.cols_removed],
             },
+            "bus": {
+                "removed": [_bus_str(e) for e in diff.bus_removed],
+                "added": [_bus_str(e) for e in diff.bus_added],
+                "changed": [{"before": _bus_str(x), "after": _bus_str(y)}
+                            for x, y in diff.bus_changed],
+                "memory": {
+                    "removed": _mem_n(diff.bus_removed),
+                    "added": _mem_n(diff.bus_added),
+                    "changed": _mem_n(diff.bus_changed, pair=True),
+                },
+            },
         }, indent=2)
     if mode == RICH:
         return _diff_rich(diff, ta, tb, limit)
@@ -456,6 +487,9 @@ def _diff_plain(diff, ta, tb, limit) -> str:
         f"# constraints: -{len(diff.removed)} +{len(diff.added)} "
         f"~{len(diff.changed)}   columns: +{len(diff.cols_added)} "
         f"-{len(diff.cols_removed)}",
+        f"# bus: -{len(diff.bus_removed)} +{len(diff.bus_added)} "
+        f"~{len(diff.bus_changed)}   memory: -{_mem_n(diff.bus_removed)} "
+        f"+{_mem_n(diff.bus_added)} ~{_mem_n(diff.bus_changed, pair=True)}",
     ]
     if _diff_reassoc_hint(diff):
         out.append("# note: all changes are reassociations (likely loop_iteration)")
@@ -480,6 +514,22 @@ def _diff_plain(diff, ta, tb, limit) -> str:
         out.append(f"+col {n}" + (f" = {_signed_str(d)}" if d is not None else ""))
     for n, d in diff.cols_removed:
         out.append(f"-col {n}" + (f" = {_signed_str(d)}" if d is not None else ""))
+    bchg = _group([f"{_bus_str(x)}  =>  {_bus_str(y)}" for x, y in diff.bus_changed])
+    shown, trunc = _capped(bchg, limit)
+    for s, n in shown:
+        out.append(f"~bus {s}{_xn(n)}")
+    if trunc:
+        out.append(f"~bus (+{trunc} more)")
+    shown, trunc = _capped(_group([_bus_str(e) for e in diff.bus_removed]), limit)
+    for s, n in shown:
+        out.append(f"-bus {s}{_xn(n)}")
+    if trunc:
+        out.append(f"-bus (+{trunc} more)")
+    shown, trunc = _capped(_group([_bus_str(e) for e in diff.bus_added]), limit)
+    for s, n in shown:
+        out.append(f"+bus {s}{_xn(n)}")
+    if trunc:
+        out.append(f"+bus (+{trunc} more)")
     return "\n".join(out)
 
 
@@ -496,6 +546,12 @@ def _diff_rich(diff, ta, tb, limit) -> str:
             f"[green]+{len(diff.added)}[/] [yellow]~{len(diff.changed)}[/]   "
             f"columns: [green]+{len(diff.cols_added)}[/] "
             f"[red]-{len(diff.cols_removed)}[/]")
+        console.print(
+            f"bus: [red]-{len(diff.bus_removed)}[/] "
+            f"[green]+{len(diff.bus_added)}[/] [yellow]~{len(diff.bus_changed)}[/]"
+            f"   memory: [red]-{_mem_n(diff.bus_removed)}[/] "
+            f"[green]+{_mem_n(diff.bus_added)}[/] "
+            f"[yellow]~{_mem_n(diff.bus_changed, pair=True)}[/]")
         if _diff_reassoc_hint(diff):
             console.print("[dim]all changes are reassociations "
                           "(likely loop_iteration)[/]")
@@ -522,6 +578,23 @@ def _diff_rich(diff, ta, tb, limit) -> str:
         for n, d in diff.cols_removed:
             console.print(f"[red]-col[/] {n}"
                           + (f" = {_signed_str(d)}" if d is not None else ""))
+        bchg = _group([f"{_bus_str(x)}  [dim]=>[/]  {_bus_str(y)}"
+                       for x, y in diff.bus_changed])
+        shown, trunc = _capped(bchg, limit)
+        for s, n in shown:
+            console.print(f"[yellow]~bus[/] {s}{_xn(n)}")
+        if trunc:
+            console.print(f"[yellow]~bus (+{trunc} more)[/]")
+        shown, trunc = _capped(_group([_bus_str(e) for e in diff.bus_removed]), limit)
+        for s, n in shown:
+            console.print(f"[red]-bus[/] {s}{_xn(n)}")
+        if trunc:
+            console.print(f"[red]-bus (+{trunc} more)[/]")
+        shown, trunc = _capped(_group([_bus_str(e) for e in diff.bus_added]), limit)
+        for s, n in shown:
+            console.print(f"[green]+bus[/] {s}{_xn(n)}")
+        if trunc:
+            console.print(f"[green]+bus (+{trunc} more)[/]")
     return cap.get().rstrip("\n")
 
 
@@ -543,9 +616,10 @@ SUBCOMMANDS
   sweep   all [<group>] [--sort KEY]   1 row PER BLOCK (group auto-picked
             if only one). KEY: cons0(default) consF steps mem0 memF size red
   subs    <group> <block>   list var -> definition (signed-normalized)
-  diff    <group> <block> <stepA> <stepB> [--limit N]   constraint-level
-            diff (removed/added/changed + columns). SAME representation only:
-            refuses M-vs-C (the encoding flip is not a real change).
+  diff    <group> <block> <stepA> <stepB> [--limit N]   constraint- AND
+            bus-level diff (removed/added/changed + columns). SAME
+            representation only: refuses M-vs-C. Memory busses matched by
+            (address_space, pointer)+timestamp; others by column proxy.
 
 GLOBAL FLAGS
   --root DIR     dumps root (default: powdr-dumps)
@@ -625,5 +699,7 @@ EXAMPLES
 DIFF JSON FIELDS
   a{..} b{..} format  removed[str] added[str] changed[{before,after}]
   columns{added:[{name,def}], removed:[{name,def}]}
+  bus{removed[str], added[str], changed[{before,after}],
+      memory{removed,added,changed}}
   same-representation only; M-vs-C diff exits non-zero with a message.
 """

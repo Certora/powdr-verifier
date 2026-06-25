@@ -103,3 +103,61 @@ def test_render_diff_plain_markers_and_grouping():
     text = render_diff(d, ta, tb, PLAIN)
     assert "constraints: -3 +0 ~0" in text
     assert "- 0  (x3)" in text  # the three trivial zeros grouped
+
+
+# --- bus interactions -------------------------------------------------------
+def _cb(bus):
+    """A constraints-format dump with the given bus interactions."""
+    return {"constraints": [], "bus_interactions": bus, "derived_columns": []}
+
+
+def _mem(ptr, data, ts, mult=1, asp=1):
+    return {"id": 1, "mult": mult, "args": [asp, ptr, *data, ts]}
+
+
+_LABELS = {"1": "Memory", "6": "BitwiseLookup"}
+
+
+def test_bus_memory_changed_matched_by_cell():
+    # same (as=1, ptr=40), different data -> one changed pair (not -1/+1)
+    a = _cb([_mem(40, ["x@0"], "t@1")])
+    b = _cb([_mem(40, ["y@2"], "t@1")])
+    d = build_diff(a, b, labels=_LABELS)
+    assert len(d.bus_changed) == 1
+    assert not d.bus_removed and not d.bus_added
+    (la, _), (lb, _) = d.bus_changed[0]
+    assert la == "Memory" and lb == "Memory"
+
+
+def test_bus_memory_removed():
+    a = _cb([_mem(40, ["x@0"], "t@1"), _mem(44, ["y@1"], "t@2")])
+    b = _cb([_mem(40, ["x@0"], "t@1")])
+    d = build_diff(a, b, labels=_LABELS)
+    assert len(d.bus_removed) == 1 and not d.bus_added and not d.bus_changed
+    assert d.bus_removed[0][0] == "Memory"
+
+
+def test_bus_nonmemory_changed_via_column_proxy():
+    # BitwiseLookup [x,y,z,op]; share x@0,y@1 (Jaccard 2/4 = 0.5) -> changed
+    a = _cb([{"id": 6, "mult": 1, "args": ["x@0", "y@1", "w@3", 0]}])
+    b = _cb([{"id": 6, "mult": 1, "args": ["x@0", "y@1", "z@4", 0]}])
+    d = build_diff(a, b, labels=_LABELS)
+    assert len(d.bus_changed) == 1
+
+
+def test_bus_exact_unchanged_absent():
+    a = _cb([_mem(40, ["x@0"], "t@1")])
+    d = build_diff(a, _cb([_mem(40, ["x@0"], "t@1")]), labels=_LABELS)
+    assert not d.bus_removed and not d.bus_added and not d.bus_changed
+
+
+def test_render_diff_bus_summary_and_json():
+    a = _cb([_mem(40, ["x@0"], "t@1"), _mem(44, ["y@1"], "t@2")])
+    b = _cb([_mem(40, ["x@0"], "t@1")])
+    d = build_diff(a, b, labels=_LABELS)
+    ta, tb = _targets()
+    text = render_diff(d, ta, tb, PLAIN)
+    assert "bus: -1 +0 ~0   memory: -1 +0 ~0" in text
+    out = json.loads(render_diff(d, ta, tb, JSON))
+    assert out["bus"]["memory"]["removed"] == 1
+    assert len(out["bus"]["removed"]) == 1

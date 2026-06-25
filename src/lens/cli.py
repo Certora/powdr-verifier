@@ -139,8 +139,9 @@ def _run_diff(args, mode: str) -> int:
     bid = resolve.normalize_block(args.block)
     subs_path = resolve.substitutions_path(directory, args.block)
     subs = load(subs_path) if subs_path is not None else None
+    labels = load_bus_map(resolve.base_dump_path(directory, args.block))
     try:
-        cdiff = build_diff(load(ea.path), load(eb.path), subs)
+        cdiff = build_diff(load(ea.path), load(eb.path), subs, labels)
     except DiffError as e:
         print(f"lens: {ea.label} vs {eb.label}: {e}", file=sys.stderr)
         return 2
