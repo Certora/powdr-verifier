@@ -1,4 +1,5 @@
 """Plotly figures and HTML fragments for report dashboards (ECDFs, timelines, heatmaps)."""
+import filecmp
 import functools
 import html
 from pathlib import Path
@@ -261,6 +262,24 @@ def _job_name(input1: str, input2: str) -> str:
     p1 = Path(input1).name.removesuffix(".json")
     p2 = Path(input2).name.removesuffix(".json")
     return f"{p1} -> {p2}"
+
+
+def _inputs_byte_identical(input1: str, input2: str) -> bool:
+    p1, p2 = Path(input1), Path(input2)
+    if p1 == p2:
+        return True
+    try:
+        return filecmp.cmp(p1, p2, shallow=False)
+    except OSError:
+        return False
+
+
+def _badge_identical_inputs() -> str:
+    title = html.escape("Byte-identical dumps", quote=True)
+    return (
+        f'<span class="badge text-bg-light border" title="{title}" '
+        f'style="font-size:0.82em">≡</span>'
+    )
 
 
 def _render_stat_card(label: str, value: object) -> str:
@@ -538,6 +557,11 @@ def _render_job_list_item(idx: int, row: tuple, *, sortable: bool = False) -> st
     command_line = row[6] if len(row) > 6 else None
     job_name = _job_name(str(input1), str(input2))
     job = html.escape(job_name)
+    identical_badge = (
+        _badge_identical_inputs()
+        if _inputs_byte_identical(str(input1), str(input2))
+        else ""
+    )
     kind_badge = _badge_kind(str(kind), at_step)
     time_badge = _badge_time(running_time)
     size_badge = _badge_bytes(size_bytes)
@@ -559,7 +583,7 @@ def _render_job_list_item(idx: int, row: tuple, *, sortable: bool = False) -> st
         f"<span><span class='text-body-secondary me-2 job-list-idx'>{idx}.</span>"
         f"<code>{job}</code></span>"
         f"<span class='ms-auto d-flex align-items-center gap-1'>"
-        f"{kind_badge} {time_badge} {size_badge}{copy_badge}</span>"
+        f"{identical_badge}{kind_badge} {time_badge} {size_badge}{copy_badge}</span>"
         "</li>"
     )
 
