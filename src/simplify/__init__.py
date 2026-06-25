@@ -4,7 +4,7 @@ import time
 from ..utils.io import load_json
 from ..utils.stats import stats_dump
 from ..smt.utils import *
-from ..rewriter import rewrite
+from ..rewriter import reset_rewrite_stats, rewrite, rewrite_stats
 
 from .flatten_outer_array import simplify_flatten_outer_array
 from .solve_eqs import simplify_solve_eqs
@@ -82,6 +82,7 @@ def simplify_rewrite(smt_script: script.SmtLibScript, subaction=None) -> script.
     pending = None
     t0 = 0.0
     slow_asserts: list[dict] = []
+    reset_rewrite_stats()
 
     try:
         for cmd in smt_script:
@@ -104,9 +105,16 @@ def simplify_rewrite(smt_script: script.SmtLibScript, subaction=None) -> script.
     finally:
         if pending is not None:
             pending["sec"] = time.perf_counter() - t0
+        rw_stats = rewrite_stats()
         stats_dump(
             "rewrite",
-            {"asserts": total, "asserts_changed": changed, "slow_asserts": slow_asserts},
+            {
+                "asserts": total,
+                "asserts_changed": changed,
+                "simple_rewrites": rw_stats.simple,
+                "sympy_rewrites": rw_stats.sympy,
+                "slow_asserts": slow_asserts,
+            },
         )
     return smt_script
 
