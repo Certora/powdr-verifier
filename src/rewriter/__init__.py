@@ -78,7 +78,7 @@ class RelationRewriter(substituter.Substituter):
 
     @substituter.handles(frozenset([operators.EQUALS, operators.MOD]))
     def walk_identity_or_replace(self, formula, args, **kwargs):
-        """Try to rewrite equality formulas (modulo field) via SymPy, otherwise keep them."""
+        """Try to rewrite equalities via PySMT rules and optionally SymPy."""
         op = formula.node_type()
         if op in REWRITES:
             res = rewrite_one(op, args, REWRITES[formula.node_type()])
@@ -86,7 +86,7 @@ class RelationRewriter(substituter.Substituter):
                 logger.debug(f"rewrote {formula} --> {res}")
                 rewrite_stats().simple += 1
                 return keep_comment(res, formula)
-        if op in REWRITES_SYMPY:
+        if ARGS().with_sympy and op in REWRITES_SYMPY:
             try:
                 node = get_env().formula_manager.create_node(op, tuple(args))
                 res = to_smt(
