@@ -56,6 +56,18 @@ def group_dir(group: str, root: Path | None = None) -> Path:
     raise ResolveError(f"group {group!r} not found (tried: {tried})")
 
 
+def sole_group_dir(root: Path | None = None) -> Path:
+    """Return the only group dir under ``root``; error if 0 or >1 exist."""
+    root = root or DEFAULT_ROOT
+    dirs = sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []
+    if len(dirs) == 1:
+        return dirs[0]
+    if not dirs:
+        raise ResolveError(f"no group directories under {root}")
+    names = ", ".join(d.name for d in dirs)
+    raise ResolveError(f"multiple groups under {root} ({names}); specify one")
+
+
 def index_block(directory: Path, block: str) -> list[StepEntry]:
     """Return all step entries for ``block`` in ``directory``, sorted by NNN."""
     bid = normalize_block(block)
@@ -70,6 +82,16 @@ def index_block(directory: Path, block: str) -> list[StepEntry]:
             f"(expected apc_candidate_{bid}_*.json)"
         )
     return sorted(entries, key=lambda e: e.nnn)
+
+
+def list_blocks(directory: Path) -> list[str]:
+    """Distinct candidate ids present in ``directory``, sorted numerically."""
+    ids: set[str] = set()
+    for path in directory.glob("apc_candidate_*.json"):
+        m = _NAME_RE.match(path.name)
+        if m:
+            ids.add(m.group(1))
+    return sorted(ids, key=int)
 
 
 def resolve_step(entries: list[StepEntry], step: str) -> StepEntry:

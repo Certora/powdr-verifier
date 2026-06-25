@@ -288,6 +288,64 @@ def _sweep_rich(rows, group, block, abbrev) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# sweep all (one row per block)
+# --------------------------------------------------------------------------- #
+def render_sweep_all(rows, group: str, sort: str, mode: str) -> str:
+    if mode == JSON:
+        return json.dumps(
+            {"group": group, "sort": sort,
+             "blocks": [r.as_dict() for r in rows]},
+            indent=2,
+        )
+    if mode == RICH:
+        return _sweep_all_rich(rows, group, sort)
+    return _sweep_all_plain(rows, group, sort)
+
+
+def _red_str(r) -> str:
+    return "·" if r.reduction_pct is None else f"{r.reduction_pct}%"
+
+
+def _sweep_all_plain(rows, group, sort) -> str:
+    out = [f"# {group} · sort={sort} desc · {len(rows)} blocks"]
+    out.append(f"{'block':>8} {'steps':>5} {'cons0':>6} {'consF':>5} "
+               f"{'red%':>4} {'mem0':>4} {'memF':>4} {'degF':>4} {'symF':>4} "
+               f"{'kb':>8}")
+    for r in rows:
+        out.append(
+            f"{r.block:>8} {r.n_steps:>5} {r.cons0:>6} {r.consF:>5} "
+            f"{_red_str(r):>4} {r.mem0:>4} {r.memF:>4} {r.max_degree_final:>4} "
+            f"{('sym' if r.sym_final else '·'):>4} {r.kb0:>8.1f}"
+        )
+    return "\n".join(out)
+
+
+def _sweep_all_rich(rows, group, sort) -> str:
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    with console.capture() as cap:
+        console.rule(f"[bold]{group}[/]   [dim]sort={sort} desc · "
+                     f"{len(rows)} blocks[/]")
+        t = Table(show_edge=False)
+        t.add_column("block", justify="right")
+        for col in ("steps", "cons0", "consF", "red%", "mem0", "memF", "degF"):
+            t.add_column(col, justify="right")
+        t.add_column("symF", justify="center")
+        t.add_column("kb", justify="right")
+        for r in rows:
+            sym = "[yellow]sym[/]" if r.sym_final else "[dim]·[/]"
+            t.add_row(
+                r.block, str(r.n_steps), str(r.cons0), str(r.consF),
+                _red_str(r), str(r.mem0), str(r.memF),
+                str(r.max_degree_final), sym, f"{r.kb0:.1f}",
+            )
+        console.print(t)
+    return cap.get().rstrip("\n")
+
+
+# --------------------------------------------------------------------------- #
 # agent guide
 # --------------------------------------------------------------------------- #
 def agent_guide() -> str:
@@ -302,6 +360,8 @@ SUBCOMMANDS
   show    <group> <block> <step>        stats for one dump
   compare <group> <block> <stepA> <stepB>   A->B deltas (same block)
   sweep   <group> <block> [--from N] [--to N]   per-step trail, 1 row/step
+  sweep   all [<group>] [--sort KEY]   1 row PER BLOCK (group auto-picked
+            if only one). KEY: cons0(default) consF steps mem0 memF size red
 
 GLOBAL FLAGS
   --root DIR     dumps root (default: powdr-dumps)
@@ -351,6 +411,14 @@ SWEEP COLUMNS / JSON (one row per step)
     n_bus_interactions,n_memory,n_derived_columns,max_degree,
     distinct_columns,sym_busses[]}]}
 
+SWEEP ALL COLUMNS / JSON (one row per block, sorted by KEY desc)
+  block steps cons0 consF red% mem0 memF degF symF kb
+  cons0/consF=initial/final n_constraints  red%=reduction
+  mem0/memF=initial/final Memory-bus count  degF=final max degree
+  symF=final dump has symbolic bus mults  kb=initial dump size
+  JSON: {group,sort,blocks:[{block,n_steps,cons0,consF,reduction_pct,
+    mem0,memF,max_degree_final,sym_final,kb0,bytes0}]}
+
 EXAMPLES
   lens show keccak 2106412 011 --json
   lens show keccak 2106412 memory --plain
@@ -358,4 +426,6 @@ EXAMPLES
   lens compare keccak 2103924 memory remove_free --json
   lens sweep keccak 2099512
   lens sweep keccak 2099512 --from 11 --to 23 --json
+  lens sweep all
+  lens sweep all keccak --sort consF --json
 """

@@ -7,7 +7,7 @@ from . import render, resolve
 from .loader import load, load_bus_map
 from .metrics import DumpDiff, DumpStats
 from .render import Target
-from .sweep import build_sweep
+from .sweep import build_sweep, build_sweep_all
 
 
 def _add_common(parser: argparse.ArgumentParser, suppress: bool) -> None:
@@ -55,14 +55,21 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_cmp.add_argument("step_a")
     sp_cmp.add_argument("step_b")
 
-    sp_sweep = sub.add_parser("sweep", parents=[common],
-                              help="compact per-step stats across a block")
-    sp_sweep.add_argument("group")
-    sp_sweep.add_argument("block")
+    sp_sweep = sub.add_parser(
+        "sweep", parents=[common],
+        help="per-step trail of one block, or 'all' for one row per block")
+    # `sweep <group> <block>`  OR  `sweep all [<group>]`
+    sp_sweep.add_argument("target", help="group, or the literal 'all'")
+    sp_sweep.add_argument("arg", nargs="?",
+                          help="block (single-block) or group (with 'all')")
     sp_sweep.add_argument("--from", dest="lo", type=int, default=None,
-                          help="lowest step NNN to include")
+                          help="lowest step NNN to include (single-block)")
     sp_sweep.add_argument("--to", dest="hi", type=int, default=None,
-                          help="highest step NNN to include")
+                          help="highest step NNN to include (single-block)")
+    sp_sweep.add_argument("--sort", default="cons0",
+                          choices=["cons0", "consF", "steps", "mem0", "memF",
+                                   "size", "red"],
+                          help="sort key for 'all' (default cons0, desc)")
 
     return p
 
@@ -80,6 +87,31 @@ def _stats_for(entry: resolve.StepEntry, directory: Path, block: str) -> DumpSta
     return DumpStats.from_data(load(entry.path), labels)
 
 
+def _run_sweep(args, mode: str) -> None:
+    """Dispatch `sweep all [<group>]` vs `sweep <group> <block>`."""
+    if args.target == "all":
+        directory = (resolve.group_dir(args.arg, args.root) if args.arg
+                     else resolve.sole_group_dir(args.root))
+        group = directory.name.removeprefix("guest-")
+        blocks = resolve.list_blocks(directory)
+        if not blocks:
+            raise resolve.ResolveError(f"no blocks under {directory}")
+        labels = load_bus_map(resolve.base_dump_path(directory, blocks[0]))
+        rows = build_sweep_all(directory, labels, args.sort)
+        print(render.render_sweep_all(rows, group, args.sort, mode))
+        return
+
+    if args.arg is None:
+        raise resolve.ResolveError("sweep <group> <block>: block is required "
+                                   "(or use `sweep all`)")
+    group, block = args.target, args.arg
+    directory = resolve.group_dir(group, args.root)
+    entries = resolve.index_block(directory, block)
+    labels = load_bus_map(resolve.base_dump_path(directory, block))
+    rows = build_sweep(entries, labels, args.lo, args.hi)
+    print(render.render_sweep(rows, group, resolve.normalize_block(block), mode))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
@@ -92,6 +124,10 @@ def main(argv: list[str] | None = None) -> int:
 
     mode = _mode(args)
     try:
+        if args.command == "sweep":
+            _run_sweep(args, mode)
+            return 0
+
         directory = resolve.group_dir(args.group, args.root)
         entries = resolve.index_block(directory, args.block)
 
@@ -111,12 +147,6 @@ def main(argv: list[str] | None = None) -> int:
             ta = Target(args.group, bid, ea.label, str(ea.path))
             tb = Target(args.group, bid, eb.label, str(eb.path))
             print(render.render_compare(DumpDiff(sa, sb), ta, tb, mode))
-
-        elif args.command == "sweep":
-            labels = load_bus_map(resolve.base_dump_path(directory, args.block))
-            rows = build_sweep(entries, labels, args.lo, args.hi)
-            print(render.render_sweep(
-                rows, args.group, resolve.normalize_block(args.block), mode))
 
     except resolve.ResolveError as e:
         print(f"lens: {e}", file=sys.stderr)

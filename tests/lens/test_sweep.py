@@ -3,8 +3,8 @@ import json
 
 from src.lens import resolve
 from src.lens.loader import load_bus_map
-from src.lens.render import JSON, PLAIN, render_sweep
-from src.lens.sweep import abbrev_label, build_sweep
+from src.lens.render import JSON, PLAIN, render_sweep, render_sweep_all
+from src.lens.sweep import abbrev_label, build_sweep, build_sweep_all
 
 
 def _circuit_dump(memory_sym=True):
@@ -103,3 +103,92 @@ def test_render_sweep_plain(tmp_path):
     assert lines[2].startswith("000 unopt") and " M " in lines[2]
     assert "Mem" in lines[2]  # abbreviated sym label
     assert lines[3].lstrip().startswith("001 solver")
+
+
+# --------------------------------------------------------------------------- #
+# sweep all
+# --------------------------------------------------------------------------- #
+def _bus(bid, mult, n):
+    return [{"id": bid, "mult": mult, "args": []} for _ in range(n)]
+
+
+def _write_block(group, bid, cons0, consF, mem0, memF, final_sym=False):
+    base = {
+        "block": {"blocks": [{"instructions": [[1]]}]},
+        "subs": [[0, 1]],
+        "bus_map": {"bus_ids": {"1": "Memory"}},
+        "machine": {
+            "constraints": [["f@0", "*", ["f@0", "-", 1]]] * cons0,
+            "bus_interactions": _bus(1, "sel@9", mem0),  # symbolic in circuit
+            "derived_columns": [],
+        },
+    }
+    (group / f"apc_candidate_{bid}_000_unopt.json").write_text(json.dumps(base))
+    fbus = _bus(1, 1, memF)
+    if final_sym:
+        fbus.append({"id": 1, "mult": ["x@0", "+", "y@1"], "args": []})
+    final = {
+        "constraints": [["f@0", "*", ["f@0", "+", 2013265920]]] * consF,
+        "bus_interactions": fbus,
+        "derived_columns": [],
+    }
+    (group / f"apc_candidate_{bid}_001_solver.json").write_text(json.dumps(final))
+
+
+def _make_multiblock(tmp_path):
+    group = tmp_path / "guest-keccak"
+    group.mkdir()
+    # block 111: cons0=5 consF=1 ; block 222: cons0=3 consF=2 (final symbolic)
+    _write_block(group, "111", cons0=5, consF=1, mem0=4, memF=2)
+    _write_block(group, "222", cons0=3, consF=2, mem0=3, memF=3, final_sym=True)
+    return tmp_path
+
+
+def test_list_blocks(tmp_path):
+    _make_multiblock(tmp_path)
+    d = resolve.group_dir("keccak", tmp_path)
+    assert resolve.list_blocks(d) == ["111", "222"]
+
+
+def _all_rows(tmp_path, sort="cons0"):
+    d = resolve.group_dir("keccak", tmp_path)
+    labels = load_bus_map(resolve.base_dump_path(d, "111"))
+    return build_sweep_all(d, labels, sort)
+
+
+def test_build_sweep_all_default_sort_and_fields(tmp_path):
+    _make_multiblock(tmp_path)
+    rows = _all_rows(tmp_path)
+    assert [r.block for r in rows] == ["111", "222"]  # cons0 desc: 5,3
+    r = rows[0]
+    assert (r.cons0, r.consF, r.n_steps) == (5, 1, 2)
+    assert (r.mem0, r.memF) == (4, 2)
+    assert r.reduction_pct == 80  # 1 - 1/5
+    assert r.sym_final is False and r.bytes0 > 0
+    # block 222 final has a column-bearing mult -> symbolic
+    assert rows[1].sym_final is True
+    assert rows[1].reduction_pct == 33  # 1 - 2/3
+
+
+def test_build_sweep_all_sort_consF(tmp_path):
+    _make_multiblock(tmp_path)
+    rows = _all_rows(tmp_path, sort="consF")
+    assert [r.block for r in rows] == ["222", "111"]  # consF desc: 2,1
+
+
+def test_render_sweep_all_json(tmp_path):
+    _make_multiblock(tmp_path)
+    out = json.loads(render_sweep_all(_all_rows(tmp_path), "keccak", "cons0", JSON))
+    assert out["group"] == "keccak" and out["sort"] == "cons0"
+    assert len(out["blocks"]) == 2
+    for key in ("block", "n_steps", "cons0", "consF", "reduction_pct",
+                "mem0", "memF", "max_degree_final", "sym_final", "kb0", "bytes0"):
+        assert key in out["blocks"][0]
+
+
+def test_render_sweep_all_plain(tmp_path):
+    _make_multiblock(tmp_path)
+    text = render_sweep_all(_all_rows(tmp_path), "keccak", "cons0", PLAIN)
+    assert "2 blocks" in text
+    lines = text.splitlines()
+    assert lines[2].split()[:4] == ["111", "2", "5", "1"]  # block steps cons0 consF
