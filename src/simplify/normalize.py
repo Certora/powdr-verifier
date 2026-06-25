@@ -1,8 +1,8 @@
 """Canonicalize polynomial ``Int`` relations.
 
-Each monomial is an exponent tuple ``(e_0, …, e_{n-1})`` aligned with a fixed variable order
-(see ``collect_variables``). Monomials are compared by **graded lex** (total degree, then
-lexicographic on exponents).
+Each monomial is a sorted tuple of generator indices with repetition for exponents
+(see ``collect_variables``); ``()`` is the unit monomial. Exponents are usually small.
+Monomials are compared by **graded lex** (total degree, then lexicographic on exponents).
 
 **Field mod equalities**: monic normalization via ``field_eq`` when ``relation_poly_diff`` reports
 modular. **Other equalities and inequalities**: gcd-normalized diff, with ``wrap_mod`` on
@@ -19,6 +19,7 @@ from pysmt.walkers import IdentityDagWalker
 from ..smt.utils import *
 from ..utils.args import ARGS
 
+# Sorted generator indices with repetition; ``()`` is the unit monomial.
 Monomial = tuple[int, ...]
 Poly = dict[Monomial, int]
 
@@ -74,15 +75,43 @@ def collect_variables(smt_script: script.SmtLibScript) -> tuple[FNode, ...]:
     return tuple(sorted(gens, key=lambda s: s.serialize()))
 
 
+def _mono_degree(m: Monomial) -> int:
+    return len(m)
+
+
 def _compare_monomials(e1: Monomial, e2: Monomial) -> int:
     """Comparator for graded lex; return value suitable for ``cmp_to_key`` (``>`` means ``e1`` larger)."""
-    s1, s2 = sum(e1), sum(e2)
-    if s1 != s2:
-        return 1 if s1 > s2 else -1
-    for a, b in zip(e1, e2, strict=True):
-        if a != b:
-            return 1 if a > b else -1
+    d1, d2 = _mono_degree(e1), _mono_degree(e2)
+    if d1 != d2:
+        return 1 if d1 > d2 else -1
+    i1 = i2 = 0
+    while i1 < len(e1):
+        idx1 = e1[i1]
+        idx2 = e2[i2]
+        if idx1 < idx2:
+            return 1
+        if idx2 < idx1:
+            return -1
+        idx = idx1
+        j1 = i1
+        while j1 < len(e1) and e1[j1] == idx:
+            j1 += 1
+        j2 = i2
+        while j2 < len(e2) and e2[j2] == idx:
+            j2 += 1
+        c1, c2 = j1 - i1, j2 - i2
+        if c1 != c2:
+            return 1 if c1 > c2 else -1
+        i1, i2 = j1, j2
     return 0
+
+
+def _mono_mul(e1: Monomial, e2: Monomial) -> Monomial:
+    if not e1:
+        return e2
+    if not e2:
+        return e1
+    return tuple(sorted(e1 + e2))
 
 
 def _lead_exp(poly: Poly) -> Monomial:
@@ -102,17 +131,20 @@ def _poly_add(a: Poly, b: Poly, scale_b: int, *, mod: int | None) -> Poly:
     return out
 
 
-def _poly_mul(a: Poly, b: Poly, n: int, *, mod: int | None) -> Poly:
-    """Polynomial product: exponents add componentwise; coefficients multiply (mod ``mod`` if set)."""
+def _poly_mul(a: Poly, b: Poly, *, mod: int | None) -> Poly:
+    """Polynomial product over sparse monomials."""
     out: Poly = {}
     for e1, c1 in a.items():
         for e2, c2 in b.items():
-            e = tuple(e1[i] + e2[i] for i in range(n))
+            e = _mono_mul(e1, e2)
             v = out.get(e, 0) + c1 * c2
             if mod is not None:
                 v %= mod
-            out[e] = v
-    return {e: c for e, c in out.items() if c}
+            if v:
+                out[e] = v
+            elif e in out:
+                del out[e]
+    return out
 
 
 def _as_int_const(n: FNode) -> int | None:
@@ -166,7 +198,6 @@ def relation_poly_diff(
         _unwrap_field_mod_body(lhs),
         _unwrap_field_mod_body(rhs),
         var_index,
-        len(vars_),
         mod=mod,
     )
     if diff is None:
@@ -177,18 +208,17 @@ def relation_poly_diff(
 def _expr_to_poly(
     n: FNode,
     var_index: dict[FNode, int],
-    nvars: int,
     *,
     mod: int | None,
 ) -> Poly | None:
     """Parse an ``Int`` polynomial built from ``+``, unary ``-``, ``*``, constants, symbols."""
     if (ic := _as_int_const(n)) is not None:
         m = ic % mod if mod is not None else ic
-        return {(0,) * nvars: m} if m else {}
+        return {(): m} if m else {}
     if n.is_plus():
         acc: Poly | None = {}
         for a in n.args():
-            q = _expr_to_poly(a, var_index, nvars, mod=mod)
+            q = _expr_to_poly(a, var_index, mod=mod)
             if q is None:
                 return None
             acc = _poly_add(acc, q, 1, mod=mod)
@@ -197,24 +227,21 @@ def _expr_to_poly(
         if len(n.args()) != 2:
             return None
         a, b = n.args()
-        pa = _expr_to_poly(a, var_index, nvars, mod=mod)
-        pb = _expr_to_poly(b, var_index, nvars, mod=mod)
+        pa = _expr_to_poly(a, var_index, mod=mod)
+        pb = _expr_to_poly(b, var_index, mod=mod)
         if pa is None or pb is None:
             return None
         return _poly_add(pa, pb, -1, mod=mod)
     if n.is_times():
-        acc = {(0,) * nvars: 1}
+        acc: Poly = {(): 1}
         for a in n.args():
-            q = _expr_to_poly(a, var_index, nvars, mod=mod)
+            q = _expr_to_poly(a, var_index, mod=mod)
             if q is None:
                 return None
-            acc = _poly_mul(acc, q, nvars, mod=mod)
-            assert acc is not None
+            acc = _poly_mul(acc, q, mod=mod)
         return acc
     if n in var_index:
-        e = [0] * nvars
-        e[var_index[n]] = 1
-        return {tuple(e): 1}
+        return {(var_index[n],): 1}
     return None
 
 
@@ -227,9 +254,7 @@ def _poly_to_expr(poly: Poly, vars_: tuple[FNode, ...]) -> FNode:
     for e, c in items:
         if c == 0:
             continue
-        mono_factors: list[FNode] = []
-        for i, ei in enumerate(e):
-            mono_factors.extend([vars_[i]] * ei)
+        mono_factors = [vars_[idx] for idx in e]
         if not mono_factors:
             terms.append(Int(c))
         elif c == 1:
@@ -247,12 +272,11 @@ def _poly_diff_poly(
     la: FNode,
     lb: FNode,
     var_index: dict[FNode, int],
-    nvars: int,
     *,
     mod: int | None,
 ) -> Poly | None:
-    pla = _expr_to_poly(la, var_index, nvars, mod=mod)
-    plb = _expr_to_poly(lb, var_index, nvars, mod=mod)
+    pla = _expr_to_poly(la, var_index, mod=mod)
+    plb = _expr_to_poly(lb, var_index, mod=mod)
     if pla is None or plb is None:
         return None
     return _poly_add(pla, plb, -1, mod=mod)
