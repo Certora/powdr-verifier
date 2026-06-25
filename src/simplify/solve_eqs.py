@@ -41,6 +41,7 @@ from pysmt import substituter
 from pysmt import operators as op
 
 from ..smt.utils import *
+from ..utils.stats import stats_dump
 
 
 def _contains_array_store(expr: FNode) -> bool:
@@ -231,8 +232,9 @@ def simplify_solve_eqs(
         f"array_eqs_remaining={array_eqs_remaining} "
         f"(conjunctive={array_eqs_conjunctive} other={array_eqs_under_other})"
     )
-    if subaction is not None:
-        subaction += {
+    stats_dump(
+        "solve_eqs",
+        {
             "rounds": rounds,
             "scalar_eliminations": scalar_elim,
             "array_eliminations": array_elim,
@@ -240,5 +242,6 @@ def simplify_solve_eqs(
             "array_eqs_remaining": array_eqs_remaining,
             "array_eqs_conjunctive": array_eqs_conjunctive,
             "array_eqs_under_other": array_eqs_under_other,
-        }
+        },
+    )
     return smt_script

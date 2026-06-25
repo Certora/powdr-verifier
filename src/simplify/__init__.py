@@ -2,6 +2,7 @@
 import time
 
 from ..utils.io import load_json
+from ..utils.stats import stats_dump
 from ..smt.utils import *
 from ..rewriter import rewrite
 
@@ -54,8 +55,7 @@ def simplify_model(smt_script: script.SmtLibScript, subaction=None) -> script.Sm
             cmd.args[0] = new
             if new != old:
                 changed += 1
-    if subaction is not None:
-        subaction += {"model_bindings": len(substitutions), "asserts_changed": changed}
+    stats_dump("model", {"model_bindings": len(substitutions), "asserts_changed": changed})
     return smt_script
 
 
@@ -71,8 +71,7 @@ def simplify_evaluate(smt_script: script.SmtLibScript, subaction=None) -> script
                 old,
             )
             changed += (cmd.args[0] != old)
-    if subaction is not None:
-        subaction += {"asserts_total": total, "asserts_changed": changed}
+    stats_dump("evaluator", {"asserts_total": total, "asserts_changed": changed})
     return smt_script
 
 
@@ -82,13 +81,7 @@ def simplify_rewrite(smt_script: script.SmtLibScript, subaction=None) -> script.
     total = 0
     pending = None
     t0 = 0.0
-
-    if subaction is not None:
-        subaction += {
-            "slow_asserts": [],
-            "asserts": 0,
-            "asserts_changed": 0,
-        }
+    slow_asserts: list[dict] = []
 
     try:
         for cmd in smt_script:
@@ -97,24 +90,24 @@ def simplify_rewrite(smt_script: script.SmtLibScript, subaction=None) -> script.
             total += 1
             old = cmd.args[0]
             entry = {"index": total - 1, "assert": str(old)[:240]}
-            if subaction is not None:
-                subaction += ("slow_asserts", entry)
             pending = entry
             t0 = time.perf_counter()
             new = keep_comment(rewrite(old).simplify(), old)
             sec = time.perf_counter() - t0
             entry["sec"] = sec
             pending = None
-            if subaction is not None and sec < 0.05:
-                subaction.slow_asserts.pop()
+            if sec >= 0.05:
+                slow_asserts.append(entry)
             cmd.args[0] = new
             if new != old:
                 changed += 1
     finally:
         if pending is not None:
             pending["sec"] = time.perf_counter() - t0
-        if subaction is not None:
-            subaction += {"asserts": total, "asserts_changed": changed}
+        stats_dump(
+            "rewrite",
+            {"asserts": total, "asserts_changed": changed, "slow_asserts": slow_asserts},
+        )
     return smt_script
 
 

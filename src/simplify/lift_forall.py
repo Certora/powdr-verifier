@@ -1,5 +1,6 @@
 """Hoist quantifier bodies: extract ``Not(And(…))`` disjuncts to top-level assertions."""
 from ..smt.utils import *
+from ..utils.stats import stats_dump
 
 
 def _qvar_deps(expr: FNode, qvars: frozenset[FNode]) -> frozenset[FNode]:
@@ -123,13 +124,15 @@ def simplify_lift_forall(smt_script: script.SmtLibScript, subaction=None) -> scr
     ]
     smt_script.commands = prefix + declares + suffix
 
-    if subaction is not None:
-        n_decl = sum(1 for c in declares if c.name == "declare-fun")
-        n_pin = sum(1 for c in declares if c.name == "assert")
-        subaction += {
+    n_decl = sum(1 for c in declares if c.name == "declare-fun")
+    n_pin = sum(1 for c in declares if c.name == "assert")
+    stats_dump(
+        "lift_forall",
+        {
             "pins_lifted": len(w.lifted),
             "new_declarations": n_decl,
             "hoisted_pin_asserts": n_pin,
-        }
+        },
+    )
 
     return smt_script

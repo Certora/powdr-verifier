@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 
 from ...smt.utils import *
+from ...utils.stats import stats_dump
 from .bounded_formula import BoundedFormula
 from .domain import IntVarDomains
 from .reasoner import IntervalReasoner, logger as interval_logger
@@ -26,8 +27,7 @@ def simplify_intervals(smt_script: script.SmtLibScript, subaction=None) -> scrip
     """Run disjunctive interval propagation on all assertions."""
     assertions = [cmd.args[0] for cmd in smt_script if cmd.name == "assert"]
     if not assertions:
-        if subaction is not None:
-            subaction += {"asserts": 0, "inconsistent": False, "tightened_symbols": 0}
+        stats_dump("intervals", {"asserts": 0, "inconsistent": False, "tightened_symbols": 0})
         return smt_script
 
     if interval_logger.isEnabledFor(logging.INFO):
@@ -73,12 +73,14 @@ def simplify_intervals(smt_script: script.SmtLibScript, subaction=None) -> scrip
         ):
             cmd.args[0] = reasoner.inject_root_bounds(cmd.args[0], only_tightened=True)
 
-    if subaction is not None:
-        subaction += {
+    stats_dump(
+        "intervals",
+        {
             "asserts": len(assertions),
             "inconsistent": inconsistent,
             "tightened_symbols": len(reasoner.tightened_symbols),
-        }
+        },
+    )
     return smt_script
 
 
@@ -113,8 +115,7 @@ def simplify_intervals2(smt_script: script.SmtLibScript, subaction=None) -> scri
     
     n_asserts_in = len(assertions)
     if not assertions:
-        if subaction is not None:
-            subaction += {"asserts_in": 0, "asserts_out": 0, "inconsistent": False}
+        stats_dump("intervals2", {"asserts_in": 0, "asserts_out": 0, "inconsistent": False})
         return smt_script
 
     if interval_logger.isEnabledFor(logging.INFO):
@@ -132,7 +133,7 @@ def simplify_intervals2(smt_script: script.SmtLibScript, subaction=None) -> scri
         )
 
     if inconsistent:
-        assertions = FALSE()
+        assertions = [script.SmtLibCommand(name="assert", args=[FALSE()])]
     else:
         bf.simplify(IntVarDomains.top(), frozenset())
         res = bf.as_fnode()
@@ -143,11 +144,13 @@ def simplify_intervals2(smt_script: script.SmtLibScript, subaction=None) -> scri
 
     res = script.SmtLibScript()
     res.commands = prefix + assertions + suffix
-    if subaction is not None:
-        out_asserts = sum(1 for c in res.commands if c.name == "assert")
-        subaction += {
+    out_asserts = sum(1 for c in res.commands if c.name == "assert")
+    stats_dump(
+        "intervals2",
+        {
             "asserts_in": n_asserts_in,
             "asserts_out": out_asserts,
             "inconsistent": inconsistent,
-        }
+        },
+    )
     return res

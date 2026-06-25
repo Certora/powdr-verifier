@@ -32,6 +32,7 @@ from pysmt import substituter
 
 from ..smt.conversion import SmtConverter
 from ..smt.utils import *
+from ..utils.stats import stats_dump
 
 UF_MOD_INV = SmtConverter.UF_MOD_INV
 
@@ -238,13 +239,15 @@ def simplify_mod_inv(smt_script: script.SmtLibScript, subaction=None) -> script.
         for cmd in smt_script
         if cmd.name == "assert"
     ):
-        if subaction is not None:
-            subaction += {
+        stats_dump(
+            "mod_inv",
+            {
                 "definition_folds": 0,
                 "fallback_asserts": 0,
                 "fallback_inverse_constraints": 0,
                 "fallback_fresh_symbols": 0,
-            }
+            },
+        )
         return smt_script
 
     declared = {
@@ -299,11 +302,13 @@ def simplify_mod_inv(smt_script: script.SmtLibScript, subaction=None) -> script.
             for constraint in rewriter.constraints
         )
     smt_script.commands = output
-    if subaction is not None:
-        subaction += {
+    stats_dump(
+        "mod_inv",
+        {
             "definition_folds": definition_folds,
             "fallback_asserts": fallback_asserts,
             "fallback_inverse_constraints": fallback_constraints,
             "fallback_fresh_symbols": fallback_fresh_symbols,
-        }
+        },
+    )
     return smt_script

@@ -8,6 +8,7 @@ from pysmt.exceptions import SolverReturnedUnknownResultError
 
 from ..report.action import Action
 from ..smt.utils import *
+from ..utils.stats import stats_dump
 
 logger = logging.getLogger(__name__)
 
@@ -165,16 +166,18 @@ def simplify_domain_probe(
     subaction: Action,
 ) -> script.SmtLibScript:
     total_added = 0
-
     assertions = [cmd.args[0] for cmd in smt_script if cmd.name == "assert"]
-    subaction += {"base_asserts": len(assertions)}
+    probe_stats: dict = {"base_asserts": len(assertions)}
+
     if not assertions:
+        stats_dump("domain_probe", probe_stats)
         return smt_script
 
     choices = _collect_choices(assertions, _MAX_VALUES)
-    subaction += {"choice_symbols": len(choices)}
+    probe_stats["choice_symbols"] = len(choices)
     if not choices:
-        subaction += {"pairs_probed": 0, "clusters_probed": 0}
+        probe_stats.update({"pairs_probed": 0, "clusters_probed": 0})
+        stats_dump("domain_probe", probe_stats)
         return smt_script
 
     try:
@@ -233,12 +236,12 @@ def simplify_domain_probe(
                     solver.add_assertion(f)
                 _probe_cluster(solver, cluster_choices, batch)
 
-        subaction += {
+        probe_stats.update({
             "pairs_probed": symbols_probed,
             "clusters_probed": clusters_probed,
             "flag_vars": flag_vars_total,
             "flag_local_asserts": flag_local_total,
-        }
+        })
         if len(choices) > symbols_probed:
             logger.info(
                 "domain_probe: probed %d of %d candidate symbol(s) in %d cluster(s)",
@@ -268,4 +271,5 @@ def simplify_domain_probe(
         logger.info("domain_probe: solver error, stopping: %s", e)
         return smt_script
     finally:
-        subaction += {"added_facts": total_added}
+        probe_stats["added_facts"] = total_added
+        stats_dump("domain_probe", probe_stats)

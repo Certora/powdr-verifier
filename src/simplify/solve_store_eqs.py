@@ -35,6 +35,7 @@ from pysmt import substituter
 from pysmt import operators as op
 
 from ..smt.utils import *
+from ..utils.stats import stats_dump
 
 
 def _is_2d_array_type(t) -> bool:
@@ -241,12 +242,14 @@ def simplify_solve_store_eqs(
         f"asserts_dropped={asserts_dropped} "
         f"array_eqs_remaining={array_eqs_remaining}"
     )
-    if subaction is not None:
-        subaction += {
+    stats_dump(
+        "solve_store_eqs",
+        {
             "rounds": rounds,
             "stores_eliminated": stores_elim,
             "consts_eliminated": consts_elim,
             "asserts_dropped": asserts_dropped,
             "array_eqs_remaining": array_eqs_remaining,
-        }
+        },
+    )
     return smt_script

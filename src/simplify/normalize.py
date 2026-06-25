@@ -18,6 +18,7 @@ from pysmt.walkers import IdentityDagWalker
 
 from ..smt.utils import *
 from ..utils.args import ARGS
+from ..utils.stats import stats_dump
 
 # Sorted generator indices with repetition; ``()`` is the unit monomial.
 Monomial = tuple[int, ...]
@@ -384,6 +385,8 @@ def simplify_normalize(smt_script: script.SmtLibScript, subaction=None) -> scrip
         cmd.args[0] = new
         if new != old:
             changed += 1
-    if subaction is not None:
-        subaction += {"asserts": total, "asserts_changed": changed, "int_vars": len(vars_sorted)}
+    stats_dump(
+        "normalize",
+        {"asserts": total, "asserts_changed": changed, "int_vars": len(vars_sorted)},
+    )
     return smt_script

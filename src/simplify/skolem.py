@@ -33,6 +33,7 @@ assertion, removing ``q`` from the universal.
 """
 
 from ..smt.utils import *
+from ..utils.stats import stats_dump
 from ..smt_backends.pysmt import wrap_mod
 
 from ..verify import SKOLEM_SETINFO_COLON_PREFIX
@@ -167,11 +168,13 @@ def simplify_skolem(smt_script: script.SmtLibScript, subaction=None) -> script.S
     if w.applied:
         parts = ", ".join(f"{k}={v}" for k, v in sorted(w.applied.items()))
         logging.info(f"skolem: applied {parts}")
-    if subaction is not None:
-        subaction += {
+    stats_dump(
+        "skolem",
+        {
             "pins_by_source": dict(w.applied),
             "free_value_asserts": len(free_pins),
-        }
+        },
+    )
     smt_script.commands = [
         cmd
         for cmd in smt_script.commands

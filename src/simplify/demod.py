@@ -4,6 +4,7 @@ from typing import Iterable
 from pysmt.walkers import IdentityDagWalker
 
 from ..smt.utils import *
+from ..utils.stats import stats_dump, stats_enabled
 from ..utils.args import ARGS
 from .intervals.domain import INF, IntInterval
 
@@ -282,7 +283,9 @@ def simplify_demod(smt_script: script.SmtLibScript, subaction=None) -> script.Sm
 
     constraints = [cmd.args[0] for cmd in smt_script if cmd.name == "assert"]
     ranges, protected_constraints = extract_symbol_ranges(constraints)
-    stats: dict[str, int] = {"eqmod_asserts_changed": eqmod_asserts_changed}
+    stats: dict[str, int] | None = (
+        {"eqmod_asserts_changed": eqmod_asserts_changed} if stats_enabled() else None
+    )
     demod = DeModSubstituter(
         ranges=ranges,
         protected_constraints=protected_constraints,
@@ -291,10 +294,12 @@ def simplify_demod(smt_script: script.SmtLibScript, subaction=None) -> script.Sm
     for cmd in smt_script:
         if cmd.name == "assert":
             cmd.args[0] = demod.substitute(cmd.args[0])
-    if subaction is not None:
-        subaction += {
+    stats_dump(
+        "demod",
+        {
             "range_symbols": len(ranges),
             "protected_range_constraints": len(protected_constraints),
-            **stats,
-        }
+            **(stats or {"eqmod_asserts_changed": eqmod_asserts_changed}),
+        },
+    )
     return smt_script

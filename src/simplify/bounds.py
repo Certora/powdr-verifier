@@ -2,6 +2,7 @@
 import re
 
 from ..smt.utils import *
+from ..utils.stats import stats_dump
 
 _BOUNDED_INT_VAR_RE = re.compile(r"@[0-9]+$")
 
@@ -57,8 +58,7 @@ def simplify_bounds(smt_script: script.SmtLibScript, subaction=None) -> script.S
         rewritten.append(cmd)
 
     if not bounded_symbols:
-        if subaction is not None:
-            subaction += {"bounded_symbols": 0, "range_asserts_added": 0}
+        stats_dump("bounds", {"bounded_symbols": 0, "range_asserts_added": 0})
         return smt_script
 
     bound_asserts = [
@@ -75,9 +75,11 @@ def simplify_bounds(smt_script: script.SmtLibScript, subaction=None) -> script.S
         output.append(cmd)
 
     smt_script.commands = output
-    if subaction is not None:
-        subaction += {
+    stats_dump(
+        "bounds",
+        {
             "bounded_symbols": len(bounded_symbols),
             "range_asserts_added": len(bound_asserts),
-        }
+        },
+    )
     return smt_script

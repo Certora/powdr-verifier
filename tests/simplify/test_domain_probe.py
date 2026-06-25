@@ -88,7 +88,7 @@ def test_flag_cluster_links_pinned_aux_vars():
     assert cluster == frozenset({x, y})
 
 
-def test_domain_probe_subaction_added_facts():
+def test_domain_probe_adds_facts():
     x = Symbol("x", INT)
     y = Symbol("y", INT)
     f = And(
@@ -98,5 +98,5 @@ def test_domain_probe_subaction_added_facts():
     )
     smt = _script(f)
     with Action("domain_probe") as subaction:
-        simplify_domain_probe(smt, subaction)
-    assert subaction.added_facts == 1
+        out = simplify_domain_probe(smt, subaction)
+    assert sum(1 for cmd in out.commands if cmd.name == "assert") == 2
