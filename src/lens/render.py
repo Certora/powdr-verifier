@@ -477,7 +477,78 @@ def _memkey_rows(machine, symbolic_only):
     return rows, len(mem), n_sym
 
 
-def render_memkeys(machine, group, block, label, symbolic_only, limit, mode):
+def _memkey_by_as_rows(machine):
+    """[as_str, count, sym, distinct] per address space; sorted by count desc."""
+    from .normalize import normalize_constants
+
+    groups: dict = {}
+    order: list = []
+    for bi in machine.get("bus_interactions", []):
+        if bi.get("id") != 1:
+            continue
+        args = bi.get("args", [])
+        a_str = _expr_str(normalize_constants(args[0])) if len(args) > 0 else "?"
+        p_str = _expr_str(normalize_constants(args[1])) if len(args) > 1 else "?"
+        if a_str not in groups:
+            groups[a_str] = [a_str, 0, 0, set()]
+            order.append(a_str)
+        g = groups[a_str]
+        g[1] += 1
+        if mem_key_symbolic(bi):
+            g[2] += 1
+        g[3].add(p_str)
+    rows = [[a, n, s, len(keys)] for a, n, s, keys in (groups[a] for a in order)]
+    rows.sort(key=lambda r: -r[1])
+    return rows
+
+
+def _render_memkeys_by_as(machine, group, block, label, limit, mode):
+    rows = _memkey_by_as_rows(machine)
+    n_mem = sum(r[1] for r in rows)
+    n_sym = sum(r[2] for r in rows)
+    if mode == JSON:
+        return json.dumps({
+            "group": group, "block": block, "step": label,
+            "memory": {"total": n_mem, "symbolic": n_sym},
+            "by_address_space": [{"address_space": a, "count": n,
+                                  "symbolic": s, "distinct": d}
+                                 for a, n, s, d in rows],
+        }, indent=2)
+    shown, trunc = _capped(rows, limit)
+    if mode == RICH:
+        from rich.console import Console
+        from rich.table import Table
+
+        console = Console()
+        with console.capture() as cap:
+            console.rule(f"[bold]{group}/{block}[/] {label}  [dim]memory by "
+                         f"address space ({n_sym}/{n_mem} keys sym)[/]")
+            t = Table(show_edge=False)
+            t.add_column("address_space", style="green")
+            t.add_column("count", justify="right")
+            t.add_column("keysym", justify="right")
+            t.add_column("distinct", justify="right")
+            for a, n, s, d in shown:
+                t.add_row(a, str(n), f"[yellow]{s}[/]" if s else "[dim]0[/]",
+                          str(d))
+            console.print(t)
+            if trunc:
+                console.print(f"[dim](+{trunc} more)[/]")
+        return cap.get().rstrip("\n")
+    out = [f"# {group}/{block} {label}  memory by address space "
+           f"({n_sym} of {n_mem} keys symbolic; {len(rows)} address spaces)",
+           f"{'address_space':<28} {'count':>6} {'keysym':>6} {'distinct':>8}"]
+    for a, n, s, d in shown:
+        out.append(f"{a:<28} {n:>6} {s:>6} {d:>8}")
+    if trunc:
+        out.append(f"(+{trunc} more)")
+    return "\n".join(out)
+
+
+def render_memkeys(machine, group, block, label, symbolic_only, limit, mode,
+                   by_as=False):
+    if by_as:
+        return _render_memkeys_by_as(machine, group, block, label, limit, mode)
     rows, n_mem, n_sym = _memkey_rows(machine, symbolic_only)
     if mode == JSON:
         return json.dumps({
@@ -871,10 +942,12 @@ SUBCOMMANDS
   sweep   all [<group>] [--sort KEY]   1 row PER BLOCK (group auto-picked
             if only one). KEY: cons0(default) consF steps mem0 memF size red
   subs    <group> <block>   list var -> definition (signed-normalized)
-  memkeys <group> <block> <step> [--all] [--limit N]   list Memory
-            interaction keys (address_space, pointer); symbolic-only by
-            default. JSON: {memory{total,symbolic},
-            keys:[{address_space,pointer,symbolic,count}]}
+  memkeys <group> <block> <step> [--all] [--by-as] [--limit N]   list
+            Memory interaction keys (address_space, pointer); symbolic-only
+            by default. --by-as summarizes per address space
+            (count/keysym/distinct). JSON: {memory{total,symbolic},
+            keys:[{address_space,pointer,symbolic,count}]} or, with --by-as,
+            by_address_space:[{address_space,count,symbolic,distinct}]}
   diff    <group> <block> <stepA> <stepB> [--limit N]   constraint- AND
             bus-level diff (removed/added/changed + columns). SAME
             representation only: refuses M-vs-C. Memory busses matched by

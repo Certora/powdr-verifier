@@ -111,8 +111,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_mk.add_argument("step")
     sp_mk.add_argument("--all", action="store_true",
                        help="include concrete keys (default: symbolic only)")
+    sp_mk.add_argument("--by-as", dest="by_as", action="store_true",
+                       help="summarize by address space (count/keysym/distinct)")
     sp_mk.add_argument("--limit", type=int, default=50,
-                       help="max distinct keys listed (default 50)")
+                       help="max rows listed (default 50)")
 
     return p
 
@@ -185,7 +187,7 @@ def _run_memkeys(args, mode: str) -> None:
     machine = machine_of(load(entry.path))
     print(render.render_memkeys(
         machine, args.group, resolve.normalize_block(args.block),
-        entry.label, not args.all, args.limit, mode))
+        entry.label, not args.all, args.limit, mode, by_as=args.by_as))
 
 
 def _run_subs(args, mode: str) -> None:

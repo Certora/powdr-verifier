@@ -89,3 +89,20 @@ def test_memkeys_all_includes_concrete():
     assert len(out["keys"]) == 2                 # symbolic + concrete
     text = render_memkeys(_mem_machine(), "k", "1", "050", True, 50, PLAIN)
     assert "2 of 3 interactions symbolic" in text
+
+
+def test_memkeys_by_as_grouping():
+    machine = {"bus_interactions": [
+        {"id": 1, "mult": 1, "args": [1, 40, "d@1"]},              # as1 concrete
+        {"id": 1, "mult": 1, "args": [1, 44, "d@2"]},              # as1 concrete
+        {"id": 1, "mult": 1, "args": [2, ["p@0", "+", 1], "d@3"]},  # as2 sym
+        {"id": 1, "mult": 1, "args": [2, ["p@0", "+", 1], "d@4"]},  # as2 sym (same key)
+        {"id": 3, "mult": 1, "args": ["x@0", 17]},                  # not memory
+    ]}
+    out = json.loads(render_memkeys(machine, "k", "1", "0", True, 50, JSON, by_as=True))
+    assert out["memory"] == {"total": 4, "symbolic": 2}
+    bya = {r["address_space"]: r for r in out["by_address_space"]}
+    assert bya["1"] == {"address_space": "1", "count": 2, "symbolic": 0, "distinct": 2}
+    assert bya["2"] == {"address_space": "2", "count": 2, "symbolic": 2, "distinct": 1}
+    text = render_memkeys(machine, "k", "1", "0", True, 50, PLAIN, by_as=True)
+    assert "2 address spaces" in text and "address_space" in text
