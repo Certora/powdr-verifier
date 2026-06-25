@@ -259,7 +259,7 @@ def __do_simplify(input, output, optimization_step: str | None = None):
         extra_args=[
             *(
                 ["--optimization-step", optimization_step]
-                if optimization_step
+                if optimization_step is not None
                 else []
             ),
             "--timeout",
@@ -397,9 +397,7 @@ def run_verify(a, b):
             first,
             parse_output=True,
             timeout=TIMEOUT_ENCODING_SEC,
-            extra_args=(
-                ["--optimization-step", optimization_step] if optimization_step else []
-            ),
+            extra_args=["--optimization-step", optimization_step],
         )
         res_verify.name = "verify-encode"
         a_verify += res_verify
@@ -408,7 +406,7 @@ def run_verify(a, b):
                 res_simp = __do_simplify(
                     file,
                     file.with_suffix(".rewrite.smt2"),
-                    optimization_step=optimization_step or None,
+                    optimization_step=optimization_step,
                 )
                 a_check += res_simp
                 for rewritten in (res_simp.outputs or []):
