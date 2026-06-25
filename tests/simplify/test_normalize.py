@@ -397,14 +397,11 @@ def _poly_from_terms(
     const: int = 0,
 ) -> dict:
     idx = {v: i for i, v in enumerate(vars_)}
-    n = len(vars_)
     poly: dict = {}
     for sym, coef in terms:
-        e = [0] * n
-        e[idx[sym]] = 1
-        poly[tuple(e)] = coef % mod if mod is not None else coef
+        poly[(idx[sym],)] = coef % mod if mod is not None else coef
     if const:
         c = const % mod if mod is not None else const
         if c:
-            poly[(0,) * n] = c
+            poly[()] = c
     return poly
