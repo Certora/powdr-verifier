@@ -34,6 +34,7 @@ from src.paths import (
     ensure_layout,
 )
 from src.utils.args import parse_args as verifier_parse_args
+from src.utils.stats import prepare_stats_dir, stats_tag_from_path, verify_run_id
 
 ensure_layout()
 set_report_dir(REPORTS_DIR)
@@ -120,6 +121,7 @@ def parse_args():
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--with-patch", type=Path, default=None)
     parser.add_argument("-j", "--jobs", type=int, default=1)
+    parser.add_argument("--stats", action="store_true")
 
     global _ARGS
     _ARGS, leftover = parser.parse_known_args()
@@ -194,16 +196,19 @@ def __run_main(
     *args,
     parse_output: bool = False,
     extra_args=None,
+    stats_args=None,
     timeout: float = TIMEOUT_DEFAULT_SEC,
 ) -> Optional[Any]:
     """Run ``main.py`` as a subprocess. With ``parse_output=True``, capture stdout and return ``load_json`` of it."""
     extra = list(extra_args or [])
+    stats = list(stats_args or [])
     cmd = [
         *memory_limit_cmd_prefix(_ARGS.jobs),
         PYTHON,
         VERIFIER_DIR / "main.py",
         *_ARGS._additional_args,
         *_ARGS._main_args,
+        *stats,
         command,
         *args,
         *extra,
@@ -251,7 +256,22 @@ def __run_main(
         raise subprocess.CalledProcessError(proc.returncode, cmd)
     return None
 
-def __do_simplify(input, output, optimization_step: str | None = None):
+def __stats_extra(run_id: str | None, smt_file: Path | None = None) -> list:
+    if not _ARGS.stats or run_id is None:
+        return []
+    extra = ["--stats-run-id", run_id]
+    if smt_file is not None:
+        extra += ["--stats-tag", stats_tag_from_path(smt_file)]
+    return extra
+
+
+def __do_simplify(
+    input,
+    output,
+    optimization_step: str | None = None,
+    *,
+    stats_run_id: str | None = None,
+):
     logging.info(f"simplifying {input.relative_to(Path.cwd())} (step={optimization_step or 'default'})")
     return __run_main(
         "simplify",
@@ -268,6 +288,7 @@ def __do_simplify(input, output, optimization_step: str | None = None):
             "--timeout",
             str(TIMEOUT_SIMPLIFY_SEC - 5),
         ],
+        stats_args=__stats_extra(stats_run_id, input),
         timeout=TIMEOUT_SIMPLIFY_SEC,
     )
 
@@ -389,6 +410,9 @@ def run_verify_opt(files: dict, pairs):
 @parallelize
 def run_verify(a, b):
     _, optimization_step = _parse_step_and_pass(b)
+    stats_run_id = verify_run_id(a, b) if _ARGS.stats else None
+    if stats_run_id is not None:
+        prepare_stats_dir(_ARGS.test, stats_run_id, wipe=True)
     with ActionDumper("verify", _ARGS.test, a, b) as a_verify:
         a_verify += {"command_line": __orchestrate_verify_cmd(a, b)}
         logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
@@ -400,7 +424,11 @@ def run_verify(a, b):
             first,
             parse_output=True,
             timeout=TIMEOUT_ENCODING_SEC,
-            extra_args=["--optimization-step", optimization_step],
+            extra_args=[
+                "--optimization-step",
+                optimization_step,
+            ],
+            stats_args=__stats_extra(stats_run_id),
         )
         res_verify.name = "verify-encode"
         a_verify += res_verify
@@ -410,6 +438,7 @@ def run_verify(a, b):
                     file,
                     file.with_suffix(".rewrite.smt2"),
                     optimization_step=optimization_step,
+                    stats_run_id=stats_run_id,
                 )
                 a_check += res_simp
                 for rewritten in (res_simp.outputs or []):
@@ -419,6 +448,7 @@ def run_verify(a, b):
                         "--dump-model", file.with_suffix(".model"),
                         parse_output=True,
                         timeout=TIMEOUT_CHECK_SEC,
+                        stats_args=__stats_extra(stats_run_id, rewritten),
                     )
 
 if __name__ == '__main__':

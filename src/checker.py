@@ -12,6 +12,7 @@ from pathlib import Path
 from .report.action import Action, classify_expected_vs_result
 from .smt.utils import *
 from .utils.args import ARGS
+from .utils.stats import init_stats_run, set_stats_tag, stats_enabled, stats_tag_from_path
 
 
 def _get_reason_unknown(solver):
@@ -292,6 +293,10 @@ def check_smt_script(
 
 def check():
     """Check the smt2 file."""
+
+    if stats_enabled():
+        init_stats_run(wipe=False)
+        set_stats_tag(getattr(ARGS(), "stats_tag", None) or stats_tag_from_path(ARGS().input))
 
     parser = SmtLibParser()
     logging.info(f"loading from {ARGS().input}")
