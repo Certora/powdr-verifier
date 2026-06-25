@@ -1,4 +1,5 @@
 """Equality-focused PySMT rewrites using local rules and SymPy modulo reasoning."""
+from dataclasses import dataclass
 import sympy
 
 from .conversion import to_sympy, to_smt
@@ -22,6 +23,25 @@ REWRITES_SYMPY = {
     operators.EQUALS: [rewrite_choice],
 }
 MAX_REWRITE_COUNT = 5
+
+
+@dataclass
+class RewriteStats:
+    simple: int = 0
+    sympy: int = 0
+
+
+_rewrite_stats = RewriteStats()
+
+
+def reset_rewrite_stats() -> RewriteStats:
+    global _rewrite_stats
+    _rewrite_stats = RewriteStats()
+    return _rewrite_stats
+
+
+def rewrite_stats() -> RewriteStats:
+    return _rewrite_stats
 
 
 def rewrite_one(node_type: int, args: list[FNode], rewrites) -> FNode:
@@ -64,6 +84,7 @@ class RelationRewriter(substituter.Substituter):
             res = rewrite_one(op, args, REWRITES[formula.node_type()])
             if res is not None and res != formula:
                 logger.debug(f"rewrote {formula} --> {res}")
+                rewrite_stats().simple += 1
                 return keep_comment(res, formula)
         if op in REWRITES_SYMPY:
             try:
@@ -83,6 +104,7 @@ class RelationRewriter(substituter.Substituter):
                 raise
             if res != formula:
                 logger.debug(f"rewrote sympy {formula} --> {res}")
+                rewrite_stats().sympy += 1
                 return keep_comment(res, formula)
         return keep_comment(
             substituter.Substituter.super(self, formula, args=args, **kwargs), formula
