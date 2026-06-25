@@ -359,8 +359,8 @@ class SMTPrettyPrinter(script.SmtPrinter):
         return any([
             self.is_collapsed,
             self.depth > 10,
-            all([ child.node_type() in self.COLLAPSIBLE for child in formula.args() ]),
-            len(str(formula)) < 60
+            all(child.node_type() in self.COLLAPSIBLE for child in formula.args()),
+            formula.size() < 10,
         ])
     
     @contextlib.contextmanager
