@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from .metrics import DumpDiff, DumpStats
 
 RICH, PLAIN, JSON = "rich", "plain", "json"
+FMT_MARK = {"circuit": "M", "constraints": "C", "unknown": "?"}
+_FMT_LEGEND = "f: M=machine/circuit C=constraints"
 
 
 @dataclass
@@ -217,6 +219,75 @@ def _compare_rich(diff: DumpDiff, ta: Target, tb: Target) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# sweep
+# --------------------------------------------------------------------------- #
+def render_sweep(rows, group: str, block: str, mode: str) -> str:
+    from .sweep import abbrev_label
+
+    if mode == JSON:
+        return json.dumps(
+            {"group": group, "block": block,
+             "steps": [r.as_dict() for r in rows]},
+            indent=2,
+        )
+    if mode == RICH:
+        return _sweep_rich(rows, group, block, abbrev_label)
+    return _sweep_plain(rows, group, block, abbrev_label)
+
+
+def _sym_cell(row, abbrev) -> str:
+    return ",".join(abbrev(b) for b in row.sym_busses) if row.sym_busses else "·"
+
+
+def _sweep_plain(rows, group, block, abbrev) -> str:
+    out = [f"# {group}/{block}   {_FMT_LEGEND}"]
+    pw = max((len(r.pass_name) for r in rows), default=4)
+    out.append(f"{'NNN':>3} {'pass':<{pw}} f {'cons':>4} {'bus':>4} "
+               f"{'mem':>3} {'der':>3} {'deg':>3} {'cols':>4}  sym-busses")
+    for r in rows:
+        out.append(
+            f"{r.nnn:03d} {r.pass_name:<{pw}} {FMT_MARK.get(r.fmt, '?')} "
+            f"{r.n_constraints:>4} {r.n_bus_interactions:>4} {r.n_memory:>3} "
+            f"{r.n_derived_columns:>3} {r.max_degree:>3} "
+            f"{r.distinct_columns:>4}  {_sym_cell(r, abbrev)}"
+        )
+    return "\n".join(out)
+
+
+def _sweep_rich(rows, group, block, abbrev) -> str:
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    with console.capture() as cap:
+        console.rule(f"[bold]{group}/{block}[/]   [dim]{_FMT_LEGEND}[/]")
+        t = Table(show_edge=False)
+        t.add_column("NNN", justify="right")
+        t.add_column("pass")
+        t.add_column("f", justify="center")
+        t.add_column("cons", justify="right")
+        t.add_column("bus", justify="right")
+        t.add_column("mem", justify="right")
+        t.add_column("der", justify="right")
+        t.add_column("deg", justify="right")
+        t.add_column("cols", justify="right")
+        t.add_column("sym-busses")
+        for r in rows:
+            mark = FMT_MARK.get(r.fmt, "?")
+            mark = f"[magenta]{mark}[/]" if r.fmt == "circuit" else mark
+            sym = _sym_cell(r, abbrev)
+            sym = f"[yellow]{sym}[/]" if r.sym_busses else f"[dim]{sym}[/]"
+            t.add_row(
+                f"{r.nnn:03d}", r.pass_name, mark, str(r.n_constraints),
+                str(r.n_bus_interactions), str(r.n_memory),
+                str(r.n_derived_columns), str(r.max_degree),
+                str(r.distinct_columns), sym,
+            )
+        console.print(t)
+    return cap.get().rstrip("\n")
+
+
+# --------------------------------------------------------------------------- #
 # agent guide
 # --------------------------------------------------------------------------- #
 def agent_guide() -> str:
@@ -230,6 +301,7 @@ lens — statistics over powdr APC JSON dumps.
 SUBCOMMANDS
   show    <group> <block> <step>        stats for one dump
   compare <group> <block> <stepA> <stepB>   A->B deltas (same block)
+  sweep   <group> <block> [--from N] [--to N]   per-step trail, 1 row/step
 
 GLOBAL FLAGS
   --root DIR     dumps root (default: powdr-dumps)
@@ -269,9 +341,21 @@ JSON FIELDS (compare)
   scalars{metric:{a,b,delta}}  buses[{id,label,a,b,delta}]
   op_hist{op:{a,b,delta}}  degree_mean{a,b,delta}
 
+SWEEP COLUMNS / JSON (one row per step)
+  NNN pass  f  cons bus mem der deg cols  sym-busses
+  f = format marker: M=machine/circuit C=constraints
+  cons=n_constraints bus=n_bus_interactions mem=Memory-bus count
+  der=n_derived_columns deg=max degree cols=distinct columns
+  sym-busses = abbreviated labels of busses with symbolic mult, else ·
+  JSON: {group,block,steps:[{nnn,pass,format,n_constraints,
+    n_bus_interactions,n_memory,n_derived_columns,max_degree,
+    distinct_columns,sym_busses[]}]}
+
 EXAMPLES
   lens show keccak 2106412 011 --json
   lens show keccak 2106412 memory --plain
   lens compare keccak 2103924 010 011
   lens compare keccak 2103924 memory remove_free --json
+  lens sweep keccak 2099512
+  lens sweep keccak 2099512 --from 11 --to 23 --json
 """

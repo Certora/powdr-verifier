@@ -37,6 +37,14 @@ def test_bool_is_constant_not_int():
     assert info.degree == 0 and info.nodes == 1
 
 
+def test_bag_list_not_misread_as_infix():
+    # A QuotientOrZero value [num, den] is a 2-tuple of expressions, NOT an
+    # infix [lhs, op, rhs]. Must not crash and must collect both columns.
+    info = analyze_expr({"QuotientOrZero": ["n@0", ["d@1", "*", "d@1"]]})
+    assert info.columns == {"n@0", "d@1"}
+    assert info.degree == 2  # max over the bag (d@1*d@1)
+
+
 def test_mult_kind():
     assert mult_kind(1) == "send"
     assert mult_kind(NEG_ONE) == "recv"
@@ -45,6 +53,11 @@ def test_mult_kind():
     assert mult_kind(True) == "other"  # bool before int
     assert mult_kind("a@5") == "sym"
     assert mult_kind(["a@5", "+", 1]) == "sym"
+    # column-free expressions are concrete, not symbolic
+    assert mult_kind(["-", 1]) == "recv"      # unary minus of 1 = -1
+    assert mult_kind(["-", ["-", 1]]) == "send"  # = +1
+    assert mult_kind([2, "*", 3]) == "other"  # = 6
+    assert mult_kind([1, "+", "x@0"]) == "sym"
 
 
 def _machine(constraints, bus=None, derived=None):

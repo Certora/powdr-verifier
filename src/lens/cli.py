@@ -7,6 +7,7 @@ from . import render, resolve
 from .loader import load, load_bus_map
 from .metrics import DumpDiff, DumpStats
 from .render import Target
+from .sweep import build_sweep
 
 
 def _add_common(parser: argparse.ArgumentParser, suppress: bool) -> None:
@@ -53,6 +54,15 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_cmp.add_argument("block")
     sp_cmp.add_argument("step_a")
     sp_cmp.add_argument("step_b")
+
+    sp_sweep = sub.add_parser("sweep", parents=[common],
+                              help="compact per-step stats across a block")
+    sp_sweep.add_argument("group")
+    sp_sweep.add_argument("block")
+    sp_sweep.add_argument("--from", dest="lo", type=int, default=None,
+                          help="lowest step NNN to include")
+    sp_sweep.add_argument("--to", dest="hi", type=int, default=None,
+                          help="highest step NNN to include")
 
     return p
 
@@ -101,6 +111,12 @@ def main(argv: list[str] | None = None) -> int:
             ta = Target(args.group, bid, ea.label, str(ea.path))
             tb = Target(args.group, bid, eb.label, str(eb.path))
             print(render.render_compare(DumpDiff(sa, sb), ta, tb, mode))
+
+        elif args.command == "sweep":
+            labels = load_bus_map(resolve.base_dump_path(directory, args.block))
+            rows = build_sweep(entries, labels, args.lo, args.hi)
+            print(render.render_sweep(
+                rows, args.group, resolve.normalize_block(args.block), mode))
 
     except resolve.ResolveError as e:
         print(f"lens: {e}", file=sys.stderr)

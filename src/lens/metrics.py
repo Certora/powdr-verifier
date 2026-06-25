@@ -44,26 +44,33 @@ def analyze_expr(node: Any) -> ExprInfo:
     if isinstance(node, list):
         if not node:
             return ExprInfo(1, 1, 0, set(), Counter())
-        # Two encodings: prefix/unary ``[op, operand, ...]`` (e.g. ['-', e]
-        # negation) and infix ``[operand, op, operand, ...]``.
+        # Three shapes: prefix/unary ``[op, operand, ...]`` (e.g. ['-', e]);
+        # infix ``[operand, op, operand, ...]``; and a plain bag of
+        # sub-expressions (e.g. a QuotientOrZero ``[num, den]`` tuple, which is
+        # not an expression at all). Detect a well-formed infix by checking the
+        # odd slots are operators; otherwise fall back to a bag.
+        infix_ops = [node[i] for i in range(1, len(node), 2)]
         if isinstance(node[0], str) and node[0] in _OPS:
-            op = node[0]
             operands = [analyze_expr(x) for x in node[1:]]
-            op_tokens = [op]
-        else:
+            op_tokens = [node[0]]
+        elif infix_ops and all(isinstance(t, str) and t in _OPS for t in infix_ops):
             operands = [analyze_expr(node[i]) for i in range(0, len(node), 2)]
-            op_tokens = [node[i] for i in range(1, len(node), 2)]
-        if not operands:
-            return ExprInfo(1, 1, 0, set(), Counter())
+            op_tokens = infix_ops
+        else:
+            operands = [analyze_expr(x) for x in node]
+            op_tokens = []
         nodes = sum(o.nodes for o in operands) + len(op_tokens)
         depth = 1 + max(o.depth for o in operands)
         columns: set[str] = set().union(*(o.columns for o in operands))
-        ops = Counter(t for t in op_tokens if t in _OPS)
+        ops = Counter(op_tokens)
         for o in operands:
             ops += o.ops
-        degree = operands[0].degree
-        for tok, o in zip(op_tokens, operands[1:]):
-            degree = degree + o.degree if tok == "*" else max(degree, o.degree)
+        if op_tokens:
+            degree = operands[0].degree
+            for tok, o in zip(op_tokens, operands[1:]):
+                degree = degree + o.degree if tok == "*" else max(degree, o.degree)
+        else:
+            degree = max(o.degree for o in operands)
         return ExprInfo(nodes, depth, degree, columns, ops)
     if isinstance(node, dict):  # e.g. derived-column form wrapper
         children = [analyze_expr(v) for v in node.values()]
@@ -79,17 +86,51 @@ def analyze_expr(node: Any) -> ExprInfo:
     return ExprInfo(1, 1, 0, set(), Counter())
 
 
+def _eval_const(node: Any) -> int | None:
+    """Evaluate a column-free expression to an int, or None if it has columns.
+
+    Handles the constant forms a multiplicity can take — bare int, unary
+    ``["-", e]``, and infix ``[a, op, b, ...]`` over ``+ - *``. Returns None
+    as soon as a column ref (a ``str``) appears.
+    """
+    if isinstance(node, bool):
+        return None
+    if isinstance(node, int):
+        return node
+    if isinstance(node, str):
+        return None
+    if isinstance(node, list) and node:
+        if isinstance(node[0], str) and node[0] in _OPS:  # prefix/unary
+            v = _eval_const(node[1]) if len(node) == 2 else None
+            return None if v is None else (-v if node[0] == "-" else v)
+        v = _eval_const(node[0])
+        i = 1
+        while v is not None and i + 1 < len(node):
+            op, rhs = node[i], _eval_const(node[i + 1])
+            if rhs is None or op not in _OPS:
+                return None
+            v = v + rhs if op == "+" else v - rhs if op == "-" else v * rhs
+            i += 2
+        return v
+    return None
+
+
 def mult_kind(mult: Any) -> str:
-    """Classify a bus multiplicity into send / recv / sym / other."""
+    """Classify a bus multiplicity into send / recv / sym / other.
+
+    A multiplicity is ``sym`` only if it references columns. Column-free
+    expressions (e.g. ``["-", 1]`` = a concrete −1 receive) are evaluated to
+    their constant value — they are NOT symbolic.
+    """
     if isinstance(mult, bool):
         return "other"
-    if isinstance(mult, int):
-        if mult == 1:
-            return "send"
-        if mult in (NEG_ONE, -1):
-            return "recv"
+    if not isinstance(mult, int) and analyze_expr(mult).columns:
+        return "sym"
+    v = _eval_const(mult)
+    if v is None:
         return "other"
-    return "sym"  # symbolic: column string or expression tree
+    v %= FIELD_PRIME
+    return "send" if v == 1 else "recv" if v == NEG_ONE else "other"
 
 
 @dataclass
@@ -156,6 +197,15 @@ class DumpStats:
     n_blocks: int | None = None
     n_instructions: int | None = None
     submachine_polys: list[int] | None = None
+
+    @property
+    def memory_count(self) -> int:
+        """Number of Memory bus interactions (label ``Memory``)."""
+        return sum(r.count for r in self.buses if r.label == "Memory")
+
+    def sym_bus_labels(self) -> list[str]:
+        """Labels of busses carrying any symbolic multiplicity, by count desc."""
+        return [r.label for r in self.buses if r.sym]
 
     @classmethod
     def from_data(
