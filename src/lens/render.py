@@ -395,6 +395,137 @@ def render_subs(subs, group: str, block: str, mode: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# diff (constraint-level)
+# --------------------------------------------------------------------------- #
+def _signed_str(c) -> str:
+    from .normalize import normalize_constants
+    return _expr_str(normalize_constants(c))
+
+
+def _capped(items, limit):
+    """Yield up to `limit` items; returns (shown_list, n_truncated)."""
+    if limit is None or len(items) <= limit:
+        return items, 0
+    return items[:limit], len(items) - limit
+
+
+def _group(strs):
+    """Collapse identical strings to ordered (str, count) pairs."""
+    out, counts = [], {}
+    for s in strs:
+        if s not in counts:
+            counts[s] = 0
+            out.append(s)
+        counts[s] += 1
+    return [(s, counts[s]) for s in out]
+
+
+def _xn(count) -> str:
+    return f"  (x{count})" if count > 1 else ""
+
+
+def render_diff(diff, ta: Target, tb: Target, mode: str, limit: int = 20) -> str:
+    if mode == JSON:
+        return json.dumps({
+            "a": vars(ta), "b": vars(tb), "format": diff.fmt,
+            "removed": [_signed_str(c) for c in diff.removed],
+            "added": [_signed_str(c) for c in diff.added],
+            "changed": [{"before": _signed_str(x), "after": _signed_str(y)}
+                        for x, y in diff.changed],
+            "columns": {
+                "added": [{"name": n, "def": _signed_str(d) if d is not None else None}
+                          for n, d in diff.cols_added],
+                "removed": [{"name": n, "def": _signed_str(d) if d is not None else None}
+                            for n, d in diff.cols_removed],
+            },
+        }, indent=2)
+    if mode == RICH:
+        return _diff_rich(diff, ta, tb, limit)
+    return _diff_plain(diff, ta, tb, limit)
+
+
+def _diff_reassoc_hint(diff) -> bool:
+    return bool(diff.changed and not diff.removed and not diff.added
+                and diff.fmt == "machine")
+
+
+def _diff_plain(diff, ta, tb, limit) -> str:
+    out = [
+        f"# A: {ta.group}/{ta.block} {ta.label} [{diff.fmt}]",
+        f"# B: {tb.group}/{tb.block} {tb.label} [{diff.fmt}]",
+        f"# constraints: -{len(diff.removed)} +{len(diff.added)} "
+        f"~{len(diff.changed)}   columns: +{len(diff.cols_added)} "
+        f"-{len(diff.cols_removed)}",
+    ]
+    if _diff_reassoc_hint(diff):
+        out.append("# note: all changes are reassociations (likely loop_iteration)")
+    changed = _group([f"{_signed_str(x)}  =>  {_signed_str(y)}"
+                      for x, y in diff.changed])
+    shown, trunc = _capped(changed, limit)
+    for s, n in shown:
+        out.append(f"~ {s}{_xn(n)}")
+    if trunc:
+        out.append(f"~ (+{trunc} more)")
+    shown, trunc = _capped(_group([_signed_str(c) for c in diff.removed]), limit)
+    for s, n in shown:
+        out.append(f"- {s}{_xn(n)}")
+    if trunc:
+        out.append(f"- (+{trunc} more)")
+    shown, trunc = _capped(_group([_signed_str(c) for c in diff.added]), limit)
+    for s, n in shown:
+        out.append(f"+ {s}{_xn(n)}")
+    if trunc:
+        out.append(f"+ (+{trunc} more)")
+    for n, d in diff.cols_added:
+        out.append(f"+col {n}" + (f" = {_signed_str(d)}" if d is not None else ""))
+    for n, d in diff.cols_removed:
+        out.append(f"-col {n}" + (f" = {_signed_str(d)}" if d is not None else ""))
+    return "\n".join(out)
+
+
+def _diff_rich(diff, ta, tb, limit) -> str:
+    from rich.console import Console
+
+    console = Console()
+    with console.capture() as cap:
+        console.rule(f"[bold]A[/] {ta.group}/{ta.block} {ta.label} "
+                     f"[magenta]({diff.fmt})[/]   "
+                     f"[bold]B[/] {tb.group}/{tb.block} {tb.label}")
+        console.print(
+            f"constraints: [red]-{len(diff.removed)}[/] "
+            f"[green]+{len(diff.added)}[/] [yellow]~{len(diff.changed)}[/]   "
+            f"columns: [green]+{len(diff.cols_added)}[/] "
+            f"[red]-{len(diff.cols_removed)}[/]")
+        if _diff_reassoc_hint(diff):
+            console.print("[dim]all changes are reassociations "
+                          "(likely loop_iteration)[/]")
+        changed = _group([f"{_signed_str(x)}  [dim]=>[/]  {_signed_str(y)}"
+                          for x, y in diff.changed])
+        shown, trunc = _capped(changed, limit)
+        for s, n in shown:
+            console.print(f"[yellow]~[/] {s}{_xn(n)}")
+        if trunc:
+            console.print(f"[yellow]~ (+{trunc} more)[/]")
+        shown, trunc = _capped(_group([_signed_str(c) for c in diff.removed]), limit)
+        for s, n in shown:
+            console.print(f"[red]-[/] {s}{_xn(n)}")
+        if trunc:
+            console.print(f"[red]- (+{trunc} more)[/]")
+        shown, trunc = _capped(_group([_signed_str(c) for c in diff.added]), limit)
+        for s, n in shown:
+            console.print(f"[green]+[/] {s}{_xn(n)}")
+        if trunc:
+            console.print(f"[green]+ (+{trunc} more)[/]")
+        for n, d in diff.cols_added:
+            console.print(f"[green]+col[/] {n}"
+                          + (f" = {_signed_str(d)}" if d is not None else ""))
+        for n, d in diff.cols_removed:
+            console.print(f"[red]-col[/] {n}"
+                          + (f" = {_signed_str(d)}" if d is not None else ""))
+    return cap.get().rstrip("\n")
+
+
+# --------------------------------------------------------------------------- #
 # agent guide
 # --------------------------------------------------------------------------- #
 def agent_guide() -> str:
@@ -412,6 +543,9 @@ SUBCOMMANDS
   sweep   all [<group>] [--sort KEY]   1 row PER BLOCK (group auto-picked
             if only one). KEY: cons0(default) consF steps mem0 memF size red
   subs    <group> <block>   list var -> definition (signed-normalized)
+  diff    <group> <block> <stepA> <stepB> [--limit N]   constraint-level
+            diff (removed/added/changed + columns). SAME representation only:
+            refuses M-vs-C (the encoding flip is not a real change).
 
 GLOBAL FLAGS
   --root DIR     dumps root (default: powdr-dumps)
@@ -485,4 +619,11 @@ EXAMPLES
   lens sweep all
   lens sweep all keccak --sort consF --json
   lens subs keccak 2099512
+  lens diff keccak 2104492 003 004
+  lens diff keccak 2104492 010 011 --json
+
+DIFF JSON FIELDS
+  a{..} b{..} format  removed[str] added[str] changed[{before,after}]
+  columns{added:[{name,def}], removed:[{name,def}]}
+  same-representation only; M-vs-C diff exits non-zero with a message.
 """

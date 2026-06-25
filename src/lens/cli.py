@@ -5,6 +5,7 @@ from pathlib import Path
 
 from . import render, resolve
 from .loader import load, load_bus_map
+from .diff import DiffError, build_diff
 from .metrics import DumpDiff, DumpStats
 from .normalize import normalize_constants
 from .render import Target
@@ -78,6 +79,16 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_subs.add_argument("group")
     sp_subs.add_argument("block")
 
+    sp_diff = sub.add_parser(
+        "diff", parents=[common],
+        help="constraint-level diff of two steps (same representation only)")
+    sp_diff.add_argument("group")
+    sp_diff.add_argument("block")
+    sp_diff.add_argument("step_a")
+    sp_diff.add_argument("step_b")
+    sp_diff.add_argument("--limit", type=int, default=20,
+                         help="max constraints listed per section (default 20)")
+
     return p
 
 
@@ -119,6 +130,26 @@ def _run_sweep(args, mode: str) -> None:
     print(render.render_sweep(rows, group, resolve.normalize_block(block), mode))
 
 
+def _run_diff(args, mode: str) -> int:
+    """`diff <group> <block> <stepA> <stepB>`: same-representation only."""
+    directory = resolve.group_dir(args.group, args.root)
+    entries = resolve.index_block(directory, args.block)
+    ea = resolve.resolve_step(entries, args.step_a)
+    eb = resolve.resolve_step(entries, args.step_b)
+    bid = resolve.normalize_block(args.block)
+    subs_path = resolve.substitutions_path(directory, args.block)
+    subs = load(subs_path) if subs_path is not None else None
+    try:
+        cdiff = build_diff(load(ea.path), load(eb.path), subs)
+    except DiffError as e:
+        print(f"lens: {ea.label} vs {eb.label}: {e}", file=sys.stderr)
+        return 2
+    ta = Target(args.group, bid, ea.label, str(ea.path))
+    tb = Target(args.group, bid, eb.label, str(eb.path))
+    print(render.render_diff(cdiff, ta, tb, mode, args.limit))
+    return 0
+
+
 def _run_subs(args, mode: str) -> None:
     """`subs <group> <block>`: list var -> definition, constants signed."""
     directory = resolve.group_dir(args.group, args.root)
@@ -151,6 +182,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "subs":
             _run_subs(args, mode)
             return 0
+
+        if args.command == "diff":
+            return _run_diff(args, mode)
 
         directory = resolve.group_dir(args.group, args.root)
         entries = resolve.index_block(directory, args.block)
