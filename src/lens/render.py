@@ -405,12 +405,23 @@ def _signed_str(c) -> str:
 _MULT_SIGN = {"send": "+", "recv": "-", "sym": "?", "other": "."}
 
 
-def _PLAIN_MARK(old, new):
-    return f"{{{old} -> {new}}}"
+def _PLAIN_HL(side, s):
+    return "{" + s + "}"
 
 
-def _RICH_MARK(old, new):
-    return f"[red]{old}[/red]->[green]{new}[/green]"
+def _RICH_HL(side, s):
+    return f"[red]{s}[/red]" if side == "b" else f"[green]{s}[/green]"
+
+
+def _group_pairs(pairs):
+    """Collapse identical (before, after) pairs to ordered (before, after, count)."""
+    out, counts = [], {}
+    for p in pairs:
+        if p not in counts:
+            counts[p] = 0
+            out.append(p)
+        counts[p] += 1
+    return [(b, a, counts[(b, a)]) for b, a in out]
 
 
 def _bus_str(entry) -> str:
@@ -430,61 +441,73 @@ def _mem_n(entries, pair=False) -> int:
     return sum(1 for lb, _ in entries if lb == "Memory")
 
 
-def _align(b, a, mark):
-    """Inline structural diff of two normalized exprs, or None if shapes differ.
+def _align_pair(b, a, hl):
+    """Parallel render of two normalized exprs as (before, after) strings.
 
-    Equal subtrees render plainly; differing leaves render via ``mark(old,new)``.
-    Requires identical tree shape and operators — the common "same shape" case.
+    Identical subtrees render plainly on both; differing leaves are wrapped by
+    ``hl(side, text)`` (side 'b'/'a'). Returns None if shapes differ.
     """
     if b == a:
-        return _expr_str(b)
+        s = _expr_str(b)
+        return (s, s)
     bu = isinstance(b, list) and len(b) == 2 and b[0] == "-"
     au = isinstance(a, list) and len(a) == 2 and a[0] == "-"
     if bu and au:
-        s = _align(b[1], a[1], mark)
-        return None if s is None else f"-{s}"
+        r = _align_pair(b[1], a[1], hl)
+        return None if r is None else (f"-{r[0]}", f"-{r[1]}")
     if bu != au:
         return None
     if (isinstance(b, list) and isinstance(a, list)
             and len(b) == len(a) and len(b) >= 3):
-        parts = []
+        pb, pa = [], []
         for i in range(len(b)):
-            if i % 2 == 1:                    # operator position
+            if i % 2 == 1:
                 if b[i] != a[i]:
                     return None
-                parts.append(str(b[i]))
+                pb.append(str(b[i]))
+                pa.append(str(a[i]))
             else:
-                s = _align(b[i], a[i], mark)
-                if s is None:
+                r = _align_pair(b[i], a[i], hl)
+                if r is None:
                     return None
-                parts.append(s)
-        return "(" + " ".join(parts) + ")"
+                pb.append(r[0])
+                pa.append(r[1])
+        return ("(" + " ".join(pb) + ")", "(" + " ".join(pa) + ")")
     if not isinstance(b, list) and not isinstance(a, list):
-        return mark(str(b), str(a))
+        return (hl("b", str(b)), hl("a", str(a)))
     return None
 
 
-def _aligned_constraint(x, y, mark) -> str:
+def _constraint_pair(x, y, hl) -> tuple[str, str]:
+    """(before, after) strings for a changed constraint; whole-line if shapes differ."""
     from .normalize import normalize_constants
-    s = _align(normalize_constants(x), normalize_constants(y), mark)
-    return s if s is not None else f"{_signed_str(x)}  =>  {_signed_str(y)}"
+    r = _align_pair(normalize_constants(x), normalize_constants(y), hl)
+    if r is not None:
+        return r
+    return (hl("b", _signed_str(x)), hl("a", _signed_str(y)))
 
 
-def _bus_align(ex, ey, mark) -> str:
-    """Element-aligned structural diff of two matched bus entries."""
+def _bus_pair(ex, ey, hl) -> tuple[str, str]:
+    """(before, after) strings for a changed bus entry, args aligned."""
     from .normalize import normalize_constants
     (label, bx), (_, by) = ex, ey
     ax = [normalize_constants(a) for a in bx.get("args", [])]
     ay = [normalize_constants(a) for a in by.get("args", [])]
+    sb = _MULT_SIGN.get(mult_kind(bx.get("mult")), "?")
+    sa = _MULT_SIGN.get(mult_kind(by.get("mult")), "?")
     if bx.get("id") != by.get("id") or len(ax) != len(ay):
-        return f"{_bus_str(ex)}  =>  {_bus_str(ey)}"
-    sign = _MULT_SIGN.get(mult_kind(bx.get("mult")), "?")
-    cells = [_align(x, y, mark) or mark(_expr_str(x), _expr_str(y))
+        return (_bus_str(ex), _bus_str(ey))
+    cells = [_align_pair(x, y, hl) or (hl("b", _expr_str(x)), hl("a", _expr_str(y)))
              for x, y in zip(ax, ay)]
-    if bx.get("id") == 1 and len(cells) >= 2:
-        body = ", ".join(cells[2:])
-        return f"{label}({sign}) [as={cells[0]}, ptr={cells[1]}] ({body})"
-    return f"{label}({sign}) ({', '.join(cells)})"
+    cb = [c[0] for c in cells]
+    ca = [c[1] for c in cells]
+
+    def fmt(label, sign, cs):
+        if bx.get("id") == 1 and len(cs) >= 2:
+            return f"{label}({sign}) [as={cs[0]}, ptr={cs[1]}] ({', '.join(cs[2:])})"
+        return f"{label}({sign}) ({', '.join(cs)})"
+
+    return (fmt(label, sb, cb), fmt(label, sa, ca))
 
 
 def _capped(items, limit):
@@ -515,8 +538,7 @@ def render_diff(diff, ta: Target, tb: Target, mode: str, limit: int = 20) -> str
             "a": vars(ta), "b": vars(tb), "format": diff.fmt,
             "removed": [_signed_str(c) for c in diff.removed],
             "added": [_signed_str(c) for c in diff.added],
-            "changed": [{"before": _signed_str(x), "after": _signed_str(y),
-                         "diff": _aligned_constraint(x, y, _PLAIN_MARK)}
+            "changed": [{"before": _signed_str(x), "after": _signed_str(y)}
                         for x, y in diff.changed],
             "columns": {
                 "added": [{"name": n, "def": _signed_str(d) if d is not None else None}
@@ -527,8 +549,7 @@ def render_diff(diff, ta: Target, tb: Target, mode: str, limit: int = 20) -> str
             "bus": {
                 "removed": [_bus_str(e) for e in diff.bus_removed],
                 "added": [_bus_str(e) for e in diff.bus_added],
-                "changed": [{"before": _bus_str(x), "after": _bus_str(y),
-                             "diff": _bus_align(x, y, _PLAIN_MARK)}
+                "changed": [{"before": _bus_str(x), "after": _bus_str(y)}
                             for x, y in diff.bus_changed],
                 "memory": {
                     "removed": _mem_n(diff.bus_removed),
@@ -560,11 +581,12 @@ def _diff_plain(diff, ta, tb, limit) -> str:
     ]
     if _diff_reassoc_hint(diff):
         out.append("# note: all changes are reassociations (likely loop_iteration)")
-    mark = _PLAIN_MARK
-    changed = _group([_aligned_constraint(x, y, mark) for x, y in diff.changed])
+    changed = _group_pairs([_constraint_pair(x, y, _PLAIN_HL)
+                            for x, y in diff.changed])
     shown, trunc = _capped(changed, limit)
-    for s, n in shown:
-        out.append(f"~ {s}{_xn(n)}")
+    for b, a, n in shown:
+        out.append(f"~- {b}{_xn(n)}")
+        out.append(f"~+ {a}")
     if trunc:
         out.append(f"~ (+{trunc} more)")
     shown, trunc = _capped(_group([_signed_str(c) for c in diff.removed]), limit)
@@ -581,10 +603,11 @@ def _diff_plain(diff, ta, tb, limit) -> str:
         out.append(f"+col {n}" + (f" = {_signed_str(d)}" if d is not None else ""))
     for n, d in diff.cols_removed:
         out.append(f"-col {n}" + (f" = {_signed_str(d)}" if d is not None else ""))
-    bchg = _group([_bus_align(x, y, mark) for x, y in diff.bus_changed])
+    bchg = _group_pairs([_bus_pair(x, y, _PLAIN_HL) for x, y in diff.bus_changed])
     shown, trunc = _capped(bchg, limit)
-    for s, n in shown:
-        out.append(f"~bus {s}{_xn(n)}")
+    for b, a, n in shown:
+        out.append(f"~-bus {b}{_xn(n)}")
+        out.append(f"~+bus {a}")
     if trunc:
         out.append(f"~bus (+{trunc} more)")
     shown, trunc = _capped(_group([_bus_str(e) for e in diff.bus_removed]), limit)
@@ -622,11 +645,12 @@ def _diff_rich(diff, ta, tb, limit) -> str:
         if _diff_reassoc_hint(diff):
             console.print("[dim]all changes are reassociations "
                           "(likely loop_iteration)[/]")
-        mark = _RICH_MARK
-        changed = _group([_aligned_constraint(x, y, mark) for x, y in diff.changed])
+        changed = _group_pairs([_constraint_pair(x, y, _RICH_HL)
+                                for x, y in diff.changed])
         shown, trunc = _capped(changed, limit)
-        for s, n in shown:
-            console.print(f"[yellow]~[/] {s}{_xn(n)}")
+        for b, a, n in shown:
+            console.print(f"[yellow]~[/][red]-[/] {b}{_xn(n)}")
+            console.print(f"[yellow]~[/][green]+[/] {a}")
         if trunc:
             console.print(f"[yellow]~ (+{trunc} more)[/]")
         shown, trunc = _capped(_group([_signed_str(c) for c in diff.removed]), limit)
@@ -645,10 +669,11 @@ def _diff_rich(diff, ta, tb, limit) -> str:
         for n, d in diff.cols_removed:
             console.print(f"[red]-col[/] {n}"
                           + (f" = {_signed_str(d)}" if d is not None else ""))
-        bchg = _group([_bus_align(x, y, mark) for x, y in diff.bus_changed])
+        bchg = _group_pairs([_bus_pair(x, y, _RICH_HL) for x, y in diff.bus_changed])
         shown, trunc = _capped(bchg, limit)
-        for s, n in shown:
-            console.print(f"[yellow]~bus[/] {s}{_xn(n)}")
+        for b, a, n in shown:
+            console.print(f"[yellow]~[/][red]-bus[/] {b}{_xn(n)}")
+            console.print(f"[yellow]~[/][green]+bus[/] {a}")
         if trunc:
             console.print(f"[yellow]~bus (+{trunc} more)[/]")
         shown, trunc = _capped(_group([_bus_str(e) for e in diff.bus_removed]), limit)
