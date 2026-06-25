@@ -324,16 +324,18 @@ def simplify_flatten_outer_array(
     # Until that's diagnosed, only run round 1 (outer-only flatten).
     # All the staging infrastructure stays in place for future work.
     MAX_ROUNDS = 1
+    round_stats_list: list[dict] = []
     while rounds < MAX_ROUNDS:
-        round_sub = None  # don't pollute subaction with per-round counts
         round_stats = _flatten_one_round(smt_script)
         if round_stats["flattened"] == 0:
             break
+        rounds += 1
+        stats_dump("flatten_outer_array-round", {"round": rounds, **round_stats})
+        round_stats_list.append({"round": rounds, **round_stats})
         total_flattened += round_stats["flattened"]
         total_new += round_stats["new_inner_arrays"]
         total_rewrites += round_stats["asserts_rewritten"]
-        total_ineligible = round_stats["ineligible"]  # last round's view
-        rounds += 1
+        total_ineligible = round_stats["ineligible"]
     logging.info(
         f"flatten_outer_array: total {total_flattened} arrays flattened into "
         f"{total_new} per-index decls across {rounds} round(s) "
@@ -348,6 +350,7 @@ def simplify_flatten_outer_array(
             "new_inner_arrays_total": total_new,
             "asserts_rewritten_total": total_rewrites,
             "ineligible_at_final_round": total_ineligible,
+            "rounds_detail": round_stats_list,
         },
     )
 

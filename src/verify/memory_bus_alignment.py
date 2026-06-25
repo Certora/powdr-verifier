@@ -735,6 +735,7 @@ def emit_memory_equalities(
         )
     if alignment is None:
         _LOG.info("memory bus pins skipped (no alignment)")
+        stats_dump("memory-bus-pins", {"pin_count": 0, "skipped": True, "reason": "no_alignment"})
         return SetInfos()
     match ARGS().memory_encoding:
         case "array":
@@ -759,6 +760,18 @@ def emit_memory_equalities(
         pins = [Equals(v, k) for k, v in subs.items()]
     else:
         pins = [Equals(k, v) for k, v in subs.items()]
+    stats_dump(
+        "memory-bus-pins",
+        {
+            "encoding": ARGS().memory_encoding,
+            "reverse": reverse,
+            "file": smt_dump_base.name if smt_dump_base is not None else None,
+            "n_before": alignment.n_before,
+            "n_after": alignment.n_after,
+            "aligned_steps": len(alignment.before_to_after),
+            "pin_count": len(pins),
+        },
+    )
     return SetInfos(
         equations=[SkolemPin(p, SkolemPinKind.MEMORY_BUS) for p in pins],
     )
