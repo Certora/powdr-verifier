@@ -145,6 +145,17 @@ def _structurally_equal(a: FNode, b: FNode) -> bool:
     return a.serialize() == b.serialize()
 
 
+def _contains_mod_inv(formula: FNode) -> bool:
+    """True if ``formula`` contains a ``uf_mod_inv`` application."""
+    stack = [formula]
+    while stack:
+        node = stack.pop()
+        if node.is_function_application() and node.function_name() == UF_MOD_INV:
+            return True
+        stack.extend(node.args())
+    return False
+
+
 class _FallbackModInvRewriter(substituter.Substituter):
     """Fallback for ``uf_mod_inv`` occurrences outside the definition pattern.
 
@@ -222,6 +233,20 @@ def simplify_mod_inv(smt_script: script.SmtLibScript, subaction=None) -> script.
     2. **Per-term fallback** — any leftover ``uf_mod_inv(T)`` is replaced
        by a fresh ``__mod_inv_N`` variable with an explicit inverse axiom.
     """
+    if not any(
+        _contains_mod_inv(cmd.args[0])
+        for cmd in smt_script
+        if cmd.name == "assert"
+    ):
+        if subaction is not None:
+            subaction += {
+                "definition_folds": 0,
+                "fallback_asserts": 0,
+                "fallback_inverse_constraints": 0,
+                "fallback_fresh_symbols": 0,
+            }
+        return smt_script
+
     declared = {
         cmd.args[0].symbol_name()
         for cmd in smt_script
