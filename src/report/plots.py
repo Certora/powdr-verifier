@@ -11,7 +11,18 @@ from .database import query, query_single_value
 from .html_utils import copy_command_badge
 
 
+_PLOT_FONT_SIZE = 14
+
+
+def _style_fig(fig) -> None:
+    fig.update_layout(
+        font=dict(size=_PLOT_FONT_SIZE),
+        title_font=dict(size=_PLOT_FONT_SIZE + 2),
+    )
+
+
 def _fig_html(fig) -> str:
+    _style_fig(fig)
     return fig.to_html(full_html=False, include_plotlyjs=False)
 
 
@@ -673,12 +684,18 @@ def verified_over_time() -> str:
         df,
         y="time",
         color="series",
-        title="Verifies solved",
+        title="Steps solved over time",
         ecdfnorm=None,
         orientation="h",
         category_orders={"series": order},
-        labels={"count": "# samples", "time": "Time (s)", "series": "Series"},
+        labels={
+            "count": "number of steps",
+            "time": "verification time (s)",
+            "series": "Series",
+        },
     )
+    fig.update_xaxes(title_text="number of steps")
+    fig.update_yaxes(title_text="verification time (s)")
     return _fig_html(fig)
 
 @functools.lru_cache(maxsize=1)
@@ -869,8 +886,10 @@ def block_solved_percentage_ecdf() -> str:
         ecdfmode="complementary",
         range_y=[0, 100],
         category_orders={"series": order},
-        labels={"count": "# blocks", "pct": "% solved", "series": "Series"},
+        labels={"pct": "% solved", "series": "Series"},
     )
+    fig.for_each_trace(lambda t: t.update(x=[xi + 1 for xi in t.x]))
+    fig.update_xaxes(title_text="block count")
     return _fig_html(fig)
 
 
