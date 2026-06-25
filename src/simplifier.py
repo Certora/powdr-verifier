@@ -49,7 +49,9 @@ DEFAULT_TACTIC = (
 )
 
 # Custom colon-separated pipelines keyed by powdr optimization pass name (e.g. ``remove_free``).
-STEP_TACTICS: dict[str, str] = {}
+STEP_TACTICS: dict[str, str] = {
+    "loop_iteration": "nnf:evaluator:skolem:lift:witness:demod:z3-propagate-values:flatten_outer_array:isqf:bounds:demod:normalize:bitwise:mod_inv:demod:z3-propagate-values:normalize:demod:pretty",
+}
 
 
 def resolve_tactic(tactic: str, optimization_step: str | None = None) -> str:
