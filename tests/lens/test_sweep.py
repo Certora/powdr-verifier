@@ -65,6 +65,22 @@ def _rows(tmp_path, lo=None, hi=None):
     return build_sweep(resolve.index_block(d, "111"), labels, lo, hi)
 
 
+def test_build_sweep_delta_vs_prev(tmp_path):
+    _make_block(tmp_path)
+    rows = _rows(tmp_path)
+    assert rows[0].delta is None            # first row: no prev
+    assert rows[1].delta == "xrep"          # 001 (C) vs 000 (M): not comparable
+    # 002 (C) vs 001 (C): identical constraints/bus -> all-zero delta
+    assert rows[2].delta == ((0, 0, 0), (0, 0, 0))
+
+
+def test_render_sweep_delta_columns(tmp_path):
+    _make_block(tmp_path)
+    text = render_sweep(_rows(tmp_path), "keccak", "111", PLAIN)
+    assert "dcons" in text and "dbus" in text
+    assert "—" in text                       # the cross-representation row
+
+
 def test_build_sweep_markers_memory_and_sym(tmp_path):
     _make_block(tmp_path)
     rows = _rows(tmp_path)

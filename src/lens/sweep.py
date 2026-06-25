@@ -7,6 +7,7 @@ from typing import Any
 
 from pathlib import Path
 
+from .diff import DiffError, build_diff
 from .loader import load
 from .metrics import DumpStats
 from .resolve import StepEntry, index_block, list_blocks
@@ -40,6 +41,20 @@ class StepRow:
     max_degree: int
     distinct_columns: int
     sym_busses: list[str]
+    # diff vs the previous step: None (first), "xrep" (cross-representation,
+    # not comparable), or ((c_rem, c_add, c_chg), (b_rem, b_add, b_chg)).
+    delta: Any = None
+
+    def _delta_dict(self) -> Any:
+        if self.delta is None:
+            return None
+        if self.delta == "xrep":
+            return {"cross_representation": True}
+        (cr, ca, cc), (br, ba, bc) = self.delta
+        return {
+            "constraints": {"removed": cr, "added": ca, "changed": cc},
+            "bus": {"removed": br, "added": ba, "changed": bc},
+        }
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -53,6 +68,7 @@ class StepRow:
             "max_degree": self.max_degree,
             "distinct_columns": self.distinct_columns,
             "sym_busses": self.sym_busses,
+            "diff": self._delta_dict(),
         }
 
 
@@ -145,14 +161,21 @@ def build_sweep(
     lo: int | None = None,
     hi: int | None = None,
 ) -> list[StepRow]:
-    """Compute a StepRow per entry whose NNN is within ``[lo, hi]``."""
+    """Compute a StepRow per entry whose NNN is within ``[lo, hi]``.
+
+    Each emitted row carries a diff summary vs the previous emitted row, when
+    both share a representation (else ``"xrep"``).
+    """
     rows: list[StepRow] = []
+    prev: tuple | None = None   # (data, fmt) of the previous emitted step
     for e in entries:
         if lo is not None and e.nnn < lo:
             continue
         if hi is not None and e.nnn > hi:
             continue
-        s = DumpStats.from_data(load(e.path), labels)
+        data = load(e.path)
+        s = DumpStats.from_data(data, labels)
+        delta = _step_delta(prev, data, s.fmt, labels)
         rows.append(StepRow(
             nnn=e.nnn,
             pass_name=e.pass_name,
@@ -164,5 +187,24 @@ def build_sweep(
             max_degree=s.degree.max,
             distinct_columns=s.distinct_columns,
             sym_busses=s.sym_bus_labels(),
+            delta=delta,
         ))
+        prev = (data, s.fmt)
     return rows
+
+
+def _step_delta(prev, data, fmt, labels):
+    """Diff summary of `data` vs `prev` (data, fmt), or None / 'xrep'."""
+    if prev is None:
+        return None
+    pdata, pfmt = prev
+    if pfmt != fmt or fmt not in ("machine", "constraints"):
+        return "xrep"
+    try:
+        d = build_diff(pdata, data, labels=labels)
+    except DiffError:
+        return "xrep"
+    return (
+        (len(d.removed), len(d.added), len(d.changed)),
+        (len(d.bus_removed), len(d.bus_added), len(d.bus_changed)),
+    )

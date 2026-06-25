@@ -240,17 +240,37 @@ def _sym_cell(row, abbrev) -> str:
     return ",".join(abbrev(b) for b in row.sym_busses) if row.sym_busses else "·"
 
 
+def _rac(t) -> str:
+    """Format a (removed, added, changed) triple as -r+a~c, or · if all zero."""
+    r, a, c = t
+    if not (r or a or c):
+        return "·"
+    return (f"-{r}" if r else "") + (f"+{a}" if a else "") + (f"~{c}" if c else "")
+
+
+def _delta_cells(delta) -> tuple[str, str]:
+    """(dcons, dbus) display strings for a StepRow.delta."""
+    if delta is None:
+        return ("", "")
+    if delta == "xrep":
+        return ("—", "—")
+    cons, bus = delta
+    return (_rac(cons), _rac(bus))
+
+
 def _sweep_plain(rows, group, block, abbrev) -> str:
-    out = [f"# {group}/{block}   {_FMT_LEGEND}"]
+    out = [f"# {group}/{block}   {_FMT_LEGEND}   (dcons/dbus = -rem+add~chg vs prev)"]
     pw = max((len(r.pass_name) for r in rows), default=4)
     out.append(f"{'NNN':>3} {'pass':<{pw}} f {'cons':>4} {'bus':>4} "
-               f"{'mem':>3} {'der':>3} {'deg':>3} {'cols':>4}  sym-busses")
+               f"{'mem':>3} {'der':>3} {'deg':>3} {'cols':>4} "
+               f"{'dcons':>9} {'dbus':>7}  sym-busses")
     for r in rows:
+        dcons, dbus = _delta_cells(r.delta)
         out.append(
             f"{r.nnn:03d} {r.pass_name:<{pw}} {FMT_MARK.get(r.fmt, '?')} "
             f"{r.n_constraints:>4} {r.n_bus_interactions:>4} {r.n_memory:>3} "
             f"{r.n_derived_columns:>3} {r.max_degree:>3} "
-            f"{r.distinct_columns:>4}  {_sym_cell(r, abbrev)}"
+            f"{r.distinct_columns:>4} {dcons:>9} {dbus:>7}  {_sym_cell(r, abbrev)}"
         )
     return "\n".join(out)
 
@@ -272,17 +292,20 @@ def _sweep_rich(rows, group, block, abbrev) -> str:
         t.add_column("der", justify="right")
         t.add_column("deg", justify="right")
         t.add_column("cols", justify="right")
+        t.add_column("dcons", justify="right")
+        t.add_column("dbus", justify="right")
         t.add_column("sym-busses")
         for r in rows:
             mark = FMT_MARK.get(r.fmt, "?")
             mark = f"[magenta]{mark}[/]" if r.fmt == "machine" else mark
             sym = _sym_cell(r, abbrev)
             sym = f"[yellow]{sym}[/]" if r.sym_busses else f"[dim]{sym}[/]"
+            dcons, dbus = _delta_cells(r.delta)
             t.add_row(
                 f"{r.nnn:03d}", r.pass_name, mark, str(r.n_constraints),
                 str(r.n_bus_interactions), str(r.n_memory),
                 str(r.n_derived_columns), str(r.max_degree),
-                str(r.distinct_columns), sym,
+                str(r.distinct_columns), dcons, dbus, sym,
             )
         console.print(t)
     return cap.get().rstrip("\n")
@@ -756,14 +779,18 @@ JSON FIELDS (compare)
   op_hist{op:{a,b,delta}}  degree_mean{a,b,delta}
 
 SWEEP COLUMNS / JSON (one row per step)
-  NNN pass  f  cons bus mem der deg cols  sym-busses
+  NNN pass  f  cons bus mem der deg cols  dcons dbus  sym-busses
+  dcons/dbus = -rem+add~chg of constraints/busses vs the previous step
+    (only when same representation; "—" across M/C; blank on first row)
   f = format marker: M=machine C=constraints
   cons=n_constraints bus=n_bus_interactions mem=Memory-bus count
   der=n_derived_columns deg=max degree cols=distinct columns
   sym-busses = abbreviated labels of busses with symbolic mult, else ·
   JSON: {group,block,steps:[{nnn,pass,format,n_constraints,
     n_bus_interactions,n_memory,n_derived_columns,max_degree,
-    distinct_columns,sym_busses[]}]}
+    distinct_columns,sym_busses[],
+    diff: null | {cross_representation:true} |
+      {constraints:{removed,added,changed}, bus:{removed,added,changed}}}]}
 
 SWEEP ALL COLUMNS / JSON (one row per block, sorted by KEY desc)
   block steps cons0 consF red% mem0 memF degF memSym othSym kb
