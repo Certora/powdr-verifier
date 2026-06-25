@@ -618,8 +618,7 @@ class PermutationCheckMixin:
             return [], [], []
         alignment = self._cur_state.verify_preanalysis.memory_bus_alignment
         skip_matches = (
-            ARGS().optimization_step != "memory"
-            and alignment is not None
+            alignment is not None
             and alignment.n_before == alignment.n_after == n
             and all(alignment.before_to_after.get(i) == i for i in range(n))
         )
