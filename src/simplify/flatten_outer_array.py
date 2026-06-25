@@ -79,6 +79,7 @@ from typing import Iterable, Optional
 from pysmt import operators
 
 from ..smt.utils import *
+from ..utils.stats import stats_dump
 
 
 def _is_outer_array_type(t) -> bool:
@@ -339,14 +340,16 @@ def simplify_flatten_outer_array(
         f"({total_rewrites} asserts rewritten; "
         f"{total_ineligible} ineligible at final round)"
     )
-    if subaction is not None:
-        subaction += {
+    stats_dump(
+        "flatten_outer_array",
+        {
             "rounds": rounds,
             "flattened_total": total_flattened,
             "new_inner_arrays_total": total_new,
             "asserts_rewritten_total": total_rewrites,
             "ineligible_at_final_round": total_ineligible,
-        }
+        },
+    )
 
     # Contract: at the end of this pass, no 2D+ array declaration may
     # remain. Outer arrays are this pass's responsibility, and an

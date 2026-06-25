@@ -1,5 +1,6 @@
 """Negation normal form conversion for PySMT formulas via a custom substituter."""
 from ..smt.utils import *
+from ..utils.stats import stats_dump
 
 
 class NNFConverter(substituter.Substituter):
@@ -87,6 +88,5 @@ def simplify_nnf(smt_script: script.SmtLibScript, subaction=None) -> script.SmtL
             cmd.args[0] = new
             if new != old:
                 changed += 1
-    if subaction is not None:
-        subaction += {"asserts": total, "asserts_changed": changed}
+    stats_dump("nnf", {"asserts": total, "asserts_changed": changed})
     return smt_script

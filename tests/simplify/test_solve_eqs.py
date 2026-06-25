@@ -156,6 +156,13 @@ def test_array_eqs_remaining_counter(monkeypatch):
     """The pass reports `array_eqs_remaining` for any (= a b) between
     two array-typed expressions that survives. This is the signal that
     drives the next milestone."""
+    captured: dict = {}
+
+    def _capture(_name, data):
+        captured.update(data)
+
+    monkeypatch.setattr("src.simplify.solve_eqs.stats_dump", _capture)
+
     base = Symbol("aer_base", _AT)
     a = Symbol("aer_a", _AT)
     b = Symbol("aer_b", _AT)
@@ -168,19 +175,11 @@ def test_array_eqs_remaining_counter(monkeypatch):
         _assert(Equals(a, b)),
     ])
 
-    class _Counter:
-        def __init__(self):
-            self.d = {}
-        def __iadd__(self, other):
-            self.d.update(other)
-            return self
-
-    sub = _Counter()
-    simplify_solve_eqs(smt, sub)
+    simplify_solve_eqs(smt, None)
     # The eligible (= a b) gets substituted (one of a or b eliminated).
-    assert sub.d["array_eliminations"] >= 1
+    assert captured["array_eliminations"] >= 1
     # The two store-RHS defining equalities remain; they're array eqs.
-    assert sub.d["array_eqs_remaining"] >= 1
+    assert captured["array_eqs_remaining"] >= 1
 
 
 def test_descends_into_conjunction():

@@ -23,6 +23,7 @@ from ..bus_interactions.single_interaction_encoder import BusInteraction
 from ..report.action import Action
 from ..smt.conversion import SmtConverter
 from ..smt.utils import *
+from ..utils.stats import stats_dump
 from ..utils.args import ARGS
 
 BEFORE_PREFIX = "before"
@@ -317,7 +318,7 @@ def analyze_memory_bus_partial_alignment_legacy(
                 counters["context-unknown"] += 1
     counters["context-time"] = time.perf_counter() - t0
 
-    parent_action += counters
+    stats_dump("memory-bus-align-legacy", counters)
 
     pair_preview = before_to_after if len(before_to_after) <= 16 else {
         **dict(list(before_to_after.items())[:12]),
@@ -437,8 +438,7 @@ def analyze_memory_bus_partial_alignment_first(
 
     if nb == na:
         m = {i: i for i in range(nb)}
-        if parent_action is not None:
-            parent_action += {"identity-shortcut": True}
+        stats_dump("memory-bus-align-first", {"identity-shortcut": True})
         _LOG.info(
             "memory bus alignment (identity): n_before=%d n_after=%d aligned_pairs=%d",
             nb,
@@ -458,8 +458,7 @@ def analyze_memory_bus_partial_alignment_first(
     )
     _singleton_sweep_memory_alignment(nb, na, before_to_after, counters)
 
-    if parent_action is not None:
-        parent_action += counters
+    stats_dump("memory-bus-align-first", counters)
 
     return MemoryBusPartialAlignment(nb, na, before_to_after)
 
@@ -571,7 +570,7 @@ def analyze_memory_bus_partial_alignment_second(
     context_sweep()
     _singleton_sweep_memory_alignment(nb, na, before_to_after, counters)
 
-    parent_action += counters
+    stats_dump("memory-bus-align-second", counters)
 
     _LOG.info(
         "memory bus alignment: n_before=%d n_after=%d aligned_pairs=%d",

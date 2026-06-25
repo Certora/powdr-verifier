@@ -2,6 +2,7 @@
 from ..smt_backends.pysmt import *
 import z3
 
+from ..utils.stats import stats_dump
 from .utils import _string_to_script
 
 
@@ -84,14 +85,16 @@ def simplify_z3(smt_script: script.SmtLibScript, args=[], subaction=None) -> scr
                 ]
                 output = list(prefix) + extra_decls + new_asserts + [cmd]
                 in_suffix = True
-                if subaction is not None:
-                    subaction += {
+                stats_dump(
+                    "z3",
+                    {
                         "z3_check": str(z3_check),
                         "asserts_in": z3_asserts_in,
                         "asserts_out": len(new_asserts),
                         "extra_declarations": len(extra_decls),
                         "tactic_args": list(args) if args else None,
-                    }
+                    },
+                )
             case _:
                 assert False, f"unexpected command: {cmd.name}"
 

@@ -3,6 +3,7 @@ from typing import Iterable, Iterator, NamedTuple
 
 from ..bus_interactions.openvm_bitwise_lookup import OpenVMBitwiseLookupEncoder
 from ..smt.utils import *
+from ..utils.stats import stats_dump, stats_enabled
 
 UF_XOR = OpenVMBitwiseLookupEncoder.UF_XOR
 UF_AND = OpenVMBitwiseLookupEncoder.UF_AND
@@ -295,7 +296,7 @@ def simplify_bitwise(smt_script: script.SmtLibScript, subaction=None) -> script.
     across both passes.
     """
     stats = None
-    if subaction is not None:
+    if stats_enabled():
         stats = {
             "seen": {"xor": 0, "and": 0, "or": 0},
             "emitted": {"xor": 0, "and": 0, "or": 0, "link": 0},
@@ -331,9 +332,8 @@ def simplify_bitwise(smt_script: script.SmtLibScript, subaction=None) -> script.
         for name in ("bitwise_axiom_generators", "bitwise_stats"):
             if hasattr(env, name):
                 delattr(env, name)
-    if subaction is not None:
-        payload: dict = {"top_level_bitwise_axiom_asserts": top_axiom_asserts}
-        if stats is not None:
-            payload["bitwise_stats"] = stats
-        subaction += payload
+    payload: dict = {"top_level_bitwise_axiom_asserts": top_axiom_asserts}
+    if stats is not None:
+        payload["bitwise_stats"] = stats
+    stats_dump("bitwise", payload)
     return smt_script

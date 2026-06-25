@@ -1,5 +1,6 @@
 """Legacy witness simplifications keyed by symbol naming conventions (before/after prefixes)."""
 from ..smt.utils import *
+from ..utils.stats import stats_dump
 
 
 def _strip_prefix(name: str) -> str:
@@ -212,13 +213,11 @@ def simplify_witnesses(smt_script: script.SmtLibScript, subaction=None) -> scrip
                 candidates.append(match)
     n_cand = len(candidates)
     if not candidates:
-        if subaction is not None:
-            subaction += {"witness_candidates": 0}
+        stats_dump("witness", {"witness_candidates": 0})
         return smt_script
     w = WitnessSubstituter(candidates, env=get_env())
     for cmd in smt_script:
         if cmd.name == "assert":
             cmd.args[0] = keep_comment(w.walk(cmd.args[0]), cmd.args[0])
-    if subaction is not None:
-        subaction += {"witness_candidates": n_cand}
+    stats_dump("witness", {"witness_candidates": n_cand})
     return smt_script

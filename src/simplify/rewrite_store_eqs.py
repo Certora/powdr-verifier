@@ -40,6 +40,7 @@ flatten has nothing 2D to dissect.
 from pysmt import operators as op
 
 from ..smt.utils import *
+from ..utils.stats import stats_dump
 
 
 def _canon_arith(mgr, expr: FNode, mod_p: FNode | None = None) -> FNode:
@@ -308,10 +309,12 @@ def simplify_rewrite_store_eqs(
         f"rewrite_store_eqs: reductions={walker.reductions} "
         f"asserts_rewritten={rewrites} asserts_dropped={asserts_dropped}"
     )
-    if subaction is not None:
-        subaction += {
+    stats_dump(
+        "rewrite_store_eqs",
+        {
             "reductions": walker.reductions,
             "asserts_rewritten": rewrites,
             "asserts_dropped": asserts_dropped,
-        }
+        },
+    )
     return smt_script
