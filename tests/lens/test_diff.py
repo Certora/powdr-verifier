@@ -151,6 +151,30 @@ def test_bus_exact_unchanged_absent():
     assert not d.bus_removed and not d.bus_added and not d.bus_changed
 
 
+def test_render_changed_constraint_aligned_inline():
+    # same shape, one leaf differs -> inline {old -> new}, not before=>after
+    d = build_diff(_c([["x@0", "+", 1]]), _c([["x@0", "+", 7]]))
+    text = render_diff(d, *_targets(), PLAIN)
+    assert "~ (x@0 + {1 -> 7})" in text
+    assert "=>" not in text  # aligned, no fallback
+
+
+def test_render_changed_constraint_shape_mismatch_falls_back():
+    # B's sum has an extra term -> shapes differ -> fall back to before => after
+    d = build_diff(_c([["x@0", "+", 1]]), _c([["x@0", "+", ["y@1", "+", 1]]]))
+    text = render_diff(d, *_targets(), PLAIN)
+    assert "=>" in text
+
+
+def test_render_changed_memory_aligned_inline():
+    a = _cb([_mem(40, ["x@0", "x@1"], "t@9")])
+    b = _cb([_mem(40, ["y@2", "x@1"], "t@9")])  # only first data limb changes
+    d = build_diff(a, b, labels=_LABELS)
+    text = render_diff(d, *_targets(), PLAIN)
+    assert "[as=1, ptr=40]" in text
+    assert "{x@0 -> y@2}" in text and "x@1" in text  # changed limb marked, rest plain
+
+
 def test_render_diff_bus_summary_and_json():
     a = _cb([_mem(40, ["x@0"], "t@1"), _mem(44, ["y@1"], "t@2")])
     b = _cb([_mem(40, ["x@0"], "t@1")])
