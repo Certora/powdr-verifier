@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from . import render, resolve
-from .loader import load, load_bus_map
+from .loader import load, load_bus_map, machine_of
 from .diff import DiffError, build_diff
 from .metrics import DumpDiff, DumpStats
 from .normalize import normalize_constants
@@ -103,6 +103,17 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_diff.add_argument("--limit", type=int, default=20,
                          help="max constraints listed per section (default 20)")
 
+    sp_mk = sub.add_parser(
+        "memkeys", parents=[common],
+        help="list Memory interaction keys (address_space, pointer)")
+    sp_mk.add_argument("group")
+    sp_mk.add_argument("block")
+    sp_mk.add_argument("step")
+    sp_mk.add_argument("--all", action="store_true",
+                       help="include concrete keys (default: symbolic only)")
+    sp_mk.add_argument("--limit", type=int, default=50,
+                       help="max distinct keys listed (default 50)")
+
     return p
 
 
@@ -166,6 +177,17 @@ def _run_diff(args, mode: str) -> int:
     return 0
 
 
+def _run_memkeys(args, mode: str) -> None:
+    """`memkeys <group> <block> <step>`: list Memory (addr, ptr) keys."""
+    directory = resolve.group_dir(args.group, args.root)
+    entries = resolve.index_block(directory, args.block)
+    entry = resolve.resolve_step(entries, args.step)
+    machine = machine_of(load(entry.path))
+    print(render.render_memkeys(
+        machine, args.group, resolve.normalize_block(args.block),
+        entry.label, not args.all, args.limit, mode))
+
+
 def _run_subs(args, mode: str) -> None:
     """`subs <group> <block>`: list var -> definition, constants signed."""
     directory = resolve.group_dir(args.group, args.root)
@@ -201,6 +223,10 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "diff":
             return _run_diff(args, mode)
+
+        if args.command == "memkeys":
+            _run_memkeys(args, mode)
+            return 0
 
         directory = resolve.group_dir(args.group, args.root)
         entries = resolve.index_block(directory, args.block)

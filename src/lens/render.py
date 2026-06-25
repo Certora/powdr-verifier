@@ -3,7 +3,7 @@ import json
 import sys
 from dataclasses import dataclass
 
-from .metrics import DumpDiff, DumpStats, mult_kind
+from .metrics import DumpDiff, DumpStats, mem_key_symbolic, mult_kind
 
 RICH, PLAIN, JSON = "rich", "plain", "json"
 FMT_MARK = {"machine": "M", "constraints": "C",
@@ -446,6 +446,79 @@ def render_subs(subs, group: str, block: str, mode: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# memkeys (Memory interaction keys: address_space, pointer)
+# --------------------------------------------------------------------------- #
+def _memkey_rows(machine, symbolic_only):
+    """(distinct-key rows, n_mem, n_sym) for Memory interactions.
+
+    Each row: [as_str, ptr_str, symbolic, count], signed-normalized and grouped
+    by identical (address_space, pointer). Sorted symbolic-first, count desc.
+    """
+    from .normalize import normalize_constants
+
+    mem = [bi for bi in machine.get("bus_interactions", []) if bi.get("id") == 1]
+    n_sym = sum(mem_key_symbolic(bi) for bi in mem)
+    groups: dict = {}
+    order: list = []
+    for bi in mem:
+        sym = mem_key_symbolic(bi)
+        if symbolic_only and not sym:
+            continue
+        args = bi.get("args", [])
+        a_str = _expr_str(normalize_constants(args[0])) if len(args) > 0 else "?"
+        p_str = _expr_str(normalize_constants(args[1])) if len(args) > 1 else "?"
+        key = (a_str, p_str)
+        if key not in groups:
+            groups[key] = [a_str, p_str, sym, 0]
+            order.append(key)
+        groups[key][3] += 1
+    rows = [groups[k] for k in order]
+    rows.sort(key=lambda r: (not r[2], -r[3]))
+    return rows, len(mem), n_sym
+
+
+def render_memkeys(machine, group, block, label, symbolic_only, limit, mode):
+    rows, n_mem, n_sym = _memkey_rows(machine, symbolic_only)
+    if mode == JSON:
+        return json.dumps({
+            "group": group, "block": block, "step": label,
+            "memory": {"total": n_mem, "symbolic": n_sym},
+            "keys": [{"address_space": a, "pointer": p, "symbolic": s,
+                      "count": n} for a, p, s, n in rows],
+        }, indent=2)
+    head = (f"{group}/{block} {label}  memory keys: {n_sym} of {n_mem} "
+            f"interactions symbolic; {len(rows)} distinct"
+            + (" (symbolic only; --all for the rest)" if symbolic_only else ""))
+    shown, trunc = _capped(rows, limit)
+    if mode == RICH:
+        from rich.console import Console
+        from rich.table import Table
+
+        console = Console()
+        with console.capture() as cap:
+            console.rule(f"[bold]{group}/{block}[/] {label}  [dim]memory keys "
+                         f"{n_sym}/{n_mem} sym[/]")
+            t = Table(show_edge=False)
+            t.add_column("key", justify="center")
+            t.add_column("address_space")
+            t.add_column("pointer", style="green")
+            t.add_column("count", justify="right")
+            for a, p, s, n in shown:
+                mark = "[yellow]sym[/]" if s else "[dim]·[/]"
+                t.add_row(mark, a, p, str(n))
+            console.print(t)
+            if trunc:
+                console.print(f"[dim](+{trunc} more)[/]")
+        return cap.get().rstrip("\n")
+    out = [f"# {head}", f"{'key':>3}  {'as':<6} {'ptr':<28} count"]
+    for a, p, s, n in shown:
+        out.append(f"{'sym' if s else '·':>3}  {a:<6} {p:<28} {n}")
+    if trunc:
+        out.append(f"(+{trunc} more)")
+    return "\n".join(out)
+
+
+# --------------------------------------------------------------------------- #
 # diff (constraint-level)
 # --------------------------------------------------------------------------- #
 def _signed_str(c) -> str:
@@ -798,6 +871,10 @@ SUBCOMMANDS
   sweep   all [<group>] [--sort KEY]   1 row PER BLOCK (group auto-picked
             if only one). KEY: cons0(default) consF steps mem0 memF size red
   subs    <group> <block>   list var -> definition (signed-normalized)
+  memkeys <group> <block> <step> [--all] [--limit N]   list Memory
+            interaction keys (address_space, pointer); symbolic-only by
+            default. JSON: {memory{total,symbolic},
+            keys:[{address_space,pointer,symbolic,count}]}
   diff    <group> <block> <stepA> <stepB> [--limit N]   constraint- AND
             bus-level diff (removed/added/changed + columns). SAME
             representation only: refuses M-vs-C. Memory busses matched by
@@ -899,6 +976,7 @@ EXAMPLES
   lens sweep all
   lens sweep all keccak --sort consF --json
   lens subs keccak 2099512
+  lens memkeys keccak 2100224 050        # which mem addresses stay symbolic
   lens diff keccak 2104492 003 004
   lens diff keccak 2104492 010 011 --json
 

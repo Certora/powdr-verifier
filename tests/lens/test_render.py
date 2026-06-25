@@ -2,7 +2,9 @@
 import json
 
 from src.lens.metrics import NEG_ONE, DumpDiff, DumpStats
-from src.lens.render import JSON, PLAIN, Target, render_compare, render_show
+from src.lens.render import (
+    JSON, PLAIN, Target, render_compare, render_memkeys, render_show,
+)
 
 
 def _machine(constraints, bus=None):
@@ -62,3 +64,28 @@ def test_compare_plain_shows_delta():
     tb = Target("keccak", "111", "016", "b.json")
     text = render_compare(DumpDiff(a, b), ta, tb, PLAIN)
     assert "n_constraints\t1\t2\t+1" in text
+
+
+def _mem_machine():
+    return {"bus_interactions": [
+        {"id": 1, "mult": 1, "args": [2, ["p@0", "+", 1], "d@1", "ts@2"]},  # sym
+        {"id": 1, "mult": 1, "args": [2, ["p@0", "+", 1], "d@3", "ts@4"]},  # same key
+        {"id": 1, "mult": 1, "args": [1, 40, "d@5", "ts@6"]},               # concrete
+        {"id": 3, "mult": 1, "args": ["x@0", 17]},                          # not memory
+    ]}
+
+
+def test_memkeys_symbolic_only_grouping():
+    out = json.loads(render_memkeys(_mem_machine(), "k", "1", "050", True, 50, JSON))
+    assert out["memory"] == {"total": 3, "symbolic": 2}
+    assert len(out["keys"]) == 1                 # one distinct symbolic key
+    assert out["keys"][0]["count"] == 2          # two interactions share it
+    assert out["keys"][0]["symbolic"] is True
+    assert out["keys"][0]["pointer"] == "(p@0 + 1)"
+
+
+def test_memkeys_all_includes_concrete():
+    out = json.loads(render_memkeys(_mem_machine(), "k", "1", "050", False, 50, JSON))
+    assert len(out["keys"]) == 2                 # symbolic + concrete
+    text = render_memkeys(_mem_machine(), "k", "1", "050", True, 50, PLAIN)
+    assert "2 of 3 interactions symbolic" in text
