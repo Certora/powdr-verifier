@@ -611,6 +611,7 @@ class PermutationCheckMixin:
     ) -> tuple[list[FNode], list[FNode], list[FNode]]:
         """Encodes a permutation check in the spirit of busat."""
 
+        p = ARGS().field_type.value
         conjuncts = []
         n = len(interactions)
         if n == 0:
@@ -637,6 +638,23 @@ class PermutationCheckMixin:
             i: self._symbol(f"{self.NAME}_isdisabled_{i}", BOOL)
             for i in range(n)
         }
+
+        mem_key_const: list[tuple[int | None, int | None]] = []
+        for inter in interactions:
+            addr, ptr = inter.args[0], inter.args[1]
+            mem_key_const.append((
+                addr.constant_value() % p if addr.is_int_constant() else None,
+                ptr.constant_value() % p if ptr.is_int_constant() else None,
+            ))
+
+        def mem_keys_statically_disjoint(ii: int, jj: int) -> bool:
+            ai, pi = mem_key_const[ii]
+            aj, pj = mem_key_const[jj]
+            if ai is not None and aj is not None and ai != aj:
+                return True
+            if pi is not None and pj is not None and pi != pj:
+                return True
+            return False
 
 
         match_vars = _plain_build_match_vars(
@@ -676,6 +694,17 @@ class PermutationCheckMixin:
                 field_eq(args(ii)[0], args(jj)[0]),
                 field_eq(args(ii)[1], args(jj)[1]),
             )
+        
+        # kill some is_inputs, is_outputs, and is_disableds
+        for i in range(n):
+            mul = mult(i)
+            if mul.is_int_constant():
+                mul = mul.constant_value()
+                is_disableds[i] = TRUE() if mul == 0 else FALSE()
+                if mul % p != p - 1:
+                    is_inputs[i] = FALSE()
+                if mul % p != 1:
+                    is_outputs[i] = FALSE()
 
         # multiplicity range constraints
         for i in range(n):
@@ -750,6 +779,8 @@ class PermutationCheckMixin:
 
         for i in range(n):
             for j in range(i + 1, n):
+                if m(i, j).is_false():
+                    continue
                 # pairwise match: mul_i + mul_j == 0 and mul_i != 0 and mul_j != 0
                 conjuncts.append(
                     with_comment(
@@ -789,7 +820,13 @@ class PermutationCheckMixin:
 
         # no two inputs or two outputs have the same address space and pointer
         for i in range(n):
+            if is_input(i).is_false() and is_output(i).is_false():
+                continue
             for j in range(i + 1, n):
+                if is_input(j).is_false() and is_output(j).is_false():
+                    continue
+                if mem_keys_statically_disjoint(i, j):
+                    continue
                 conjuncts.append(
                     with_comment(
                         Implies(
@@ -807,15 +844,21 @@ class PermutationCheckMixin:
                 )
 
         for i in range(n):
-            is_active = Or(
-                And(Not(is_disabled(j)), *mem_key_eq(i, j)) for j in range(n)
-            )
-            has_input = Or(
-                And(is_input(j), *mem_key_eq(i, j)) for j in range(n)
-            )
-            has_output = Or(
-                And(is_output(j), *mem_key_eq(i, j)) for j in range(n)
-            )
+            is_actives = []
+            has_inputs = []
+            has_outputs = []
+            for j in range(n):
+                if mem_keys_statically_disjoint(i, j):
+                    continue
+                if not is_disabled(j).is_true():
+                    is_actives.append(And(Not(is_disabled(j)), *mem_key_eq(i, j)))
+                if not is_input(j).is_false():
+                    has_inputs.append(And(is_input(j), *mem_key_eq(i, j)))
+                if not is_output(j).is_false():
+                    has_outputs.append(And(is_output(j), *mem_key_eq(i, j)))
+            is_active = Or(*is_actives)
+            has_input = Or(*has_inputs)
+            has_output = Or(*has_outputs)
             conjuncts.append(
                 with_comment(
                     Implies(is_active, has_input),
@@ -831,7 +874,9 @@ class PermutationCheckMixin:
 
         for i in range(n):
             for j in range(n):
-                if i == j:
+                if i == j or m(i, j).is_false():
+                    continue
+                if mem_keys_statically_disjoint(i, j):
                     continue
                 conjuncts.append(
                     with_comment(
@@ -875,7 +920,11 @@ class PermutationCheckMixin:
 
         # inputs and outputs have each distinct timestamps
         for i in range(n):
+            if is_input(i).is_false() and is_output(i).is_false():
+                continue
             for j in range(i + 1, n):
+                if (is_input(i).is_false() and is_input(j).is_false()) or (is_output(i).is_false() and is_output(j).is_false()):
+                    continue
                 conjuncts.append(
                     with_comment(
                         Implies(
@@ -888,7 +937,7 @@ class PermutationCheckMixin:
                         f"inputs or outputs {i} and {j} have different timestamps"
                     )
                 )
-        
+
         if ARGS().use_memory_order:
             conjuncts.extend(
                 plain_memory_const_key_io_hints(
