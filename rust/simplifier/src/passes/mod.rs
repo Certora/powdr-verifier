@@ -1,6 +1,7 @@
 pub mod bitwise;
 pub mod bounds;
 pub mod demod;
+pub mod domain_probe;
 pub mod evaluator;
 pub mod isqf;
 pub mod lift;
