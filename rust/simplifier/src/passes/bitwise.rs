@@ -77,6 +77,10 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         cur = Script::from_commands(commands);
     }
 
+    let mut commands = cur.commands;
+    ensure_uf_declarations(&mut commands);
+    cur = Script::from_commands(commands);
+
     Ok((
         cur,
         serde_json::json!({
@@ -96,6 +100,44 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
             },
         }),
     ))
+}
+
+fn declared_symbols(commands: &[Command]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for cmd in commands {
+        if cmd.name() != "declare-fun" {
+            continue;
+        }
+        let raw = cmd.raw.as_str();
+        let inner = raw.trim().strip_prefix('(').unwrap_or(raw).trim();
+        let rest = inner.strip_prefix("declare-fun").unwrap_or("").trim();
+        if let Some(end) = rest.find(|c: char| c.is_whitespace()) {
+            out.insert(rest[..end].to_string());
+        }
+    }
+    out
+}
+
+fn script_mentions(name: &str, commands: &[Command]) -> bool {
+    commands.iter().any(|c| c.raw.contains(name))
+}
+
+fn ensure_uf_declarations(commands: &mut Vec<Command>) {
+    let declared = declared_symbols(commands);
+    let mut inserts = Vec::new();
+    for uf in [UF_XOR, UF_AND, UF_OR] {
+        if !declared.contains(uf) && script_mentions(uf, commands) {
+            inserts.push(Command::new(format!("(declare-fun {uf} (Int Int) Int)")));
+        }
+    }
+    if inserts.is_empty() {
+        return;
+    }
+    let pos = commands
+        .iter()
+        .position(|c| c.name() == "assert")
+        .unwrap_or(commands.len());
+    commands.splice(pos..pos, inserts);
 }
 
 fn transform_assert(

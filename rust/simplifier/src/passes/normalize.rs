@@ -8,6 +8,43 @@ use smt2::{assert_commands, map_asserts, Script, Term};
 type Monomial = Vec<u32>;
 type Poly = HashMap<Monomial, i128>;
 
+fn declare_fun_symbol(raw: &str) -> Option<String> {
+    let inner = raw.trim().strip_prefix('(')?.trim();
+    let rest = inner.strip_prefix("declare-fun")?.trim();
+    let end = rest.find(|c: char| c.is_whitespace())?;
+    Some(rest[..end].to_string())
+}
+
+fn declare_fun_sort(raw: &str) -> Option<&str> {
+    let body = raw.trim().strip_suffix(')')?.trim();
+    body.rsplit_once(' ').map(|(_, sort)| sort)
+}
+
+fn collect_bool_symbols(script: &Script) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for cmd in &script.commands {
+        if cmd.name() != "declare-fun" {
+            continue;
+        }
+        if declare_fun_sort(&cmd.raw) != Some("Bool") {
+            continue;
+        }
+        if let Some(sym) = declare_fun_symbol(&cmd.raw) {
+            out.insert(sym);
+        }
+    }
+    out
+}
+
+fn contains_bool_symbol(t: &Term, bool_symbols: &HashSet<String>) -> bool {
+    match t {
+        Term::Atom(s) => bool_symbols.contains(s),
+        Term::List(items) => items[1..]
+            .iter()
+            .any(|a| contains_bool_symbol(a, bool_symbols)),
+    }
+}
+
 pub fn field_mod() -> Option<i128> {
     std::env::var("SIMPLIFIER_FIELD_MOD")
         .ok()
@@ -22,10 +59,12 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         .enumerate()
         .map(|(i, v)| (term_key(v), i))
         .collect();
+    let bool_symbols = collect_bool_symbols(script);
     let ctx = NormalizeCtx {
         var_index: &var_index,
         vars: &vars,
         field_mod: p,
+        bool_symbols: &bool_symbols,
     };
 
     let total = assert_commands(script).len();
@@ -52,6 +91,7 @@ struct NormalizeCtx<'a> {
     var_index: &'a HashMap<String, usize>,
     vars: &'a [Term],
     field_mod: Option<i128>,
+    bool_symbols: &'a HashSet<String>,
 }
 
 fn int_literal(t: &Term) -> Option<i128> {
@@ -242,6 +282,10 @@ fn lead_exp(poly: &Poly) -> Monomial {
         .unwrap_or_default()
 }
 
+fn coeff_mod(v: i128, m: i128) -> i128 {
+    v.rem_euclid(m)
+}
+
 fn poly_add(a: &Poly, b: &Poly, scale_b: i128, modulo: Option<i128>) -> Poly {
     let mut keys: HashSet<&Monomial> = HashSet::new();
     for k in a.keys() {
@@ -254,7 +298,7 @@ fn poly_add(a: &Poly, b: &Poly, scale_b: i128, modulo: Option<i128>) -> Poly {
     for e in keys {
         let mut v = a.get(e).copied().unwrap_or(0) + scale_b * b.get(e).copied().unwrap_or(0);
         if let Some(m) = modulo {
-            v %= m;
+            v = coeff_mod(v, m);
         }
         if v != 0 {
             out.insert(e.clone(), v);
@@ -269,7 +313,11 @@ fn poly_mul(a: &Poly, b: &Poly, modulo: Option<i128>) -> Poly {
         for (e2, c2) in b {
             let e = mono_mul(e1, e2);
             let v = out.get(&e).copied().unwrap_or(0) + c1 * c2;
-            let v = if let Some(m) = modulo { v % m } else { v };
+            let v = if let Some(m) = modulo {
+                coeff_mod(v, m)
+            } else {
+                v
+            };
             if v != 0 {
                 out.insert(e, v);
             } else {
@@ -298,7 +346,7 @@ fn relation_modular(lhs: &Term, rhs: &Term, p: i128) -> Option<bool> {
 fn expr_to_poly(n: &Term, var_index: &HashMap<String, usize>, modulo: Option<i128>) -> Option<Poly> {
     if let Some(ic) = int_literal(n) {
         let m = if let Some(mod_) = modulo {
-            ic % mod_
+            coeff_mod(ic, mod_)
         } else {
             ic
         };
@@ -333,7 +381,7 @@ fn expr_to_poly(n: &Term, var_index: &HashMap<String, usize>, modulo: Option<i12
             for v in p.values_mut() {
                 *v = -*v;
                 if let Some(m) = modulo {
-                    *v %= m;
+                    *v = coeff_mod(*v, m);
                 }
             }
             p.retain(|_, v| *v != 0);
@@ -415,8 +463,12 @@ fn gcd_i128(mut a: i128, mut b: i128) -> i128 {
 }
 
 fn mod_inverse(a: i128, m: i128) -> Option<i128> {
+    let a = coeff_mod(a, m);
+    if a == 0 {
+        return None;
+    }
     let (mut t, mut newt) = (0i128, 1i128);
-    let (mut r, mut newr) = (m, a % m);
+    let (mut r, mut newr) = (m, a);
     while newr != 0 {
         let q = r / newr;
         (t, newt) = (newt, t - q * newt);
@@ -425,24 +477,24 @@ fn mod_inverse(a: i128, m: i128) -> Option<i128> {
     if r != 1 {
         return None;
     }
-    let mut t = t % m;
-    if t < 0 {
-        t += m;
-    }
-    Some(t)
+    Some(coeff_mod(t, m))
 }
 
-fn rescale_monic(poly: Poly, modulo: i128) -> Poly {
+fn rescale_monic(poly: Poly, modulo: i128) -> Option<Poly> {
     let lead = lead_exp(&poly);
-    let lc = poly[&lead];
-    assert!(lc != 0);
-    let inv = mod_inverse(lc, modulo).unwrap();
-    poly.into_iter()
-        .filter_map(|(e, c)| {
-            let v = (c * inv) % modulo;
-            if v != 0 { Some((e, v)) } else { None }
-        })
-        .collect()
+    let lc = coeff_mod(poly[&lead], modulo);
+    if lc == 0 {
+        return Some(Poly::new());
+    }
+    let inv = mod_inverse(lc, modulo)?;
+    Some(
+        poly.into_iter()
+            .filter_map(|(e, c)| {
+                let v = coeff_mod(c * inv, modulo);
+                if v != 0 { Some((e, v)) } else { None }
+            })
+            .collect(),
+    )
 }
 
 fn rescale_gcd(poly: Poly) -> Poly {
@@ -473,6 +525,11 @@ fn relation_poly_diff_plain(
     rhs: &Term,
     ctx: &NormalizeCtx<'_>,
 ) -> Option<(Poly, bool)> {
+    if contains_bool_symbol(lhs, ctx.bool_symbols)
+        || contains_bool_symbol(rhs, ctx.bool_symbols)
+    {
+        return None;
+    }
     if let Some(p) = ctx.field_mod {
         let modular = relation_modular(lhs, rhs, p)?;
         let modulo = if modular { Some(p) } else { None };
@@ -522,7 +579,9 @@ fn normalize_equals(lhs: &Term, rhs: &Term, ctx: &NormalizeCtx<'_>) -> Option<Te
     let rep = if diff.is_empty() {
         atom("0")
     } else if modular {
-        poly_to_expr(&rescale_monic(diff, ctx.field_mod?), ctx.vars)
+        let p = ctx.field_mod?;
+        let scaled = rescale_monic(diff.clone(), p).unwrap_or_else(|| rescale_gcd(diff));
+        poly_to_expr(&scaled, ctx.vars)
     } else {
         poly_to_expr(&rescale_gcd(diff), ctx.vars)
     };
@@ -607,6 +666,40 @@ mod tests {
         let (out, _) = apply(&script).unwrap();
         let s = smt2::dump_string(&out);
         assert!(s.contains("(= (mod (+ x y)"));
+    }
+
+    #[test]
+    fn skips_bool_equalities() {
+        let script = Script::parse(
+            "(declare-fun a () Bool)\n\
+             (declare-fun b () Bool)\n\
+             (assert (= a b))\n\
+             (check-sat)\n",
+        )
+        .unwrap();
+        let (out, _) = apply(&script).unwrap();
+        let s = smt2::dump_string(&out);
+        assert!(s.contains("(assert (= a b))"));
+        assert!(!s.contains("(* -1"));
+    }
+
+    #[test]
+    fn field_monic_negative_leading_coeff() {
+        let p = 2013265921i128;
+        std::env::set_var("SIMPLIFIER_FIELD_MOD", p.to_string());
+        let script = Script::parse(&format!(
+            "(declare-fun before-from_state__timestamp_1@37 () Int)\n\
+             (declare-fun before-from_state__timestamp_2@73 () Int)\n\
+             (declare-fun before-writes_aux__base__timestamp_lt_aux__lower_decomp__0_2@85 () Int)\n\
+             (declare-fun before-writes_aux__base__timestamp_lt_aux__lower_decomp__1_2@86 () Int)\n\
+             (assert (= (mod (+ 1 (* (- 1) before-from_state__timestamp_1@37) \
+             before-from_state__timestamp_2@73 \
+             (* (- 1) before-writes_aux__base__timestamp_lt_aux__lower_decomp__0_2@85) \
+             (* (- 131072) before-writes_aux__base__timestamp_lt_aux__lower_decomp__1_2@86)) {p}) 0))\n\
+             (check-sat)\n"
+        ))
+        .unwrap();
+        apply(&script).unwrap();
     }
 
     #[test]
