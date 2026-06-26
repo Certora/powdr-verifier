@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # git clone git@github.com:Certora/powdr-verifier.git verifier/
 
