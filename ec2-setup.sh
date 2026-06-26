@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # git clone git@github.com:Certora/powdr-verifier.git verifier/
 
@@ -14,7 +14,7 @@ python3 verifier/download_z3.py z3-4.16.0 --sdk ~/lib/z3-4.16.0 --bindir ~/bin
 python3 verifier/download_z3.py Nightly --bindir ~/bin
 chmod +x ~/bin/*
 
-sudo apt install -y build-essential pkg-config clang nasm
+sudo apt install -y build-essential m4 pkg-config clang nasm
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 . "$HOME/.cargo/env"
 
