@@ -1,10 +1,11 @@
 """Run Z3 tactics on the asserted fragment up to ``check-sat``, then re-emit simplified asserts."""
+import logging
+
 from ..smt_backends.pysmt import *
 import z3
 
 from ..utils.stats import stats_dump
 from .utils import _string_to_script
-
 
 def _declared_symbol_names(commands: list) -> set[str]:
     names: set[str] = set()
@@ -31,12 +32,10 @@ def _declares_from_z3_not_in_prefix(
     return out
 
 
-def simplify_z3(smt_script: script.SmtLibScript, args=[], subaction=None) -> script.SmtLibScript:
-    """Feed asserts to a Z3 ``Tactic`` solver until ``check-sat``, then splice back simplified asserts.
-
-    ``args`` empty: default ``Repeat(Then(propagate-values, …, ctx-simplify))``.
-    One string: single named tactic. Multiple strings: ``Then`` chain.
-    """
+def simplify_z3(
+    smt_script: script.SmtLibScript, args: list, subaction=None
+) -> script.SmtLibScript:
+    """Feed asserts to a Z3 ``Tactic`` solver until ``check-sat``, then splice back simplified asserts."""
     match args:
         case []:
             tactic = z3.Repeat(
@@ -88,6 +87,7 @@ def simplify_z3(smt_script: script.SmtLibScript, args=[], subaction=None) -> scr
                 stats_dump(
                     "z3",
                     {
+                        "backend": "python",
                         "z3_check": str(z3_check),
                         "asserts_in": z3_asserts_in,
                         "asserts_out": len(new_asserts),

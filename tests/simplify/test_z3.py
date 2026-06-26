@@ -1,3 +1,6 @@
+from unittest import mock
+
+import pytest
 import z3
 
 from src.smt.utils import *
@@ -7,6 +10,24 @@ from src.simplify.z3 import (
     _declares_from_z3_not_in_prefix,
     simplify_z3,
 )
+from src.simplify.rust import resolve_simplifier_bin, run_rust_pipeline
+
+
+def _rust_z3(smt_script, args, subaction=None):
+    tactic = "r#z3" if not args else f"r#z3-{'-'.join(args)}"
+    return run_rust_pipeline(smt_script, tactic)
+
+
+_Z3_BACKENDS = pytest.mark.parametrize(
+    "simplify_fn",
+    [simplify_z3, _rust_z3],
+    ids=["python", "rust"],
+)
+
+
+def _require_rust_binary(simplify_fn):
+    if simplify_fn is _rust_z3 and resolve_simplifier_bin() is None:
+        pytest.skip("simplifier binary not built")
 
 
 def _script_with_check_sat(commands):
@@ -17,7 +38,6 @@ def _script_with_check_sat(commands):
 
 def test_declares_from_z3_not_in_prefix():
     x = Symbol("x", INT)
-    aux = Symbol("mod!0", INT)
     processed = _string_to_script(
         "(set-logic ALL)\n"
         "(declare-fun x () Int)\n"
@@ -32,7 +52,9 @@ def test_declares_from_z3_not_in_prefix():
     assert [c.args[0].symbol_name() for c in extra] == ["mod!0"]
 
 
-def test_z3_simplify_folds_not_equal_constants():
+@_Z3_BACKENDS
+def test_z3_simplify_folds_not_equal_constants(simplify_fn):
+    _require_rust_binary(simplify_fn)
     x = Symbol("x", INT)
     smt_script = _script_with_check_sat(
         [
@@ -43,12 +65,14 @@ def test_z3_simplify_folds_not_equal_constants():
             ),
         ]
     )
-    out = simplify_z3(smt_script, ["simplify"])
+    out = simplify_fn(smt_script, ["simplify"])
     assert_cmds = [c for c in out.commands if c.name == "assert"]
     assert assert_cmds[-1].args[0] == Equals(x, Int(1))
 
 
-def test_z3_simplify_preserves_mod_shape():
+@_Z3_BACKENDS
+def test_z3_simplify_preserves_mod_shape(simplify_fn):
+    _require_rust_binary(simplify_fn)
     x = Symbol("x", INT)
     p = Int(2013265921)
     inner = Not(Equals(Mod(Times(x, Int(2)), p), Int(0)))
@@ -58,7 +82,7 @@ def test_z3_simplify_preserves_mod_shape():
             script.SmtLibCommand("assert", [inner]),
         ]
     )
-    out = simplify_z3(smt_script, ["simplify"])
+    out = simplify_fn(smt_script, ["simplify"])
     assert_cmds = [c for c in out.commands if c.name == "assert"]
     out_f = assert_cmds[-1].args[0]
     assert out_f.is_not() and out_f.arg(0).is_equals()
@@ -69,7 +93,9 @@ def test_z3_simplify_preserves_mod_shape():
     assert mod_m == p and mod_e.get_free_variables() == {x}
 
 
-def test_z3_propagate_preserves_memory_tie_assert():
+@_Z3_BACKENDS
+def test_z3_propagate_preserves_memory_tie_assert(simplify_fn):
+    _require_rust_binary(simplify_fn)
     before = Symbol("before-memory-0-data0", INT)
     after = Symbol("after-memory-0-data0", INT)
     x = Symbol("before-a__0_0@1", INT)
@@ -83,7 +109,7 @@ def test_z3_propagate_preserves_memory_tie_assert():
         script.SmtLibCommand("assert", [tie]),
         script.SmtLibCommand("check-sat", []),
     ]
-    out = simplify_z3(smt_script, ["propagate-values"])
+    out = simplify_fn(smt_script, ["propagate-values"])
     pin_cmds = [
         cmd
         for cmd in out.commands
@@ -103,3 +129,29 @@ def test_z3_solve_eqs():
     result = tactic(goal)
     assert len(result) == 1
     assert isinstance(result[0], z3.Goal)
+
+
+def test_python_backend_never_subprocess():
+    x = Symbol("x", INT)
+    smt_script = _script_with_check_sat(
+        [
+            script.SmtLibCommand("declare-fun", [x, INT]),
+            script.SmtLibCommand("assert", [Equals(x, Int(1))]),
+        ]
+    )
+    with mock.patch("src.simplify.rust.subprocess.run") as run:
+        simplify_z3(smt_script, ["simplify"])
+        run.assert_not_called()
+
+
+def test_split_tactic_rust_prefix():
+    from src.simplifier import TacticParts, _split_tactic
+
+    assert _split_tactic("r#z3-propagate-values") == TacticParts(
+        executor="r#", base="z3", suffix=["propagate-values"]
+    )
+    assert _split_tactic("z3-propagate-values") == TacticParts(
+        executor="", base="z3", suffix=["propagate-values"]
+    )
+    assert _split_tactic("nnf") == TacticParts(executor="", base="nnf", suffix=[])
+    assert _split_tactic("r#z3-propagate-values").raw() == "r#z3-propagate-values"

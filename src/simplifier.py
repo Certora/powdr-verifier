@@ -8,6 +8,7 @@ import copy
 import logging
 import signal
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TypeVar
 
@@ -42,7 +43,7 @@ from .simplify import (
     simplify_rewrite_store_eqs,
     simplify_z3,
 )
-from .simplify.rust import run_rust_pipeline, rust_tactic_to_python_fallback
+from .simplify.rust import run_rust_pipeline
 
 _T = TypeVar("_T")
 
@@ -59,6 +60,30 @@ STEP_TACTICS: dict[str, str] = {
     "solver": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod:pretty",
     "substitute_bus_interactio_fields": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod:pretty",
 }
+
+
+@dataclass(frozen=True)
+class TacticParts:
+    """Parsed tactic token: optional executor prefix, pass name, dash suffix args."""
+
+    executor: str
+    base: str
+    suffix: list[str]
+
+    def raw(self) -> str:
+        body = self.base if not self.suffix else f"{self.base}-{'-'.join(self.suffix)}"
+        return f"{self.executor}{body}" if self.executor else body
+
+
+def _split_tactic(raw_tactic: str) -> TacticParts:
+    """Split ``z3-foo`` or ``r#z3-foo`` into executor, base, and suffix."""
+    executor = ""
+    inner = raw_tactic
+    if raw_tactic.startswith("r#"):
+        executor = "r#"
+        inner = raw_tactic.removeprefix("r#")
+    base, *dash_suffix = inner.split("-", 1)
+    return TacticParts(executor=executor, base=base, suffix=dash_suffix)
 
 
 def resolve_tactic(tactic: str, optimization_step: str | None = None) -> str:
@@ -91,12 +116,62 @@ def _run_with_itimer(seconds: float, fn: Callable[[], _T]) -> tuple[bool, _T | N
         signal.signal(signal.SIGALRM, prev)
 
 
+def _is_rust_tactic(raw_tactic: str) -> bool:
+    return _split_tactic(raw_tactic).executor == "r#"
+
+
+def _group_tactics(tactics: list[str]) -> list[tuple[str, list[str]]]:
+    groups: list[tuple[str, list[str]]] = []
+    for raw in tactics:
+        kind = "rust" if _is_rust_tactic(raw) else "python"
+        if groups and groups[-1][0] == kind:
+            groups[-1][1].append(raw)
+        else:
+            groups.append((kind, [raw]))
+    return groups
+
+
+def _backup_script(smt_script: script.SmtLibScript) -> script.SmtLibScript:
+    backup = script.SmtLibScript()
+    if smt_script.annotations is not None:
+        backup.annotations = copy.copy(smt_script.annotations)
+    backup.commands = [cmd._replace(args=list(cmd.args)) for cmd in smt_script.commands]
+    return backup
+
+
+def _run_rust_batch_with_fallback(
+    smt_script: script.SmtLibScript,
+    raw_tactics: list[str],
+    subaction,
+) -> script.SmtLibScript:
+    pipeline = ":".join(raw_tactics)
+    try:
+        return run_rust_pipeline(smt_script, pipeline)
+    except (FileNotFoundError, RuntimeError) as exc:
+        logging.warning(
+            "rust simplifier batch %s failed (%s), falling back to python",
+            pipeline,
+            exc,
+        )
+        subaction += {"fallback": "python", "tactics": raw_tactics}
+        cur = smt_script
+        for raw in raw_tactics:
+            parts = _split_tactic(raw)
+            cur = _apply_tactic_pass(
+                TacticParts(executor="", base=parts.base, suffix=parts.suffix),
+                cur,
+                subaction,
+            )
+        return cur
+
+
 def _apply_tactic_pass(
-    base: str,
-    dash_suffix: list[str],
+    parts: TacticParts,
     smt_script: script.SmtLibScript,
     subaction,
 ) -> script.SmtLibScript:
+    base = parts.base
+    dash_suffix = parts.suffix
     match base:
         case "witness":
             return simplify_witnesses(smt_script, subaction)
@@ -152,7 +227,7 @@ def _apply_tactic_pass(
             ARGS().pretty = True
             return smt_script
         case _:
-            logging.error(f"ignoring unknown tactic: {base}")
+            logging.error(f"ignoring unknown tactic: {parts.raw()}")
             return smt_script
 
 
@@ -206,48 +281,102 @@ def simplify_smt_script(
     resolved = resolve_tactic(tactic, optimization_step)
     tactics = resolved.split(":")
     deadline = time.monotonic() + float(timeout)
-    for step_index, raw_tactic in enumerate(tactics):
-        step_no = step_index + 1
-        remaining = deadline - time.monotonic() - 2
+    step_index = 0
+    for kind, raw_list in _group_tactics(tactics):
+        if kind == "python":
+            for raw_tactic in raw_list:
+                step_index += 1
+                remaining = deadline - time.monotonic() - 2
+                parts = _split_tactic(raw_tactic)
 
-        base, *dash_suffix = raw_tactic.split("-", 1)
+                logging.info("simplifying with %s", raw_tactic)
+                with parent.action(raw_tactic) as subaction:
+                    if remaining <= 0:
+                        logging.info(
+                            "skipping simplifier pass %s (no time budget)", raw_tactic
+                        )
+                        subaction += {"result": "skipped", "reason": "no-budget"}
+                        continue
 
-        logging.info("simplifying with %s", raw_tactic)
-        with parent.action(raw_tactic) as subaction:
-            if remaining <= 0:
-                logging.info("skipping simplifier pass %s (no time budget)", raw_tactic)
-                subaction += {"result": "skipped", "reason": "no-budget"}
-                continue
+                    backup_script = _backup_script(smt_script)
+                    backup_pretty = ARGS().pretty
 
-            backup_script = script.SmtLibScript()
-            if smt_script.annotations is not None:
-                backup_script.annotations = copy.copy(smt_script.annotations)
-            backup_script.commands = [
-                cmd._replace(args=list(cmd.args)) for cmd in smt_script.commands
-            ]
-            backup_pretty = ARGS().pretty
+                    def run_step():
+                        return _apply_tactic_pass(parts, smt_script, subaction)
 
-            def run_step():
-                return _apply_tactic_pass(base, dash_suffix, smt_script, subaction)
+                    timed_out, step_script = _run_with_itimer(remaining, run_step)
 
-            timed_out, step_script = _run_with_itimer(remaining, run_step)
+                    if timed_out:
+                        smt_script = backup_script
+                        ARGS().pretty = backup_pretty
+                        logging.warning(
+                            "simplifier pass %s hit timeout, skipping", raw_tactic
+                        )
+                        subaction += {"result": "timeout"}
+                    else:
+                        assert step_script is not None
+                        smt_script = step_script
+                        _ensure_declarations_for_asserts(smt_script)
 
-            if timed_out:
-                smt_script = backup_script
-                ARGS().pretty = backup_pretty
-                logging.warning("simplifier pass %s hit timeout, skipping", raw_tactic)
-                subaction += {"result": "timeout"}
-            else:
-                assert step_script is not None
-                smt_script = step_script
-                _ensure_declarations_for_asserts(smt_script)
+                if getattr(ARGS(), "dump_steps", False) and output is not None:
+                    stem = (
+                        output.name[: -len(output.suffix)]
+                        if output.suffix
+                        else output.name
+                    )
+                    dump_file = output.with_name(
+                        f"{stem}.{step_index:02d}.{raw_tactic}.smt2"
+                    )
+                    with open_file(dump_file, "w") as out:
+                        logging.info("dumping intermediate formula to %s", out.name)
+                        write_smtlib_script(smt_script, out)
+        else:
+            step_start = step_index + 1
+            step_end = step_index + len(raw_list)
+            step_index = step_end
+            remaining = deadline - time.monotonic() - 2
+            batch_label = ":".join(raw_list)
+            dump_label = "_".join(raw_list)
 
-        if ARGS().dump_steps and output is not None:
-            stem = output.name[: -len(output.suffix)] if output.suffix else output.name
-            dump_file = output.with_name(f"{stem}.{step_no:02d}.{raw_tactic}.smt2")
-            with open_file(dump_file, "w") as out:
-                logging.info("dumping intermediate formula to %s", out.name)
-                write_smtlib_script(smt_script, out)
+            logging.info("simplifying with rust batch %s", batch_label)
+            with parent.action(batch_label) as subaction:
+                if remaining <= 0:
+                    logging.info(
+                        "skipping rust batch %s (no time budget)", batch_label
+                    )
+                    subaction += {"result": "skipped", "reason": "no-budget"}
+                    continue
+
+                backup_script = _backup_script(smt_script)
+                backup_pretty = ARGS().pretty
+
+                def run_batch():
+                    return _run_rust_batch_with_fallback(
+                        smt_script, raw_list, subaction
+                    )
+
+                timed_out, step_script = _run_with_itimer(remaining, run_batch)
+
+                if timed_out:
+                    smt_script = backup_script
+                    ARGS().pretty = backup_pretty
+                    logging.warning("rust batch %s hit timeout, skipping", batch_label)
+                    subaction += {"result": "timeout"}
+                else:
+                    assert step_script is not None
+                    smt_script = step_script
+                    _ensure_declarations_for_asserts(smt_script)
+
+            if getattr(ARGS(), "dump_steps", False) and output is not None:
+                stem = (
+                    output.name[: -len(output.suffix)] if output.suffix else output.name
+                )
+                dump_file = output.with_name(
+                    f"{stem}.{step_start:02d}-{step_end:02d}.{dump_label}.smt2"
+                )
+                with open_file(dump_file, "w") as out:
+                    logging.info("dumping intermediate formula to %s", out.name)
+                    write_smtlib_script(smt_script, out)
 
     _ensure_declarations_for_asserts(smt_script)
     return smt_script
