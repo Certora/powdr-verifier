@@ -109,6 +109,8 @@ def run_rust_pipeline(
             stats_dump("bitwise", data)
         elif base == "mod_inv":
             stats_dump("mod_inv", data)
+        elif base == "domain_probe":
+            stats_dump("domain_probe", data)
         elif base == "isqf":
             stats_dump("isqf", data)
         else:

@@ -7,7 +7,7 @@ use std::io::{self, Write};
 
 use smt2::Script;
 
-use crate::passes::{bitwise, bounds, demod, evaluator, isqf, lift, mod_inv, nnf, normalize, pretty, skolem, witness, z3};
+use crate::passes::{bitwise, bounds, demod, domain_probe, evaluator, isqf, lift, mod_inv, nnf, normalize, pretty, skolem, witness, z3};
 use crate::tactic::split_tactic;
 
 #[derive(Debug)]
@@ -30,6 +30,7 @@ pub fn apply_pass(raw_tactic: &str, script: &Script) -> Result<(Script, StepResu
         "bounds" => bounds::apply(script)?,
         "bitwise" => bitwise::apply(script)?,
         "mod_inv" => mod_inv::apply(script)?,
+        "domain_probe" => domain_probe::apply(script)?,
         "isqf" => isqf::apply(script)?,
         "pretty" | "p" => pretty::apply(script)?,
         other => {
