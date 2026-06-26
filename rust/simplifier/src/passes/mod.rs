@@ -1,9 +1,13 @@
+pub mod bitwise;
+pub mod bounds;
 pub mod demod;
 pub mod evaluator;
 pub mod isqf;
 pub mod lift;
+pub mod mod_inv;
 pub mod nnf;
 pub mod normalize;
 pub mod pretty;
 pub mod skolem;
+pub mod witness;
 pub mod z3;

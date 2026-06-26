@@ -101,6 +101,14 @@ def run_rust_pipeline(
             stats_dump("skolem", data)
         elif base == "lift":
             stats_dump("lift_forall", data)
+        elif base == "witness":
+            stats_dump("witness", data)
+        elif base == "bounds":
+            stats_dump("bounds", data)
+        elif base == "bitwise":
+            stats_dump("bitwise", data)
+        elif base == "mod_inv":
+            stats_dump("mod_inv", data)
         elif base == "isqf":
             stats_dump("isqf", data)
         else:
