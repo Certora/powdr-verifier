@@ -4,6 +4,7 @@ psutil
 pysmt
 pytest
 requests
+rich
 ruff
 semver
 setuptools
