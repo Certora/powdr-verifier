@@ -72,16 +72,18 @@ class TacticParts:
 
     def raw(self) -> str:
         body = self.base if not self.suffix else f"{self.base}-{'-'.join(self.suffix)}"
-        return f"{self.executor}{body}" if self.executor else body
+        if self.executor:
+            return f"{self.executor}#{body}"
+        return body
 
 
 def _split_tactic(raw_tactic: str) -> TacticParts:
-    """Split ``z3-foo`` or ``r#z3-foo`` into executor, base, and suffix."""
+    """Split ``z3-foo``, ``p#z3-foo``, or ``r#z3-foo`` into executor, base, and suffix."""
     executor = ""
     inner = raw_tactic
-    if raw_tactic.startswith("r#"):
-        executor = "r#"
-        inner = raw_tactic.removeprefix("r#")
+    if len(raw_tactic) >= 2 and raw_tactic[1] == "#" and raw_tactic[0] in "pr":
+        executor = raw_tactic[0]
+        inner = raw_tactic[2:]
     base, *dash_suffix = inner.split("-", 1)
     return TacticParts(executor=executor, base=base, suffix=dash_suffix)
 
@@ -117,7 +119,7 @@ def _run_with_itimer(seconds: float, fn: Callable[[], _T]) -> tuple[bool, _T | N
 
 
 def _is_rust_tactic(raw_tactic: str) -> bool:
-    return _split_tactic(raw_tactic).executor == "r#"
+    return _split_tactic(raw_tactic).executor == "r"
 
 
 def _group_tactics(tactics: list[str]) -> list[tuple[str, list[str]]]:

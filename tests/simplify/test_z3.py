@@ -148,7 +148,10 @@ def test_split_tactic_rust_prefix():
     from src.simplifier import TacticParts, _split_tactic
 
     assert _split_tactic("r#z3-propagate-values") == TacticParts(
-        executor="r#", base="z3", suffix=["propagate-values"]
+        executor="r", base="z3", suffix=["propagate-values"]
+    )
+    assert _split_tactic("p#z3-propagate-values") == TacticParts(
+        executor="p", base="z3", suffix=["propagate-values"]
     )
     assert _split_tactic("z3-propagate-values") == TacticParts(
         executor="", base="z3", suffix=["propagate-values"]

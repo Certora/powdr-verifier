@@ -44,8 +44,10 @@ def parse_rust_stats(stderr: str) -> list[dict]:
 
 
 def strip_executor(raw_tactic: str) -> str:
-    """Drop the Python ``r#`` executor prefix before invoking Rust."""
-    return raw_tactic.removeprefix("r#")
+    """Drop a ``p#`` / ``r#`` executor prefix before invoking Rust."""
+    if len(raw_tactic) >= 2 and raw_tactic[1] == "#" and raw_tactic[0] in "pr":
+        return raw_tactic[2:]
+    return raw_tactic
 
 
 def _pass_stats_name(pass_name: str) -> str:
