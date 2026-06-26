@@ -2,7 +2,7 @@ use std::env;
 use std::io::{self, Read, Write, stdin, stdout};
 use std::process;
 
-use smt2::{dump_string, load_path, load_reader};
+use smt2::{dump_string, load_path, load_reader, pretty_print_script};
 use simplifier::{run_pipeline, write_step_stats};
 
 fn main() {
@@ -15,6 +15,7 @@ fn main() {
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().skip(1).collect();
     let mut timeout: Option<f64> = None;
+    let mut pretty = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -25,6 +26,10 @@ fn run() -> Result<(), String> {
                 timeout = Some(v.parse().map_err(|_| "invalid --timeout")?);
                 i += 1;
             }
+            "--pretty" => {
+                pretty = true;
+                i += 1;
+            }
             opt if opt.starts_with("--") => return Err(format!("unknown option: {opt}")),
             _ => break,
         }
@@ -33,7 +38,9 @@ fn run() -> Result<(), String> {
 
     let positional: Vec<String> = args[i..].to_vec();
     if positional.len() != 3 {
-        return Err("usage: simplifier <input> <tactic> <output> [--timeout SEC]".into());
+        return Err(
+            "usage: simplifier [--timeout SEC] [--pretty] <input> <tactic> <output>".into(),
+        );
     }
     let input = &positional[0];
     let tactic_pipeline = &positional[1];
@@ -51,6 +58,11 @@ fn run() -> Result<(), String> {
 
     let tactics: Vec<String> = tactic_pipeline.split(':').map(|s| s.to_string()).collect();
     let (out_script, steps) = run_pipeline(&script, &tactics)?;
+    let out_script = if pretty {
+        pretty_print_script(&out_script)?
+    } else {
+        out_script
+    };
 
     let out_str = dump_string(&out_script);
     if output == "-" {

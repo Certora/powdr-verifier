@@ -7,7 +7,7 @@ use std::io::{self, Write};
 
 use smt2::Script;
 
-use crate::passes::{evaluator, isqf, nnf, z3};
+use crate::passes::{evaluator, isqf, nnf, pretty, z3};
 use crate::tactic::split_tactic;
 
 #[derive(Debug)]
@@ -23,6 +23,7 @@ pub fn apply_pass(raw_tactic: &str, script: &Script) -> Result<(Script, StepResu
         "nnf" => nnf::apply(script)?,
         "evaluator" => evaluator::apply(script)?,
         "isqf" => isqf::apply(script)?,
+        "pretty" | "p" => pretty::apply(script)?,
         other => {
             return Err(format!("unknown or unsupported rust tactic: {other}"));
         }

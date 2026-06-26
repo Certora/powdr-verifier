@@ -412,4 +412,5 @@ mod tests {
         let out = replace_assert_body(raw, &folded.to_string());
         assert!(out.contains("(= x 1)"));
     }
+
 }
