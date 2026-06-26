@@ -27,6 +27,13 @@ pub fn term_key(t: &Term) -> String {
 pub fn int_literal(t: &Term) -> Option<i128> {
     match t {
         Term::Atom(s) => smt2::term::parse_int_literal(s),
+        Term::List(items) if items.len() == 2 => {
+            if matches!(items.first(), Some(Term::Atom(s)) if s == "-") {
+                int_literal(&items[1]).map(|v| -v)
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -140,21 +147,46 @@ pub fn unwrap_zero_mod_eq(f: &Term, field: i128) -> Option<Term> {
 }
 
 pub fn free_variables(f: &Term) -> HashSet<String> {
-    let mut out = HashSet::new();
-    collect_free(f, &mut out);
-    out
+    scoped_free_variables(f, &HashSet::new())
 }
 
-fn collect_free(f: &Term, out: &mut HashSet<String>) {
-    if is_symbol(f) {
-        out.insert(symbol_name(f).unwrap().to_string());
-        return;
-    }
-    if let Term::List(items) = f {
-        for a in &items[1..] {
-            collect_free(a, out);
+pub fn scoped_free_variables(term: &Term, bound: &HashSet<String>) -> HashSet<String> {
+    if let Some(name) = symbol_name(term) {
+        if is_symbol(term) && !bound.contains(name) {
+            return HashSet::from([name.to_string()]);
         }
+        return HashSet::new();
     }
+    let Term::List(items) = term else {
+        return HashSet::new();
+    };
+    if items.is_empty() {
+        return HashSet::new();
+    }
+    if matches!(items.first(), Some(Term::Atom(s)) if s == "forall" || s == "exists") && items.len() >= 3
+    {
+        let mut new_bound = bound.clone();
+        new_bound.extend(quantifier_var_names(&items[1]));
+        return scoped_free_variables(&items[2], &new_bound);
+    }
+    items[1..]
+        .iter()
+        .flat_map(|a| scoped_free_variables(a, bound))
+        .collect()
+}
+
+fn quantifier_var_names(decls: &Term) -> HashSet<String> {
+    let Term::List(items) = decls else {
+        return HashSet::new();
+    };
+    items
+        .iter()
+        .filter_map(|d| match d {
+            Term::List(pair) if !pair.is_empty() => symbol_name(&pair[0]).map(str::to_string),
+            Term::Atom(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 pub fn wrap_mod_expr(expr: Term, p: i128) -> Term {
