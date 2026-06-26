@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from ..smt_backends.pysmt import script
+from ..utils.args import ARGS
 from ..utils.stats import stats_dump
 from .utils import _script_to_string, _string_to_script
 
@@ -63,8 +64,12 @@ def run_rust_pipeline(
     )
 
     smt_in = _script_to_string(smt_script)
+    cmd = [str(bin_path)]
+    if getattr(ARGS(), "pretty", False):
+        cmd.append("--pretty")
+    cmd.extend(["-", rust_pipeline, "-"])
     proc = subprocess.run(
-        [str(bin_path), "-", rust_pipeline, "-"],
+        cmd,
         input=smt_in,
         capture_output=True,
         text=True,

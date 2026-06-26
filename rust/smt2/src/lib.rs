@@ -1,5 +1,6 @@
 pub mod io;
 pub mod parse;
+pub mod pretty;
 pub mod script;
 pub mod term;
 
@@ -9,4 +10,5 @@ pub use script::{
     assert_commands, asserts_excluding_true, declared_symbol_names, extra_declarations,
     map_asserts, splice_z3_result, Script, ScriptParts,
 };
+pub use pretty::{pretty_print_command, pretty_print_script, pretty_print_term, pretty_print_term_in_script};
 pub use term::{assert_body, fold_constants, fold_constants_fixpoint, replace_assert_body, Term};
