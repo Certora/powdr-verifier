@@ -15,7 +15,8 @@ from src.simplify.rust import resolve_simplifier_bin, run_rust_pipeline
 
 def _rust_z3(smt_script, args, subaction=None):
     tactic = "r#z3" if not args else f"r#z3-{'-'.join(args)}"
-    return run_rust_pipeline(smt_script, tactic)
+    smt_script, _steps = run_rust_pipeline(smt_script, tactic)
+    return smt_script
 
 
 _Z3_BACKENDS = pytest.mark.parametrize(

@@ -5,6 +5,7 @@ pub mod poly_factor;
 pub mod tactic;
 
 use std::io::{self, Write};
+use std::time::Instant;
 
 use smt2::Script;
 
@@ -55,9 +56,18 @@ pub fn run_pipeline(
     let mut cur = script.clone();
     let mut steps = Vec::new();
     for raw in tactics {
+        let t0 = Instant::now();
         let (next, step) = apply_pass(raw, &cur)?;
+        let running_time = t0.elapsed().as_secs_f64();
+        let mut stats = step.stats;
+        if let Some(obj) = stats.as_object_mut() {
+            obj.insert("running_time".into(), serde_json::json!(running_time));
+        }
         cur = next;
-        steps.push(step);
+        steps.push(StepResult {
+            pass: step.pass,
+            stats,
+        });
     }
     Ok((cur, steps))
 }
