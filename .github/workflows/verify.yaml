@@ -34,7 +34,7 @@ jobs:
     - name: install custom binaries
       run: |
         mkdir -p ~/bin/
-        python3 verifier/download_z3.py z3-4.16.0 ~/bin/
+        python3 verifier/download_z3.py z3-4.16.0 --bindir ~/bin/
         chmod +x ~/bin/*
 
   lint:
