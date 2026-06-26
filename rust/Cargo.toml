@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = ["smt2", "simplify-z3"]
+
+[workspace.package]
+edition = "2021"

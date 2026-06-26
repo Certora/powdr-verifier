@@ -1,0 +1,12 @@
+[package]
+name = "simplify-z3"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "simplify-z3"
+path = "src/main.rs"
+
+[dependencies]
+smt2 = { path = "../smt2" }
+z3 = "0.20"
