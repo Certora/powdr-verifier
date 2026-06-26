@@ -9,6 +9,7 @@ pub mod mod_inv;
 pub mod nnf;
 pub mod normalize;
 pub mod pretty;
+pub mod rewrite;
 pub mod skolem;
 pub mod witness;
 pub mod z3;

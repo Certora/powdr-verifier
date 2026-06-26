@@ -90,9 +90,11 @@ dependencies = [
 name = "simplifier"
 version = "0.1.0"
 dependencies = [
+ "flint-sys",
  "serde_json",
  "smt2",
  "z3",
+ "z3-sys",
 ]
 
 [[package]]
