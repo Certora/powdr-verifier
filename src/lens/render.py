@@ -1,0 +1,1062 @@
+"""Render DumpStats / DumpDiff as rich, plain text, or JSON."""
+import json
+import sys
+from dataclasses import dataclass
+
+from .metrics import DumpDiff, DumpStats, mem_key_symbolic, mult_kind
+
+RICH, PLAIN, JSON = "rich", "plain", "json"
+FMT_MARK = {"machine": "M", "constraints": "C",
+            "substitutions": "S", "unknown": "?"}
+_FMT_LEGEND = "f: M=machine C=constraints"
+
+
+@dataclass
+class Target:
+    """What was resolved, for headers."""
+
+    group: str
+    block: str
+    label: str  # e.g. "011_memory"
+    path: str
+
+
+def default_mode() -> str:
+    """rich on a TTY, plain otherwise (pipes, agents, CI)."""
+    return RICH if sys.stdout.isatty() else PLAIN
+
+
+def _delta_str(d: int) -> str:
+    return "" if d == 0 else f"{d:+d}"
+
+
+# --------------------------------------------------------------------------- #
+# show
+# --------------------------------------------------------------------------- #
+def render_show(stats: DumpStats, target: Target, mode: str) -> str:
+    if mode == JSON:
+        return json.dumps({"target": vars(target), **stats.as_dict()}, indent=2)
+    if mode == RICH:
+        return _show_rich(stats, target)
+    return _show_plain(stats, target)
+
+
+def _show_plain(s: DumpStats, t: Target) -> str:
+    out: list[str] = []
+    out.append(f"# {t.group}/{t.block} {t.label}  ({t.path})")
+    out.append(f"format\t{s.fmt}")
+    out.append(f"constraints\t{s.n_constraints}")
+    out.append(f"bus_interactions\t{s.n_bus_interactions}")
+    out.append(f"derived_columns\t{s.n_derived_columns}")
+    out.append(f"distinct_columns\t{s.distinct_columns}")
+    out.append(
+        f"degree\tmin={s.degree.min} mean={s.degree.mean} max={s.degree.max}"
+    )
+    out.append(f"nodes\tmin={s.nodes.min} mean={s.nodes.mean} max={s.nodes.max}")
+    out.append(f"depth\tmin={s.depth.min} mean={s.depth.mean} max={s.depth.max}")
+    out.append("ops\t" + " ".join(f"{k}={v}" for k, v in sorted(s.op_hist.items())))
+    if s.degree_hist:
+        out.append(
+            "degree_hist\t"
+            + " ".join(f"{k}:{v}" for k, v in sorted(s.degree_hist.items()))
+        )
+    if s.derived_forms:
+        out.append(
+            "derived_forms\t"
+            + " ".join(f"{k}={v}" for k, v in sorted(s.derived_forms.items()))
+        )
+    if s.n_blocks is not None:
+        out.append(f"blocks\t{s.n_blocks}")
+        out.append(f"instructions\t{s.n_instructions}")
+    if s.submachine_polys is not None:
+        out.append(
+            f"submachines\t{len(s.submachine_polys)} "
+            f"polys={s.submachine_polys}"
+        )
+    out.append("# buses\tid\tlabel\tcount\tsend\trecv\tsym\tother"
+               "\tkeysym\targs_nodes")
+    for r in s.buses:
+        out.append(
+            f"bus\t{r.id}\t{r.label}\t{r.count}\t{r.send}\t{r.recv}\t"
+            f"{r.sym}\t{r.other}\t{r.key_sym}\t{r.args_nodes}"
+        )
+    return "\n".join(out)
+
+
+def _show_rich(s: DumpStats, t: Target) -> str:
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    with console.capture() as cap:
+        console.rule(f"[bold]{t.group}/{t.block}[/]  {t.label}  "
+                     f"[magenta]({s.fmt})[/]")
+
+        counts = Table.grid(padding=(0, 2))
+        counts.add_column(style="cyan", justify="right")
+        counts.add_column()
+        counts.add_row("format", f"[magenta]{s.fmt}[/]")
+        counts.add_row("constraints", str(s.n_constraints))
+        counts.add_row("bus_interactions", str(s.n_bus_interactions))
+        counts.add_row("derived_columns", str(s.n_derived_columns))
+        counts.add_row("distinct_columns", str(s.distinct_columns))
+        counts.add_row(
+            "degree (min/mean/max)",
+            f"{s.degree.min} / {s.degree.mean} / [bold]{s.degree.max}[/]",
+        )
+        counts.add_row("nodes (min/mean/max)", f"{s.nodes.min} / {s.nodes.mean} / {s.nodes.max}")
+        counts.add_row("depth (min/mean/max)", f"{s.depth.min} / {s.depth.mean} / {s.depth.max}")
+        counts.add_row("operators", "  ".join(f"{k}={v}" for k, v in sorted(s.op_hist.items())))
+        if s.derived_forms:
+            counts.add_row(
+                "derived_forms",
+                "  ".join(f"{k}={v}" for k, v in sorted(s.derived_forms.items())),
+            )
+        if s.n_blocks is not None:
+            counts.add_row("blocks / instructions", f"{s.n_blocks} / {s.n_instructions}")
+        if s.submachine_polys is not None:
+            counts.add_row(
+                "submachines (polys)",
+                f"{len(s.submachine_polys)}  {s.submachine_polys}",
+            )
+        console.print(counts)
+
+        bus = Table(title="bus interactions", title_style="bold", show_edge=False)
+        bus.add_column("id", justify="right")
+        bus.add_column("label", style="green")
+        bus.add_column("count", justify="right")
+        bus.add_column("send", justify="right")
+        bus.add_column("recv", justify="right")
+        bus.add_column("sym", justify="right")
+        bus.add_column("other", justify="right")
+        bus.add_column("keysym", justify="right")
+        bus.add_column("args_nodes", justify="right")
+        for r in s.buses:
+            bus.add_row(
+                r.id, r.label, str(r.count), str(r.send), str(r.recv),
+                str(r.sym), str(r.other),
+                str(r.key_sym) if r.label == "Memory" else "·",
+                str(r.args_nodes),
+            )
+        console.print(bus)
+    return cap.get().rstrip("\n")
+
+
+# --------------------------------------------------------------------------- #
+# compare
+# --------------------------------------------------------------------------- #
+def render_compare(
+    diff: DumpDiff, ta: Target, tb: Target, mode: str
+) -> str:
+    if mode == JSON:
+        return json.dumps(
+            {"a": vars(ta), "b": vars(tb), **diff.as_dict()}, indent=2
+        )
+    if mode == RICH:
+        return _compare_rich(diff, ta, tb)
+    return _compare_plain(diff, ta, tb)
+
+
+def _compare_plain(diff: DumpDiff, ta: Target, tb: Target) -> str:
+    out: list[str] = []
+    out.append(f"# A: {ta.group}/{ta.block} {ta.label} [{diff.a.fmt}]")
+    out.append(f"# B: {tb.group}/{tb.block} {tb.label} [{diff.b.fmt}]")
+    if diff.a.fmt != diff.b.fmt:
+        out.append("# note: formats differ; operator deltas may be encoding artifacts")
+    out.append("# metric\tA\tB\tdelta")
+    for k, (va, vb) in diff.scalar_deltas().items():
+        out.append(f"{k}\t{va}\t{vb}\t{_delta_str(vb - va)}")
+    dm = diff.as_dict()["degree_mean"]
+    out.append(f"degree_mean\t{dm['a']}\t{dm['b']}\t{dm['delta']:+g}" if dm["delta"] else
+               f"degree_mean\t{dm['a']}\t{dm['b']}\t")
+    for k, (va, vb) in diff.op_deltas().items():
+        out.append(f"op[{k}]\t{va}\t{vb}\t{_delta_str(vb - va)}")
+    out.append("# bus\tid\tlabel\tA\tB\tdelta")
+    for i, lbl, ca, cb in diff.bus_deltas():
+        out.append(f"bus\t{i}\t{lbl}\t{ca}\t{cb}\t{_delta_str(cb - ca)}")
+    return "\n".join(out)
+
+
+def _compare_rich(diff: DumpDiff, ta: Target, tb: Target) -> str:
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+
+    def cell(d: int) -> str:
+        if d == 0:
+            return "[dim]·[/]"
+        color = "green" if d < 0 else "red"
+        return f"[{color}]{d:+d}[/]"
+
+    with console.capture() as cap:
+        console.rule(f"[bold]A[/] {ta.group}/{ta.block} {ta.label} "
+                     f"[magenta]({diff.a.fmt})[/]   "
+                     f"[bold]B[/] {tb.group}/{tb.block} {tb.label} "
+                     f"[magenta]({diff.b.fmt})[/]")
+        if diff.a.fmt != diff.b.fmt:
+            console.print("[yellow]note:[/] formats differ; "
+                          "operator deltas may be encoding artifacts")
+        tbl = Table(show_edge=False)
+        tbl.add_column("metric", style="cyan")
+        tbl.add_column("A", justify="right")
+        tbl.add_column("B", justify="right")
+        tbl.add_column("Δ", justify="right")
+        for k, (va, vb) in diff.scalar_deltas().items():
+            tbl.add_row(k, str(va), str(vb), cell(vb - va))
+        dm = diff.as_dict()["degree_mean"]
+        tbl.add_row("degree_mean", str(dm["a"]), str(dm["b"]),
+                    "[dim]·[/]" if dm["delta"] == 0 else f"{dm['delta']:+g}")
+        for k, (va, vb) in diff.op_deltas().items():
+            tbl.add_row(f"op[{k}]", str(va), str(vb), cell(vb - va))
+        console.print(tbl)
+
+        bus = Table(title="bus interactions", title_style="bold", show_edge=False)
+        bus.add_column("id", justify="right")
+        bus.add_column("label", style="green")
+        bus.add_column("A", justify="right")
+        bus.add_column("B", justify="right")
+        bus.add_column("Δ", justify="right")
+        for i, lbl, ca, cb in diff.bus_deltas():
+            bus.add_row(i, lbl, str(ca), str(cb), cell(cb - ca))
+        console.print(bus)
+    return cap.get().rstrip("\n")
+
+
+# --------------------------------------------------------------------------- #
+# sweep
+# --------------------------------------------------------------------------- #
+def render_sweep(rows, group: str, block: str, mode: str,
+                 with_diff: bool = False) -> str:
+    from .sweep import abbrev_label
+
+    if mode == JSON:
+        steps = [r.as_dict() for r in rows]
+        if not with_diff:
+            for s in steps:
+                s.pop("diff", None)
+        return json.dumps({"group": group, "block": block, "steps": steps},
+                          indent=2)
+    if mode == RICH:
+        return _sweep_rich(rows, group, block, abbrev_label, with_diff)
+    return _sweep_plain(rows, group, block, abbrev_label, with_diff)
+
+
+def _sym_cell(row, abbrev) -> str:
+    return ",".join(abbrev(b) for b in row.sym_busses) if row.sym_busses else "·"
+
+
+def _count_or_dot(n) -> str:
+    return str(n) if n else "·"
+
+
+def _rac(t) -> str:
+    """Format a (removed, added, changed) triple as -r+a~c, or · if all zero."""
+    r, a, c = t
+    if not (r or a or c):
+        return "·"
+    return (f"-{r}" if r else "") + (f"+{a}" if a else "") + (f"~{c}" if c else "")
+
+
+def _delta_cells(delta) -> tuple[str, str, str]:
+    """(dcons, dmem, dbus) display strings for a StepRow.delta."""
+    if delta is None:
+        return ("", "", "")
+    if delta == "xrep":
+        return ("—", "—", "—")
+    cons, mem, bus = delta
+    return (_rac(cons), _rac(mem), _rac(bus))
+
+
+def _sweep_plain(rows, group, block, abbrev, with_diff=False) -> str:
+    legend = _FMT_LEGEND + ("   (d* = -rem+add~chg vs prev)"
+                            if with_diff else "")
+    out = [f"# {group}/{block}   {legend}"]
+    pw = max((len(r.pass_name) for r in rows), default=4)
+    dcol = f"{'dcons':>9} {'dmem':>7} {'dbus':>7} " if with_diff else ""
+    out.append(f"{'NNN':>3} {'pass':<{pw}} f {'cons':>4} {'bus':>4} "
+               f"{'mem':>3} {'mkey':>4} {'der':>3} {'deg':>3} {'cols':>4} "
+               f"{dcol} sym-busses")
+    for r in rows:
+        dcell = ""
+        if with_diff:
+            dcons, dmem, dbus = _delta_cells(r.delta)
+            dcell = f"{dcons:>9} {dmem:>7} {dbus:>7} "
+        out.append(
+            f"{r.nnn:03d} {r.pass_name:<{pw}} {FMT_MARK.get(r.fmt, '?')} "
+            f"{r.n_constraints:>4} {r.n_bus_interactions:>4} {r.n_memory:>3} "
+            f"{_count_or_dot(r.mem_key_sym):>4} "
+            f"{r.n_derived_columns:>3} {r.max_degree:>3} "
+            f"{r.distinct_columns:>4} {dcell} {_sym_cell(r, abbrev)}"
+        )
+    return "\n".join(out)
+
+
+def _sweep_rich(rows, group, block, abbrev, with_diff=False) -> str:
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    with console.capture() as cap:
+        console.rule(f"[bold]{group}/{block}[/]   [dim]{_FMT_LEGEND}[/]")
+        t = Table(show_edge=False)
+        t.add_column("NNN", justify="right")
+        t.add_column("pass")
+        t.add_column("f", justify="center")
+        t.add_column("cons", justify="right")
+        t.add_column("bus", justify="right")
+        t.add_column("mem", justify="right")
+        t.add_column("mkey", justify="right")
+        t.add_column("der", justify="right")
+        t.add_column("deg", justify="right")
+        t.add_column("cols", justify="right")
+        if with_diff:
+            t.add_column("dcons", justify="right")
+            t.add_column("dmem", justify="right")
+            t.add_column("dbus", justify="right")
+        t.add_column("sym-busses")
+        for r in rows:
+            mark = FMT_MARK.get(r.fmt, "?")
+            mark = f"[magenta]{mark}[/]" if r.fmt == "machine" else mark
+            sym = _sym_cell(r, abbrev)
+            sym = f"[yellow]{sym}[/]" if r.sym_busses else f"[dim]{sym}[/]"
+            mkey = (f"[yellow]{r.mem_key_sym}[/]" if r.mem_key_sym
+                    else "[dim]·[/]")
+            cells = [
+                f"{r.nnn:03d}", r.pass_name, mark, str(r.n_constraints),
+                str(r.n_bus_interactions), str(r.n_memory), mkey,
+                str(r.n_derived_columns), str(r.max_degree),
+                str(r.distinct_columns),
+            ]
+            if with_diff:
+                cells.extend(_delta_cells(r.delta))
+            cells.append(sym)
+            t.add_row(*cells)
+        console.print(t)
+    return cap.get().rstrip("\n")
+
+
+# --------------------------------------------------------------------------- #
+# sweep all (one row per block)
+# --------------------------------------------------------------------------- #
+def render_sweep_all(rows, group: str, sort: str, mode: str) -> str:
+    if mode == JSON:
+        return json.dumps(
+            {"group": group, "sort": sort,
+             "blocks": [r.as_dict() for r in rows]},
+            indent=2,
+        )
+    if mode == RICH:
+        return _sweep_all_rich(rows, group, sort)
+    return _sweep_all_plain(rows, group, sort)
+
+
+def _red_str(r) -> str:
+    return "·" if r.reduction_pct is None else f"{r.reduction_pct}%"
+
+
+def _sweep_all_plain(rows, group, sort) -> str:
+    out = [f"# {group} · sort={sort} desc · {len(rows)} blocks"]
+    out.append(f"{'block':>8} {'steps':>5} {'cons0':>6} {'consF':>5} "
+               f"{'red%':>4} {'mem0':>4} {'memF':>4} {'degF':>4} "
+               f"{'memSym':>6} {'memKey':>6} {'othSym':>6} {'kb':>8}")
+    for r in rows:
+        out.append(
+            f"{r.block:>8} {r.n_steps:>5} {r.cons0:>6} {r.consF:>5} "
+            f"{_red_str(r):>4} {r.mem0:>4} {r.memF:>4} {r.max_degree_final:>4} "
+            f"{('sym' if r.mem_sym_final else '·'):>6} "
+            f"{('sym' if r.mem_key_sym_final else '·'):>6} "
+            f"{('sym' if r.other_sym_final else '·'):>6} {r.kb0:>8.1f}"
+        )
+    return "\n".join(out)
+
+
+def _sweep_all_rich(rows, group, sort) -> str:
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    with console.capture() as cap:
+        console.rule(f"[bold]{group}[/]   [dim]sort={sort} desc · "
+                     f"{len(rows)} blocks[/]")
+        t = Table(show_edge=False)
+        t.add_column("block", justify="right")
+        for col in ("steps", "cons0", "consF", "red%", "mem0", "memF", "degF"):
+            t.add_column(col, justify="right")
+        t.add_column("memSym", justify="center")
+        t.add_column("memKey", justify="center")
+        t.add_column("othSym", justify="center")
+        t.add_column("kb", justify="right")
+
+        def flag(on):
+            return "[yellow]sym[/]" if on else "[dim]·[/]"
+
+        for r in rows:
+            t.add_row(
+                r.block, str(r.n_steps), str(r.cons0), str(r.consF),
+                _red_str(r), str(r.mem0), str(r.memF),
+                str(r.max_degree_final), flag(r.mem_sym_final),
+                flag(r.mem_key_sym_final), flag(r.other_sym_final),
+                f"{r.kb0:.1f}",
+            )
+        console.print(t)
+    return cap.get().rstrip("\n")
+
+
+# --------------------------------------------------------------------------- #
+# subs (substitutions: var -> definition)
+# --------------------------------------------------------------------------- #
+def _expr_str(node) -> str:
+    """Compact infix string for a (signed-normalized) expression tree."""
+    if isinstance(node, list):
+        if node and node[0] == "-" and len(node) == 2:
+            return f"-{_expr_str(node[1])}"
+        parts = [_expr_str(x) if i % 2 == 0 else str(x) for i, x in enumerate(node)]
+        return "(" + " ".join(parts) + ")"
+    return str(node)
+
+
+def render_subs(subs, group: str, block: str, mode: str) -> str:
+    """Render substitutions (already constant-normalized) var = definition."""
+    if mode == JSON:
+        return json.dumps(
+            {"group": group, "block": block,
+             "substitutions": [{"var": v, "def": d} for v, d in subs]},
+            indent=2,
+        )
+    if mode == RICH:
+        from rich.console import Console
+        from rich.table import Table
+
+        console = Console()
+        with console.capture() as cap:
+            console.rule(f"[bold]{group}/{block}[/] substitutions "
+                         f"[dim]({len(subs)})[/]")
+            t = Table(show_edge=False)
+            t.add_column("variable", style="green")
+            t.add_column("=")
+            t.add_column("definition")
+            for v, d in subs:
+                t.add_row(str(v), "=", _expr_str(d))
+            console.print(t)
+        return cap.get().rstrip("\n")
+    out = [f"# {group}/{block} substitutions ({len(subs)})"]
+    out += [f"{v} = {_expr_str(d)}" for v, d in subs]
+    return "\n".join(out)
+
+
+# --------------------------------------------------------------------------- #
+# memkeys (Memory interaction keys: address_space, pointer)
+# --------------------------------------------------------------------------- #
+def _memkey_rows(machine, symbolic_only):
+    """(distinct-key rows, n_mem, n_sym) for Memory interactions.
+
+    Each row: [as_str, ptr_str, symbolic, count], signed-normalized and grouped
+    by identical (address_space, pointer). Sorted symbolic-first, count desc.
+    """
+    from .normalize import normalize_constants
+
+    mem = [bi for bi in machine.get("bus_interactions", []) if bi.get("id") == 1]
+    n_sym = sum(mem_key_symbolic(bi) for bi in mem)
+    groups: dict = {}
+    order: list = []
+    for bi in mem:
+        sym = mem_key_symbolic(bi)
+        if symbolic_only and not sym:
+            continue
+        args = bi.get("args", [])
+        a_str = _expr_str(normalize_constants(args[0])) if len(args) > 0 else "?"
+        p_str = _expr_str(normalize_constants(args[1])) if len(args) > 1 else "?"
+        key = (a_str, p_str)
+        if key not in groups:
+            groups[key] = [a_str, p_str, sym, 0]
+            order.append(key)
+        groups[key][3] += 1
+    rows = [groups[k] for k in order]
+    rows.sort(key=lambda r: (not r[2], -r[3]))
+    return rows, len(mem), n_sym
+
+
+def _memkey_by_as_rows(machine):
+    """[as_str, count, sym, distinct] per address space; sorted by count desc."""
+    from .normalize import normalize_constants
+
+    groups: dict = {}
+    order: list = []
+    for bi in machine.get("bus_interactions", []):
+        if bi.get("id") != 1:
+            continue
+        args = bi.get("args", [])
+        a_str = _expr_str(normalize_constants(args[0])) if len(args) > 0 else "?"
+        p_str = _expr_str(normalize_constants(args[1])) if len(args) > 1 else "?"
+        if a_str not in groups:
+            groups[a_str] = [a_str, 0, 0, set()]
+            order.append(a_str)
+        g = groups[a_str]
+        g[1] += 1
+        if mem_key_symbolic(bi):
+            g[2] += 1
+        g[3].add(p_str)
+    rows = [[a, n, s, len(keys)] for a, n, s, keys in (groups[a] for a in order)]
+    rows.sort(key=lambda r: -r[1])
+    return rows
+
+
+def _render_memkeys_by_as(machine, group, block, label, limit, mode):
+    rows = _memkey_by_as_rows(machine)
+    n_mem = sum(r[1] for r in rows)
+    n_sym = sum(r[2] for r in rows)
+    if mode == JSON:
+        return json.dumps({
+            "group": group, "block": block, "step": label,
+            "memory": {"total": n_mem, "symbolic": n_sym},
+            "by_address_space": [{"address_space": a, "count": n,
+                                  "symbolic": s, "distinct": d}
+                                 for a, n, s, d in rows],
+        }, indent=2)
+    shown, trunc = _capped(rows, limit)
+    if mode == RICH:
+        from rich.console import Console
+        from rich.table import Table
+
+        console = Console()
+        with console.capture() as cap:
+            console.rule(f"[bold]{group}/{block}[/] {label}  [dim]memory by "
+                         f"address space ({n_sym}/{n_mem} keys sym)[/]")
+            t = Table(show_edge=False)
+            t.add_column("address_space", style="green")
+            t.add_column("count", justify="right")
+            t.add_column("keysym", justify="right")
+            t.add_column("distinct", justify="right")
+            for a, n, s, d in shown:
+                t.add_row(a, str(n), f"[yellow]{s}[/]" if s else "[dim]0[/]",
+                          str(d))
+            console.print(t)
+            if trunc:
+                console.print(f"[dim](+{trunc} more)[/]")
+        return cap.get().rstrip("\n")
+    out = [f"# {group}/{block} {label}  memory by address space "
+           f"({n_sym} of {n_mem} keys symbolic; {len(rows)} address spaces)",
+           f"{'address_space':<28} {'count':>6} {'keysym':>6} {'distinct':>8}"]
+    for a, n, s, d in shown:
+        out.append(f"{a:<28} {n:>6} {s:>6} {d:>8}")
+    if trunc:
+        out.append(f"(+{trunc} more)")
+    return "\n".join(out)
+
+
+def render_memkeys(machine, group, block, label, symbolic_only, limit, mode,
+                   by_as=False):
+    if by_as:
+        return _render_memkeys_by_as(machine, group, block, label, limit, mode)
+    rows, n_mem, n_sym = _memkey_rows(machine, symbolic_only)
+    if mode == JSON:
+        return json.dumps({
+            "group": group, "block": block, "step": label,
+            "memory": {"total": n_mem, "symbolic": n_sym},
+            "keys": [{"address_space": a, "pointer": p, "symbolic": s,
+                      "count": n} for a, p, s, n in rows],
+        }, indent=2)
+    head = (f"{group}/{block} {label}  memory keys: {n_sym} of {n_mem} "
+            f"interactions symbolic; {len(rows)} distinct"
+            + (" (symbolic only; --all for the rest)" if symbolic_only else ""))
+    shown, trunc = _capped(rows, limit)
+    if mode == RICH:
+        from rich.console import Console
+        from rich.table import Table
+
+        console = Console()
+        with console.capture() as cap:
+            console.rule(f"[bold]{group}/{block}[/] {label}  [dim]memory keys "
+                         f"{n_sym}/{n_mem} sym[/]")
+            t = Table(show_edge=False)
+            t.add_column("key", justify="center")
+            t.add_column("address_space")
+            t.add_column("pointer", style="green")
+            t.add_column("count", justify="right")
+            for a, p, s, n in shown:
+                mark = "[yellow]sym[/]" if s else "[dim]·[/]"
+                t.add_row(mark, a, p, str(n))
+            console.print(t)
+            if trunc:
+                console.print(f"[dim](+{trunc} more)[/]")
+        return cap.get().rstrip("\n")
+    out = [f"# {head}", f"{'key':>3}  {'as':<6} {'ptr':<28} count"]
+    for a, p, s, n in shown:
+        out.append(f"{'sym' if s else '·':>3}  {a:<6} {p:<28} {n}")
+    if trunc:
+        out.append(f"(+{trunc} more)")
+    return "\n".join(out)
+
+
+# --------------------------------------------------------------------------- #
+# diff (constraint-level)
+# --------------------------------------------------------------------------- #
+def _signed_str(c) -> str:
+    from .normalize import normalize_constants
+    return _expr_str(normalize_constants(c))
+
+
+_MULT_SIGN = {"send": "+", "recv": "-", "sym": "?", "other": "."}
+
+
+def _PLAIN_HL(side, s):
+    return "{" + s + "}"
+
+
+def _RICH_HL(side, s):
+    return f"[red]{s}[/red]" if side == "b" else f"[green]{s}[/green]"
+
+
+def _group_pairs(pairs):
+    """Collapse identical (before, after) pairs to ordered (before, after, count)."""
+    out, counts = [], {}
+    for p in pairs:
+        if p not in counts:
+            counts[p] = 0
+            out.append(p)
+        counts[p] += 1
+    return [(b, a, counts[(b, a)]) for b, a in out]
+
+
+def _bus_str(entry) -> str:
+    """Render a (label, bi) bus entry compactly with a send/recv sign."""
+    label, bi = entry
+    sign = _MULT_SIGN.get(mult_kind(bi.get("mult")), "?")
+    args = [_signed_str(a) for a in bi.get("args", [])]
+    if bi.get("id") == 1 and len(args) >= 2:  # memory: surface as/ptr
+        body = ", ".join(args[2:])
+        return f"{label}({sign}) [as={args[0]}, ptr={args[1]}] ({body})"
+    return f"{label}({sign}) ({', '.join(args)})"
+
+
+def _mem_n(entries, pair=False) -> int:
+    if pair:
+        return sum(1 for (lb, _), _ in entries if lb == "Memory")
+    return sum(1 for lb, _ in entries if lb == "Memory")
+
+
+def _align_pair(b, a, hl):
+    """Parallel render of two normalized exprs as (before, after) strings.
+
+    Identical subtrees render plainly on both; differing leaves are wrapped by
+    ``hl(side, text)`` (side 'b'/'a'). Returns None if shapes differ.
+    """
+    if b == a:
+        s = _expr_str(b)
+        return (s, s)
+    bu = isinstance(b, list) and len(b) == 2 and b[0] == "-"
+    au = isinstance(a, list) and len(a) == 2 and a[0] == "-"
+    if bu and au:
+        r = _align_pair(b[1], a[1], hl)
+        return None if r is None else (f"-{r[0]}", f"-{r[1]}")
+    if bu != au:
+        return None
+    if (isinstance(b, list) and isinstance(a, list)
+            and len(b) == len(a) and len(b) >= 3):
+        pb, pa = [], []
+        for i in range(len(b)):
+            if i % 2 == 1:
+                if b[i] != a[i]:
+                    return None
+                pb.append(str(b[i]))
+                pa.append(str(a[i]))
+            else:
+                r = _align_pair(b[i], a[i], hl)
+                if r is None:
+                    return None
+                pb.append(r[0])
+                pa.append(r[1])
+        return ("(" + " ".join(pb) + ")", "(" + " ".join(pa) + ")")
+    if not isinstance(b, list) and not isinstance(a, list):
+        return (hl("b", str(b)), hl("a", str(a)))
+    return None
+
+
+def _constraint_pair(x, y, hl) -> tuple[str, str]:
+    """(before, after) strings for a changed constraint; whole-line if shapes differ."""
+    from .normalize import normalize_constants
+    r = _align_pair(normalize_constants(x), normalize_constants(y), hl)
+    if r is not None:
+        return r
+    return (hl("b", _signed_str(x)), hl("a", _signed_str(y)))
+
+
+def _bus_pair(ex, ey, hl) -> tuple[str, str]:
+    """(before, after) strings for a changed bus entry, args aligned."""
+    from .normalize import normalize_constants
+    (label, bx), (_, by) = ex, ey
+    ax = [normalize_constants(a) for a in bx.get("args", [])]
+    ay = [normalize_constants(a) for a in by.get("args", [])]
+    sb = _MULT_SIGN.get(mult_kind(bx.get("mult")), "?")
+    sa = _MULT_SIGN.get(mult_kind(by.get("mult")), "?")
+    if bx.get("id") != by.get("id") or len(ax) != len(ay):
+        return (_bus_str(ex), _bus_str(ey))
+    cells = [_align_pair(x, y, hl) or (hl("b", _expr_str(x)), hl("a", _expr_str(y)))
+             for x, y in zip(ax, ay)]
+    cb = [c[0] for c in cells]
+    ca = [c[1] for c in cells]
+
+    def fmt(label, sign, cs):
+        if bx.get("id") == 1 and len(cs) >= 2:
+            return f"{label}({sign}) [as={cs[0]}, ptr={cs[1]}] ({', '.join(cs[2:])})"
+        return f"{label}({sign}) ({', '.join(cs)})"
+
+    return (fmt(label, sb, cb), fmt(label, sa, ca))
+
+
+def _capped(items, limit):
+    """Yield up to `limit` items; returns (shown_list, n_truncated)."""
+    if limit is None or len(items) <= limit:
+        return items, 0
+    return items[:limit], len(items) - limit
+
+
+def _group(strs):
+    """Collapse identical strings to ordered (str, count) pairs."""
+    out, counts = [], {}
+    for s in strs:
+        if s not in counts:
+            counts[s] = 0
+            out.append(s)
+        counts[s] += 1
+    return [(s, counts[s]) for s in out]
+
+
+def _xn(count) -> str:
+    return f"  (x{count})" if count > 1 else ""
+
+
+def render_diff(diff, ta: Target, tb: Target, mode: str, limit: int = 20) -> str:
+    if mode == JSON:
+        return json.dumps({
+            "a": vars(ta), "b": vars(tb), "format": diff.fmt,
+            "removed": [_signed_str(c) for c in diff.removed],
+            "added": [_signed_str(c) for c in diff.added],
+            "changed": [{"before": _signed_str(x), "after": _signed_str(y)}
+                        for x, y in diff.changed],
+            "columns": {
+                "added": [{"name": n, "def": _signed_str(d) if d is not None else None}
+                          for n, d in diff.cols_added],
+                "removed": [{"name": n, "def": _signed_str(d) if d is not None else None}
+                            for n, d in diff.cols_removed],
+            },
+            "bus": {
+                "removed": [_bus_str(e) for e in diff.bus_removed],
+                "added": [_bus_str(e) for e in diff.bus_added],
+                "changed": [{"before": _bus_str(x), "after": _bus_str(y)}
+                            for x, y in diff.bus_changed],
+                "memory": {
+                    "removed": _mem_n(diff.bus_removed),
+                    "added": _mem_n(diff.bus_added),
+                    "changed": _mem_n(diff.bus_changed, pair=True),
+                },
+            },
+        }, indent=2)
+    if mode == RICH:
+        return _diff_rich(diff, ta, tb, limit)
+    return _diff_plain(diff, ta, tb, limit)
+
+
+def _diff_reassoc_hint(diff) -> bool:
+    return bool(diff.changed and not diff.removed and not diff.added
+                and diff.fmt == "machine")
+
+
+def _diff_plain(diff, ta, tb, limit) -> str:
+    out = [
+        f"# A: {ta.group}/{ta.block} {ta.label} [{diff.fmt}]",
+        f"# B: {tb.group}/{tb.block} {tb.label} [{diff.fmt}]",
+        f"# constraints: -{len(diff.removed)} +{len(diff.added)} "
+        f"~{len(diff.changed)}   columns: +{len(diff.cols_added)} "
+        f"-{len(diff.cols_removed)}",
+        f"# bus: -{len(diff.bus_removed)} +{len(diff.bus_added)} "
+        f"~{len(diff.bus_changed)}   memory: -{_mem_n(diff.bus_removed)} "
+        f"+{_mem_n(diff.bus_added)} ~{_mem_n(diff.bus_changed, pair=True)}",
+    ]
+    if _diff_reassoc_hint(diff):
+        out.append("# note: all changes are reassociations (likely loop_iteration)")
+    changed = _group_pairs([_constraint_pair(x, y, _PLAIN_HL)
+                            for x, y in diff.changed])
+    shown, trunc = _capped(changed, limit)
+    for b, a, n in shown:
+        out.append(f"~- {b}{_xn(n)}")
+        out.append(f"~+ {a}")
+    if trunc:
+        out.append(f"~ (+{trunc} more)")
+    shown, trunc = _capped(_group([_signed_str(c) for c in diff.removed]), limit)
+    for s, n in shown:
+        out.append(f"- {s}{_xn(n)}")
+    if trunc:
+        out.append(f"- (+{trunc} more)")
+    shown, trunc = _capped(_group([_signed_str(c) for c in diff.added]), limit)
+    for s, n in shown:
+        out.append(f"+ {s}{_xn(n)}")
+    if trunc:
+        out.append(f"+ (+{trunc} more)")
+    for n, d in diff.cols_added:
+        out.append(f"+col {n}" + (f" = {_signed_str(d)}" if d is not None else ""))
+    for n, d in diff.cols_removed:
+        out.append(f"-col {n}" + (f" = {_signed_str(d)}" if d is not None else ""))
+    bchg = _group_pairs([_bus_pair(x, y, _PLAIN_HL) for x, y in diff.bus_changed])
+    shown, trunc = _capped(bchg, limit)
+    for b, a, n in shown:
+        out.append(f"~-bus {b}{_xn(n)}")
+        out.append(f"~+bus {a}")
+    if trunc:
+        out.append(f"~bus (+{trunc} more)")
+    shown, trunc = _capped(_group([_bus_str(e) for e in diff.bus_removed]), limit)
+    for s, n in shown:
+        out.append(f"-bus {s}{_xn(n)}")
+    if trunc:
+        out.append(f"-bus (+{trunc} more)")
+    shown, trunc = _capped(_group([_bus_str(e) for e in diff.bus_added]), limit)
+    for s, n in shown:
+        out.append(f"+bus {s}{_xn(n)}")
+    if trunc:
+        out.append(f"+bus (+{trunc} more)")
+    return "\n".join(out)
+
+
+def _diff_rich(diff, ta, tb, limit) -> str:
+    from rich.console import Console
+
+    console = Console()
+    with console.capture() as cap:
+        console.rule(f"[bold]A[/] {ta.group}/{ta.block} {ta.label} "
+                     f"[magenta]({diff.fmt})[/]   "
+                     f"[bold]B[/] {tb.group}/{tb.block} {tb.label}")
+        console.print(
+            f"constraints: [red]-{len(diff.removed)}[/] "
+            f"[green]+{len(diff.added)}[/] [yellow]~{len(diff.changed)}[/]   "
+            f"columns: [green]+{len(diff.cols_added)}[/] "
+            f"[red]-{len(diff.cols_removed)}[/]")
+        console.print(
+            f"bus: [red]-{len(diff.bus_removed)}[/] "
+            f"[green]+{len(diff.bus_added)}[/] [yellow]~{len(diff.bus_changed)}[/]"
+            f"   memory: [red]-{_mem_n(diff.bus_removed)}[/] "
+            f"[green]+{_mem_n(diff.bus_added)}[/] "
+            f"[yellow]~{_mem_n(diff.bus_changed, pair=True)}[/]")
+        if _diff_reassoc_hint(diff):
+            console.print("[dim]all changes are reassociations "
+                          "(likely loop_iteration)[/]")
+        changed = _group_pairs([_constraint_pair(x, y, _RICH_HL)
+                                for x, y in diff.changed])
+        shown, trunc = _capped(changed, limit)
+        for b, a, n in shown:
+            console.print(f"[yellow]~[/][red]-[/] {b}{_xn(n)}")
+            console.print(f"[yellow]~[/][green]+[/] {a}")
+        if trunc:
+            console.print(f"[yellow]~ (+{trunc} more)[/]")
+        shown, trunc = _capped(_group([_signed_str(c) for c in diff.removed]), limit)
+        for s, n in shown:
+            console.print(f"[red]-[/] {s}{_xn(n)}")
+        if trunc:
+            console.print(f"[red]- (+{trunc} more)[/]")
+        shown, trunc = _capped(_group([_signed_str(c) for c in diff.added]), limit)
+        for s, n in shown:
+            console.print(f"[green]+[/] {s}{_xn(n)}")
+        if trunc:
+            console.print(f"[green]+ (+{trunc} more)[/]")
+        for n, d in diff.cols_added:
+            console.print(f"[green]+col[/] {n}"
+                          + (f" = {_signed_str(d)}" if d is not None else ""))
+        for n, d in diff.cols_removed:
+            console.print(f"[red]-col[/] {n}"
+                          + (f" = {_signed_str(d)}" if d is not None else ""))
+        bchg = _group_pairs([_bus_pair(x, y, _RICH_HL) for x, y in diff.bus_changed])
+        shown, trunc = _capped(bchg, limit)
+        for b, a, n in shown:
+            console.print(f"[yellow]~[/][red]-bus[/] {b}{_xn(n)}")
+            console.print(f"[yellow]~[/][green]+bus[/] {a}")
+        if trunc:
+            console.print(f"[yellow]~bus (+{trunc} more)[/]")
+        shown, trunc = _capped(_group([_bus_str(e) for e in diff.bus_removed]), limit)
+        for s, n in shown:
+            console.print(f"[red]-bus[/] {s}{_xn(n)}")
+        if trunc:
+            console.print(f"[red]-bus (+{trunc} more)[/]")
+        shown, trunc = _capped(_group([_bus_str(e) for e in diff.bus_added]), limit)
+        for s, n in shown:
+            console.print(f"[green]+bus[/] {s}{_xn(n)}")
+        if trunc:
+            console.print(f"[green]+bus (+{trunc} more)[/]")
+    return cap.get().rstrip("\n")
+
+
+# --------------------------------------------------------------------------- #
+# agent guide
+# --------------------------------------------------------------------------- #
+def agent_guide() -> str:
+    """Dense, parse-friendly usage doc for agents (the --agent output)."""
+    return AGENT_GUIDE.strip()
+
+
+AGENT_GUIDE = """
+lens — explore the powdr APC optimizer dumps.
+
+WHAT / WHY
+  The powdr autoprecompile optimizer writes a JSON snapshot after each pass:
+  powdr-dumps/<group>/apc_candidate_<id>_<NNN>_<pass>.json. A "block" is one
+  candidate id; its steps NNN=000..N are the trail through the optimizer.
+  lens reads these to answer: how big/complex is a block, what did each pass
+  do, how was a variable eliminated, which block is the hardest.
+  One trap it handles for you: between adjacent passes the *encoding* flips
+  (machine <-> constraints, see FORMAT). A constraint like f*(f-1) is written
+  ["f","*",["f","-",1]] in machine form and ["f","*",["f","+",2013265920]] in
+  constraints form — identical math, different bytes. lens normalizes this and
+  REFUSES to diff across the flip, so you always compare like with like.
+
+DECIDE (goal -> command)
+  stats / shape of one dump            -> show <g> <b> <step>
+  how a block evolves across passes    -> sweep <g> <b>
+  what each pass changed (counts)      -> sweep <g> <b> --diff
+  exactly what one pass changed        -> diff <g> <b> <stepA> <stepB>
+  which block is biggest / least-opt   -> sweep all [<g>] [--sort KEY]
+  how a variable was eliminated        -> subs <g> <b>
+  raw count delta between two steps    -> compare <g> <b> <stepA> <stepB>
+  feed another tool / script           -> add --json to any of the above
+
+TYPICAL SESSION
+  # 1. survey the group: which blocks carry the most work?
+  lens sweep all keccak --sort consF
+  # 2. walk one block's optimization trail (format flips, counts per step)
+  lens sweep keccak 2104492
+  # 3. attribute the change to each pass (counts; opt-in, slower)
+  lens sweep keccak 2104492 --diff
+  # 4. drill into one transition — same representation only
+  lens diff keccak 2104492 010 011
+  # 5. a step pair that flips M<->C is refused; pick two same-rep steps,
+  #    e.g. skip the machine-encoded loop_iteration between two C steps
+  lens diff keccak 2104492 011 014
+  # 6. explain an eliminated variable seen in a diff's columns
+  lens subs keccak 2104492 | grep <var>
+  # 7. full detail on a single dump
+  lens show keccak 2104492 011 --json
+
+SUBCOMMANDS
+  show    <group> <block> <step>        stats for one dump
+  compare <group> <block> <stepA> <stepB>   A->B deltas (same block)
+  sweep   <group> <block> [--from N] [--to N] [--diff]   per-step trail,
+            1 row/step (--diff adds dcons/dbus; slower on big blocks)
+  sweep   all [<group>] [--sort KEY]   1 row PER BLOCK (group auto-picked
+            if only one). KEY: cons0(default) consF steps mem0 memF size red
+  subs    <group> <block>   list var -> definition (signed-normalized)
+  memkeys <group> <block> <step> [--all] [--by-as] [--limit N]   list
+            Memory interaction keys (address_space, pointer); symbolic-only
+            by default. --by-as summarizes per address space
+            (count/keysym/distinct). JSON: {memory{total,symbolic},
+            keys:[{address_space,pointer,symbolic,count}]} or, with --by-as,
+            by_address_space:[{address_space,count,symbolic,distinct}]}
+  diff    <group> <block> <stepA> <stepB> [--limit N]   constraint- AND
+            bus-level diff (removed/added/changed + columns). SAME
+            representation only: refuses M-vs-C. Memory busses matched by
+            (address_space, pointer)+timestamp; others by column proxy.
+
+GLOBAL FLAGS
+  --root DIR     dumps root (default: powdr-dumps)
+  --plain        plain TSV-ish text, no color (default when not a TTY)
+  --json         machine-readable JSON (schema below)
+  --agent        print this guide and exit
+  (no flag on a TTY -> colored rich output)
+
+RESOLUTION
+  group   keccak -> <root>/guest-keccak ; also accepts guest-keccak or a path
+  block   candidate id, e.g. 2103924 (apc_candidate_ prefix optional)
+  step    NNN integer (11 or 011) | pass name (memory) | unopt|base (000)
+          pass names repeat (memory at 011/022/033): disambiguate with
+          memory@2 (1-based) or use the NNN. Ambiguous bare names error.
+
+EXIT CODES
+  0   success (incl. an empty diff / zero changes)
+  2   resolution error (unknown group/block/step, ambiguous pass name) OR a
+      refused diff (M-vs-C, or a non-constraint dump). Message on stderr.
+  argparse usage errors exit 2 as well (stderr usage line).
+
+PERFORMANCE
+  Most blocks are sub-second. Cost is dominated by JSON parsing, which scales
+  with the unopt dump size (see `sweep all` kb column). The big outlier is
+  2100224 (~28k initial constraints, 12 MB unopt): `sweep` ~8s; `sweep --diff`
+  ~16s (canonicalization adds ~2x); plain `diff` of a single huge pair is
+  similar. Prefer --diff / diff on specific steps or smaller blocks; sweep
+  without --diff stays cheap.
+
+FORMAT (powdr emits three artifacts; lens auto-detects)
+  machine        SymbolicMachine/AlgebraicExpression: uses real - and unary
+                 ["-",e]; negatives signed. The _000_unopt base dump (has
+                 block/subs) AND the outer steps (loop_iteration, inlining,
+                 range_constraints, post-inline rule_based/trivial_simp).
+  constraints    ConstraintSystem/GroupedExpression: NO -; negatives are
+                 field residues (2013265920=p-1). The inner passes.
+  substitutions  the _substitutions.json list of [var, definition] pairs.
+  discriminator: any - operator => machine; else residue => constraints.
+  normalization: constants are signed toward negative, p=2013265921
+  (2013265920 -> -1). `lens subs` prints definitions in this form.
+  comparing across encodings flags operator-delta artifacts.
+
+JSON FIELDS (show)
+  target{group,block,label,path}  format:"machine"|"constraints"
+  n_constraints:int  n_bus_interactions:int  n_derived_columns:int
+  distinct_columns:int
+  degree{min,mean,max}  degree_hist{deg:count}
+  nodes{min,mean,max}  depth{min,mean,max}  op_hist{"+":n,"-":n,"*":n}
+  buses[ {id,label,count,send,recv,sym,other,key_sym,args_nodes} ]
+  derived_forms{form:count}
+  n_blocks,n_instructions,submachine_polys[]   (base/unopt dump only)
+  degree = polynomial degree (const 0, col 1, +/- max, * sum)
+  sym = interactions with symbolic multiplicity; key_sym (Memory only) =
+    interactions whose key (address_space, pointer) is symbolic
+
+JSON FIELDS (compare)
+  a{...} b{...} (targets)  format{a,b}
+  scalars{metric:{a,b,delta}}  buses[{id,label,a,b,delta}]
+  op_hist{op:{a,b,delta}}  degree_mean{a,b,delta}
+
+SWEEP COLUMNS / JSON (one row per step)
+  NNN pass  f  cons bus mem mkey der deg cols  [dcons dmem dbus]  sym-busses
+  dcons/dmem/dbus (only with --diff; slower on big blocks) = -rem+add~chg of
+    constraints / Memory-bus / other-bus vs the previous step (same
+    representation only; "—" across M/C; blank on first row)
+  f = format marker: M=machine C=constraints
+  cons=n_constraints bus=n_bus_interactions mem=Memory-bus count
+  mkey=Memory interactions with symbolic (addr,ptr) key (· if none)
+  der=n_derived_columns deg=max degree cols=distinct columns
+  sym-busses = abbreviated labels of busses with symbolic mult, else ·
+  JSON: {group,block,steps:[{nnn,pass,format,n_constraints,
+    n_bus_interactions,n_memory,n_derived_columns,max_degree,
+    distinct_columns,sym_busses[],mem_key_sym,
+    diff: null | {cross_representation:true} | {constraints:{r,a,chg},
+      memory:{r,a,chg}, bus:{r,a,chg}}}]}  (only with --diff)
+
+SWEEP ALL COLUMNS / JSON (one row per block, sorted by KEY desc)
+  block steps cons0 consF red% mem0 memF degF memSym memKey othSym kb
+  cons0/consF=initial/final n_constraints  red%=reduction
+  mem0/memF=initial/final Memory-bus count  degF=final max degree
+  memSym=Memory bus has symbolic mult in final dump
+  memKey=Memory bus has symbolic (addr,ptr) key in final dump
+  othSym=any non-Memory bus symbolic in final  kb=initial dump size
+  JSON: {group,sort,blocks:[{block,n_steps,cons0,consF,reduction_pct,
+    mem0,memF,max_degree_final,mem_sym_final,mem_key_sym_final,
+    other_sym_final,kb0,bytes0}]}
+
+EXAMPLES
+  lens show keccak 2106412 011 --json
+  lens show keccak 2106412 memory --plain
+  lens compare keccak 2103924 010 011
+  lens compare keccak 2103924 memory remove_free --json
+  lens sweep keccak 2099512
+  lens sweep keccak 2099512 --from 11 --to 23 --json
+  lens sweep all
+  lens sweep all keccak --sort consF --json
+  lens subs keccak 2099512
+  lens memkeys keccak 2100224 050        # which mem addresses stay symbolic
+  lens diff keccak 2104492 003 004
+  lens diff keccak 2104492 010 011 --json
+
+DIFF JSON FIELDS
+  a{..} b{..} format  removed[str] added[str] changed[{before,after}]
+  columns{added:[{name,def}], removed:[{name,def}]}
+  bus{removed[str], added[str], changed[{before,after}],
+      memory{removed,added,changed}}
+  same-representation only; M-vs-C diff exits non-zero with a message.
+"""
