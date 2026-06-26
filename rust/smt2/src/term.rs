@@ -1,6 +1,6 @@
 //! S-expression term parse / constant-fold / print (evaluator pass).
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Term {
     Atom(String),
     List(Vec<Term>),
@@ -233,7 +233,7 @@ fn int_arg(t: &Term) -> Option<i128> {
     }
 }
 
-fn parse_int_literal(s: &str) -> Option<i128> {
+pub fn parse_int_literal(s: &str) -> Option<i128> {
     if let Some(hex) = s.strip_prefix("#x") {
         return u128::from_str_radix(hex, 16).ok().map(|v| v as i128);
     }
