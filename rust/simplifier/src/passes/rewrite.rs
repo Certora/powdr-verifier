@@ -26,6 +26,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut changed = 0usize;
     let mut global = RewriteStats::default();
 
+    let mut assert_index = 0usize;
     let out = map_asserts(script, |body| {
         let term = Term::parse(body)?;
         let t0 = Instant::now();
@@ -34,10 +35,12 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         let sec = t0.elapsed().as_secs_f64();
         if sec >= 0.05 {
             global.slow_asserts.push(serde_json::json!({
+                "index": assert_index,
                 "assert": &body[..body.len().min(240)],
                 "sec": sec,
             }));
         }
+        assert_index += 1;
         global.rewrites += stats.rewrites;
         global.factor_calls += stats.factor_calls;
         let new_body = new.to_string();

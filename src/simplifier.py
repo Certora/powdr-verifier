@@ -43,7 +43,7 @@ from .simplify import (
     simplify_rewrite_store_eqs,
     simplify_z3,
 )
-from .simplify.rust import run_rust_pipeline
+from .simplify.rust import run_rust_pipeline, rust_step_action_props
 
 _T = TypeVar("_T")
 
@@ -144,30 +144,73 @@ def _backup_script(smt_script: script.SmtLibScript) -> script.SmtLibScript:
     return backup
 
 
-def _run_rust_batch_with_fallback(
+def _attach_rust_step_actions(
+    parent: Action,
+    raw_tactics: list[str],
+    steps: list[dict],
+    *,
+    batch_end_ns: int,
+) -> None:
+    if len(steps) != len(raw_tactics):
+        logging.warning(
+            "rust step stats count %d != tactic count %d",
+            len(steps),
+            len(raw_tactics),
+        )
+        steps = [
+            steps[i] if i < len(steps) else {"running_time": 0.0}
+            for i in range(len(raw_tactics))
+        ]
+    total_ns = sum(int(float(step.get("running_time", 0.0)) * 1e9) for step in steps)
+    cursor_ns = batch_end_ns - total_ns
+    for raw, step in zip(raw_tactics, steps):
+        rt = float(step.get("running_time", 0.0))
+        rt_ns = int(rt * 1e9)
+        enter_ns = cursor_ns
+        exit_ns = cursor_ns + rt_ns
+        cursor_ns = exit_ns
+        child = Action(
+            raw,
+            enter_time=enter_ns,
+            exit_time=exit_ns,
+            running_time=rt,
+        )
+        props = rust_step_action_props(step)
+        if props:
+            child += props
+        parent += child
+
+
+def _run_rust_tactics(
+    parent: Action,
     smt_script: script.SmtLibScript,
     raw_tactics: list[str],
-    subaction,
 ) -> script.SmtLibScript:
     pipeline = ":".join(raw_tactics)
     try:
-        return run_rust_pipeline(smt_script, pipeline)
+        smt_script, steps = run_rust_pipeline(smt_script, pipeline)
     except (FileNotFoundError, RuntimeError) as exc:
         logging.warning(
             "rust simplifier batch %s failed (%s), falling back to python",
             pipeline,
             exc,
         )
-        subaction += {"fallback": "python", "tactics": raw_tactics}
         cur = smt_script
         for raw in raw_tactics:
-            parts = _split_tactic(raw)
-            cur = _apply_tactic_pass(
-                TacticParts(executor="", base=parts.base, suffix=parts.suffix),
-                cur,
-                subaction,
-            )
+            with parent.action(raw) as subaction:
+                subaction += {"fallback": "python"}
+                parts = _split_tactic(raw)
+                cur = _apply_tactic_pass(
+                    TacticParts(executor="", base=parts.base, suffix=parts.suffix),
+                    cur,
+                    subaction,
+                )
         return cur
+
+    _attach_rust_step_actions(
+        parent, raw_tactics, steps, batch_end_ns=time.perf_counter_ns()
+    )
+    return smt_script
 
 
 def _apply_tactic_pass(
@@ -339,39 +382,42 @@ def simplify_smt_script(
             case "r":
                 step_start = step_index + 1
                 step_end = step_index + len(raw_list)
-                step_index = step_end
                 remaining = deadline - time.monotonic() - 2
                 batch_label = ":".join(raw_list)
                 dump_label = "_".join(raw_list)
 
-                logging.info("simplifying with rust batch %s", batch_label)
-                with parent.action(batch_label) as subaction:
-                    if remaining <= 0:
+                if remaining <= 0:
+                    for raw_tactic in raw_list:
+                        step_index += 1
                         logging.info(
-                            "skipping rust batch %s (no time budget)", batch_label
+                            "skipping simplifier pass %s (no time budget)", raw_tactic
                         )
-                        subaction += {"result": "skipped", "reason": "no-budget"}
-                        continue
+                        with parent.action(raw_tactic) as subaction:
+                            subaction += {"result": "skipped", "reason": "no-budget"}
+                    continue
 
-                    backup_script = _backup_script(smt_script)
-                    backup_pretty = ARGS().pretty
+                logging.info("simplifying with rust batch %s", batch_label)
+                backup_script = _backup_script(smt_script)
+                backup_pretty = ARGS().pretty
 
-                    def run_batch():
-                        return _run_rust_batch_with_fallback(
-                            smt_script, raw_list, subaction
-                        )
+                def run_batch():
+                    return _run_rust_tactics(parent, smt_script, raw_list)
 
-                    timed_out, step_script = _run_with_itimer(remaining, run_batch)
+                timed_out, step_script = _run_with_itimer(remaining, run_batch)
 
-                    if timed_out:
-                        smt_script = backup_script
-                        ARGS().pretty = backup_pretty
-                        logging.warning("rust batch %s hit timeout, skipping", batch_label)
-                        subaction += {"result": "timeout"}
-                    else:
-                        assert step_script is not None
-                        smt_script = step_script
-                        _ensure_declarations_for_asserts(smt_script)
+                if timed_out:
+                    smt_script = backup_script
+                    ARGS().pretty = backup_pretty
+                    logging.warning("rust batch %s hit timeout, skipping", batch_label)
+                    for raw_tactic in raw_list:
+                        step_index += 1
+                        with parent.action(raw_tactic) as subaction:
+                            subaction += {"result": "timeout"}
+                else:
+                    assert step_script is not None
+                    smt_script = step_script
+                    _ensure_declarations_for_asserts(smt_script)
+                    step_index = step_end
 
                 if getattr(ARGS(), "dump_steps", False) and output is not None:
                     stem = (

@@ -54,9 +54,16 @@ def _pass_stats_name(pass_name: str) -> str:
     return pass_name.split("-", 1)[0]
 
 
+_ACTION_STAT_KEYS = ("expected", "result", "fallback")
+
+
+def rust_step_action_props(step: dict) -> dict:
+    return {k: step[k] for k in _ACTION_STAT_KEYS if k in step}
+
+
 def run_rust_pipeline(
     smt_script: script.SmtLibScript, tactic_pipeline: str
-) -> script.SmtLibScript:
+) -> tuple[script.SmtLibScript, list[dict]]:
     bin_path = resolve_simplifier_bin()
     if bin_path is None:
         raise FileNotFoundError("simplifier binary not found")
@@ -85,7 +92,8 @@ def run_rust_pipeline(
             f"simplifier exited {proc.returncode}: {proc.stderr.strip()}"
         )
 
-    for stat in parse_rust_stats(proc.stderr):
+    steps = parse_rust_stats(proc.stderr)
+    for stat in steps:
         pass_name = stat.get("pass", "rust")
         data = {k: v for k, v in stat.items() if k != "pass"}
         base = _pass_stats_name(pass_name)
@@ -118,4 +126,4 @@ def run_rust_pipeline(
         else:
             stats_dump(base, data)
 
-    return _string_to_script(proc.stdout)
+    return _string_to_script(proc.stdout), steps
