@@ -64,7 +64,15 @@ jobs:
       run: |
         pip install -r verifier/requirements.txt
         pysmt-install --z3 --confirm-agreement
-  
+
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+    - name: install z3 dev libs
+      run: sudo apt-get install -y libz3-dev
+
+    - name: build verifier rust workspace
+      run: cargo build --release --workspace --manifest-path verifier/rust/Cargo.toml
+
     - name: run formatter
       continue-on-error: true
       run: ruff format --diff verifier/
