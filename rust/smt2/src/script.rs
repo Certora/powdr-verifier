@@ -146,6 +146,42 @@ fn is_assert_true(raw: &str) -> bool {
     body == "true" || body == "(true)"
 }
 
+/// Assert commands in `script` (before `check-sat`).
+pub fn assert_commands(script: &Script) -> Vec<&Command> {
+    script
+        .commands
+        .iter()
+        .take_while(|c| c.name() != "check-sat")
+        .filter(|c| c.name() == "assert")
+        .collect()
+}
+
+/// Transform each assert command body; other commands unchanged.
+pub fn map_asserts(
+    script: &Script,
+    mut f: impl FnMut(&str) -> Result<String, String>,
+) -> Result<Script, String> {
+    use crate::term::{assert_body, replace_assert_body};
+
+    let mut commands = Vec::with_capacity(script.commands.len());
+    for cmd in &script.commands {
+        if cmd.name() == "assert" {
+            let body = assert_body(&cmd.raw).ok_or_else(|| {
+                format!("malformed assert command: {}", cmd.raw)
+            })?;
+            let new_body = f(&body)?;
+            if new_body != body {
+                commands.push(Command::new(replace_assert_body(&cmd.raw, &new_body)));
+            } else {
+                commands.push(cmd.clone());
+            }
+        } else {
+            commands.push(cmd.clone());
+        }
+    }
+    Ok(Script::from_commands(commands))
+}
+
 /// Reassemble after Z3 processing.
 pub fn splice_z3_result(
     parts: &ScriptParts,
