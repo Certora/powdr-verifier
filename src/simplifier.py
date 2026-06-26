@@ -81,7 +81,7 @@ def _split_tactic(raw_tactic: str) -> TacticParts:
     """Split ``z3-foo``, ``p#z3-foo``, or ``r#z3-foo`` into executor, base, and suffix."""
     executor = ""
     inner = raw_tactic
-    if len(raw_tactic) >= 2 and raw_tactic[1] == "#" and raw_tactic[0] in "pr":
+    if len(raw_tactic) >= 2 and raw_tactic[1] == "#":
         executor = raw_tactic[0]
         inner = raw_tactic[2:]
     base, *dash_suffix = inner.split("-", 1)
@@ -118,18 +118,21 @@ def _run_with_itimer(seconds: float, fn: Callable[[], _T]) -> tuple[bool, _T | N
         signal.signal(signal.SIGALRM, prev)
 
 
-def _is_rust_tactic(raw_tactic: str) -> bool:
-    return _split_tactic(raw_tactic).executor == "r"
-
-
 def _group_tactics(tactics: list[str]) -> list[tuple[str, list[str]]]:
     groups: list[tuple[str, list[str]]] = []
     for raw in tactics:
-        kind = "rust" if _is_rust_tactic(raw) else "python"
-        if groups and groups[-1][0] == kind:
+        match _split_tactic(raw).executor:
+            case "" | "p":
+                executor = "p"
+            case "r":
+                executor = "r"
+            case bad:
+                logging.error("ignoring tactic with unknown executor %r: %s", bad, raw)
+                continue
+        if groups and groups[-1][0] == executor:
             groups[-1][1].append(raw)
         else:
-            groups.append((kind, [raw]))
+            groups.append((executor, [raw]))
     return groups
 
 
@@ -284,18 +287,68 @@ def simplify_smt_script(
     tactics = resolved.split(":")
     deadline = time.monotonic() + float(timeout)
     step_index = 0
-    for kind, raw_list in _group_tactics(tactics):
-        if kind == "python":
-            for raw_tactic in raw_list:
-                step_index += 1
-                remaining = deadline - time.monotonic() - 2
-                parts = _split_tactic(raw_tactic)
+    for executor, raw_list in _group_tactics(tactics):
+        match executor:
+            case "p":
+                for raw_tactic in raw_list:
+                    step_index += 1
+                    remaining = deadline - time.monotonic() - 2
+                    parts = _split_tactic(raw_tactic)
 
-                logging.info("simplifying with %s", raw_tactic)
-                with parent.action(raw_tactic) as subaction:
+                    logging.info("simplifying with %s", raw_tactic)
+                    with parent.action(raw_tactic) as subaction:
+                        if remaining <= 0:
+                            logging.info(
+                                "skipping simplifier pass %s (no time budget)", raw_tactic
+                            )
+                            subaction += {"result": "skipped", "reason": "no-budget"}
+                            continue
+
+                        backup_script = _backup_script(smt_script)
+                        backup_pretty = ARGS().pretty
+
+                        def run_step():
+                            return _apply_tactic_pass(parts, smt_script, subaction)
+
+                        timed_out, step_script = _run_with_itimer(remaining, run_step)
+
+                        if timed_out:
+                            smt_script = backup_script
+                            ARGS().pretty = backup_pretty
+                            logging.warning(
+                                "simplifier pass %s hit timeout, skipping", raw_tactic
+                            )
+                            subaction += {"result": "timeout"}
+                        else:
+                            assert step_script is not None
+                            smt_script = step_script
+                            _ensure_declarations_for_asserts(smt_script)
+
+                    if getattr(ARGS(), "dump_steps", False) and output is not None:
+                        stem = (
+                            output.name[: -len(output.suffix)]
+                            if output.suffix
+                            else output.name
+                        )
+                        dump_file = output.with_name(
+                            f"{stem}.{step_index:02d}.{raw_tactic}.smt2"
+                        )
+                        with open_file(dump_file, "w") as out:
+                            logging.info("dumping intermediate formula to %s", out.name)
+                            write_smtlib_script(smt_script, out)
+            case "r":
+                step_start = step_index + 1
+                step_end = step_index + len(raw_list)
+                step_index = step_end
+                remaining = deadline - time.monotonic() - 2
+                batch_label = ":".join(raw_list)
+                dump_label = "_".join(raw_list)
+
+                logging.info("simplifying with rust batch %s", batch_label)
+                with parent.action(batch_label) as subaction:
                     if remaining <= 0:
                         logging.info(
-                            "skipping simplifier pass %s (no time budget)", raw_tactic
+                            "skipping rust batch %s (no time budget)", batch_label
                         )
                         subaction += {"result": "skipped", "reason": "no-budget"}
                         continue
@@ -303,17 +356,17 @@ def simplify_smt_script(
                     backup_script = _backup_script(smt_script)
                     backup_pretty = ARGS().pretty
 
-                    def run_step():
-                        return _apply_tactic_pass(parts, smt_script, subaction)
+                    def run_batch():
+                        return _run_rust_batch_with_fallback(
+                            smt_script, raw_list, subaction
+                        )
 
-                    timed_out, step_script = _run_with_itimer(remaining, run_step)
+                    timed_out, step_script = _run_with_itimer(remaining, run_batch)
 
                     if timed_out:
                         smt_script = backup_script
                         ARGS().pretty = backup_pretty
-                        logging.warning(
-                            "simplifier pass %s hit timeout, skipping", raw_tactic
-                        )
+                        logging.warning("rust batch %s hit timeout, skipping", batch_label)
                         subaction += {"result": "timeout"}
                     else:
                         assert step_script is not None
@@ -322,63 +375,14 @@ def simplify_smt_script(
 
                 if getattr(ARGS(), "dump_steps", False) and output is not None:
                     stem = (
-                        output.name[: -len(output.suffix)]
-                        if output.suffix
-                        else output.name
+                        output.name[: -len(output.suffix)] if output.suffix else output.name
                     )
                     dump_file = output.with_name(
-                        f"{stem}.{step_index:02d}.{raw_tactic}.smt2"
+                        f"{stem}.{step_start:02d}-{step_end:02d}.{dump_label}.smt2"
                     )
                     with open_file(dump_file, "w") as out:
                         logging.info("dumping intermediate formula to %s", out.name)
                         write_smtlib_script(smt_script, out)
-        else:
-            step_start = step_index + 1
-            step_end = step_index + len(raw_list)
-            step_index = step_end
-            remaining = deadline - time.monotonic() - 2
-            batch_label = ":".join(raw_list)
-            dump_label = "_".join(raw_list)
-
-            logging.info("simplifying with rust batch %s", batch_label)
-            with parent.action(batch_label) as subaction:
-                if remaining <= 0:
-                    logging.info(
-                        "skipping rust batch %s (no time budget)", batch_label
-                    )
-                    subaction += {"result": "skipped", "reason": "no-budget"}
-                    continue
-
-                backup_script = _backup_script(smt_script)
-                backup_pretty = ARGS().pretty
-
-                def run_batch():
-                    return _run_rust_batch_with_fallback(
-                        smt_script, raw_list, subaction
-                    )
-
-                timed_out, step_script = _run_with_itimer(remaining, run_batch)
-
-                if timed_out:
-                    smt_script = backup_script
-                    ARGS().pretty = backup_pretty
-                    logging.warning("rust batch %s hit timeout, skipping", batch_label)
-                    subaction += {"result": "timeout"}
-                else:
-                    assert step_script is not None
-                    smt_script = step_script
-                    _ensure_declarations_for_asserts(smt_script)
-
-            if getattr(ARGS(), "dump_steps", False) and output is not None:
-                stem = (
-                    output.name[: -len(output.suffix)] if output.suffix else output.name
-                )
-                dump_file = output.with_name(
-                    f"{stem}.{step_start:02d}-{step_end:02d}.{dump_label}.smt2"
-                )
-                with open_file(dump_file, "w") as out:
-                    logging.info("dumping intermediate formula to %s", out.name)
-                    write_smtlib_script(smt_script, out)
 
     _ensure_declarations_for_asserts(smt_script)
     return smt_script
