@@ -11,8 +11,22 @@ from ..utils.io import open_file
 # Imported after the backend's ``import *`` so its custom-operator and
 # type-checker setup runs first (importing this earlier breaks ``MOD``).
 from pysmt.environment import get_env
+from pysmt.walkers import IdentityDagWalker
 
 SUPPORTS_COMMENTS = "comment" in FNode.__slots__
+
+_identity_walker: IdentityDagWalker | None = None
+
+
+def _refresh_formula(f: FNode) -> FNode:
+    """Rebuild ``f`` with fresh nodes so ``simplify()`` can apply further rules.
+
+    Equivalent to ``substitute({}, {})`` but skips MGSubstituter's empty-map overhead.
+    """
+    global _identity_walker
+    if _identity_walker is None:
+        _identity_walker = IdentityDagWalker(get_env())
+    return _identity_walker.walk(f)
 
 
 _BOOL_CONNECTIVES = frozenset(
@@ -348,11 +362,15 @@ def partial_evaluate(f: FNode, model: dict[str, Any], interpreters):
         sym: GenericInterpreter(sym, f) for sym, f in interpreters.items()
     }
 
+    refresh = _refresh_formula if not substitutions and not interpretations else None
     last = None
     cnt = 3
     while last != f and cnt > 0 and not f.is_constant():
         last = f
-        f = f.substitute(substitutions, interpretations).simplify()
+        if refresh is not None:
+            f = refresh(f).simplify()
+        else:
+            f = f.substitute(substitutions, interpretations).simplify()
         cnt -= 1
     
     if f.is_int_constant():
