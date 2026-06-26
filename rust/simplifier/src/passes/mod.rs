@@ -1,5 +1,9 @@
+pub mod demod;
 pub mod evaluator;
 pub mod isqf;
+pub mod lift;
 pub mod nnf;
+pub mod normalize;
 pub mod pretty;
+pub mod skolem;
 pub mod z3;

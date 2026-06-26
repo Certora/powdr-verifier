@@ -7,7 +7,7 @@ use std::io::{self, Write};
 
 use smt2::Script;
 
-use crate::passes::{evaluator, isqf, nnf, pretty, z3};
+use crate::passes::{demod, evaluator, isqf, lift, nnf, normalize, pretty, skolem, z3};
 use crate::tactic::split_tactic;
 
 #[derive(Debug)]
@@ -22,6 +22,10 @@ pub fn apply_pass(raw_tactic: &str, script: &Script) -> Result<(Script, StepResu
         "z3" => z3::apply(script, &parts.suffix)?,
         "nnf" => nnf::apply(script)?,
         "evaluator" => evaluator::apply(script)?,
+        "demod" => demod::apply(script)?,
+        "normalize" => normalize::apply(script)?,
+        "skolem" => skolem::apply(script)?,
+        "lift" => lift::apply(script)?,
         "isqf" => isqf::apply(script)?,
         "pretty" | "p" => pretty::apply(script)?,
         other => {

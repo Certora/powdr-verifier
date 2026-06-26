@@ -68,12 +68,15 @@ def run_rust_pipeline(
     if getattr(ARGS(), "pretty", False):
         cmd.append("--pretty")
     cmd.extend(["-", rust_pipeline, "-"])
+    env = os.environ.copy()
+    env["SIMPLIFIER_FIELD_MOD"] = str(ARGS().field_type.value)
     proc = subprocess.run(
         cmd,
         input=smt_in,
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
     if proc.returncode != 0:
         raise RuntimeError(
@@ -90,6 +93,14 @@ def run_rust_pipeline(
             stats_dump("nnf", data)
         elif base == "evaluator":
             stats_dump("evaluator", data)
+        elif base == "demod":
+            stats_dump("demod", data)
+        elif base == "normalize":
+            stats_dump("normalize", data)
+        elif base == "skolem":
+            stats_dump("skolem", data)
+        elif base == "lift":
+            stats_dump("lift_forall", data)
         elif base == "isqf":
             stats_dump("isqf", data)
         else:
