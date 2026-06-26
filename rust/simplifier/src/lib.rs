@@ -17,13 +17,15 @@ pub struct StepResult {
 }
 
 pub fn apply_pass(raw_tactic: &str, script: &Script) -> Result<(Script, StepResult), String> {
-    let (base, suffix) = split_tactic(raw_tactic);
-    let (out, stats) = match base.as_str() {
-        "r#z3" => z3::apply(script, &suffix)?,
-        "r#nnf" => nnf::apply(script)?,
-        "r#evaluator" => evaluator::apply(script)?,
-        "r#isqf" => isqf::apply(script)?,
-        other => return Err(format!("unknown or unsupported rust tactic: {other}")),
+    let parts = split_tactic(raw_tactic);
+    let (out, stats) = match parts.base.as_str() {
+        "z3" => z3::apply(script, &parts.suffix)?,
+        "nnf" => nnf::apply(script)?,
+        "evaluator" => evaluator::apply(script)?,
+        "isqf" => isqf::apply(script)?,
+        other => {
+            return Err(format!("unknown or unsupported rust tactic: {other}"));
+        }
     };
     Ok((
         out,
@@ -72,7 +74,7 @@ mod tests {
             "(declare-fun x () Int)\n(assert (or (not (= 0 0)) (= x 1)))\n(check-sat)\n",
         )
         .unwrap();
-        let (out, step) = apply_pass("r#evaluator", &script).unwrap();
+        let (out, step) = apply_pass("evaluator", &script).unwrap();
         let s = smt2::dump_string(&out);
         assert!(s.contains("(= x 1)"));
         assert_eq!(step.stats["asserts_changed"], 1);
@@ -87,7 +89,7 @@ mod tests {
             "(declare-fun x () Int)\n(assert (or (not (= 0 0)) (= x 1)))\n(check-sat)\n",
         )
         .unwrap();
-        let (out, _) = apply_pass("r#z3-simplify", &script).unwrap();
+        let (out, _) = apply_pass("z3-simplify", &script).unwrap();
         let s = smt2::dump_string(&out);
         assert!(s.contains("(= x 1)"));
     }

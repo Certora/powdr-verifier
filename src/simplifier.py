@@ -42,6 +42,7 @@ from .simplify import (
     simplify_rewrite_store_eqs,
     simplify_z3,
 )
+from .simplify.rust import run_rust_pipeline, rust_tactic_to_python_fallback
 
 _T = TypeVar("_T")
 
