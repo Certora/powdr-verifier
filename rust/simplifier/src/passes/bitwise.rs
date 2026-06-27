@@ -6,7 +6,7 @@ use smt2::{Script, Term};
 use smt2::parse::Command;
 
 use crate::passes::skolem::term_util::{
-    atom, int_literal, list, scoped_free_variables,
+    atom, expand_lets, int_literal, list, scoped_free_variables,
 };
 
 const UF_XOR: &str = "uf_xor";
@@ -62,7 +62,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
                     &cmd.raw,
                     &new_body.to_string(),
                 )));
-                let terms = collect_bitwise_terms(&new_body, None);
+                let terms = collect_bitwise_terms(&expand_lets(&new_body), None);
                 for axiom in emit_axioms(&terms, &generators, &mut stats) {
                     let key = axiom.to_string();
                     if seen_top.insert(key.clone()) {
@@ -610,5 +610,18 @@ mod tests {
         assert!(s.contains("(forall ((x Int))"));
         assert!(s.contains("(and (= (uf_xor x y) z)"));
         assert!(s.contains("(= (= x y) (= (uf_xor x y) 0))"));
+    }
+
+    #[test]
+    fn expands_let_bindings_for_top_level_axioms() {
+        let script = Script::parse(
+            "(declare-fun uf_xor (Int Int) Int)\n(declare-fun x () Int)\n(declare-fun y () Int)\n(assert (let ((a!2 x) (a!3 y)) (= (uf_xor a!2 a!3) 0)))\n(check-sat)\n",
+        )
+        .unwrap();
+        let (out, _) = apply(&script).unwrap();
+        let s = smt2::dump_string(&out);
+        assert!(s.contains("(let ((a!2 x) (a!3 y))"));
+        assert!(s.contains("(= (= x y) (= (uf_xor x y) 0))"));
+        assert!(!s.contains("(= (= a!2 a!3)"));
     }
 }

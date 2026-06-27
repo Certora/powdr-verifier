@@ -146,6 +146,71 @@ pub fn unwrap_zero_mod_eq(f: &Term, field: i128) -> Option<Term> {
     Some(mod_items[1].clone())
 }
 
+pub fn substitute_symbol(term: &Term, name: &str, replacement: &Term) -> Term {
+    if let Some(sym) = symbol_name(term) {
+        if sym == name {
+            return replacement.clone();
+        }
+        return term.clone();
+    }
+    let Term::List(items) = term else {
+        return term.clone();
+    };
+    if matches!(items.first(), Some(Term::Atom(s)) if s == "forall" || s == "exists")
+        && items.len() >= 3
+    {
+        let bound = quantifier_var_names(&items[1]);
+        if bound.contains(name) {
+            return term.clone();
+        }
+        return Term::List(vec![
+            items[0].clone(),
+            items[1].clone(),
+            substitute_symbol(&items[2], name, replacement),
+        ]);
+    }
+    Term::List(
+        std::iter::once(items[0].clone())
+            .chain(
+                items[1..]
+                    .iter()
+                    .map(|arg| substitute_symbol(arg, name, replacement)),
+            )
+            .collect(),
+    )
+}
+
+/// Inline ``(let ((x t) ...) body)`` bindings for term collection / rewriting.
+pub fn expand_lets(term: &Term) -> Term {
+    let Term::List(items) = term else {
+        return term.clone();
+    };
+    if matches!(items.first(), Some(Term::Atom(s)) if s == "let") && items.len() >= 3 {
+        let mut body = expand_lets(&items[2]);
+        if let Term::List(binders) = &items[1] {
+            for binder in binders.iter().rev() {
+                let Term::List(pair) = binder else {
+                    continue;
+                };
+                if pair.len() < 2 {
+                    continue;
+                }
+                let Some(name) = symbol_name(&pair[0]).map(str::to_string) else {
+                    continue;
+                };
+                let val = expand_lets(&pair[1]);
+                body = substitute_symbol(&body, &name, &val);
+            }
+        }
+        return body;
+    }
+    Term::List(
+        std::iter::once(items[0].clone())
+            .chain(items[1..].iter().map(expand_lets))
+            .collect(),
+    )
+}
+
 pub fn free_variables(f: &Term) -> HashSet<String> {
     scoped_free_variables(f, &HashSet::new())
 }
