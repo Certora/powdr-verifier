@@ -20,11 +20,21 @@ ORCHESTRATE_SCRIPT = f"./{_REL_VERIFIER}/orchestrate.py"
 _PRLIMIT_BIN = shutil.which("prlimit")
 
 
+def display_path(path: Path | str) -> str:
+    p = Path(path)
+    if p.is_absolute():
+        try:
+            return p.resolve().relative_to(WORKSPACE_DIR.resolve()).as_posix()
+        except ValueError:
+            return p.as_posix()
+    return p.as_posix()
+
+
 def arg_for_dump(arg) -> str:
     path = Path(arg)
     if path.is_absolute():
         try:
-            return f"./{path.relative_to(WORKSPACE_DIR).as_posix()}"
+            return path.relative_to(WORKSPACE_DIR).as_posix()
         except ValueError:
             pass
     return str(arg)
