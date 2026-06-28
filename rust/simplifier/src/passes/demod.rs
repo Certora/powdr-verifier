@@ -4,6 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 use smt2::{assert_commands, map_asserts, Script, Term};
 
+use crate::passes::skolem::term_util::expand_lets;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct IntInterval {
     lo: Option<i128>,
@@ -66,6 +68,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
             format!("malformed assert command: {}", cmd.raw)
         })?;
         let term = Term::parse(&body)?;
+        let term = expand_lets(&term);
         let rewritten = eqmod_walk(&term, field_mod);
         if rewritten != term {
             stats.eqmod_asserts_changed += 1;
