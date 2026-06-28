@@ -23,13 +23,16 @@ from src.utils.utils import s2range
 from src.report.action import Action
 from src.report.dumpers import ActionDumper, set_report_dir
 from src.paths import (
+    MAIN_SCRIPT,
     ORCHESTRATE_SCRIPT,
     POWDR_DIR,
     POWDR_DUMPS_DIR,
     REPORTS_DIR,
     VERIFIER_DIR,
+    WORKSPACE_DIR,
     arg_for_dump,
     data_path_for_dump,
+    display_path,
     dump_cmd_parts,
     ensure_layout,
 )
@@ -191,6 +194,12 @@ def __dump_job_report(test: str, command: str, *, started_at: str, started: floa
         dump_json(payload, f, indent=4)
 
 
+def __cmd_arg(arg) -> str:
+    if isinstance(arg, Path):
+        return arg_for_dump(arg)
+    return str(arg)
+
+
 def __run_main(
     command,
     *args,
@@ -205,22 +214,23 @@ def __run_main(
     cmd = [
         *memory_limit_cmd_prefix(_ARGS.jobs),
         PYTHON,
-        VERIFIER_DIR / "main.py",
-        *_ARGS._additional_args,
-        *_ARGS._main_args,
-        *stats,
+        MAIN_SCRIPT,
+        *map(__cmd_arg, _ARGS._additional_args),
+        *map(__cmd_arg, _ARGS._main_args),
+        *map(__cmd_arg, stats),
         command,
-        *args,
-        *extra,
-        *_ARGS._sub_args,
+        *map(__cmd_arg, args),
+        *map(__cmd_arg, extra),
+        *map(__cmd_arg, _ARGS._sub_args),
     ]
-    cmdstr = " ".join(map(str, cmd))
+    cmdstr = " ".join(cmd)
     if parse_output:
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            cwd=WORKSPACE_DIR,
         )
         stdout, stderr, timed_out = communicate_with_timeout(proc, timeout)
         if timed_out:
@@ -248,7 +258,7 @@ def __run_main(
                 result="invalid-json",
                 error_message=(stdout[:400] if stdout else ""),
             )
-    proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True, cwd=WORKSPACE_DIR)
     _, _, timed_out = communicate_with_timeout(proc, timeout)
     if timed_out:
         logging.error(f"timed out running {cmdstr}")
@@ -272,7 +282,7 @@ def __do_simplify(
     *,
     stats_run_id: str | None = None,
 ):
-    logging.info(f"simplifying {input.relative_to(Path.cwd())} (step={optimization_step or 'default'})")
+    logging.info(f"simplifying {display_path(input)} (step={optimization_step or 'default'})")
     return __run_main(
         "simplify",
         input,
@@ -336,7 +346,7 @@ def run_powdr_guest(test, dirsuffix = ""):
 
 def run_trace(*files):
     for f in files:
-        logging.warning(f"running tracer on {f.relative_to(Path.cwd())}")
+        logging.warning(f"running tracer on {display_path(f)}")
         with ActionDumper("trace", _ARGS.test, f) as dump:
             trace_smt2 = data_path_for_dump(f, f"trace-{f.stem}.smt2")
             res_trace = __run_main("trace", f, trace_smt2, parse_output=True)
@@ -358,7 +368,7 @@ def run_trace(*files):
 
 def run_diff(*pairs):
     for a,b in pairs:
-        logging.warning(f"diffing {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
+        logging.warning(f"diffing {display_path(a)} and {display_path(b)}")
         __run_main("diff", a, b)
 
 def run_evaluate(first, *files):
@@ -368,11 +378,11 @@ def run_evaluate(first, *files):
             logging.warning(f"can not eval {f} because there is no model")
             continue
         subprocess.run([
-            PYTHON, VERIFIER_DIR / "evaluate.py",
-            "--base-dump", first,
-            f,
-            model,
-        ], check=True)
+            PYTHON, arg_for_dump(VERIFIER_DIR / "evaluate.py"),
+            "--base-dump", arg_for_dump(first),
+            arg_for_dump(f),
+            arg_for_dump(model),
+        ], check=True, cwd=WORKSPACE_DIR)
 
 def run_eval(*files):
     for f in files:
@@ -380,7 +390,7 @@ def run_eval(*files):
         if not model.exists():
             logging.warning(f"can not eval {f} because there is no model")
             continue
-        logging.warning(f"evaluating trace from {model.relative_to(Path.cwd())} on {f.relative_to(Path.cwd())}")
+        logging.warning(f"evaluating trace from {display_path(model)} on {display_path(f)}")
         __run_main("eval", f, model)
 
 def _parse_step_and_pass(file: Path) -> tuple[int, str]:
@@ -399,7 +409,7 @@ def run_verify_opt(files: dict, pairs):
 
         output = input_file.with_name(f"{input_file.stem}.powdr-opt-{next_pass}.json")
         logging.warning(
-            f"running powdr-opt {next_pass} on {input_file.relative_to(Path.cwd())}"
+            f"running powdr-opt {next_pass} on {display_path(input_file)}"
         )
         powdr_opt_args = [input_file, next_pass, output]
         if 0 in files:
@@ -415,7 +425,7 @@ def run_verify(a, b):
         prepare_stats_dir(_ARGS.test, stats_run_id, wipe=True)
     with ActionDumper("verify", _ARGS.test, a, b) as a_verify:
         a_verify += {"command_line": __orchestrate_verify_cmd(a, b)}
-        logging.warning(f"verify equivalence of {a.relative_to(Path.cwd())} and {b.relative_to(Path.cwd())}")
+        logging.warning(f"verify equivalence of {display_path(a)} and {display_path(b)}")
         first = data_path_for_dump(a, f"verify-{a.stem}-{b.stem}.smt2")
         res_verify = __run_main(
             "verify",

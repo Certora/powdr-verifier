@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 from typing import Any, Optional, TextIO, Union
 
-from ..paths import dump_input_relpath
+from ..paths import dump_input_abspath, dump_input_relpath
 from ..report.action import Action
 from .args import ARGS
 
@@ -30,7 +30,7 @@ def load_json(file: Union[Path, TextIO]) -> Any:
     def object_decoder(d: dict[Any, Any]) -> Any:
         match d:
             case {"__Path": str(path), **rest} if rest == {}:
-                return Path(path)
+                return dump_input_abspath(path)
             case {"__Action": dict(action), **rest} if rest == {}:
                 return Action(**action)
             case _:
