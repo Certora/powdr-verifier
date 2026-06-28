@@ -862,92 +862,52 @@ def scatter_time_size_by_outcome(input_base: Path) -> str:
     return _fig_html(fig)
 
 
-def scatter_time_size_by_isqf_and_outcome(input_base: Path) -> str:
+def block_solved_percentage_ecdf() -> str:
     rows = query(
         """
-        SELECT v.id, v.input1, v.input2, v.size_bytes, v.running_time, v.status, s.status
-        FROM verification_steps v
-        JOIN substeps s ON s.verification_step_id = v.id
-        WHERE v.running_time IS NOT NULL
-          AND v.size_bytes IS NOT NULL
-          AND s.name = 'isqf'
-          AND s.status IN ('qf', 'not-qf')
-        """
-    )
-    by_step: dict[int, dict[str, object]] = {}
-    for step_id, input1, input2, size_bytes, rt, status, isqf_result in rows:
-        rec = by_step.setdefault(
-            int(step_id),
-            {
-                "size": size_bytes,
-                "time": rt,
-                "outcome": "success" if status == "success" else "failed",
-                "isqf_result": None,
-                "input1": _path_relative_to_base(str(input1), input_base),
-                "input2": _path_relative_to_base(str(input2), input_base),
-            },
+        WITH step_outcomes AS (
+            SELECT
+                v.block,
+                v.id,
+                MAX(CASE
+                    WHEN s.name = 'verify-encode' AND s.parent IS NULL AND s.status = 'success'
+                    THEN 1 ELSE 0
+                END) AS encode_ok,
+                MAX(CASE
+                    WHEN s.name = 'check (completeness)' AND s.parent IS NULL
+                         AND s.status = 'success'
+                    THEN 1 ELSE 0
+                END) AS completeness_ok,
+                MAX(CASE
+                    WHEN s.name = 'check (soundness)' AND s.parent IS NULL AND s.status = 'success'
+                    THEN 1 ELSE 0
+                END) AS soundness_ok
+            FROM verification_steps v
+            LEFT JOIN substeps s ON s.verification_step_id = v.id
+            WHERE v.block IS NOT NULL
+            GROUP BY v.block, v.id
+        ),
+        block_rates AS (
+            SELECT
+                block,
+                100.0 * SUM(encode_ok) / COUNT(*) AS pct_encode,
+                100.0 * SUM(completeness_ok) / COUNT(*) AS pct_completeness,
+                100.0 * SUM(soundness_ok) / COUNT(*) AS pct_soundness
+            FROM step_outcomes
+            GROUP BY block
         )
-        if isqf_result == "not-qf" or rec["isqf_result"] is None:
-            rec["isqf_result"] = str(isqf_result)
-    rec = []
-    for row in by_step.values():
-        isqf_result = row["isqf_result"]
-        if isqf_result is None:
-            continue
-        rec.append({**row, "series": f"{isqf_result} / {row['outcome']}"})
-    if not rec:
-        return ""
-    df = pandas.DataFrame(rec)
-    series_order = ["qf / success", "qf / failed", "not-qf / success", "not-qf / failed"]
-    fig = plotly.express.scatter(
-        df,
-        x="size",
-        y="time",
-        color="series",
-        category_orders={"series": series_order},
-        color_discrete_map={
-            "qf / success": "#636EFA",
-            "qf / failed": "#7F7F7F",
-            "not-qf / success": "#00CC96",
-            "not-qf / failed": "#EF553B",
-        },
-        title="Verification Size vs. Time (by isqf result and outcome)",
-        labels={
-            "size": "Size",
-            "time": "Time (s)",
-            "series": "Series",
-            "input1": "Input file 1",
-            "input2": "Input file 2",
-        },
-        range_x=[0, df["size"].max() * 1.1],
-        range_y=[0, df["time"].max() * 1.1],
-        hover_data=["input1", "input2"],
-    )
-    _append_trace_counts(fig, df["series"].value_counts().to_dict())
-    return _fig_html(fig)
-
-
-def block_solved_percentage_ecdf() -> str:
-    sub = query(
-        """
-        SELECT v.block, s.name,
-               100.0 * SUM(CASE WHEN s.status = 'success' THEN 1 ELSE 0 END) / COUNT(*) AS pct
-        FROM substeps s
-        JOIN verification_steps v ON v.id = s.verification_step_id
-        WHERE s.parent IS NULL AND v.block IS NOT NULL
-        GROUP BY v.block, s.name
-        HAVING COUNT(*) > 0
+        SELECT pct_encode, pct_completeness, pct_soundness FROM block_rates
         """
     )
     rec: list[dict[str, object]] = []
-    for _blk, name, pct in sub:
-        series = _report_series_name(str(name))
-        if series is None or series == "simplify":
-            continue
-        rec.append({"series": series, "pct": pct})
+    for pct_encode, pct_completeness, pct_soundness in rows:
+        rec.append({"series": "encode", "pct": pct_encode})
+        rec.append({"series": "completeness", "pct": pct_completeness})
+        rec.append({"series": "soundness", "pct": pct_soundness})
     if not rec:
         return ""
     df = pandas.DataFrame(rec)
+    n_blocks = len(rows)
     order = [s for s in _REPORT_SERIES_ORDER if s in df["series"].unique()]
     fig = plotly.express.ecdf(
         df,
@@ -962,7 +922,7 @@ def block_solved_percentage_ecdf() -> str:
         labels={"pct": "% solved", "series": "Series"},
     )
     fig.for_each_trace(lambda t: t.update(x=[xi + 1 for xi in t.x]))
-    fig.update_xaxes(title_text="block count")
+    fig.update_xaxes(title_text="block count", range=[1, n_blocks], dtick=1)
     return _fig_html(fig)
 
 

@@ -20,7 +20,6 @@ from .plots import (
     basic_stats,
     block_solved_percentage_ecdf,
     pass_solved_percentage_ecdf,
-    scatter_time_size_by_isqf_and_outcome,
     scatter_time_size_by_outcome,
     scatter_time_size_success_only,
     simplifier_pass_stats_bar,
@@ -370,8 +369,6 @@ def report():
 {scatter_time_size_success_only(report_data_dir(report_dir))}
 
 {scatter_time_size_by_outcome(report_data_dir(report_dir))}
-
-{scatter_time_size_by_isqf_and_outcome(report_data_dir(report_dir))}
 
 {simplifier_pass_stats_bar()}
 </body>
