@@ -115,12 +115,22 @@ fn int_constant(t: &Term) -> Option<i128> {
         _ => None,
     }
 }
+
+fn int_constant_mod(t: &Term, m: i128) -> Option<i128> {
+    if let Some(v) = int_constant(t) {
+        return Some(((v % m) + m) % m);
+    }
+    match t {
+        Term::Atom(s) => smt2::term::mod_int_literal_string(s, m)?.parse().ok(),
+        _ => None,
+    }
+}
 fn is_symbol(t: &Term) -> bool {
     match t {
         Term::Atom(s) => {
             s != "true"
                 && s != "false"
-                && smt2::term::parse_int_literal(s).is_none()
+                && !smt2::term::is_int_literal_string(s)
         }
         _ => false,
     }
@@ -412,6 +422,11 @@ fn normalize_arith_under_mod(e: &Term, m: i128) -> Term {
     if let Some(k) = int_constant(e) {
         return atom(&(k % m).to_string());
     }
+    if let Term::Atom(s) = e {
+        if let Some(reduced) = smt2::term::mod_int_literal_string(s, m) {
+            return atom(&reduced);
+        }
+    }
     let Term::List(items) = e else {
         return e.clone();
     };
@@ -665,10 +680,12 @@ fn demod_mod(expr: &Term, modulus: &Term, ctx: &mut DemodCtx<'_>) -> Term {
             expr = normalize_arith_under_mod(&expr, mc);
         }
     }
-    if let (Some(ec), Some(mc)) = (int_constant(&expr), int_constant(modulus)) {
+    if let Some(mc) = int_constant(modulus) {
         if mc != 0 {
-            ctx.stats.const_eval += 1;
-            return atom(&(ec % mc).to_string());
+            if let Some(ec) = int_constant_mod(&expr, mc) {
+                ctx.stats.const_eval += 1;
+                return atom(&ec.to_string());
+            }
         }
     }
     if let Term::List(items) = &expr {

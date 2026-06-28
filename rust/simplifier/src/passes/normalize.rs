@@ -101,6 +101,19 @@ fn int_literal(t: &Term) -> Option<i128> {
     }
 }
 
+fn int_literal_mod(t: &Term, modulo: Option<i128>) -> Option<i128> {
+    let m = modulo?;
+    match t {
+        Term::Atom(s) => {
+            if let Some(v) = smt2::term::parse_int_literal(s) {
+                return Some(coeff_mod(v, m));
+            }
+            smt2::term::mod_int_literal_string(s, m)?.parse().ok()
+        }
+        _ => None,
+    }
+}
+
 fn atom(s: &str) -> Term {
     Term::Atom(s.to_string())
 }
@@ -344,12 +357,7 @@ fn relation_modular(lhs: &Term, rhs: &Term, p: i128) -> Option<bool> {
 }
 
 fn expr_to_poly(n: &Term, var_index: &HashMap<String, usize>, modulo: Option<i128>) -> Option<Poly> {
-    if let Some(ic) = int_literal(n) {
-        let m = if let Some(mod_) = modulo {
-            coeff_mod(ic, mod_)
-        } else {
-            ic
-        };
+    if let Some(m) = int_literal_mod(n, modulo).or_else(|| int_literal(n)) {
         return if m == 0 {
             Some(Poly::new())
         } else {
