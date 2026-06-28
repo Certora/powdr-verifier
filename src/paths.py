@@ -61,6 +61,23 @@ def dump_cmd_parts(parts: list) -> str:
     return shlex.join(out)
 
 
+def dump_input_relpath(path: Path | str) -> Path:
+    p = Path(path)
+    if p.is_absolute():
+        p = p.resolve().relative_to(WORKSPACE_DIR.resolve())
+    if "powdr-dumps" in p.parts:
+        idx = p.parts.index("powdr-dumps")
+        return Path("verifier", *p.parts[idx:])
+    return p
+
+
+def dump_input_abspath(path: Path | str) -> Path:
+    p = Path(path)
+    if p.is_absolute():
+        return p.resolve()
+    return (WORKSPACE_DIR / p).resolve()
+
+
 def ensure_layout() -> None:
     for directory in (POWDR_DUMPS_DIR, DATA_DIR, REPORTS_DIR):
         directory.mkdir(parents=True, exist_ok=True)
