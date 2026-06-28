@@ -315,7 +315,9 @@ def check():
 
         goal = _find_largest_or_goal(smt_script)
         if goal is None:
-            logging.warning("no goal found, checking entire script")
+            logging.warning(
+                "no splittable Or-disjunction found, checking entire script"
+            )
             check_smt_script(smt_script, action, input_for_log=ARGS().input)
             return action
 
