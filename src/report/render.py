@@ -356,9 +356,11 @@ def report():
 
 {basic_stats()}
 
+{block_solved_percentage_ecdf()}
+
 {verified_over_time()}
 
-{block_solved_percentage_ecdf()}
+{substeps_stacked_lines(report_data_dir(report_dir))}
 
 {pass_solved_percentage_ecdf()}
 
@@ -369,8 +371,6 @@ def report():
 {scatter_time_size_by_isqf_and_outcome(report_data_dir(report_dir))}
 
 {simplifier_pass_stats_bar()}
-
-{substeps_stacked_lines(report_data_dir(report_dir))}
 </body>
 </html>
 """

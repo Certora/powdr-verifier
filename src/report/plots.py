@@ -14,6 +14,22 @@ from .html_utils import copy_command_badge
 
 _PLOT_FONT_SIZE = 14
 
+_REPORT_SERIES_ORDER = ["encode", "completeness", "soundness", "simplify"]
+
+
+def _report_series_name(substep_name: str) -> str | None:
+    match substep_name:
+        case "verify-encode":
+            return "encode"
+        case "check (completeness)":
+            return "completeness"
+        case "check (soundness)":
+            return "soundness"
+        case "simplifier":
+            return "simplify"
+        case _:
+            return None
+
 
 def _style_fig(fig) -> None:
     fig.update_layout(
@@ -735,12 +751,6 @@ def _badge_kind(kind: str, at_step: object = None) -> str:
     return f'<span class="badge {css}">{html.escape(kind)}</span>'
 
 def verified_over_time() -> str:
-    whole = query(
-        """
-        SELECT running_time FROM verification_steps
-        WHERE status = 'success' AND running_time IS NOT NULL
-        """
-    )
     sub = query(
         """
         SELECT name, running_time FROM substeps
@@ -748,19 +758,15 @@ def verified_over_time() -> str:
         """
     )
     rec: list[dict[str, object]] = []
-    for (rt,) in whole:
-        rec.append({"series": "verification", "time": rt})
     for name, rt in sub:
-        rec.append({"series": str(name), "time": rt})
+        series = _report_series_name(str(name))
+        if series is None or series == "simplify":
+            continue
+        rec.append({"series": series, "time": rt})
     if not rec:
         return ""
     df = pandas.DataFrame(rec)
-    names = {r["series"] for r in rec}
-    order: list[str] = []
-    if "verification" in names:
-        order.append("verification")
-        names.discard("verification")
-    order.extend(sorted(names))
+    order = [s for s in _REPORT_SERIES_ORDER if s in df["series"].unique()]
     fig = plotly.express.ecdf(
         df,
         y="time",
@@ -771,12 +777,12 @@ def verified_over_time() -> str:
         category_orders={"series": order},
         labels={
             "count": "number of steps",
-            "time": "verification time (s)",
+            "time": "time (s)",
             "series": "Series",
         },
     )
     fig.update_xaxes(title_text="number of steps")
-    fig.update_yaxes(title_text="verification time (s)")
+    fig.update_yaxes(title_text="time (s)")
     return _fig_html(fig)
 
 @functools.lru_cache(maxsize=1)
@@ -922,16 +928,6 @@ def scatter_time_size_by_isqf_and_outcome(input_base: Path) -> str:
 
 
 def block_solved_percentage_ecdf() -> str:
-    whole = query(
-        """
-        SELECT block,
-               100.0 * SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) / COUNT(*) AS pct
-        FROM verification_steps
-        WHERE block IS NOT NULL
-        GROUP BY block
-        HAVING COUNT(*) > 0
-        """
-    )
     sub = query(
         """
         SELECT v.block, s.name,
@@ -944,24 +940,20 @@ def block_solved_percentage_ecdf() -> str:
         """
     )
     rec: list[dict[str, object]] = []
-    for _blk, pct in whole:
-        rec.append({"series": "verification", "pct": pct})
     for _blk, name, pct in sub:
-        rec.append({"series": str(name), "pct": pct})
+        series = _report_series_name(str(name))
+        if series is None or series == "simplify":
+            continue
+        rec.append({"series": series, "pct": pct})
     if not rec:
         return ""
     df = pandas.DataFrame(rec)
-    names = {r["series"] for r in rec}
-    order: list[str] = []
-    if "verification" in names:
-        order.append("verification")
-        names.discard("verification")
-    order.extend(sorted(names))
+    order = [s for s in _REPORT_SERIES_ORDER if s in df["series"].unique()]
     fig = plotly.express.ecdf(
         df,
         y="pct",
         color="series",
-        title="Percentage of verification steps solved per block",
+        title="Percentage solved per block",
         ecdfnorm=None,
         orientation="h",
         ecdfmode="complementary",
@@ -1154,56 +1146,68 @@ def substeps_stacked_lines(input_base: Path) -> str:
     rows = query(
         """
         SELECT sub.verification_step_id, sub.name, COALESCE(sub.running_time, 0),
-               v.input1, v.input2, sub.status
+               v.input1, v.input2, v.status
         FROM substeps sub
         JOIN verification_steps v ON v.id = sub.verification_step_id
-        WHERE sub.parent IS NULL
+        WHERE sub.name IN ('verify-encode', 'simplifier')
+           OR (sub.name IN ('check (completeness)', 'check (soundness)') AND sub.parent IS NOT NULL)
         """
     )
     if not rows:
         return ""
-    df = pandas.DataFrame(
-        rows,
-        columns=["verification_step_id", "name", "running_time", "input1", "input2", "status"],
+    meta = query(
+        """
+        SELECT id, input1, input2, status FROM verification_steps
+        """
     )
-    df = df.groupby(["verification_step_id", "name"], as_index=False).agg(
+    meta_by_id = {vid: (i1, i2, st) for vid, i1, i2, st in meta}
+    rec: list[dict[str, object]] = []
+    for vid, name, rt, _i1, _i2, _st in rows:
+        series = _report_series_name(str(name))
+        if series is None:
+            continue
+        i1, i2, status = meta_by_id.get(vid, (_i1, _i2, _st))
+        rec.append(
+            {
+                "verification_step_id": vid,
+                "series": series,
+                "running_time": rt,
+                "input1": _path_relative_to_base(str(i1), input_base),
+                "input2": _path_relative_to_base(str(i2), input_base),
+                "status": status,
+            }
+        )
+    df = pandas.DataFrame(rec)
+    df = df.groupby(["verification_step_id", "series"], as_index=False).agg(
         running_time=("running_time", "sum"),
         input1=("input1", "first"),
         input2=("input2", "first"),
         status=("status", "first"),
     )
-    df["input1"] = df["input1"].map(lambda p: _path_relative_to_base(str(p), input_base))
-    df["input2"] = df["input2"].map(lambda p: _path_relative_to_base(str(p), input_base))
     pt = df.pivot_table(
         index="verification_step_id",
-        columns="name",
+        columns="series",
         values="running_time",
         aggfunc="sum",
         fill_value=0,
     )
-    enc_col = "verify-encode"
-    encode_series = pt[enc_col] if enc_col in pt.columns else pandas.Series(0.0, index=pt.index)
+    encode_series = pt["encode"] if "encode" in pt.columns else pandas.Series(0.0, index=pt.index)
     step_order = encode_series.sort_values(ascending=True).index.tolist()
     rank = {vid: i for i, vid in enumerate(step_order)}
     df["x_rank"] = df["verification_step_id"].map(rank)
-
-    names = list(df["name"].unique())
-    stack_order = []
-    if enc_col in names:
-        stack_order.append(enc_col)
-    stack_order.extend(sorted(n for n in names if n != enc_col))
+    stack_order = [s for s in _REPORT_SERIES_ORDER if s in df["series"].unique()]
 
     fig = plotly.express.bar(
         df,
         x="x_rank",
         y="running_time",
-        color="name",
-        category_orders={"name": stack_order},
-        title="Substep time by verification step (stacked)",
+        color="series",
+        category_orders={"series": stack_order},
+        title="Substep time",
         labels={
             "x_rank": "Step order (sorted by encode time)",
             "running_time": "Time (s)",
-            "name": "Substep",
+            "series": "Substep",
             "input1": "Input file 1",
             "input2": "Input file 2",
             "verification_step_id": "Step id",
