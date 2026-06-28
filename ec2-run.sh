@@ -16,6 +16,9 @@ cd ~/
 
 pushd verifier
 git pull
+pushd rust
+cargo build --release -p simplifier
+popd
 popd
 
 source .venv/bin/activate
