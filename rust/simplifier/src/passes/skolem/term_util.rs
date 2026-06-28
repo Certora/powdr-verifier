@@ -43,7 +43,7 @@ pub fn is_symbol(t: &Term) -> bool {
         Term::Atom(s) => {
             s != "true"
                 && s != "false"
-                && smt2::term::parse_int_literal(s).is_none()
+                && !smt2::term::is_int_literal_string(s)
         }
         _ => false,
     }
@@ -234,6 +234,32 @@ pub fn scoped_free_variables(term: &Term, bound: &HashSet<String>) -> HashSet<St
         new_bound.extend(quantifier_var_names(&items[1]));
         return scoped_free_variables(&items[2], &new_bound);
     }
+    if matches!(items.first(), Some(Term::Atom(s)) if s == "let") && items.len() >= 3 {
+        let mut new_bound = bound.clone();
+        if let Term::List(binders) = &items[1] {
+            for binder in binders {
+                let Term::List(pair) = binder else {
+                    continue;
+                };
+                if let Some(name) = symbol_name(&pair[0]) {
+                    new_bound.insert(name.to_string());
+                }
+            }
+        }
+        let mut free = HashSet::new();
+        if let Term::List(binders) = &items[1] {
+            for binder in binders {
+                let Term::List(pair) = binder else {
+                    continue;
+                };
+                if pair.len() >= 2 {
+                    free.extend(scoped_free_variables(&pair[1], bound));
+                }
+            }
+        }
+        free.extend(scoped_free_variables(&items[2], &new_bound));
+        return free;
+    }
     items[1..]
         .iter()
         .flat_map(|a| scoped_free_variables(a, bound))
@@ -272,4 +298,25 @@ pub fn sort_from_decl(raw: &str) -> SortKind {
 
 pub fn symbol_sort(name: &str, sorts: &std::collections::HashMap<String, SortKind>) -> SortKind {
     sorts.get(name).copied().unwrap_or(SortKind::Other)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scoped_free_variables_skips_let_binders() {
+        let term = Term::parse("(let ((a!1 x)) (= a!1 y))").unwrap();
+        let free = scoped_free_variables(&term, &HashSet::new());
+        assert!(free.contains("x"));
+        assert!(free.contains("y"));
+        assert!(!free.contains("a!1"));
+    }
+
+    #[test]
+    fn big_int_literals_are_not_free_variables() {
+        let term = Term::parse("(= x 32561662554329978067493305279605223446198353920)").unwrap();
+        let free = free_variables(&term);
+        assert_eq!(free, HashSet::from(["x".to_string()]));
+    }
 }

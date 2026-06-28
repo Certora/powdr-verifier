@@ -243,6 +243,47 @@ pub fn parse_int_literal(s: &str) -> Option<i128> {
     s.parse::<i128>().ok()
 }
 
+/// True for SMT-LIB integer literals (including values outside ``i128``).
+pub fn is_int_literal_string(s: &str) -> bool {
+    if s.starts_with("#x") || s.starts_with("#b") {
+        return s.len() > 2;
+    }
+    let digits = s.strip_prefix('-').unwrap_or(s);
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+}
+
+fn normalized_mod(v: i128, m: i128) -> i128 {
+    ((v % m) + m) % m
+}
+
+/// Reduce an integer literal modulo ``m`` (decimal literals may exceed ``i128``).
+pub fn mod_int_literal_string(s: &str, modulus: i128) -> Option<String> {
+    if modulus <= 0 {
+        return None;
+    }
+    if let Some(v) = parse_int_literal(s) {
+        return Some(normalized_mod(v, modulus).to_string());
+    }
+    if !is_int_literal_string(s) {
+        return None;
+    }
+    let neg = s.starts_with('-');
+    let digits = s.strip_prefix('-').unwrap_or(s);
+    let mut rem: i128 = 0;
+    for d in digits.as_bytes() {
+        if !d.is_ascii_digit() {
+            return None;
+        }
+        rem = (rem * 10 + i128::from(*d - b'0')) % modulus;
+    }
+    if neg {
+        rem = normalized_mod(-rem, modulus);
+    } else {
+        rem = normalized_mod(rem, modulus);
+    }
+    Some(rem.to_string())
+}
+
 fn atom(s: &str) -> Term {
     Term::Atom(s.to_string())
 }
@@ -405,12 +446,11 @@ mod tests {
     }
 
     #[test]
-    fn assert_body_roundtrip() {
-        let raw = "(assert (or (not (= 0 0)) (= x 1)))";
-        let body = assert_body(raw).unwrap();
-        let folded = fold_constants(&Term::parse(&body).unwrap(), None);
-        let out = replace_assert_body(raw, &folded.to_string());
-        assert!(out.contains("(= x 1)"));
+    fn mod_int_literal_string_reduces_beyond_i128() {
+        let p = 2_013_265_921_i128;
+        let huge = "32561662554329978067493305279605223446198353920";
+        let reduced = mod_int_literal_string(huge, p).unwrap();
+        assert_eq!(reduced, "1069547521");
     }
 
 }

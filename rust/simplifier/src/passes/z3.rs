@@ -2,10 +2,10 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use smt2::{parse::Command, splice_z3_result, Script, Term};
+use smt2::{parse::Command, map_asserts, splice_z3_result, Script, Term};
 use z3::{SatResult, Tactic};
 
-use crate::passes::skolem::term_util::{free_variables, swap_prefix, symbol_sort};
+use crate::passes::skolem::term_util::{expand_lets, free_variables, swap_prefix, symbol_sort};
 use crate::passes::skolem::types::SortKind;
 use crate::passes::skolem::utils::{collect_symbol_sorts, declare_fun_name};
 
@@ -76,6 +76,13 @@ fn infer_free_symbol_sort(
     SortKind::Int
 }
 
+fn is_let_temp_symbol(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("a!") else {
+        return false;
+    };
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+}
+
 /// Declare symbols free in ``assert`` bodies but missing from ``declare-fun``.
 /// Mirrors Python ``_ensure_declarations_for_asserts`` before Z3 sees the script.
 fn ensure_assert_declarations(script: &Script) -> Result<(Script, usize), String> {
@@ -96,6 +103,9 @@ fn ensure_assert_declarations(script: &Script) -> Result<(Script, usize), String
         };
         let term = Term::parse(&body)?;
         for sym in free_variables(&term) {
+            if is_let_temp_symbol(&sym) {
+                continue;
+            }
             if declared.contains(&sym) || missing.contains_key(&sym) {
                 continue;
             }
@@ -140,6 +150,10 @@ pub fn apply(script: &Script, tactic_args: &[String]) -> Result<(Script, serde_j
 
     let processed_str = solver.to_string();
     let processed = Script::parse(&processed_str)?;
+    let processed = map_asserts(&processed, |body| {
+        let term = Term::parse(body)?;
+        Ok(expand_lets(&term).to_string())
+    })?;
 
     let prefix_names = smt2::declared_symbol_names(&parts.prefix);
     let extra = smt2::extra_declarations(&processed.commands, &prefix_names);
