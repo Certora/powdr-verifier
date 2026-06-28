@@ -29,7 +29,7 @@ from .plots import (
 )
 from .action import Action
 from .html_utils import copy_command_badge
-from ..paths import DATA_DIR, POWDR_DUMPS_DIR
+from ..paths import DATA_DIR, POWDR_DUMPS_DIR, dump_input_abspath, dump_input_relpath
 from ..utils.args import ARGS
 from ..utils.io import load_json
 from ..utils.inputs import load_files_by_block, load_verification_steps
@@ -319,14 +319,17 @@ def collect(basedir: Path):
         if node.name == "verify":
             assert len(node.inputs) == 2
             i1, i2 = node.inputs
-            assert (i1, i2) in results, f"Verification step not found for inputs {i1} and {i2}"
-            node.block, node.passname = results[(i1, i2)]
-            results[(i1, i2)] = node
-            step_id = insert_verification_row(i1, i2, node)
+            key = (dump_input_relpath(i1), dump_input_relpath(i2))
+            assert key in results, f"Verification step not found for inputs {i1} and {i2}"
+            node.block, node.passname = results[key]
+            results[key] = node
+            step_id = insert_verification_row(
+                dump_input_abspath(i1), dump_input_abspath(i2), node
+            )
             insert_substeps(step_id, [normalize_substep_tree(child) for child in node.children])
     for (i1, i2), val in results.items():
         if isinstance(val, tuple):
-            insert_verification_row(i1, i2, val)
+            insert_verification_row(dump_input_abspath(i1), dump_input_abspath(i2), val)
     commit_db()
     return ttw, results
 

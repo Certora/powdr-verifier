@@ -3,6 +3,8 @@ from collections import defaultdict
 import re
 import pathlib
 
+from ..paths import dump_input_relpath
+
 __FILENAMERE = re.compile("apc_candidate_(\\d+)_(\\d+)(.*)\\.json")
 
 def parse_filename(file: pathlib.Path) -> tuple[int, int, str]:
@@ -48,7 +50,12 @@ def load_verification_steps(basedir: pathlib.Path):
         i = 1
         while i in blocks[block]:
             _, suffix = blocks[block][i]
-            res[(blocks[block][i-1][0], blocks[block][i][0])] = (
+            res[
+                (
+                    dump_input_relpath(blocks[block][i - 1][0]),
+                    dump_input_relpath(blocks[block][i][0]),
+                )
+            ] = (
                 block,
                 format_passname(i, suffix),
             )
