@@ -4,7 +4,7 @@ mod map;
 mod names;
 mod rules;
 pub(crate) mod term_util;
-mod types;
+pub(crate) mod types;
 pub(crate) mod utils;
 mod witness;
 

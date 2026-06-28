@@ -165,6 +165,28 @@ fn parse_set_info(raw: &str) -> Option<(String, String)> {
     let rest = inner.strip_prefix("set-info")?.trim();
     let key_end = rest.find(|c: char| c.is_whitespace())?;
     let key = rest[..key_end].to_string();
-    let value = rest[key_end..].trim();
-    Some((key, value.to_string()))
+    let value = strip_set_info_value(rest[key_end..].trim());
+    Some((key, value))
+}
+
+/// PySMT strips ``|...|`` on ``set-info`` parse-in; mirror that before ``Term::parse``.
+fn strip_set_info_value(value: &str) -> String {
+    let v = value.trim();
+    if v.len() >= 2 && v.starts_with('|') && v.ends_with('|') {
+        return v[1..v.len() - 1].trim().to_string();
+    }
+    v.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_info_value_strips_pipe_quotes() {
+        let raw = "(set-info :skolem-substitution-0 |(= before-a__0_8@299 before-a__0_7@272)|)";
+        let (_, value) = parse_set_info(raw).unwrap();
+        assert_eq!(value, "(= before-a__0_8@299 before-a__0_7@272)");
+        assert!(matches!(smt2::Term::parse(&value), Ok(smt2::Term::List(_))));
+    }
 }
