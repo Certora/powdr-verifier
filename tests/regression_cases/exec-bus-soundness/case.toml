@@ -19,6 +19,13 @@ args = [
 timeout = 120
 capture_json = true
 
+[[assert]]
+kind = "exit_ok"
+
+[[assert]]
+kind = "isqf"
+result = "qf"
+
 [[steps]]
 script = "main.py"
 args = ["check", "{work}/rewritten.smt2"]
@@ -27,18 +34,7 @@ capture_json = true
 
 [[assert]]
 kind = "exit_ok"
-step = 0
-
-[[assert]]
-kind = "isqf"
-step = 0
-result = "qf"
-
-[[assert]]
-kind = "exit_ok"
-step = 1
 
 [[assert]]
 kind = "check_result"
-step = 1
 result = "unsat"

@@ -33,7 +33,6 @@ timeout = 300
 
 [[assert]]
 kind = "exit_ok"
-step = 0
 
 [[assert]]
 kind = "json_file_equals"
