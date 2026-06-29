@@ -118,14 +118,20 @@ def _run_with_itimer(seconds: float, fn: Callable[[], _T]) -> tuple[bool, _T | N
         signal.signal(signal.SIGALRM, prev)
 
 
-def _group_tactics(tactics: list[str]) -> list[tuple[str, list[str]]]:
+def _group_tactics(
+    tactics: list[str],
+    *,
+    default_executor: str = "p",
+) -> list[tuple[str, list[str]]]:
     groups: list[tuple[str, list[str]]] = []
     for raw in tactics:
         match _split_tactic(raw).executor:
-            case "" | "p":
+            case "p":
                 executor = "p"
             case "r":
                 executor = "r"
+            case "":
+                executor = default_executor
             case bad:
                 logging.error("ignoring tactic with unknown executor %r: %s", bad, raw)
                 continue
@@ -328,9 +334,12 @@ def simplify_smt_script(
     parent = parent_action or Action("simplify-programmatic")
     resolved = resolve_tactic(tactic, optimization_step)
     tactics = resolved.split(":")
+    default_executor = getattr(ARGS(), "default_executor", "p")
     deadline = time.monotonic() + float(timeout)
     step_index = 0
-    for executor, raw_list in _group_tactics(tactics):
+    for executor, raw_list in _group_tactics(
+        tactics, default_executor=default_executor
+    ):
         match executor:
             case "p":
                 for raw_tactic in raw_list:
@@ -448,6 +457,7 @@ def simplify():
             "inputs": [ARGS().input],
             "outputs": [ARGS().output],
             "tactic": ARGS().tactic,
+            "default_executor": ARGS().default_executor,
         }
         if optimization_step:
             action += {"optimization_step": optimization_step}

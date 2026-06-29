@@ -155,10 +155,21 @@ def _norm(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.strip().splitlines()) + "\n"
 
 
+def _parse_step_json(stdout: str) -> Any | None:
+    for line in reversed(stdout.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
 def _run_step(script: str, args: list[str], *, timeout: int, capture_json: bool) -> Step:
     cmd = ["timeout", f"{timeout}s", str(_SCRIPTS[script]), *args]
     cp = subprocess.run(cmd, cwd=WORKSPACE_DIR, capture_output=True, text=True)
-    js = json.loads(cp.stdout) if capture_json and cp.returncode == 0 and cp.stdout.strip() else None
+    js = _parse_step_json(cp.stdout) if capture_json and cp.returncode == 0 and cp.stdout.strip() else None
     return Step(cp.returncode, cp.stdout, cp.stderr, js)
 
 
@@ -290,13 +301,21 @@ def update_case_dumps(name: str, *, dry_run: bool = False) -> dict[str, str]:
     return out
 
 
-def _params() -> list[pytest.ParameterSet]:
-    tags = {t.strip() for t in os.environ.get("REGRESSION_TAGS", "").split(",") if t.strip()}
-    return [
-        pytest.param(c, id=c.id)
-        for c in discover_cases()
-        if not tags or tags.intersection(c.tags)
-    ]
+def _regression_tags() -> set[str]:
+    return {t.strip() for t in os.environ.get("REGRESSION_TAGS", "").split(",") if t.strip()}
+
+
+def filtered_cases() -> list[Case]:
+    tags = _regression_tags()
+    cases = discover_cases()
+    if not tags:
+        return cases
+    return [c for c in cases if tags.intersection(c.tags)]
+
+
+def _test_func_name(case_name: str) -> str:
+    slug = re.sub(r"[^\w]+", "_", case_name).strip("_")
+    return f"test_{slug}"
 
 
 @pytest.fixture
@@ -304,18 +323,31 @@ def regression_update():
     return os.environ.get("REGRESSION_UPDATE") == "1"
 
 
-@pytest.fixture
-def regression_work(regression_case: Case):
-    work = WORKSPACE_DIR / ".tmp-regression" / regression_case.name
+def _run_regression(case: Case, *, update_goldens: bool) -> None:
+    work = WORKSPACE_DIR / ".tmp-regression" / case.name
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
-    yield work
-    shutil.rmtree(work, ignore_errors=True)
+    try:
+        run_case(case, work, update_goldens=update_goldens)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
-@pytest.mark.parametrize("regression_case", _params())
-def test_regression(regression_case: Case, regression_work, regression_update: bool):
-    if reason := _missing(regression_case):
-        pytest.skip(reason)
-    run_case(regression_case, regression_work, update_goldens=regression_update)
+def _register_case_tests() -> None:
+    for case in filtered_cases():
+        func_name = _test_func_name(case.name)
+
+        def _test(regression_update: bool, _case: Case = case) -> None:
+            if reason := _missing(_case):
+                pytest.skip(reason)
+            _run_regression(_case, update_goldens=regression_update)
+
+        _test.__name__ = func_name
+        _test.__qualname__ = func_name
+        if case.description:
+            _test.__doc__ = case.description
+        globals()[func_name] = _test
+
+
+_register_case_tests()

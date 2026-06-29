@@ -1,0 +1,79 @@
+[case]
+tags = ["dumps", "trace", "eval", "single_loadbu", "pipeline"]
+description = """
+single_loadbu APC dump pipeline: final dump trace must be sat and eval must succeed.
+Full dump chain is committed; only the <5s final-dump trace+eval path is exercised.
+"""
+
+[source]
+dataset = "single_loadbu"
+block = "0"
+powdr_commit = "77897b471b60de979dcb480ed1653032a5df4c5a"
+substitutions = true
+
+[inputs]
+type = "dumps"
+base = "apc_candidate_0_000_unopt.json"
+substitutions = "apc_candidate_0_substitutions.json"
+final = "apc_candidate_0_029.json"
+
+[[steps]]
+script = "main.py"
+args = ["trace", "{final}", "{work}/trace-out.smt2"]
+timeout = 10
+capture_json = true
+
+[[steps]]
+script = "main.py"
+args = [
+  "simplify",
+  "{work}/trace-apc_candidate_0_029.core.smt2",
+  "nnf:skolem:lift:witness:demod:z3-propagate-values:isqf:bounds:demod",
+  "{work}/trace.rewrite.smt2",
+]
+timeout = 10
+capture_json = true
+
+[[steps]]
+script = "main.py"
+args = [
+  "check",
+  "{work}/trace.rewrite.smt2",
+  "--dump-model",
+  "{work}/trace.model",
+]
+timeout = 10
+capture_json = true
+
+[[steps]]
+script = "main.py"
+args = ["eval", "{final}", "{work}/trace.model"]
+timeout = 10
+capture_json = true
+
+[[assert]]
+kind = "exit_ok"
+step = 0
+
+[[assert]]
+kind = "exit_ok"
+step = 1
+
+[[assert]]
+kind = "exit_ok"
+step = 2
+
+[[assert]]
+kind = "check_result"
+step = 2
+result = "sat"
+
+[[assert]]
+kind = "exit_ok"
+step = 3
+
+[[assert]]
+kind = "json_path"
+step = 3
+path = "axioms"
+equals = true

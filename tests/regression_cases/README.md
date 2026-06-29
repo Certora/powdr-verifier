@@ -12,9 +12,9 @@ From `verifier/` with the venv active:
 
 ```bash
 pytest tests/regressions.py
-pytest tests/regressions.py -k nnf-implies
+pytest tests/regressions.py -k test_nnf_implies
 pytest tests/regressions.py --collect-only
-REGRESSION_UPDATE=1 pytest tests/regressions.py -k nnf-implies
+REGRESSION_UPDATE=1 pytest tests/regressions.py -k test_nnf_implies
 REGRESSION_TAGS=smt2 pytest tests/regressions.py
 ```
 
