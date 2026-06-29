@@ -1,0 +1,26 @@
+[case]
+tags = ["demod", "smt2", "changes"]
+description = """
+Demod should fold (mod x p) to 0 when range bounds force x = 0.
+Promoted from test_demod_uses_top_level_bounds_across_asserts.
+"""
+
+[inputs]
+smt = "demod-mod.smt2"
+
+[[steps]]
+script = "main.py"
+args = ["simplify", "{smt}", "demod", "{work}/out.smt2"]
+timeout = 60
+capture_json = true
+
+[[assert]]
+kind = "exit_ok"
+step = 0
+
+[[assert]]
+kind = "pass_stats"
+step = 0
+pass = "demod"
+field = "elim_by_range"
+min = 1

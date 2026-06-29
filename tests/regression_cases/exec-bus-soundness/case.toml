@@ -1,0 +1,44 @@
+[case]
+tags = ["verify", "exec_bus", "pipeline", "check", "smt2", "changes"]
+description = """
+Soundness-style VC (contradiction under p / (=> p q) / not q) must simplify to unsat.
+Materialized SMT stand-in for the exec_bus verify pipeline when APC dumps are not committed.
+"""
+
+[inputs]
+smt = "soundness.smt2"
+
+[[steps]]
+script = "main.py"
+args = [
+  "simplify",
+  "{smt}",
+  "nnf:skolem:lift:witness:z3-propagate-values:isqf:bounds:rewrite:bitwise:mod_inv:demod:domain_probe:pretty",
+  "{work}/rewritten.smt2",
+]
+timeout = 120
+capture_json = true
+
+[[steps]]
+script = "main.py"
+args = ["check", "{work}/rewritten.smt2"]
+timeout = 60
+capture_json = true
+
+[[assert]]
+kind = "exit_ok"
+step = 0
+
+[[assert]]
+kind = "isqf"
+step = 0
+result = "qf"
+
+[[assert]]
+kind = "exit_ok"
+step = 1
+
+[[assert]]
+kind = "check_result"
+step = 1
+result = "unsat"

@@ -1,0 +1,1 @@
+{"constraints":[["f@0","*",["f@0","-",1]]],"bus_interactions":[{"id":1,"mult":"sel@9","args":[]},{"id":3,"mult":1,"args":[]}],"derived_columns":[]}

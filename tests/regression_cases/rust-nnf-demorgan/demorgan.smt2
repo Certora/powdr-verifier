@@ -1,0 +1,5 @@
+(set-logic ALL)
+(declare-fun a () Bool)
+(declare-fun b () Bool)
+(assert (not (and a b)))
+(check-sat)

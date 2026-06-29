@@ -1,0 +1,6 @@
+(set-logic ALL)
+(declare-fun x () Int)
+(assert (<= 0 x))
+(assert (< x 2013265921))
+(assert (= (mod x 2013265921) 0))
+(check-sat)
