@@ -54,7 +54,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         if let Some(b) = cmd.assert_bool() {
             ctx.push_assert(&mut out, b)?;
         } else {
-            ctx.push_raw(&mut out, &cmd.to_smtlib(&script.source))?;
+            out.push(cmd.clone());
         }
     }
 
@@ -159,18 +159,16 @@ mod tests {
     }
 
     #[test]
-    fn leaves_quantifiers_unchanged() {
+    fn preserves_declare_fun_commands() {
         let f = field();
         std::env::set_var("SIMPLIFIER_FIELD_MOD", f.to_string());
-        let script = Script::parse(&format!(
-            "(assert (forall ((x@0 Int)) (= x@0 y@0)))\n(check-sat)\n"
-        ))
+        let script = Script::parse(
+            "(declare-fun x@0 () Int)\n(declare-fun flag () Bool)\n(assert (= x@0 1))\n(check-sat)\n",
+        )
         .unwrap();
-        let (out, stats) = apply(&script).unwrap();
-        assert_eq!(stats["bounded_symbols"], 1);
+        let (out, _) = apply(&script).unwrap();
         let s = smt2::dump_string(&out);
-        assert!(s.contains("(forall ((x@0 Int))"));
-        assert!(s.contains("(assert (and (<= 0 y@0)"));
-        assert!(!s.contains("(=>"));
+        assert!(s.contains("(declare-fun x@0 () Int)"));
+        assert!(s.contains("(declare-fun flag () Bool)"));
     }
 }

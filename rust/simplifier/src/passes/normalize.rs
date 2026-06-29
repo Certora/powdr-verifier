@@ -150,6 +150,17 @@ fn collect_variables(script: &Script, field_mod: Option<i128>) -> Vec<Int> {
             return;
         }
 
+        if n.kind() == AstKind::Var {
+            return;
+        }
+
+        if n.kind() == AstKind::Quantifier {
+            if let Some(body) = smt2::quantifier_body(n) {
+                visit(&body, field_mod, gens, gen_terms, seen);
+            }
+            return;
+        }
+
         if let Some(int_n) = n.as_int() {
             if n.kind() == AstKind::App {
                 let head = smt2::decl_name(&n.decl());

@@ -108,7 +108,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         if let Some(b) = cmd.assert_bool() {
             ctx.push_assert(&mut commands, b)?;
         } else {
-            ctx.push_raw(&mut commands, &cmd.to_smtlib(&script.source))?;
+            commands.push(cmd.clone());
         }
     }
     if !inserted {

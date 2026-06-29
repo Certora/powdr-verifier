@@ -9,7 +9,7 @@ pub mod tactic;
 use std::io::{self, Write};
 use std::time::Instant;
 
-use smt2::Script;
+use smt2::{ensure_declarations_for_asserts, Script};
 
 use crate::passes::{bitwise, bounds, demod, domain_probe, evaluator, isqf, lift, mod_inv, nnf, normalize, pretty, rewrite, skolem, witness, z3};
 use crate::tactic::split_tactic;
@@ -65,7 +65,7 @@ pub fn run_pipeline(
         if let Some(obj) = stats.as_object_mut() {
             obj.insert("running_time".into(), serde_json::json!(running_time));
         }
-        cur = next;
+        cur = ensure_declarations_for_asserts(&next)?;
         steps.push(StepResult {
             pass: step.pass,
             stats,
