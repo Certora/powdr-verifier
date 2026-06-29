@@ -1,0 +1,23 @@
+[case]
+tags = ["isqf", "smt2", "no-change"]
+description = """
+isqf on a quantifier-free script must report qf and leave asserts unchanged.
+"""
+
+[inputs]
+smt = "qf.smt2"
+
+[[steps]]
+script = "main.py"
+args = ["simplify", "{smt}", "isqf", "{work}/out.smt2"]
+timeout = 60
+capture_json = true
+
+[[assert]]
+kind = "exit_ok"
+step = 0
+
+[[assert]]
+kind = "isqf"
+step = 0
+result = "qf"

@@ -1,0 +1,26 @@
+[case]
+tags = ["nnf", "smt2", "changes"]
+description = """
+NNF must rewrite (=> p q) to (or (not p) q).
+Promoted from test_simplify_nnf_script; guards the nnf pass on a minimal script.
+"""
+
+[inputs]
+smt = "implies-pq.smt2"
+
+[[steps]]
+script = "main.py"
+args = ["simplify", "{smt}", "nnf", "{work}/out.smt2"]
+timeout = 60
+capture_json = true
+
+[[assert]]
+kind = "exit_ok"
+step = 0
+
+[[assert]]
+kind = "pass_stats"
+step = 0
+pass = "nnf"
+field = "asserts_changed"
+min = 1

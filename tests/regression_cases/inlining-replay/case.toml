@@ -1,0 +1,41 @@
+[case]
+tags = ["powdr-opt", "dumps", "inlining", "replay"]
+requires = ["powdr"]
+description = """
+powdr-opt inlining replay must match the recorded after-dump on a minimal circuit fixture.
+Promoted from test_orchestrate_powdr_opt_replay_matches_pipeline (inlining case).
+"""
+
+[source]
+dataset = "guest-keccak"
+block = "2106456"
+powdr_commit = "77897b471b60de979dcb480ed1653032a5df4c5a"
+base = "unopt"
+before = "031"
+after = "inlining"
+
+[inputs]
+base = "apc_candidate_2106456_000_unopt.json"
+before = "apc_candidate_2106456_031_low_degree_bus.json"
+after = "apc_candidate_2106456_032_inlining.json"
+
+[[steps]]
+script = "main.py"
+args = [
+  "powdr-opt",
+  "{before}",
+  "inlining",
+  "{work}/replay.json",
+  "--base-dump",
+  "{base}",
+]
+timeout = 300
+
+[[assert]]
+kind = "exit_ok"
+step = 0
+
+[[assert]]
+kind = "json_file_equals"
+actual = "{work}/replay.json"
+expected = "{after}"

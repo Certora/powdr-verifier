@@ -1,0 +1,27 @@
+[case]
+tags = ["nnf", "rust", "smt2", "changes"]
+requires = ["rust-simplifier"]
+description = """
+Rust nnf must apply De Morgan: (not (and a b)) -> (or (not a) (not b)).
+Promoted from nnf.rs demorgan unit test.
+"""
+
+[inputs]
+smt = "demorgan.smt2"
+
+[[steps]]
+script = "main.py"
+args = ["simplify", "{smt}", "nnf", "{work}/out.smt2"]
+timeout = 60
+capture_json = true
+
+[[assert]]
+kind = "exit_ok"
+step = 0
+
+[[assert]]
+kind = "pass_stats"
+step = 0
+pass = "nnf"
+field = "asserts_changed"
+min = 1
