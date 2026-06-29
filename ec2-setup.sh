@@ -18,11 +18,7 @@ sudo apt install -y build-essential m4 pkg-config clang nasm
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 . "$HOME/.cargo/env"
 
-Z3_PREFIX="$HOME/lib/z3-4.16.0"
-export Z3_LIB_DIR="$Z3_PREFIX/bin"
-export Z3_LIBRARY_PATH_OVERRIDE="$Z3_LIB_DIR"
-export Z3_SYS_Z3_HEADER="$Z3_PREFIX/include/z3.h"
-export RUSTFLAGS="-C link-arg=-Wl,-rpath,$Z3_LIB_DIR"
+source verifier/ec2-z3-env.sh
 
 cd verifier/rust
 cargo build --release -p simplifier
