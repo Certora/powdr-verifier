@@ -60,6 +60,14 @@ def __build_parser(skip_subparsers=False):
     parser.add_argument("--cprofile", action="store_true")
     parser.add_argument("--no-typecheck", action="store_true")
     parser.add_argument("--pretty", action="store_true")
+    parser.add_argument(
+        "--default-executor",
+        type=str,
+        choices=["p", "r"],
+        default="p",
+        metavar="EXEC",
+        help="default simplifier backend: p=python, r=rust",
+    )
     parser.add_argument("--stats-run-id", type=str, default=None, metavar="RUN_ID")
     parser.add_argument("--stats-tag", type=str, default=None)
 
@@ -110,13 +118,6 @@ def __build_parser(skip_subparsers=False):
     sub_simplify.add_argument("tactic", type=str)
     sub_simplify.add_argument("output", type=Path)
     sub_simplify.add_argument("--timeout", type=float, default=60.0, metavar="SEC")
-    sub_simplify.add_argument(
-        "--default-executor",
-        type=str,
-        choices=["p", "r"],
-        default="p",
-        metavar="EXEC",
-    )
     sub_simplify.add_argument("--dump-steps", action="store_true")
     sub_simplify.add_argument("--with-model", type=Path)
     sub_simplify.add_argument("--optimization-step", type=str, default=None, metavar="PASS")
