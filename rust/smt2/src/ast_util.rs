@@ -1,0 +1,581 @@
+//! Thin Z3 AST helpers (domain-specific; generic ops use `z3::ast` directly).
+
+use std::collections::HashSet;
+use std::str::FromStr;
+
+use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
+use z3::{Context, FuncDecl, SortKind};
+use z3_sys::*;
+
+pub fn decl_name(decl: &FuncDecl) -> String {
+    decl.name()
+}
+
+pub fn is_int_numeral(ast: &Dynamic) -> bool {
+    ast.kind() == AstKind::Numeral && ast.get_sort().kind() == SortKind::Int
+}
+
+pub fn is_bool_const(ast: &Dynamic) -> bool {
+    ast.as_bool().and_then(|b| b.as_bool()).is_some()
+}
+
+pub fn is_int_const(ast: &Dynamic) -> bool {
+    ast.kind() == AstKind::App
+        && ast.is_const()
+        && ast.get_sort().kind() == SortKind::Int
+        && !is_int_numeral(ast)
+}
+
+pub fn int_const_name(ast: &Dynamic) -> Option<String> {
+    if is_int_const(ast) {
+        Some(decl_name(&ast.decl()))
+    } else {
+        None
+    }
+}
+
+pub fn int_value(e: &Int) -> Option<i128> {
+    if let Some(v) = e.as_i64() {
+        return Some(v as i128);
+    }
+    e.to_string().parse().ok()
+}
+
+pub fn int_value_dyn(ast: &Dynamic) -> Option<i128> {
+    ast.as_int().and_then(|i| int_value(&i))
+}
+
+pub fn parse_int_literal(s: &str) -> Option<i128> {
+    if let Some(hex) = s.strip_prefix("#x") {
+        return u128::from_str_radix(hex, 16).ok().map(|v| v as i128);
+    }
+    if let Some(bin) = s.strip_prefix("#b") {
+        return u128::from_str_radix(bin, 2).ok().map(|v| v as i128);
+    }
+    s.parse::<i128>().ok()
+}
+
+pub fn is_int_literal_string(s: &str) -> bool {
+    if s.starts_with("#x") || s.starts_with("#b") {
+        return s.len() > 2;
+    }
+    let digits = s.strip_prefix('-').unwrap_or(s);
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+}
+
+fn normalized_mod(v: i128, m: i128) -> i128 {
+    ((v % m) + m) % m
+}
+
+pub fn mod_int_literal_string(s: &str, modulus: i128) -> Option<String> {
+    if modulus <= 0 {
+        return None;
+    }
+    if let Some(v) = parse_int_literal(s) {
+        return Some(normalized_mod(v, modulus).to_string());
+    }
+    if !is_int_literal_string(s) {
+        return None;
+    }
+    let neg = s.starts_with('-');
+    let digits = s.strip_prefix('-').unwrap_or(s);
+    let mut rem: i128 = 0;
+    for d in digits.as_bytes() {
+        if !d.is_ascii_digit() {
+            return None;
+        }
+        rem = (rem * 10 + i128::from(*d - b'0')) % modulus;
+    }
+    if neg {
+        rem = normalized_mod(-rem, modulus);
+    } else {
+        rem = normalized_mod(rem, modulus);
+    }
+    Some(rem.to_string())
+}
+
+pub fn strip_prefix(name: &str) -> &str {
+    for prefix in ["before-", "after-"] {
+        if let Some(rest) = name.strip_prefix(prefix) {
+            return rest;
+        }
+    }
+    name
+}
+
+pub fn swap_prefix(name: &str) -> Option<String> {
+    if let Some(rest) = name.strip_prefix("before-") {
+        return Some(format!("after-{rest}"));
+    }
+    if let Some(rest) = name.strip_prefix("after-") {
+        return Some(format!("before-{rest}"));
+    }
+    None
+}
+
+pub fn is_program_variable(name: &str) -> bool {
+    strip_prefix(name).contains('@')
+}
+
+pub fn free_int_symbols(b: &Bool) -> HashSet<String> {
+    let mut out = HashSet::new();
+    collect_free_int_symbols(&Dynamic::from_ast(b), &HashSet::new(), &mut out);
+    out
+}
+
+pub fn scoped_free_int_symbols(ast: &Dynamic, bound: &HashSet<String>) -> HashSet<String> {
+    let mut out = HashSet::new();
+    collect_free_int_symbols(ast, bound, &mut out);
+    out
+}
+
+fn collect_free_int_symbols(ast: &Dynamic, bound: &HashSet<String>, out: &mut HashSet<String>) {
+    match ast.kind() {
+        AstKind::Var => {}
+        AstKind::Quantifier => {
+            let mut next_bound = bound.clone();
+            for name in quantifier_bound_names(ast) {
+                next_bound.insert(name);
+            }
+            if let Some(body) = quantifier_body(ast) {
+                collect_free_int_symbols(&body, &next_bound, out);
+            }
+        }
+        AstKind::App if ast.is_const() => {
+            if ast.get_sort().kind() == SortKind::Int && !is_int_numeral(ast) {
+                let name = decl_name(&ast.decl());
+                if !bound.contains(&name) {
+                    out.insert(name);
+                }
+            }
+        }
+        AstKind::App => {
+            for i in 0..ast.num_children() {
+                if let Some(ch) = ast.nth_child(i) {
+                    collect_free_int_symbols(&ch, bound, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn has_quantifier(b: &Bool) -> bool {
+    has_quantifier_dyn(&Dynamic::from_ast(b))
+}
+
+fn has_quantifier_dyn(ast: &Dynamic) -> bool {
+    if ast.kind() == AstKind::Quantifier {
+        return true;
+    }
+    if ast.kind() == AstKind::App {
+        for i in 0..ast.num_children() {
+            if let Some(ch) = ast.nth_child(i) {
+                if has_quantifier_dyn(&ch) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+pub fn quantifier_body(ast: &Dynamic) -> Option<Dynamic> {
+    if ast.kind() != AstKind::Quantifier {
+        return None;
+    }
+    let ctx = ast.get_ctx();
+    unsafe {
+        let z3 = ctx.get_z3_context();
+        let body = Z3_get_quantifier_body(z3, ast.get_z3_ast())?;
+        Some(Dynamic::wrap(ctx, body))
+    }
+}
+
+pub fn ast_children(ast: &Dynamic) -> Vec<Dynamic> {
+    match ast.kind() {
+        AstKind::Quantifier => quantifier_body(ast).into_iter().collect(),
+        AstKind::App => {
+            let mut out = Vec::new();
+            for i in 0..ast.num_children() {
+                if let Some(c) = ast.nth_child(i) {
+                    out.push(c);
+                }
+            }
+            out
+        }
+        _ => Vec::new(),
+    }
+}
+
+pub fn quantifier_bound_names(ast: &Dynamic) -> Vec<String> {
+    if ast.kind() != AstKind::Quantifier {
+        return Vec::new();
+    }
+    let ctx = ast.get_ctx();
+    unsafe {
+        let z3 = ctx.get_z3_context();
+        let n = Z3_get_quantifier_num_bound(z3, ast.get_z3_ast());
+        let mut out = Vec::with_capacity(n as usize);
+        for i in 0..n {
+            let sym = Z3_get_quantifier_bound_name(z3, ast.get_z3_ast(), i).unwrap();
+            out.push(z3_symbol_to_string(ctx, sym));
+        }
+        out
+    }
+}
+
+pub fn is_forall(ast: &Dynamic) -> bool {
+    quantifier_is_forall(ast)
+}
+
+pub fn is_exists(ast: &Dynamic) -> bool {
+    quantifier_is_exists(ast)
+}
+
+fn quantifier_is_forall(ast: &Dynamic) -> bool {
+    if ast.kind() != AstKind::Quantifier {
+        return false;
+    }
+    unsafe {
+        let z3 = ast.get_ctx().get_z3_context();
+        Z3_is_quantifier_forall(z3, ast.get_z3_ast())
+    }
+}
+
+fn quantifier_is_exists(ast: &Dynamic) -> bool {
+    if ast.kind() != AstKind::Quantifier {
+        return false;
+    }
+    unsafe {
+        let z3 = ast.get_ctx().get_z3_context();
+        !Z3_is_quantifier_forall(z3, ast.get_z3_ast())
+    }
+}
+
+pub fn quantifier_body_bool(ast: &Dynamic) -> Option<Bool> {
+    quantifier_body(ast)?.as_bool()
+}
+
+pub fn rebuild_forall(bounds: &[Int], body: &Bool) -> Bool {
+    use z3::ast::forall_const;
+    let bound_refs: Vec<&dyn Ast> = bounds.iter().map(|i| i as &dyn Ast).collect();
+    forall_const(&bound_refs, &[], body)
+}
+
+pub fn rebuild_exists(bounds: &[Int], body: &Bool) -> Bool {
+    use z3::ast::exists_const;
+    let bound_refs: Vec<&dyn Ast> = bounds.iter().map(|i| i as &dyn Ast).collect();
+    exists_const(&bound_refs, &[], body)
+}
+
+/// Heuristic correction when SMT-LIB binds Bool symbols with the wrong sort.
+pub fn quantifier_bound_sort_is_bool(name: &str, z3_sk: SortKind) -> bool {
+    if z3_sk == SortKind::Bool {
+        return true;
+    }
+    name.contains("memory_is") || name.contains("memory_match")
+}
+
+/// Quantifier bound constants with sorts taken from the Z3 quantifier (Bool or Int).
+pub fn quantifier_bounds(ast: &Dynamic) -> Vec<Dynamic> {
+    if ast.kind() != AstKind::Quantifier {
+        return Vec::new();
+    }
+    let ctx = ast.get_ctx();
+    unsafe {
+        let z3 = ctx.get_z3_context();
+        let n = Z3_get_quantifier_num_bound(z3, ast.get_z3_ast());
+        let mut out = Vec::with_capacity(n as usize);
+        for i in 0..n {
+            let sym = Z3_get_quantifier_bound_name(z3, ast.get_z3_ast(), i).unwrap();
+            let sort = Z3_get_quantifier_bound_sort(z3, ast.get_z3_ast(), i).unwrap();
+            let name = z3_symbol_to_string(ctx, sym);
+            let bound: Dynamic = if quantifier_bound_sort_is_bool(&name, Z3_get_sort_kind(z3, sort)) {
+                Dynamic::from_ast(&Bool::new_const(name.as_str()))
+            } else {
+                Dynamic::from_ast(&Int::new_const(name.as_str()))
+            };
+            out.push(bound);
+        }
+        out
+    }
+}
+
+pub fn rebuild_forall_dyn(bounds: &[Dynamic], body: &Bool) -> Bool {
+    use z3::ast::forall_const;
+    let bound_refs: Vec<&dyn Ast> = bounds.iter().map(|d| d as &dyn Ast).collect();
+    forall_const(&bound_refs, &[], body)
+}
+
+pub fn rebuild_exists_dyn(bounds: &[Dynamic], body: &Bool) -> Bool {
+    use z3::ast::exists_const;
+    let bound_refs: Vec<&dyn Ast> = bounds.iter().map(|d| d as &dyn Ast).collect();
+    exists_const(&bound_refs, &[], body)
+}
+
+pub fn quantifier_bounds_int(ast: &Dynamic) -> Vec<Int> {
+    quantifier_bound_names(ast)
+        .into_iter()
+        .map(|name| Int::new_const(name.as_str()))
+        .collect()
+}
+
+pub fn rebuild_quantifier(is_forall: bool, bounds: &[Int], body: &Bool) -> Bool {
+    if is_forall {
+        rebuild_forall(bounds, body)
+    } else {
+        rebuild_exists(bounds, body)
+    }
+}
+
+pub fn rebuild_quantifier_dyn(is_forall: bool, bounds: &[Dynamic], body: &Bool) -> Bool {
+    if is_forall {
+        rebuild_forall_dyn(bounds, body)
+    } else {
+        rebuild_exists_dyn(bounds, body)
+    }
+}
+
+pub fn unwrap_zero_mod_eq(b: &Bool, field: i128) -> Option<Int> {
+    let ast = Dynamic::from_ast(b);
+    if ast.kind() != AstKind::App {
+        return None;
+    }
+    if decl_name(&ast.decl()) != "=" || ast.num_children() != 2 {
+        return None;
+    }
+    let lhs = ast.nth_child(0)?;
+    let rhs = ast.nth_child(1)?;
+    let inner = if int_value_dyn(&rhs) == Some(0) {
+        lhs
+    } else if int_value_dyn(&lhs) == Some(0) {
+        rhs
+    } else {
+        return None;
+    };
+    unwrap_mod_expr(&inner, field)
+}
+
+fn unwrap_mod_expr(ast: &Dynamic, field: i128) -> Option<Int> {
+    if ast.kind() != AstKind::App {
+        return None;
+    }
+    if decl_name(&ast.decl()) != "mod" || ast.num_children() != 2 {
+        return None;
+    }
+    let modulus = ast.nth_child(1)?;
+    if int_value_dyn(&modulus) != Some(field) {
+        return None;
+    }
+    ast.nth_child(0)?.as_int()
+}
+
+pub fn bool_decl_name(b: &Bool) -> Option<String> {
+    let ast = Dynamic::from_ast(b);
+    if ast.kind() == AstKind::App {
+        Some(decl_name(&ast.decl()))
+    } else {
+        None
+    }
+}
+
+pub fn bool_children(b: &Bool) -> Vec<Bool> {
+    Dynamic::from_ast(b)
+        .children()
+        .into_iter()
+        .filter_map(|c| c.as_bool())
+        .collect()
+}
+
+pub fn flatten_and(children: Vec<Bool>) -> Bool {
+    let mut flat = Vec::new();
+    for c in children {
+        if let Some(parts) = and_parts(&c) {
+            flat.extend(parts);
+        } else {
+            flat.push(c);
+        }
+    }
+    match flat.len() {
+        0 => Bool::from_bool(true),
+        1 => flat.into_iter().next().unwrap(),
+        _ => Bool::and(&flat.iter().collect::<Vec<_>>()),
+    }
+}
+
+pub fn flatten_or(children: Vec<Bool>) -> Bool {
+    let mut flat = Vec::new();
+    for c in children {
+        if let Some(parts) = or_parts(&c) {
+            flat.extend(parts);
+        } else {
+            flat.push(c);
+        }
+    }
+    match flat.len() {
+        0 => Bool::from_bool(false),
+        1 => flat.into_iter().next().unwrap(),
+        _ => Bool::or(&flat.iter().collect::<Vec<_>>()),
+    }
+}
+
+pub fn and_parts(b: &Bool) -> Option<Vec<Bool>> {
+    let ast = Dynamic::from_ast(b);
+    if ast.kind() != AstKind::App || decl_name(&ast.decl()) != "and" {
+        return None;
+    }
+    Some(bool_children(b))
+}
+
+pub fn or_parts(b: &Bool) -> Option<Vec<Bool>> {
+    let ast = Dynamic::from_ast(b);
+    if ast.kind() != AstKind::App || decl_name(&ast.decl()) != "or" {
+        return None;
+    }
+    Some(bool_children(b))
+}
+
+pub fn is_implies(b: &Bool) -> Option<(Bool, Bool)> {
+    let ast = Dynamic::from_ast(b);
+    if ast.kind() != AstKind::App {
+        return None;
+    }
+    let name = decl_name(&ast.decl());
+    if name != "=>" && name != "implies" {
+        return None;
+    }
+    if ast.num_children() != 2 {
+        return None;
+    }
+    let a = ast.nth_child(0)?.as_bool()?;
+    let c = ast.nth_child(1)?.as_bool()?;
+    Some((a, c))
+}
+
+pub fn is_not(b: &Bool) -> Option<Bool> {
+    let ast = Dynamic::from_ast(b);
+    if ast.kind() != AstKind::App || decl_name(&ast.decl()) != "not" || ast.num_children() != 1 {
+        return None;
+    }
+    ast.nth_child(0)?.as_bool()
+}
+
+pub fn is_ite(b: &Bool) -> Option<(Bool, Bool, Bool)> {
+    let ast = Dynamic::from_ast(b);
+    if ast.kind() != AstKind::App || decl_name(&ast.decl()) != "ite" || ast.num_children() != 3 {
+        return None;
+    }
+    let cond = ast.nth_child(0)?.as_bool()?;
+    let then_b = ast.nth_child(1)?.as_bool()?;
+    let else_b = ast.nth_child(2)?.as_bool()?;
+    Some((cond, then_b, else_b))
+}
+
+pub fn int_from_i128(v: i128) -> Int {
+    if v >= i64::MIN as i128 && v <= i64::MAX as i128 {
+        Int::from_i64(v as i64)
+    } else {
+        Int::from_str(&v.to_string()).expect("invalid int literal")
+    }
+}
+
+pub fn map_bool_children(b: &Bool, f: &mut impl FnMut(&Bool) -> Bool) -> Bool {
+    let ast = Dynamic::from_ast(b);
+    if ast.kind() == AstKind::Quantifier {
+        let bounds = quantifier_bounds(&ast);
+        let is_forall = quantifier_is_forall(&ast);
+        let body = quantifier_body_bool(&ast).expect("quantifier body");
+        let new_body = f(&body);
+        return rebuild_quantifier_dyn(is_forall, &bounds, &new_body);
+    }
+    if let Some(name) = bool_decl_name(b) {
+        match name.as_str() {
+            "and" => {
+                let args: Vec<Bool> = bool_children(b).into_iter().map(|c| f(&c)).collect();
+                return flatten_and(args);
+            }
+            "or" => {
+                let args: Vec<Bool> = bool_children(b).into_iter().map(|c| f(&c)).collect();
+                return flatten_or(args);
+            }
+            "not" if ast.num_children() == 1 => {
+                if let Some(inner) = is_not(b) {
+                    return f(&inner).not();
+                }
+            }
+            "=>" | "implies" if ast.num_children() == 2 => {
+                if let Some((a, c)) = is_implies(b) {
+                    let na = f(&a);
+                    let nc = f(&c);
+                    return na.implies(&nc);
+                }
+            }
+            "ite" if ast.num_children() == 3 => {
+                if let Some((cond, then_b, else_b)) = is_ite(b) {
+                    let nc = f(&cond);
+                    let nt = f(&then_b);
+                    let ne = f(&else_b);
+                    return nc.ite(&nt, &ne);
+                }
+            }
+            _ => {}
+        }
+    }
+    b.clone()
+}
+
+pub fn rebuild_app(decl: &FuncDecl, args: &[&dyn Ast]) -> Dynamic {
+    decl.apply(args)
+}
+
+unsafe fn z3_symbol_to_string(ctx: &Context, sym: Z3_symbol) -> String {
+    let z3 = ctx.get_z3_context();
+    let ptr = Z3_get_symbol_string(z3, sym);
+    if !ptr.is_null() {
+        return std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned();
+    }
+    Z3_get_symbol_int(z3, sym).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ParseCtx;
+
+    fn has_z3() -> bool {
+        std::process::Command::new("pkg-config")
+            .args(["--exists", "z3"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn free_int_symbols_basic() {
+        if !has_z3() {
+            return;
+        }
+        let mut ctx = ParseCtx::new();
+        ctx.ingest_command("(declare-fun x () Int)").unwrap();
+        let b = ctx
+            .ingest_command("(assert (= x 1))")
+            .unwrap()
+            .unwrap();
+        let free = free_int_symbols(&b);
+        assert_eq!(free, HashSet::from(["x".to_string()]));
+    }
+
+    #[test]
+    fn has_quantifier_detects_forall() {
+        if !has_z3() {
+            return;
+        }
+        let mut ctx = ParseCtx::new();
+        let b = ctx
+            .ingest_command("(assert (forall ((x Int)) (= x 0)))")
+            .unwrap()
+            .unwrap();
+        assert!(has_quantifier(&b));
+    }
+}
