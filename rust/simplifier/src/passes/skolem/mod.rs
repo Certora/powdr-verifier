@@ -1,19 +1,22 @@
+pub(crate) mod ast_build;
 mod derived;
 mod isolate;
 mod map;
 mod names;
 mod rules;
-pub(crate) mod term_util;
 pub(crate) mod types;
 pub(crate) mod utils;
 mod witness;
 
 use std::collections::{HashMap, HashSet};
 
-use smt2::{map_asserts, Script, Term};
+use smt2::ast_util::{is_forall, or_parts, rebuild_quantifier_dyn};
+use smt2::{map_asserts, map_bool_children, Script};
+use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
+use crate::expr_util::AssertBuildCtx;
+use self::ast_build::field_mod;
 use self::map::SkolemMap;
-use self::term_util::{field_mod, list};
 use self::types::SortKind;
 use self::utils::{
     collect_declared_symbols, collect_symbol_sorts, declare_fun_block, load_skolem_setinfos,
@@ -36,8 +39,17 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut qvar_sets: Vec<HashSet<String>> = Vec::new();
 
     let out = map_asserts(script, |body| {
-        let term = Term::parse(body)?;
-        Ok(walk_assert(&term, &declared, &sorts, &pins, &candidates, &decl_block, field, &mut applied, &mut qvar_sets).to_string())
+        Ok(walk_assert(
+            body,
+            &declared,
+            &sorts,
+            &pins,
+            &candidates,
+            &decl_block,
+            field,
+            &mut applied,
+            &mut qvar_sets,
+        ))
     })?;
 
     let all_qvars: HashSet<String> = qvar_sets.iter().flatten().cloned().collect();
@@ -50,21 +62,27 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         applied.insert("rules-free".to_string(), free_pins.len());
     }
 
-    let mut commands = out.commands;
+    let mut commands = out.commands.clone();
     if !free_pins.is_empty() {
-        let insert_idx = commands
+        let insert_idx = out
+            .commands
             .iter()
             .position(|c| c.name() == "check-sat")
-            .unwrap_or(commands.len());
-        let mut new_cmds = Vec::with_capacity(commands.len() + free_pins.len());
-        new_cmds.extend(commands[..insert_idx].iter().cloned());
+            .unwrap_or(out.commands.len());
+        let mut new_cmds = Vec::with_capacity(out.commands.len() + free_pins.len());
+        let mut build = AssertBuildCtx::from_script(&out)?;
+        new_cmds.extend(out.commands[..insert_idx].iter().cloned());
         for (var, expr) in free_pins {
-            new_cmds.push(smt2::parse::Command::new(format!(
-                "(assert (= {var} {}))",
-                expr.to_string()
-            )));
+            let eq = if let Some(i) = expr.as_int() {
+                Int::new_const(var.as_str()).eq(&i)
+            } else if let Some(b) = expr.as_bool() {
+                Bool::new_const(var.as_str()).eq(&b)
+            } else {
+                continue;
+            };
+            build.push_assert(&mut new_cmds, &eq)?;
         }
-        new_cmds.extend(commands[insert_idx..].iter().cloned());
+        new_cmds.extend(out.commands[insert_idx..].iter().cloned());
         commands = new_cmds;
     }
 
@@ -72,10 +90,10 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         if cmd.name() != "set-info" {
             return true;
         }
-        !cmd.raw.contains(SKOLEM_SETINFO_PREFIX)
+        !cmd.to_smtlib(&out.source).contains(SKOLEM_SETINFO_PREFIX)
     });
 
-    let out = smt2::Script::from_commands(commands);
+    let out = Script::from_commands(&out.source, commands);
 
     let stats = serde_json::json!({
         "pins_by_source": applied,
@@ -85,8 +103,8 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
 }
 
 fn walk_assert(
-    term: &Term,
-    declared: &HashMap<String, Term>,
+    term: &Bool,
+    declared: &HashMap<String, String>,
     sorts: &HashMap<String, SortKind>,
     pins: &[types::SkolemPin],
     candidates: &[witness::WitnessCandidate],
@@ -94,28 +112,85 @@ fn walk_assert(
     field: Option<i128>,
     applied: &mut HashMap<String, usize>,
     qvar_sets: &mut Vec<HashSet<String>>,
-) -> Term {
-    match term {
-        Term::List(items) if matches!(items.first(), Some(Term::Atom(s)) if s == "forall") => {
-            walk_forall(items, declared, sorts, pins, candidates, decl_block, field, applied, qvar_sets)
+) -> Bool {
+    walk_assert_dyn(
+        &Dynamic::from_ast(term),
+        declared,
+        sorts,
+        pins,
+        candidates,
+        decl_block,
+        field,
+        applied,
+        qvar_sets,
+    )
+    .as_bool()
+    .unwrap_or_else(|| term.clone())
+}
+
+fn walk_assert_dyn(
+    term: &Dynamic,
+    declared: &HashMap<String, String>,
+    sorts: &HashMap<String, SortKind>,
+    pins: &[types::SkolemPin],
+    candidates: &[witness::WitnessCandidate],
+    decl_block: &str,
+    field: Option<i128>,
+    applied: &mut HashMap<String, usize>,
+    qvar_sets: &mut Vec<HashSet<String>>,
+) -> Dynamic {
+    if term.kind() == AstKind::Quantifier {
+        if is_forall(term) {
+            return Dynamic::from_ast(&walk_forall(
+                term,
+                declared,
+                sorts,
+                pins,
+                candidates,
+                decl_block,
+                field,
+                applied,
+                qvar_sets,
+            ));
         }
-        Term::List(items) => {
-            let head = items[0].clone();
-            Term::List(
-                std::iter::once(head)
-                    .chain(items[1..].iter().map(|a| {
-                        walk_assert(a, declared, sorts, pins, candidates, decl_block, field, applied, qvar_sets)
-                    }))
-                    .collect(),
-            )
-        }
-        _ => term.clone(),
+        let bounds = smt2::quantifier_bounds(term);
+        let Some(body) = smt2::quantifier_body_bool(term) else {
+            return term.clone();
+        };
+        let body = walk_assert(
+            &body,
+            declared,
+            sorts,
+            pins,
+            candidates,
+            decl_block,
+            field,
+            applied,
+            qvar_sets,
+        );
+        return Dynamic::from_ast(&rebuild_quantifier_dyn(false, &bounds, &body));
     }
+    if let Some(b) = term.as_bool() {
+        return Dynamic::from_ast(&map_bool_children(&b, &mut |child| {
+            walk_assert(
+                child,
+                declared,
+                sorts,
+                pins,
+                candidates,
+                decl_block,
+                field,
+                applied,
+                qvar_sets,
+            )
+        }));
+    }
+    term.clone()
 }
 
 fn walk_forall(
-    items: &[Term],
-    declared: &HashMap<String, Term>,
+    term: &Dynamic,
+    declared: &HashMap<String, String>,
     sorts: &HashMap<String, SortKind>,
     pins: &[types::SkolemPin],
     candidates: &[witness::WitnessCandidate],
@@ -123,9 +198,9 @@ fn walk_forall(
     field: Option<i128>,
     applied: &mut HashMap<String, usize>,
     qvar_sets: &mut Vec<HashSet<String>>,
-) -> Term {
-    let Some((qvars, body)) = parse_forall(&Term::List(items.to_vec())) else {
-        return Term::List(items.to_vec());
+) -> Bool {
+    let Some((qvars, bounds, body)) = parse_forall(term) else {
+        return term.as_bool().unwrap_or_else(|| Bool::from_bool(true));
     };
     qvar_sets.push(qvars.iter().map(|(n, _)| n.clone()).collect());
 
@@ -143,22 +218,19 @@ fn walk_forall(
 
     let disjuncts = skolem.emit_disjuncts();
     if disjuncts.is_empty() {
-        return Term::List(items.to_vec());
+        return term.as_bool().unwrap_or_else(|| Bool::from_bool(true));
     }
 
-    let new_body = if let Term::List(bitems) = &body {
-        if matches!(bitems.first(), Some(Term::Atom(s)) if s == "or") {
-            let mut args = bitems[1..].to_vec();
-            args.extend(disjuncts);
-            list("or", args)
-        } else {
-            list("or", std::iter::once(body.clone()).chain(disjuncts).collect())
-        }
+    let new_body = if let Some(mut args) = or_parts(&body) {
+        args.extend(disjuncts);
+        Bool::or(&args.iter().collect::<Vec<_>>())
     } else {
-        list("or", std::iter::once(body.clone()).chain(disjuncts).collect())
+        let mut args = vec![body];
+        args.extend(disjuncts);
+        Bool::or(&args.iter().collect::<Vec<_>>())
     };
 
-    Term::List(vec![items[0].clone(), items[1].clone(), new_body])
+    rebuild_quantifier_dyn(true, &bounds, &new_body)
 }
 
 #[cfg(test)]

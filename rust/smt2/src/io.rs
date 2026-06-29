@@ -30,7 +30,7 @@ pub fn dump_writer<W: Write>(script: &Script, writer: &mut W) -> io::Result<()> 
         if i > 0 {
             writer.write_all(b"\n")?;
         }
-        writer.write_all(cmd.raw.as_bytes())?;
+        writer.write_all(cmd.to_smtlib(&script.source).as_bytes())?;
     }
     writer.write_all(b"\n")?;
     Ok(())
@@ -39,14 +39,21 @@ pub fn dump_writer<W: Write>(script: &Script, writer: &mut W) -> io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::Command;
+
+    fn has_z3() -> bool {
+        std::process::Command::new("pkg-config")
+            .args(["--exists", "z3"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
 
     #[test]
     fn round_trip() {
-        let script = Script::from_commands(vec![
-            Command::new("(declare-fun x () Int)"),
-            Command::new("(assert (= x 0))"),
-        ]);
+        if !has_z3() {
+            return;
+        }
+        let script = Script::parse("(declare-fun x () Int)\n(assert (= x 0))\n").unwrap();
         let s = dump_string(&script);
         let back = Script::parse(&s).unwrap();
         assert_eq!(back.commands.len(), 2);

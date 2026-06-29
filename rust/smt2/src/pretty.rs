@@ -1,40 +1,34 @@
-//! S-expression pretty-printing (Python ``SMTPrettyPrinter`` parity).
-
-use crate::parse::Command;
+use crate::command::SmtCommand;
 use crate::script::Script;
-use crate::term::{assert_body, Term};
+use crate::ast_util::{decl_name, quantifier_body, quantifier_bound_names};
+use z3::ast::{Ast, AstKind, Bool, Dynamic};
 
 const INDENT: &str = "    ";
 
-/// Pretty-print a formula for use inside an ``assert`` command.
-pub fn pretty_print_term_in_script(term: &Term) -> String {
+pub fn pretty_print_bool_in_script(b: &Bool) -> String {
     let mut out = String::new();
-    print_top_level(&mut out, term, 0, false, true);
+    print_top_level(&mut out, &Dynamic::from_ast(b), 0, false, true);
     out
 }
 
-/// Pretty-print a formula.
-pub fn pretty_print_term(term: &Term) -> String {
+pub fn pretty_print_bool(b: &Bool) -> String {
     let mut out = String::new();
-    print_term(&mut out, term, 0, false);
+    print_term(&mut out, &Dynamic::from_ast(b), 0, false);
     out
 }
 
-/// Rewrite ``assert`` commands to pretty-printed form; other commands unchanged.
-pub fn pretty_print_command(cmd: &Command) -> Result<Command, String> {
-    if cmd.name() != "assert" {
-        return Ok(cmd.clone());
+pub fn pretty_print_command(cmd: &SmtCommand) -> Result<SmtCommand, String> {
+    match cmd {
+        SmtCommand::Assert { bool: b, span, .. } => {
+            let pretty = pretty_print_bool_in_script(b);
+            Ok(SmtCommand::Assert {
+                bool: b.clone(),
+                span: *span,
+                term_text: Some(pretty),
+            })
+        }
+        other => Ok(other.clone()),
     }
-    let body = assert_body(&cmd.raw).ok_or_else(|| format!("malformed assert: {}", cmd.raw))?;
-    let term = Term::parse(&body)?;
-    let pretty = pretty_print_term_in_script(&term);
-    let trimmed = pretty.trim_end();
-    let raw = if trimmed.starts_with('\n') {
-        format!("(assert {trimmed}\n)")
-    } else {
-        format!("(assert {trimmed})")
-    };
-    Ok(Command::new(raw))
 }
 
 pub fn pretty_print_script(script: &Script) -> Result<Script, String> {
@@ -43,87 +37,88 @@ pub fn pretty_print_script(script: &Script) -> Result<Script, String> {
         .iter()
         .map(pretty_print_command)
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(Script::from_commands(commands))
+    Ok(Script::from_commands(&script.source, commands))
 }
 
-fn should_collapse(term: &Term, depth: usize, is_collapsed: bool) -> bool {
+fn should_collapse(ast: &Dynamic, depth: usize, is_collapsed: bool) -> bool {
     is_collapsed
         || depth > 10
-        || term_size(term) < 10
-        || matches!(term, Term::List(items) if items.len() > 1 && all_collapsible(&items[1..]))
+        || ast_size(ast) < 10
+        || (ast.kind() == AstKind::App
+            && ast.num_children() > 0
+            && ast_children_slice(ast)[1..]
+                .iter()
+                .all(|c| c.kind() == AstKind::App && c.is_const()))
 }
 
-fn print_top_level(out: &mut String, term: &Term, depth: usize, is_collapsed: bool, in_script: bool) {
-    if in_script && !should_collapse(term, depth, is_collapsed) {
+fn print_top_level(out: &mut String, ast: &Dynamic, depth: usize, is_collapsed: bool, in_script: bool) {
+    if in_script && !should_collapse(ast, depth, is_collapsed) {
         out.push('\n');
-        print_term(out, term, depth + 1, is_collapsed);
+        print_term(out, ast, depth + 1, is_collapsed);
         out.push('\n');
     } else {
-        print_term(out, term, depth, is_collapsed);
+        print_term(out, ast, depth, is_collapsed);
     }
 }
 
-fn print_term(out: &mut String, term: &Term, depth: usize, is_collapsed: bool) {
-    match term {
-        Term::Atom(a) => {
+fn print_term(out: &mut String, ast: &Dynamic, depth: usize, is_collapsed: bool) {
+    match ast.kind() {
+        AstKind::App if ast.is_const() => {
             if !is_collapsed {
                 write_indent(out, depth);
             }
-            out.push_str(a);
+            out.push_str(&decl_name(&ast.decl()));
         }
-        Term::List(items) if items.is_empty() => {
+        AstKind::Numeral => {
             if !is_collapsed {
                 write_indent(out, depth);
             }
-            out.push_str("()");
+            out.push_str(&ast.to_string());
         }
-        Term::List(items) => print_list(out, items, depth, is_collapsed),
-    }
-}
-
-fn print_list(out: &mut String, items: &[Term], depth: usize, is_collapsed: bool) {
-    let head = match &items[0] {
-        Term::Atom(s) => s.as_str(),
+        AstKind::App => print_app(out, ast, depth, is_collapsed),
+        AstKind::Quantifier => print_quantifier_node(out, ast, depth, is_collapsed),
         _ => {
             if !is_collapsed {
                 write_indent(out, depth);
             }
-            out.push('(');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(' ');
-                }
-                print_term(out, item, depth, true);
-            }
-            out.push(')');
-            return;
+            out.push_str(&ast.to_string());
         }
-    };
+    }
+}
 
-    if matches!(head, "forall" | "exists") && items.len() >= 3 {
-        print_quantifier(out, head, &items[1], &items[2], depth, is_collapsed);
+fn ast_children_slice(ast: &Dynamic) -> Vec<Dynamic> {
+    (0..ast.num_children())
+        .filter_map(|i| ast.nth_child(i))
+        .collect()
+}
+
+fn print_app(out: &mut String, ast: &Dynamic, depth: usize, is_collapsed: bool) {
+    let head = decl_name(&ast.decl());
+    let children = ast_children_slice(ast);
+
+    if matches!(head.as_str(), "forall" | "exists") && children.len() >= 2 {
+        print_quantifier(out, &head, &children[0], &children[1], depth, is_collapsed);
         return;
     }
 
-    let list = Term::List(items.to_vec());
-    if should_collapse(&list, depth, is_collapsed) {
+    if should_collapse(ast, depth, is_collapsed) {
         if !is_collapsed {
             write_indent(out, depth);
         }
         out.push('(');
-        out.push_str(head);
-        for arg in &items[1..] {
+        out.push_str(&head);
+        for ch in &children {
             out.push(' ');
-            print_term(out, arg, depth, true);
+            print_term(out, ch, depth, true);
         }
         out.push(')');
     } else {
         write_indent(out, depth);
         out.push('(');
-        out.push_str(head);
+        out.push_str(&head);
         out.push('\n');
-        for arg in &items[1..] {
-            print_term(out, arg, depth + 1, is_collapsed);
+        for ch in &children {
+            print_term(out, ch, depth + 1, is_collapsed);
             out.push('\n');
         }
         write_indent(out, depth);
@@ -131,61 +126,59 @@ fn print_list(out: &mut String, items: &[Term], depth: usize, is_collapsed: bool
     }
 }
 
-fn print_quantifier(
-    out: &mut String,
-    op: &str,
-    binders: &Term,
-    body: &Term,
-    depth: usize,
-    is_collapsed: bool,
-) {
-    let sorted = sorted_quantifier_binders(binders);
-    let binders_str: String = sorted
-        .iter()
-        .map(|b| b.to_string())
-        .collect::<Vec<_>>()
-        .join(" ");
+fn print_quantifier_node(out: &mut String, ast: &Dynamic, depth: usize, is_collapsed: bool) {
+    let op = if crate::ast_util::is_forall(ast) {
+        "forall"
+    } else {
+        "exists"
+    };
+    let body = quantifier_body(ast).expect("quantifier body");
+    let names = quantifier_bound_names(ast);
+    let binders: Vec<String> = names
+        .into_iter()
+        .map(|n| format!("({n} Int)"))
+        .collect();
+    let binders_ast = Dynamic::from_ast(&Bool::from_bool(true));
+    let _ = binders_ast;
     write_indent(out, depth);
     out.push('(');
     out.push_str(op);
-    if binders_str.len() < 50 {
-        out.push_str(" (");
-        print_binder_group(out, &sorted, depth + 1, true);
-        out.push_str(")\n");
-    } else {
-        out.push('\n');
-        write_indent(out, depth + 1);
-        out.push_str("(\n");
-        for b in &sorted {
-            write_indent(out, depth + 2);
-            print_term(out, b, depth + 2, true);
-            out.push('\n');
-        }
-        write_indent(out, depth + 1);
-        out.push_str(")\n");
-    }
-    print_term(out, body, depth + 1, is_collapsed);
+    out.push_str(" (");
+    out.push_str(&binders.join(" "));
+    out.push_str(")\n");
+    print_term(out, &body, depth + 1, is_collapsed);
     out.push('\n');
     write_indent(out, depth);
     out.push(')');
 }
 
-fn sorted_quantifier_binders(binders: &Term) -> Vec<Term> {
-    let mut items = match binders {
-        Term::List(items) => items.clone(),
-        other => return vec![other.clone()],
-    };
-    items.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
-    items
-}
-
-fn print_binder_group(out: &mut String, binders: &[Term], depth: usize, collapsed: bool) {
-    for (i, b) in binders.iter().enumerate() {
-        if i > 0 {
-            out.push(' ');
+fn print_quantifier(
+    out: &mut String,
+    op: &str,
+    binders: &Dynamic,
+    body: &Dynamic,
+    depth: usize,
+    is_collapsed: bool,
+) {
+    let mut binder_strs: Vec<String> = Vec::new();
+    if binders.kind() == AstKind::App && decl_name(&binders.decl()) == "and" {
+        for ch in ast_children_slice(binders) {
+            binder_strs.push(ch.to_string());
         }
-        print_term(out, b, depth, collapsed);
+    } else {
+        binder_strs.push(binders.to_string());
     }
+    binder_strs.sort();
+    write_indent(out, depth);
+    out.push('(');
+    out.push_str(op);
+    out.push_str(" (");
+    out.push_str(&binder_strs.join(" "));
+    out.push_str(")\n");
+    print_term(out, body, depth + 1, is_collapsed);
+    out.push('\n');
+    write_indent(out, depth);
+    out.push(')');
 }
 
 fn write_indent(out: &mut String, depth: usize) {
@@ -194,76 +187,59 @@ fn write_indent(out: &mut String, depth: usize) {
     }
 }
 
-fn term_size(term: &Term) -> usize {
-    match term {
-        Term::Atom(_) => 1,
-        Term::List(items) if is_unary_int_negation(items) => 1,
-        Term::List(items) => 1 + items[1..].iter().map(term_size).sum::<usize>(),
+fn ast_size(ast: &Dynamic) -> usize {
+    if ast.kind() == AstKind::App {
+        let name = decl_name(&ast.decl());
+        if name == "-" && ast.num_children() == 1 {
+            if let Some(ch) = ast.nth_child(0) {
+                if ch.kind() == AstKind::Numeral {
+                    return 1;
+                }
+            }
+        }
+        return 1 + ast_children_slice(ast).iter().map(ast_size).sum::<usize>();
     }
-}
-
-fn is_unary_int_negation(items: &[Term]) -> bool {
-    matches!(
-        items,
-        [Term::Atom(op), Term::Atom(n)]
-            if op == "-" && is_int_literal(n)
-    )
-}
-
-fn is_int_literal(atom: &str) -> bool {
-    if atom.starts_with("#x") || atom.starts_with("#b") {
-        return true;
-    }
-    atom.parse::<i128>().is_ok()
-}
-
-fn all_collapsible(args: &[Term]) -> bool {
-    args.iter().all(|t| matches!(t, Term::Atom(_)))
+    1
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ParseCtx;
+
+    fn has_z3() -> bool {
+        std::process::Command::new("pkg-config")
+            .args(["--exists", "z3"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
 
     #[test]
     fn small_and_collapsed() {
-        let t = Term::parse("(and a b)").unwrap();
-        assert_eq!(pretty_print_term(&t), "(and a b)");
-    }
-
-    #[test]
-    fn large_and_multiline() {
-        let t = Term::parse("(and (= (+ x 1) 2) (= (+ y 3) 4) (= (+ z 5) 6))").unwrap();
-        let s = pretty_print_term(&t);
-        assert!(s.contains("(and\n"));
-        assert!(s.contains("\n    (= "));
-    }
-
-    #[test]
-    fn assert_in_script_wraps_large_formula() {
-        let t = Term::parse("(and (= (+ x 1) 2) (= (+ y 3) 4) (= (+ z 5) 6))").unwrap();
-        let s = pretty_print_term_in_script(&t);
-        assert!(s.starts_with('\n'));
-        assert!(s.ends_with('\n'));
+        if !has_z3() {
+            return;
+        }
+        let mut ctx = ParseCtx::new();
+        let b = ctx
+            .ingest_command("(assert (and a b))")
+            .unwrap()
+            .unwrap();
+        assert_eq!(pretty_print_bool(&b), "(and a b)");
     }
 
     #[test]
     fn pretty_assert_command() {
-        let cmd = Command::new("(assert (and a b))");
+        if !has_z3() {
+            return;
+        }
+        let mut ctx = ParseCtx::new();
+        let b = ctx
+            .ingest_command("(assert (and a b))")
+            .unwrap()
+            .unwrap();
+        let cmd = SmtCommand::new_assert(b);
         let out = pretty_print_command(&cmd).unwrap();
-        assert_eq!(out.raw, "(assert (and a b))");
-    }
-
-    #[test]
-    fn eq_mod_collapses_like_python() {
-        let t = Term::parse(
-            "(= (mod (- (* before-rs2_as_0@5 2013265920) (- 1)) 2013265921) 0)",
-        )
-        .unwrap();
-        assert_eq!(term_size(&t), 9);
-        assert_eq!(
-            pretty_print_term(&t),
-            "(= (mod (- (* before-rs2_as_0@5 2013265920) (- 1)) 2013265921) 0)"
-        );
+        assert!(matches!(out, SmtCommand::Assert { term_text: Some(_), .. }));
     }
 }

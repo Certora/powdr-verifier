@@ -2,21 +2,21 @@
 
 use std::collections::{HashMap, HashSet};
 
-use smt2::{Script, Term};
+use smt2::ast_util::int_from_i128;
+use smt2::{iter_nodes_dyn, symbol_name_dyn, Script};
+use z3::ast::{Bool, Dynamic, Int};
 
-use super::term_util::{atom, iter_nodes, list, strip_prefix, swap_prefix, wrap_mod_expr};
+use smt2::{strip_prefix, swap_prefix};
 
 pub fn contribute_free(
     script: &Script,
     qvars: &HashSet<String>,
     field: i128,
-) -> Vec<(String, Term)> {
+) -> Vec<(String, Dynamic)> {
     let declared = collect_declared(script);
     let free_diff_vals: Vec<String> = declared
-        .keys()
-        .filter(|name| {
-            strip_prefix(name).starts_with("diff_val") && !qvars.contains(*name)
-        })
+        .iter()
+        .filter(|name| strip_prefix(name).starts_with("diff_val") && !qvars.contains(*name))
         .cloned()
         .collect();
     if free_diff_vals.is_empty() {
@@ -73,30 +73,22 @@ struct LimbMatch {
     cmp: String,
 }
 
-fn collect_declared(script: &Script) -> HashMap<String, Term> {
-    let mut out = HashMap::new();
+fn collect_declared(script: &Script) -> HashSet<String> {
+    let mut out = HashSet::new();
     for cmd in &script.commands {
-        if cmd.name() != "declare-fun" {
-            continue;
-        }
-        if let Some(name) = super::utils::declare_fun_name(&cmd.raw) {
-            out.insert(name.clone(), Term::Atom(name));
+        if let Some(name) = super::utils::declare_fun_name(cmd, &script.source) {
+            out.insert(name);
         }
     }
     out
 }
 
-fn find_forall_body(script: &Script) -> Option<Term> {
+fn find_forall_body(script: &Script) -> Option<Bool> {
     for cmd in &script.commands {
-        if cmd.name() != "assert" {
-            continue;
-        }
-        if let Some(body) = smt2::term::assert_body(&cmd.raw) {
-            if let Ok(term) = Term::parse(&body) {
-                for node in iter_nodes(&term) {
-                    if let Some((_, b)) = super::utils::parse_forall(&node) {
-                        return Some(b);
-                    }
+        if let Some(body) = cmd.assert_bool() {
+            for node in iter_nodes_dyn(&Dynamic::from_ast(body)) {
+                if let Some((_, _, b)) = super::utils::parse_forall(&node) {
+                    return Some(b);
                 }
             }
         }
@@ -104,15 +96,15 @@ fn find_forall_body(script: &Script) -> Option<Term> {
     None
 }
 
-fn swap_sym(sym: &str, declared: &HashMap<String, Term>) -> String {
+fn swap_sym(sym: &str, declared: &HashSet<String>) -> String {
     swap_prefix(sym)
-        .filter(|s| declared.contains_key(s))
+        .filter(|s| declared.contains(s))
         .unwrap_or_else(|| sym.to_string())
 }
 
 fn swap_matches(
     matches: &HashMap<u32, LimbMatch>,
-    declared: &HashMap<String, Term>,
+    declared: &HashSet<String>,
 ) -> HashMap<u32, LimbMatch> {
     matches
         .iter()
@@ -131,7 +123,7 @@ fn swap_matches(
 }
 
 fn find_and_build_witnesses(
-    body: &Term,
+    body: &Bool,
     diff_val_vars: &[String],
     field: i128,
 ) -> Vec<(String, MatchBundle)> {
@@ -144,22 +136,20 @@ fn find_and_build_witnesses(
     results
 }
 
-fn openvm_bundle_from_named_limbs(body: &Term, dv: &str, field: i128) -> Option<MatchBundle> {
+fn openvm_bundle_from_named_limbs(body: &Bool, dv: &str, field: i128) -> Option<MatchBundle> {
     let g = diff_val_gadget(dv)?;
     let row = b_row_suffix(g);
     let cmp_prefix = format!("cmp_result_{g}@");
-    let dm_prefix = format!("diff_marker__");
-    let b_prefix = format!("b__");
 
     let mut cmp_sym = None;
     let mut dms: HashMap<u32, String> = HashMap::new();
     let mut bs: HashMap<u32, String> = HashMap::new();
 
-    for node in iter_nodes(body) {
-        let Term::Atom(name) = &node else {
+    for node in iter_nodes_dyn(&Dynamic::from_ast(body)) {
+        let Some(name) = symbol_name_dyn(&node) else {
             continue;
         };
-        let st = strip_prefix(name);
+        let st = strip_prefix(&name);
         if st.starts_with(&cmp_prefix) {
             cmp_sym = Some(name.clone());
         }
@@ -181,8 +171,6 @@ fn openvm_bundle_from_named_limbs(body: &Term, dv: &str, field: i128) -> Option<
                 }
             }
         }
-        let _ = dm_prefix;
-        let _ = b_prefix;
     }
 
     let cmp = cmp_sym?;
@@ -221,89 +209,78 @@ fn b_row_suffix(gadget: u32) -> u32 {
     }
 }
 
-fn build_skolem(matches: &HashMap<u32, LimbMatch>, cmp: &str, p: i128) -> Term {
-    let sign = list("+", vec![atom(&(p - 1).to_string()), list("*", vec![atom("2"), Term::Atom(cmp.to_string())])]);
-    let mut expr = atom("0");
+fn build_skolem(matches: &HashMap<u32, LimbMatch>, cmp: &str, p: i128) -> Dynamic {
+    let sign = Int::add(&[
+        &int_from_i128(p - 1),
+        &Int::mul(&[&int_from_i128(2), &Int::new_const(cmp)]),
+    ]);
+    let mut expr = int_from_i128(0);
     let m0 = &matches[&0];
-    expr = list(
-        "ite",
-        vec![
-            list("=", vec![Term::Atom(m0.data.clone()), atom("1")]),
-            expr,
-            wrap_mod_expr(
-                list(
-                    "*",
-                    vec![
-                        list("+", vec![atom("1"), list("*", vec![atom(&(p - 1).to_string()), Term::Atom(m0.data.clone())])]),
-                        sign.clone(),
-                    ],
-                ),
-                p,
-            ),
-        ],
+    expr = Int::new_const(m0.data.as_str()).eq(&int_from_i128(1)).ite(
+        &expr,
+        &smt2::wrap_mod_expr_int(
+            Int::mul(&[
+                &Int::add(&[
+                    &int_from_i128(1),
+                    &Int::mul(&[&int_from_i128(p - 1), &Int::new_const(m0.data.as_str())]),
+                ]),
+                &sign,
+            ]),
+            p,
+        ),
     );
     for i in 1..=3 {
         let m = &matches[&i];
-        expr = list(
-            "ite",
-            vec![
-                list("=", vec![Term::Atom(m.data.clone()), atom("0")]),
-                expr,
-                wrap_mod_expr(
-                    list(
-                        "*",
-                        vec![
-                            atom(&(p - 1).to_string()),
-                            Term::Atom(m.data.clone()),
-                            sign.clone(),
-                        ],
-                    ),
-                    p,
-                ),
-            ],
+        expr = Int::new_const(m.data.as_str()).eq(&int_from_i128(0)).ite(
+            &expr,
+            &smt2::wrap_mod_expr_int(
+                Int::mul(&[
+                    &int_from_i128(p - 1),
+                    &Int::new_const(m.data.as_str()),
+                    &sign,
+                ]),
+                p,
+            ),
         );
     }
-    wrap_mod_expr(expr, p)
+    Dynamic::from_ast(&smt2::wrap_mod_expr_int(expr, p))
 }
 
-fn build_marker_skolems(matches: &HashMap<u32, LimbMatch>) -> Vec<(String, Term)> {
+fn build_marker_skolems(matches: &HashMap<u32, LimbMatch>) -> Vec<(String, Dynamic)> {
     let b0 = &matches[&0].data;
     let b1 = &matches[&1].data;
     let b2 = &matches[&2].data;
     let b3 = &matches[&3].data;
-    let eq3 = list("=", vec![Term::Atom(b3.clone()), atom("0")]);
-    let eq2 = list("=", vec![Term::Atom(b2.clone()), atom("0")]);
-    let eq1 = list("=", vec![Term::Atom(b1.clone()), atom("0")]);
-    let eq0 = list("=", vec![Term::Atom(b0.clone()), atom("1")]);
-    let dm3 = list("ite", vec![eq3.clone(), atom("0"), atom("1")]);
-    let dm2 = list("ite", vec![eq3.clone(), atom("0"), list("ite", vec![eq2.clone(), atom("0"), atom("1")])]);
-    let dm1 = list(
-        "ite",
-        vec![
-            eq3.clone(),
-            atom("0"),
-            list("ite", vec![eq2.clone(), list("ite", vec![eq1.clone(), atom("0"), atom("1")]), atom("0")]),
-        ],
+    let eq3 = Int::new_const(b3.as_str()).eq(&int_from_i128(0));
+    let eq2 = Int::new_const(b2.as_str()).eq(&int_from_i128(0));
+    let eq1 = Int::new_const(b1.as_str()).eq(&int_from_i128(0));
+    let eq0 = Int::new_const(b0.as_str()).eq(&int_from_i128(1));
+    let dm3 = eq3.ite(&int_from_i128(0), &int_from_i128(1));
+    let dm2 = eq3.ite(
+        &int_from_i128(0),
+        &eq2.ite(&int_from_i128(0), &int_from_i128(1)),
     );
-    let dm0 = list(
-        "ite",
-        vec![
-            eq3,
-            atom("0"),
-            list(
-                "ite",
-                vec![
-                    eq2,
-                    list("ite", vec![eq1, list("ite", vec![eq0, atom("0"), atom("1")]), atom("0")]),
-                    atom("0"),
-                ],
+    let dm1 = eq3.ite(
+        &int_from_i128(0),
+        &eq2.ite(
+            &eq1.ite(&int_from_i128(0), &int_from_i128(1)),
+            &int_from_i128(0),
+        ),
+    );
+    let dm0 = eq3.ite(
+        &int_from_i128(0),
+        &eq2.ite(
+            &eq1.ite(
+                &eq0.ite(&int_from_i128(0), &int_from_i128(1)),
+                &int_from_i128(0),
             ),
-        ],
+            &int_from_i128(0),
+        ),
     );
     vec![
-        (matches[&0].dm.clone(), dm0),
-        (matches[&1].dm.clone(), dm1),
-        (matches[&2].dm.clone(), dm2),
-        (matches[&3].dm.clone(), dm3),
+        (matches[&0].dm.clone(), Dynamic::from_ast(&dm0)),
+        (matches[&1].dm.clone(), Dynamic::from_ast(&dm1)),
+        (matches[&2].dm.clone(), Dynamic::from_ast(&dm2)),
+        (matches[&3].dm.clone(), Dynamic::from_ast(&dm3)),
     ]
 }

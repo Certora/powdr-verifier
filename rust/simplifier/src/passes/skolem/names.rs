@@ -1,12 +1,18 @@
 use std::collections::HashMap;
 
-use smt2::Term;
+use z3::ast::{Bool, Dynamic, Int};
 
 use super::map::SkolemMap;
-use super::term_util::{is_program_variable, strip_prefix, symbol_name};
+use smt2::strip_prefix;
+
+use super::ast_build::is_program_variable;
 use super::types::SortKind;
 
-pub fn contribute(map: &mut SkolemMap, declared: &HashMap<String, Term>, sorts: &HashMap<String, SortKind>) {
+pub fn contribute(
+    map: &mut SkolemMap,
+    declared: &HashMap<String, String>,
+    sorts: &HashMap<String, SortKind>,
+) {
     for q in map.qvars.clone() {
         if map.is_pinned(&q) {
             continue;
@@ -18,7 +24,7 @@ pub fn contribute(map: &mut SkolemMap, declared: &HashMap<String, Term>, sorts: 
         let Some(other) = declared.get(&stripped) else {
             continue;
         };
-        let other_name = symbol_name(other).unwrap_or("");
+        let other_name = other.as_str();
         if other_name == q || map.qvars.contains(other_name) {
             continue;
         }
@@ -27,6 +33,10 @@ pub fn contribute(map: &mut SkolemMap, declared: &HashMap<String, Term>, sorts: 
         if q_sort != o_sort {
             continue;
         }
-        map.pin(&q, other.clone(), "names");
+        let pinned = match q_sort {
+            SortKind::Bool => Dynamic::from_ast(&Bool::new_const(other_name)),
+            _ => Dynamic::from_ast(&Int::new_const(other_name)),
+        };
+        map.pin(&q, pinned, "names");
     }
 }

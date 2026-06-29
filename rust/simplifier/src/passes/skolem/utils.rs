@@ -1,20 +1,20 @@
 use std::collections::HashMap;
 
-use smt2::{Script, Term};
+use smt2::ast_build::{is_symbol_dyn, iter_nodes_dyn, parse_bool_formula, symbol_name_dyn};
+use smt2::ast_util::{decl_name, quantifier_bounds, quantifier_body_bool, strip_prefix};
+use smt2::{declare_fun_name_cmd, seed_parser_context, ParseCtx, Script, SmtCommand};
+use z3::ast::{Ast, AstKind, Bool, Dynamic};
+use z3::SortKind as Z3SortKind;
 
-use super::term_util::{is_symbol, sort_from_decl, symbol_name};
 use super::types::{SkolemPin, SortKind};
 
 const SKOLEM_PREFIX: &str = ":skolem-";
 
-pub fn collect_declared_symbols(script: &Script) -> HashMap<String, Term> {
+pub fn collect_declared_symbols(script: &Script) -> HashMap<String, String> {
     let mut out = HashMap::new();
     for cmd in &script.commands {
-        if cmd.name() != "declare-fun" {
-            continue;
-        }
-        if let Some(name) = declare_fun_name(&cmd.raw) {
-            out.insert(super::term_util::strip_prefix(&name).to_string(), Term::Atom(name));
+        if let Some(name) = declare_fun_name(cmd, &script.source) {
+            out.insert(strip_prefix(&name).to_string(), name);
         }
     }
     out
@@ -23,11 +23,8 @@ pub fn collect_declared_symbols(script: &Script) -> HashMap<String, Term> {
 pub fn collect_symbol_sorts(script: &Script) -> HashMap<String, SortKind> {
     let mut out = HashMap::new();
     for cmd in &script.commands {
-        if cmd.name() != "declare-fun" {
-            continue;
-        }
-        if let Some(name) = declare_fun_name(&cmd.raw) {
-            out.insert(name.clone(), sort_from_decl(&cmd.raw));
+        if let Some(name) = declare_fun_name(cmd, &script.source) {
+            out.insert(name.clone(), sort_from_decl(&cmd.to_smtlib(&script.source)));
         }
     }
     for (name, sort) in collect_forall_qvar_sorts(script) {
@@ -41,11 +38,18 @@ pub fn declare_fun_block(script: &Script) -> String {
         .commands
         .iter()
         .filter(|c| c.name() == "declare-fun")
-        .map(|c| format!("{}\n", c.raw))
+        .map(|c| format!("{}\n", c.to_smtlib(&script.source)))
         .collect()
 }
 
-pub fn declare_fun_name(raw: &str) -> Option<String> {
+pub fn declare_fun_name(cmd: &SmtCommand, source: &str) -> Option<String> {
+    if let Some(name) = declare_fun_name_cmd(cmd) {
+        return Some(name);
+    }
+    if cmd.name() != "declare-fun" {
+        return None;
+    }
+    let raw = cmd.to_smtlib(source);
     let inner = raw.trim().strip_prefix('(')?.trim();
     let rest = inner.strip_prefix("declare-fun")?.trim();
     let end = rest.find(|c: char| c.is_whitespace())?;
@@ -55,90 +59,73 @@ pub fn declare_fun_name(raw: &str) -> Option<String> {
 fn collect_forall_qvar_sorts(script: &Script) -> Vec<(String, SortKind)> {
     let mut out = Vec::new();
     for cmd in &script.commands {
-        if cmd.name() != "assert" {
-            continue;
-        }
-        if let Some(body) = smt2::term::assert_body(&cmd.raw) {
-            if let Ok(term) = Term::parse(&body) {
-                collect_qvars_from_term(&term, &mut out);
-            }
+        if let Some(body) = cmd.assert_bool() {
+            collect_qvars_from_bool(body, &mut out);
         }
     }
     out
 }
 
-fn collect_qvars_from_term(term: &Term, out: &mut Vec<(String, SortKind)>) {
-    for node in super::term_util::iter_nodes(term) {
-        if let Some((qvars, _body)) = parse_forall(&node) {
+fn collect_qvars_from_bool(term: &Bool, out: &mut Vec<(String, SortKind)>) {
+    for node in iter_nodes_dyn(&Dynamic::from_ast(term)) {
+        if let Some((qvars, _, _body)) = parse_forall(&node) {
             out.extend(qvars);
         }
     }
 }
 
-pub fn parse_forall(term: &Term) -> Option<(Vec<(String, SortKind)>, Term)> {
-    let Term::List(items) = term else {
-        return None;
-    };
-    if !matches!(items.first(), Some(Term::Atom(s)) if s == "forall") || items.len() < 3 {
+pub fn parse_forall(term: &Dynamic) -> Option<(Vec<(String, SortKind)>, Vec<Dynamic>, Bool)> {
+    if term.kind() != AstKind::Quantifier || !smt2::ast_util::is_forall(term) {
         return None;
     }
-    let qvars = parse_qvar_decls(&items[1])?;
-    Some((qvars, items[2].clone()))
-}
-
-fn parse_qvar_decls(decls: &Term) -> Option<Vec<(String, SortKind)>> {
-    let Term::List(items) = decls else {
+    let bounds = quantifier_bounds(term);
+    if bounds.is_empty() {
         return None;
-    };
+    }
     let mut out = Vec::new();
-    for d in items {
-        match d {
-            Term::List(pair) if pair.len() == 2 => {
-                let name = match &pair[0] {
-                    Term::Atom(s) => s.clone(),
-                    _ => continue,
-                };
-                let sort = match &pair[1] {
-                    Term::Atom(s) if s == "Int" => SortKind::Int,
-                    Term::Atom(s) if s == "Bool" => SortKind::Bool,
-                    Term::Atom(s) if s.starts_with("(") => SortKind::Array,
-                    Term::List(_) => SortKind::Array,
-                    _ => SortKind::Other,
-                };
-                out.push((name, sort));
-            }
-            Term::Atom(name) => out.push((name.clone(), SortKind::Int)),
-            _ => {}
-        }
+    for b in &bounds {
+        let sort = match b.get_sort().kind() {
+            Z3SortKind::Int => SortKind::Int,
+            Z3SortKind::Bool => SortKind::Bool,
+            Z3SortKind::Array => SortKind::Array,
+            _ => SortKind::Other,
+        };
+        let Some(name) = symbol_name_dyn(b) else {
+            continue;
+        };
+        out.push((name, sort));
     }
-    Some(out)
+    Some((out, bounds, quantifier_body_bool(term)?))
 }
 
-pub fn split_equation(eq: &Term) -> Option<(String, Term)> {
-    let Term::List(items) = eq else {
-        return None;
-    };
-    if !matches!(items.first(), Some(Term::Atom(s)) if s == "=") || items.len() != 3 {
+pub fn split_equation(eq: &Bool) -> Option<(String, Dynamic)> {
+    let ast = Dynamic::from_ast(eq);
+    if ast.kind() != AstKind::App || decl_name(&ast.decl()) != "=" || ast.num_children() != 2 {
         return None;
     }
-    let a = &items[1];
-    let b = &items[2];
-    if is_symbol(a) {
-        return Some((symbol_name(a)?.to_string(), b.clone()));
+    let a = ast.nth_child(0)?;
+    let b = ast.nth_child(1)?;
+    if is_symbol_dyn(&a) {
+        return Some((symbol_name_dyn(&a)?, b));
     }
-    if is_symbol(b) {
-        return Some((symbol_name(b)?.to_string(), a.clone()));
+    if is_symbol_dyn(&b) {
+        return Some((symbol_name_dyn(&b)?, a));
     }
     None
 }
 
 pub fn load_skolem_setinfos(script: &Script) -> Vec<SkolemPin> {
     let mut out = Vec::new();
+    let mut parse = ParseCtx::new();
+    if seed_parser_context(&mut parse, script).is_err() {
+        return out;
+    }
     for cmd in &script.commands {
         if cmd.name() != "set-info" {
             continue;
         }
-        let Some((key, value)) = parse_set_info(&cmd.raw) else {
+        let raw = cmd.to_smtlib(&script.source);
+        let Some((key, value)) = parse_set_info(&raw) else {
             continue;
         };
         if !key.starts_with(SKOLEM_PREFIX) {
@@ -150,7 +137,7 @@ pub fn load_skolem_setinfos(script: &Script) -> Vec<SkolemPin> {
         };
         let kind_slug = &rest[..dash];
         let kind = kind_slug.replace('-', "_");
-        if let Ok(eq) = Term::parse(&value) {
+        if let Ok(eq) = parse_bool_formula(&mut parse, &value) {
             out.push(SkolemPin {
                 equation: eq,
                 kind,
@@ -169,7 +156,7 @@ fn parse_set_info(raw: &str) -> Option<(String, String)> {
     Some((key, value))
 }
 
-/// PySMT strips ``|...|`` on ``set-info`` parse-in; mirror that before ``Term::parse``.
+/// PySMT strips ``|...|`` on ``set-info`` parse-in; mirror that before Z3 parse.
 fn strip_set_info_value(value: &str) -> String {
     let v = value.trim();
     if v.len() >= 2 && v.starts_with('|') && v.ends_with('|') {
@@ -187,6 +174,24 @@ mod tests {
         let raw = "(set-info :skolem-substitution-0 |(= before-a__0_8@299 before-a__0_7@272)|)";
         let (_, value) = parse_set_info(raw).unwrap();
         assert_eq!(value, "(= before-a__0_8@299 before-a__0_7@272)");
-        assert!(matches!(smt2::Term::parse(&value), Ok(smt2::Term::List(_))));
+        let script = Script::parse(
+            "(declare-fun before-a__0_8@299 () Int)\n(declare-fun before-a__0_7@272 () Int)\n(check-sat)\n",
+        )
+        .unwrap();
+        let mut parse = ParseCtx::new();
+        seed_parser_context(&mut parse, &script).unwrap();
+        assert!(parse_bool_formula(&mut parse, &value).is_ok());
+    }
+}
+
+fn sort_from_decl(raw: &str) -> SortKind {
+    if raw.contains("(Array") || raw.contains(" Array ") {
+        SortKind::Array
+    } else if raw.contains("Bool") {
+        SortKind::Bool
+    } else if raw.contains("Int") {
+        SortKind::Int
+    } else {
+        SortKind::Other
     }
 }

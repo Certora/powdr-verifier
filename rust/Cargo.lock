@@ -127,6 +127,10 @@ dependencies = [
 [[package]]
 name = "smt2"
 version = "0.1.0"
+dependencies = [
+ "z3",
+ "z3-sys",
+]
 
 [[package]]
 name = "syn"

@@ -8,6 +8,6 @@ pub enum SortKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SkolemPin {
-    pub equation: smt2::Term,
+    pub equation: z3::ast::Bool,
     pub kind: String,
 }

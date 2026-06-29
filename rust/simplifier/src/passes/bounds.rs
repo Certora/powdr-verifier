@@ -2,30 +2,25 @@
 
 use std::collections::HashSet;
 
-use smt2::{Script, Term};
-use smt2::parse::Command;
+use smt2::{declare_fun_name_cmd, int_from_i128, map_asserts, Script, SmtCommand};
+use z3::ast::{Bool, Int};
 
-use crate::passes::skolem::term_util::{atom, field_mod, is_symbol, list, symbol_name};
-use crate::passes::skolem::utils::declare_fun_name;
+use crate::expr_util::{rebuild_script, AssertBuildCtx};
+use crate::passes::skolem::ast_build::field_mod;
 
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let field = field_mod().ok_or("SIMPLIFIER_FIELD_MOD not set")?;
     let sorts = collect_symbol_sorts(script);
     let mut bounded: HashSet<String> = HashSet::new();
 
-    for cmd in &script.commands {
-        if cmd.name() != "assert" {
-            continue;
-        }
-        let body = smt2::term::assert_body(&cmd.raw)
-            .ok_or_else(|| format!("malformed assert: {}", cmd.raw))?;
-        let term = Term::parse(&body)?;
-        for sym in scoped_free_variables(&term, &HashSet::new()) {
+    let _ = map_asserts(script, |b| {
+        for sym in smt2::free_int_symbols(b) {
             if is_bounded_int_symbol(&sym, &sorts) {
                 bounded.insert(sym);
             }
         }
-    }
+        Ok(b.clone())
+    })?;
 
     if bounded.is_empty() {
         return Ok((
@@ -40,24 +35,31 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut bound_names: Vec<String> = bounded.into_iter().collect();
     bound_names.sort();
 
-    let bound_asserts: Vec<Command> = bound_names
+    let bound_asserts: Vec<Bool> = bound_names
         .iter()
-        .map(|name| Command::new(format!("(assert {})", field_symbol(name, field))))
+        .map(|name| field_symbol(name, field))
         .collect();
     let n_bound = bound_names.len();
 
-    let mut out = Vec::new();
+    let mut ctx = AssertBuildCtx::from_script(script)?;
+    let mut out: Vec<SmtCommand> = Vec::new();
     let mut inserted = false;
     for cmd in &script.commands {
-        if !inserted && cmd.name() == "assert" {
-            out.extend(bound_asserts.iter().cloned());
+        if !inserted && cmd.assert_bool().is_some() {
+            for b in &bound_asserts {
+                ctx.push_assert(&mut out, b)?;
+            }
             inserted = true;
         }
-        out.push(cmd.clone());
+        if let Some(b) = cmd.assert_bool() {
+            ctx.push_assert(&mut out, b)?;
+        } else {
+            ctx.push_raw(&mut out, &cmd.to_smtlib(&script.source))?;
+        }
     }
 
     Ok((
-        Script::from_commands(out),
+        rebuild_script(&script.source, out),
         serde_json::json!({
             "bounded_symbols": n_bound,
             "range_asserts_added": n_bound,
@@ -97,11 +99,11 @@ fn collect_symbol_sorts(script: &Script) -> SymbolSorts {
         if cmd.name() != "declare-fun" {
             continue;
         }
-        let Some(name) = declare_fun_name(&cmd.raw) else {
+        let Some(name) = declare_fun_name_cmd(cmd) else {
             continue;
         };
         known.insert(name.clone());
-        if is_int_decl(&cmd.raw) {
+        if is_int_decl(&cmd.to_smtlib(&script.source)) {
             int.insert(name);
         } else {
             non_int.insert(name);
@@ -119,54 +121,11 @@ fn is_int_decl(raw: &str) -> bool {
     lower.contains(" int") || lower.ends_with(" int)") || lower.contains("(int ")
 }
 
-fn field_symbol(name: &str, field: i128) -> String {
-    list(
-        "and",
-        vec![
-            list("<=", vec![atom("0"), atom(name)]),
-            list("<", vec![atom(name), atom(&field.to_string())]),
-        ],
-    )
-    .to_string()
-}
-
-fn scoped_free_variables(term: &Term, bound: &HashSet<String>) -> HashSet<String> {
-    if let Some(name) = symbol_name(term) {
-        if is_symbol(term) && !bound.contains(name) {
-            return HashSet::from([name.to_string()]);
-        }
-        return HashSet::new();
-    }
-    let Term::List(items) = term else {
-        return HashSet::new();
-    };
-    if items.is_empty() {
-        return HashSet::new();
-    }
-    if matches!(items.first(), Some(Term::Atom(s)) if s == "forall" || s == "exists") && items.len() >= 3
-    {
-        let mut new_bound = bound.clone();
-        new_bound.extend(quantifier_var_names(&items[1]));
-        return scoped_free_variables(&items[2], &new_bound);
-    }
-    items[1..]
-        .iter()
-        .flat_map(|a| scoped_free_variables(a, bound))
-        .collect()
-}
-
-fn quantifier_var_names(decls: &Term) -> HashSet<String> {
-    let Term::List(items) = decls else {
-        return HashSet::new();
-    };
-    items
-        .iter()
-        .filter_map(|d| match d {
-            Term::List(pair) if !pair.is_empty() => symbol_name(&pair[0]).map(str::to_string),
-            Term::Atom(name) => Some(name.clone()),
-            _ => None,
-        })
-        .collect()
+fn field_symbol(name: &str, field: i128) -> Bool {
+    let sym = Int::new_const(name);
+    let lo = int_from_i128(0).le(&sym);
+    let hi = sym.lt(&int_from_i128(field));
+    Bool::and(&[&lo, &hi])
 }
 
 #[cfg(test)]
