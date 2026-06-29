@@ -54,11 +54,9 @@ def _pass_stats_name(pass_name: str) -> str:
     return pass_name.split("-", 1)[0]
 
 
-_ACTION_STAT_KEYS = ("expected", "result", "fallback")
-
-
 def rust_step_action_props(step: dict) -> dict:
-    return {k: step[k] for k in _ACTION_STAT_KEYS if k in step}
+    """Forward rust stderr stats into report actions (skip pass name and timing duplicates)."""
+    return {k: v for k, v in step.items() if k not in ("pass", "running_time")}
 
 
 def run_rust_pipeline(
