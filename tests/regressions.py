@@ -21,6 +21,7 @@ from src.simplify.rust import resolve_simplifier_bin
 CASES_ROOT = VERIFIER_DIR / "tests" / "regression_cases"
 _SCRIPTS = {"main.py": VERIFIER_DIR / "main.py", "orchestrate.py": VERIFIER_DIR / "orchestrate.py"}
 _PH = re.compile(r"\{(\w+)\}")
+_SECTION = re.compile(r"^\[\[(steps|assert)\]\]", re.MULTILINE)
 _SKIP_INPUTS = {"type", "dataset", "check"}
 _SOURCE_META = {"dataset", "block", "substitutions", "powdr_commit", "powdr_test", "match"}
 
@@ -50,9 +51,55 @@ class Step:
     json_out: Any | None = None
 
 
+def _assert_needs_step(spec: dict[str, Any]) -> bool:
+    k = spec["kind"]
+    if k == "file_equals":
+        return False
+    if k == "json_file_equals" and "actual" in spec:
+        return False
+    return True
+
+
+def _resolve_assert_steps(text: str, steps: list[dict[str, Any]], asserts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sections = [(m.group(1), m.start()) for m in _SECTION.finditer(text)]
+    sections.sort(key=lambda x: x[1])
+    step_i = assert_i = 0
+    last_step = -1
+    resolved: list[dict[str, Any]] = []
+    for kind, _ in sections:
+        if kind == "steps":
+            if step_i >= len(steps):
+                raise ValueError(f"extra [[steps]] section (only {len(steps)} defined)")
+            step_i += 1
+            last_step = step_i - 1
+        else:
+            if assert_i >= len(asserts):
+                raise ValueError(f"extra [[assert]] section (only {len(asserts)} defined)")
+            spec = dict(asserts[assert_i])
+            assert_i += 1
+            if "step" in spec:
+                raise ValueError(
+                    f"assert[{assert_i - 1}] ({spec['kind']}): remove step = …; "
+                    "place [[assert]] immediately after the [[steps]] it checks"
+                )
+            if _assert_needs_step(spec):
+                if last_step < 0:
+                    raise ValueError(f"assert[{assert_i - 1}] ({spec['kind']}): no preceding [[steps]]")
+                spec["step"] = last_step
+            resolved.append(spec)
+    if step_i != len(steps):
+        raise ValueError(f"expected {len(steps)} [[steps]] sections, found {step_i}")
+    if assert_i != len(asserts):
+        raise ValueError(f"expected {len(asserts)} [[assert]] sections, found {assert_i}")
+    return resolved
+
+
 def _load_case(manifest: Path) -> Case:
-    raw = tomllib.loads(manifest.read_text())
+    text = manifest.read_text()
+    raw = tomllib.loads(text)
     meta = raw.get("case", {})
+    steps = list(raw.get("steps", []))
+    asserts = _resolve_assert_steps(text, steps, list(raw.get("assert", [])))
     return Case(
         name=manifest.parent.name,
         path=manifest.parent,
@@ -61,8 +108,8 @@ def _load_case(manifest: Path) -> Case:
         requires=tuple(meta.get("requires", [])),
         source=raw.get("source"),
         inputs={k: str(v) for k, v in raw.get("inputs", {}).items()},
-        steps=tuple(raw.get("steps", [])),
-        asserts=tuple(raw.get("assert", [])),
+        steps=tuple(steps),
+        asserts=tuple(asserts),
     )
 
 

@@ -49,6 +49,8 @@ Tags are conventions in `[case].tags`. Filter with `REGRESSION_TAGS=tag1,tag2` o
 
 ## Assertion kinds
 
+Place each `[[assert]]` immediately after the `[[steps]]` it checks; the runner binds it to that step (no `step = …` index).
+
 | Kind | Purpose |
 |------|---------|
 | `exit_ok` | Step exited 0 |

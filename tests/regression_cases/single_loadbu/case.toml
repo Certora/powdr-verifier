@@ -23,6 +23,9 @@ args = ["trace", "{final}", "{work}/trace-out.smt2"]
 timeout = 10
 capture_json = true
 
+[[assert]]
+kind = "exit_ok"
+
 [[steps]]
 script = "main.py"
 args = [
@@ -33,6 +36,9 @@ args = [
 ]
 timeout = 10
 capture_json = true
+
+[[assert]]
+kind = "exit_ok"
 
 [[steps]]
 script = "main.py"
@@ -45,6 +51,13 @@ args = [
 timeout = 10
 capture_json = true
 
+[[assert]]
+kind = "exit_ok"
+
+[[assert]]
+kind = "check_result"
+result = "sat"
+
 [[steps]]
 script = "main.py"
 args = ["eval", "{final}", "{work}/trace.model"]
@@ -53,27 +66,8 @@ capture_json = true
 
 [[assert]]
 kind = "exit_ok"
-step = 0
-
-[[assert]]
-kind = "exit_ok"
-step = 1
-
-[[assert]]
-kind = "exit_ok"
-step = 2
-
-[[assert]]
-kind = "check_result"
-step = 2
-result = "sat"
-
-[[assert]]
-kind = "exit_ok"
-step = 3
 
 [[assert]]
 kind = "json_path"
-step = 3
 path = "axioms"
 equals = true

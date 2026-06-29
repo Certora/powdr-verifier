@@ -30,11 +30,9 @@ capture_json = true
 
 [[assert]]
 kind = "exit_ok"
-step = 0
 
 [[assert]]
 kind = "pass_stats"
-step = 0
 pass = "PASS_NAME"
 field = "asserts_changed"
 min = 1
@@ -89,11 +87,9 @@ capture_json = true
 
 [[assert]]
 kind = "exit_ok"
-step = 2
 
 [[assert]]
 kind = "check_result"
-step = 2
 result = "unsat"
 ''',
     "powdr-opt-replay": '''[case]
@@ -130,7 +126,6 @@ timeout = 300
 
 [[assert]]
 kind = "exit_ok"
-step = 0
 
 [[assert]]
 kind = "json_file_equals"

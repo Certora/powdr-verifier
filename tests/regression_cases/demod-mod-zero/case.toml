@@ -16,11 +16,9 @@ capture_json = true
 
 [[assert]]
 kind = "exit_ok"
-step = 0
 
 [[assert]]
 kind = "pass_stats"
-step = 0
 pass = "demod"
 field = "elim_by_range"
 min = 1
