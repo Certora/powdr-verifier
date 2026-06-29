@@ -2,6 +2,8 @@
 
 use smt2::{term::assert_body, Script, Term};
 
+use crate::passes::skolem::term_util::expand_lets;
+
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let is_qf = script_is_quantifier_free(script)?;
     let result = if is_qf { "qf" } else { "not-qf" };
@@ -21,7 +23,8 @@ fn script_is_quantifier_free(script: &Script) -> Result<bool, String> {
             continue;
         };
         let term = Term::parse(&body)?;
-        if term_has_quantifier(&term) {
+        let expanded = expand_lets(&term);
+        if term_has_quantifier(&expanded) {
             return Ok(false);
         }
     }
@@ -61,6 +64,16 @@ mod tests {
     fn not_qf_formula() {
         let script = Script::parse(
             "(declare-fun x () Int)\n(assert (forall ((x Int)) (= x 0)))\n(check-sat)\n",
+        )
+        .unwrap();
+        let (_, stats) = apply(&script).unwrap();
+        assert_eq!(stats["result"], "not-qf");
+    }
+
+    #[test]
+    fn forall_hidden_in_let_is_detected() {
+        let script = Script::parse(
+            "(declare-fun y () Int)\n(assert (let ((a!1 y)) (forall ((x Int)) (= x a!1))))\n(check-sat)\n",
         )
         .unwrap();
         let (_, stats) = apply(&script).unwrap();
