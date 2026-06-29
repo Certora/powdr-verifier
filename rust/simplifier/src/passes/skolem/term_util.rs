@@ -20,10 +20,6 @@ pub fn list(head: &str, args: Vec<Term>) -> Term {
     Term::List(items)
 }
 
-pub fn term_key(t: &Term) -> String {
-    t.to_string()
-}
-
 pub fn int_literal(t: &Term) -> Option<i128> {
     match t {
         Term::Atom(s) => smt2::term::parse_int_literal(s),

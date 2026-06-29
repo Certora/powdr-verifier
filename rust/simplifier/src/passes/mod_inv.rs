@@ -51,7 +51,6 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         if let Some((var, t, c, p)) = match_mod_inv_definition(&term) {
             definition_folds += 1;
             let zero = atom("0");
-            let one = atom("1");
             let mod_t = wrap_mod_expr(t.clone(), field);
             out.push(Command::new(format!(
                 "(assert {})",
