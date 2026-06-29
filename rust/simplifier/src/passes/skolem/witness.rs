@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use smt2::ast_build::split_product_int;
-use smt2::ast_util::{decl_name, int_value_dyn, unwrap_zero_mod_eq};
+use smt2::ast_util::{decl_name, int_value_dyn, is_not, unwrap_zero_mod_eq};
 use smt2::{iter_nodes_dyn, strip_prefix, symbol_name_dyn, Script};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
@@ -14,6 +14,9 @@ pub fn collect_candidates(script: &Script, field: i128) -> Vec<WitnessCandidate>
     for cmd in &script.commands {
         if let Some(body) = cmd.assert_bool() {
             for node in iter_nodes_dyn(&Dynamic::from_ast(body)) {
+                if node.kind() != AstKind::App {
+                    continue;
+                }
                 if let Some(node_b) = node.as_bool() {
                     if let Some(m) = match_collapsed(&node_b, field) {
                         candidates.push(m);
@@ -151,17 +154,13 @@ pub fn contribute(map: &mut SkolemMap, body: &Bool, candidates: &[WitnessCandida
         .collect();
 
     for node in iter_nodes_dyn(&Dynamic::from_ast(body)) {
+        if node.kind() != AstKind::App {
+            continue;
+        }
         let Some(node_b) = node.as_bool() else {
             continue;
         };
-        let target = if decl_name(&Dynamic::from_ast(&node_b).decl()) == "not" {
-            Dynamic::from_ast(&node_b)
-                .nth_child(0)
-                .and_then(|c| c.as_bool())
-                .unwrap_or(node_b.clone())
-        } else {
-            node_b
-        };
+        let target = is_not(&node_b).unwrap_or_else(|| node_b.clone());
         let Some(lhs) = unwrap_zero_mod_eq(&target, field) else {
             continue;
         };

@@ -252,4 +252,18 @@ mod tests {
         assert!(s.contains("(not (= before-x@0"));
         assert!(stats["pins_by_source"]["names"].as_u64().unwrap_or(0) >= 1);
     }
+
+    #[test]
+    fn witness_contribute_handles_quantifier_bound_vars() {
+        std::env::set_var("SIMPLIFIER_FIELD_MOD", "2013265921");
+        let script = Script::parse(
+            "(declare-fun marker () Int)\n\
+             (assert (forall ((p Bool) (q Int)) \
+               (or p (= (mod (* q marker) 2013265921) 0))))\n\
+             (check-sat)\n",
+        )
+        .unwrap();
+        let (script, _) = crate::passes::nnf::apply(&script).unwrap();
+        apply(&script).expect("skolem must not panic on quantifier bound vars");
+    }
 }
