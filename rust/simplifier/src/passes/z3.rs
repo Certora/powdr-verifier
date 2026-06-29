@@ -162,6 +162,7 @@ pub fn apply(script: &Script, tactic_args: &[String]) -> Result<(Script, serde_j
     let out = splice_z3_result(&parts, &processed.commands);
     let stats = serde_json::json!({
         "backend": "rust",
+        "z3_version": z3::full_version(),
         "z3_check": sat_result_str(z3_check),
         "asserts_in": asserts_in,
         "asserts_out": new_asserts.len(),
