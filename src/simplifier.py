@@ -17,7 +17,7 @@ from .smt.utils import *
 from .smt_backends.pysmt import write_smtlib_script
 from .utils.args import ARGS
 from .utils.io import open_file
-from .utils.stats import init_stats_run, set_stats_tag, stats_enabled, stats_tag_from_path
+from .utils.stats import init_stats_run, set_stats_tag, stats_enabled, stats_tag_from_path, clear_pass_action, set_pass_action
 
 from .simplify.witness import simplify_witnesses
 from .simplify.domain_probe import simplify_domain_probe
@@ -204,13 +204,17 @@ def _run_rust_tactics(
         cur = smt_script
         for raw in raw_tactics:
             with parent.action(raw) as subaction:
-                subaction += {"fallback": "python"}
-                parts = _split_tactic(raw)
-                cur = _apply_tactic_pass(
-                    TacticParts(executor="", base=parts.base, suffix=parts.suffix),
-                    cur,
-                    subaction,
-                )
+                prev_action = set_pass_action(subaction)
+                try:
+                    subaction += {"fallback": "python"}
+                    parts = _split_tactic(raw)
+                    cur = _apply_tactic_pass(
+                        TacticParts(executor="", base=parts.base, suffix=parts.suffix),
+                        cur,
+                        subaction,
+                    )
+                finally:
+                    clear_pass_action(prev_action)
         return cur
 
     _attach_rust_step_actions(
@@ -349,32 +353,36 @@ def simplify_smt_script(
 
                     logging.info("simplifying with %s", raw_tactic)
                     with parent.action(raw_tactic) as subaction:
-                        if remaining <= 0:
-                            logging.info(
-                                "skipping simplifier pass %s (no time budget)", raw_tactic
-                            )
-                            subaction += {"result": "skipped", "reason": "no-budget"}
-                            continue
+                        prev_action = set_pass_action(subaction)
+                        try:
+                            if remaining <= 0:
+                                logging.info(
+                                    "skipping simplifier pass %s (no time budget)", raw_tactic
+                                )
+                                subaction += {"result": "skipped", "reason": "no-budget"}
+                                continue
 
-                        backup_script = _backup_script(smt_script)
-                        backup_pretty = ARGS().pretty
+                            backup_script = _backup_script(smt_script)
+                            backup_pretty = ARGS().pretty
 
-                        def run_step():
-                            return _apply_tactic_pass(parts, smt_script, subaction)
+                            def run_step():
+                                return _apply_tactic_pass(parts, smt_script, subaction)
 
-                        timed_out, step_script = _run_with_itimer(remaining, run_step)
+                            timed_out, step_script = _run_with_itimer(remaining, run_step)
 
-                        if timed_out:
-                            smt_script = backup_script
-                            ARGS().pretty = backup_pretty
-                            logging.warning(
-                                "simplifier pass %s hit timeout, skipping", raw_tactic
-                            )
-                            subaction += {"result": "timeout"}
-                        else:
-                            assert step_script is not None
-                            smt_script = step_script
-                            _ensure_declarations_for_asserts(smt_script)
+                            if timed_out:
+                                smt_script = backup_script
+                                ARGS().pretty = backup_pretty
+                                logging.warning(
+                                    "simplifier pass %s hit timeout, skipping", raw_tactic
+                                )
+                                subaction += {"result": "timeout"}
+                            else:
+                                assert step_script is not None
+                                smt_script = step_script
+                                _ensure_declarations_for_asserts(smt_script)
+                        finally:
+                            clear_pass_action(prev_action)
 
                     if getattr(ARGS(), "dump_steps", False) and output is not None:
                         stem = (

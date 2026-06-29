@@ -17,6 +17,7 @@ _F = TypeVar("_F", bound=Callable[..., Any])
 
 _stats_dir: Path | None = None
 _current_tag: str | None = None
+_current_pass_action: Any = None
 
 _OBLIGATION_RE = re.compile(r"\.(?P<tag>completeness|soundness)(?:\.|$)")
 
@@ -135,7 +136,23 @@ def set_stats_tag(tag: str) -> None:
     _current_tag = tag
 
 
+def set_pass_action(action: Any) -> Any:
+    """Attach ``stats_dump`` payloads to the active simplifier pass ``Action``."""
+    global _current_pass_action
+    prev = _current_pass_action
+    _current_pass_action = action
+    return prev
+
+
+def clear_pass_action(token: Any) -> None:
+    global _current_pass_action
+    _current_pass_action = token
+
+
 def stats_dump(name: str, data: Any, *, tag: str | None = None) -> Path | None:
+    global _current_pass_action
+    if isinstance(data, dict) and _current_pass_action is not None:
+        _current_pass_action += data
     if not stats_enabled() or _stats_dir is None:
         return None
     t_ns = time.time_ns()
