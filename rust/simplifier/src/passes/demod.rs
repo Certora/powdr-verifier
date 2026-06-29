@@ -60,15 +60,27 @@ fn rewrite_bool(b: &Bool, field_mod: Option<i128>, stats: &mut DemodStats) -> Bo
             }
         }
     }
-    rewrite_dynamic(&d, field_mod, stats)
+    if d.kind() != AstKind::App {
+        return b.clone();
+    }
+    let args: Vec<Dynamic> = d
+        .children()
+        .into_iter()
+        .map(|ch| {
+            if let Some(cb) = ch.as_bool() {
+                Dynamic::from_ast(&rewrite_bool(&cb, field_mod, stats))
+            } else {
+                rewrite_dynamic(&ch, field_mod, stats)
+            }
+        })
+        .collect();
+    let refs: Vec<&dyn Ast> = args.iter().map(|a| a as &dyn Ast).collect();
+    rebuild_app(&d.decl(), &refs)
         .as_bool()
         .unwrap_or_else(|| b.clone())
 }
 
 fn rewrite_dynamic(ast: &Dynamic, field_mod: Option<i128>, stats: &mut DemodStats) -> Dynamic {
-    if let Some(b) = ast.as_bool() {
-        return Dynamic::from_ast(&rewrite_bool(&b, field_mod, stats));
-    }
     if ast.kind() == AstKind::Quantifier {
         return ast.clone();
     }
