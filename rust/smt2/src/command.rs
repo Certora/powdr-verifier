@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use z3::ast::Bool;
 
+use crate::ast_util::z3_if_to_ite;
 use crate::sexpr::{SExpr, Span, Spanned};
 use crate::z3_parse::ParseCtx;
 
@@ -165,7 +166,7 @@ impl SmtCommand {
                 term_text: Some(t),
                 ..
             } => format!("(assert {t})"),
-            SmtCommand::Assert { bool: b, .. } => format!("(assert {b})"),
+            SmtCommand::Assert { bool: b, .. } => format!("(assert {})", z3_if_to_ite(&b.to_string())),
             SmtCommand::CheckSat => "(check-sat)".into(),
             SmtCommand::GetModel => "(get-model)".into(),
             SmtCommand::GetUnsatCore => "(get-unsat-core)".into(),

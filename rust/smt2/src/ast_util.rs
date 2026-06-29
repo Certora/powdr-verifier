@@ -1,6 +1,6 @@
 //! Thin Z3 AST helpers (domain-specific; generic ops use `z3::ast` directly).
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::str::FromStr;
 
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
@@ -9,6 +9,25 @@ use z3_sys::*;
 
 pub fn decl_name(decl: &FuncDecl) -> String {
     decl.name()
+}
+
+/// Z3 names integer if-then-else ``if``; SMT-LIB and PySMT expect ``ite``.
+pub fn smtlib_decl_name(decl: &FuncDecl) -> String {
+    let name = decl_name(decl);
+    if name == "if" {
+        "ite".into()
+    } else {
+        name
+    }
+}
+
+/// Rewrite Z3's non-standard ``(if ...)`` nodes to ``(ite ...)`` in serialized text.
+pub fn z3_if_to_ite(s: &str) -> String {
+    if s.contains("(if ") {
+        s.replace("(if ", "(ite ")
+    } else {
+        s.to_string()
+    }
 }
 
 pub fn is_int_numeral(ast: &Dynamic) -> bool {
@@ -121,6 +140,74 @@ pub fn free_int_symbols(b: &Bool) -> HashSet<String> {
     let mut out = HashSet::new();
     collect_free_int_symbols(&Dynamic::from_ast(b), &HashSet::new(), &mut out);
     out
+}
+
+/// Uninterpreted ``Int``-returning function symbols used in a formula (e.g. ``uf_and``).
+pub fn free_uf_function_symbols(b: &Bool) -> BTreeMap<String, usize> {
+    let mut out = BTreeMap::new();
+    collect_uf_function_symbols(&Dynamic::from_ast(b), &HashSet::new(), &mut out);
+    out
+}
+
+fn is_builtin_int_function(name: &str) -> bool {
+    matches!(
+        name,
+        "+" | "-"
+            | "*"
+            | "mod"
+            | "div"
+            | "rem"
+            | "abs"
+            | "to_int"
+            | "ite"
+            | "^"
+            | "and"
+            | "or"
+            | "not"
+            | "="
+            | "<"
+            | ">"
+            | "<="
+            | ">="
+            | "distinct"
+    )
+}
+
+fn collect_uf_function_symbols(
+    ast: &Dynamic,
+    bound: &HashSet<String>,
+    out: &mut BTreeMap<String, usize>,
+) {
+    match ast.kind() {
+        AstKind::Var => {}
+        AstKind::Quantifier => {
+            let mut next_bound = bound.clone();
+            for name in quantifier_bound_names(ast) {
+                next_bound.insert(name);
+            }
+            if let Some(body) = quantifier_body(ast) {
+                collect_uf_function_symbols(&body, &next_bound, out);
+            }
+        }
+        AstKind::App => {
+            let decl = ast.decl();
+            let name = decl_name(&decl);
+            let arity = decl.arity();
+            if arity > 0
+                && ast.get_sort().kind() == SortKind::Int
+                && !is_builtin_int_function(&name)
+                && !bound.contains(&name)
+            {
+                out.entry(name).or_insert(arity);
+            }
+            for i in 0..ast.num_children() {
+                if let Some(ch) = ast.nth_child(i) {
+                    collect_uf_function_symbols(&ch, bound, out);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 pub fn scoped_free_int_symbols(ast: &Dynamic, bound: &HashSet<String>) -> HashSet<String> {
@@ -257,6 +344,98 @@ pub fn quantifier_body_bool(ast: &Dynamic) -> Option<Bool> {
     quantifier_body(ast)?.as_bool()
 }
 
+pub fn bound_var_index(ast: &Dynamic) -> Option<usize> {
+    if ast.kind() != AstKind::Var {
+        return None;
+    }
+    unsafe {
+        let z3 = ast.get_ctx().get_z3_context();
+        Some(Z3_get_index_value(z3, ast.get_z3_ast()) as usize)
+    }
+}
+
+pub fn contains_bound_var_dyn(ast: &Dynamic) -> bool {
+    if bound_var_index(ast).is_some() {
+        return true;
+    }
+    if ast.kind() == AstKind::Quantifier {
+        return false;
+    }
+    for ch in ast.children() {
+        if contains_bound_var_dyn(&ch) {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn de_bruijn_bound_name(bound_order: &[String], idx: usize) -> Option<String> {
+    let pos = bound_order.len().checked_sub(1)?.checked_sub(idx)?;
+    bound_order.get(pos).cloned()
+}
+
+pub fn resolve_bound_or_free_name(ast: &Dynamic, bound_order: &[String]) -> Option<String> {
+    if let Some(idx) = bound_var_index(ast) {
+        return de_bruijn_bound_name(bound_order, idx);
+    }
+    crate::ast_build::symbol_name_dyn(ast)
+}
+
+pub fn substitute_bound_vars_dyn(ast: &Dynamic, bounds: &[Dynamic]) -> Dynamic {
+    if let Some(idx) = bound_var_index(ast) {
+        if let Some(repl) = bounds.get(idx) {
+            return repl.clone();
+        }
+        return ast.clone();
+    }
+    if ast.kind() == AstKind::Quantifier {
+        return ast.clone();
+    }
+    if ast.kind() == AstKind::App {
+        let args: Vec<Dynamic> = (0..ast.num_children())
+            .filter_map(|i| {
+                ast.nth_child(i)
+                    .map(|ch| substitute_bound_vars_dyn(&ch, bounds))
+            })
+            .collect();
+        let refs: Vec<&dyn Ast> = args.iter().map(|a| a as &dyn Ast).collect();
+        return rebuild_app(&ast.decl(), &refs);
+    }
+    ast.clone()
+}
+
+pub fn quantifier_body_deps(
+    expr: &Dynamic,
+    bound_order: &[String],
+    qvars: &HashSet<String>,
+) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let mut stack = vec![expr.clone()];
+    while let Some(node) = stack.pop() {
+        if node.kind() == AstKind::Quantifier {
+            continue;
+        }
+        if let Some(idx) = bound_var_index(&node) {
+            if let Some(name) = de_bruijn_bound_name(bound_order, idx) {
+                if qvars.contains(&name) {
+                    out.insert(name);
+                }
+            }
+            continue;
+        }
+        if let Some(name) = crate::ast_build::symbol_name_dyn(&node) {
+            if qvars.contains(&name) {
+                out.insert(name);
+            }
+            continue;
+        }
+        for ch in node.children() {
+            stack.push(ch);
+        }
+    }
+    out
+}
+
 pub fn rebuild_forall(bounds: &[Int], body: &Bool) -> Bool {
     use z3::ast::forall_const;
     let bound_refs: Vec<&dyn Ast> = bounds.iter().map(|i| i as &dyn Ast).collect();
@@ -277,7 +456,7 @@ pub fn quantifier_bound_sort_is_bool(name: &str, z3_sk: SortKind) -> bool {
     name.contains("memory_is") || name.contains("memory_match")
 }
 
-/// Quantifier bound constants with sorts taken from the Z3 quantifier (Bool or Int).
+/// Bound constants in De Bruijn index order: ``bounds[i]`` replaces ``(:var i)``.
 pub fn quantifier_bounds(ast: &Dynamic) -> Vec<Dynamic> {
     if ast.kind() != AstKind::Quantifier {
         return Vec::new();
@@ -285,13 +464,21 @@ pub fn quantifier_bounds(ast: &Dynamic) -> Vec<Dynamic> {
     let ctx = ast.get_ctx();
     unsafe {
         let z3 = ctx.get_z3_context();
-        let n = Z3_get_quantifier_num_bound(z3, ast.get_z3_ast());
-        let mut out = Vec::with_capacity(n as usize);
+        let n = Z3_get_quantifier_num_bound(z3, ast.get_z3_ast()) as usize;
+        let mut names = Vec::with_capacity(n);
+        let mut sorts = Vec::with_capacity(n);
         for i in 0..n {
-            let sym = Z3_get_quantifier_bound_name(z3, ast.get_z3_ast(), i).unwrap();
-            let sort = Z3_get_quantifier_bound_sort(z3, ast.get_z3_ast(), i).unwrap();
-            let name = z3_symbol_to_string(ctx, sym);
-            let bound: Dynamic = if quantifier_bound_sort_is_bool(&name, Z3_get_sort_kind(z3, sort)) {
+            let sym = Z3_get_quantifier_bound_name(z3, ast.get_z3_ast(), i as u32).unwrap();
+            let sort = Z3_get_quantifier_bound_sort(z3, ast.get_z3_ast(), i as u32).unwrap();
+            names.push(z3_symbol_to_string(ctx, sym));
+            sorts.push(sort);
+        }
+        let mut out = Vec::with_capacity(n);
+        for de_bruijn_idx in 0..n {
+            let text_idx = n - 1 - de_bruijn_idx;
+            let name = &names[text_idx];
+            let sort = sorts[text_idx];
+            let bound: Dynamic = if quantifier_bound_sort_is_bool(name, Z3_get_sort_kind(z3, sort)) {
                 Dynamic::from_ast(&Bool::new_const(name.as_str()))
             } else {
                 Dynamic::from_ast(&Int::new_const(name.as_str()))

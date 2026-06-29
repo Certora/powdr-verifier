@@ -1,6 +1,6 @@
 use crate::command::SmtCommand;
 use crate::script::Script;
-use crate::ast_util::{decl_name, quantifier_body, quantifier_bound_names};
+use crate::ast_util::{decl_name, quantifier_body, quantifier_bound_names, smtlib_decl_name, z3_if_to_ite};
 use z3::ast::{Ast, AstKind, Bool, Dynamic};
 
 const INDENT: &str = "    ";
@@ -8,13 +8,13 @@ const INDENT: &str = "    ";
 pub fn pretty_print_bool_in_script(b: &Bool) -> String {
     let mut out = String::new();
     print_top_level(&mut out, &Dynamic::from_ast(b), 0, false, true);
-    out
+    z3_if_to_ite(&out)
 }
 
 pub fn pretty_print_bool(b: &Bool) -> String {
     let mut out = String::new();
     print_term(&mut out, &Dynamic::from_ast(b), 0, false);
-    out
+    z3_if_to_ite(&out)
 }
 
 pub fn pretty_print_command(cmd: &SmtCommand) -> Result<SmtCommand, String> {
@@ -73,7 +73,7 @@ fn print_term(out: &mut String, ast: &Dynamic, depth: usize, is_collapsed: bool)
             if !is_collapsed {
                 write_indent(out, depth);
             }
-            out.push_str(&ast.to_string());
+            out.push_str(&z3_if_to_ite(&ast.to_string()));
         }
         AstKind::App => print_app(out, ast, depth, is_collapsed),
         AstKind::Quantifier => print_quantifier_node(out, ast, depth, is_collapsed),
@@ -81,7 +81,7 @@ fn print_term(out: &mut String, ast: &Dynamic, depth: usize, is_collapsed: bool)
             if !is_collapsed {
                 write_indent(out, depth);
             }
-            out.push_str(&ast.to_string());
+            out.push_str(&z3_if_to_ite(&ast.to_string()));
         }
     }
 }
@@ -93,7 +93,7 @@ fn ast_children_slice(ast: &Dynamic) -> Vec<Dynamic> {
 }
 
 fn print_app(out: &mut String, ast: &Dynamic, depth: usize, is_collapsed: bool) {
-    let head = decl_name(&ast.decl());
+    let head = smtlib_decl_name(&ast.decl());
     let children = ast_children_slice(ast);
 
     if matches!(head.as_str(), "forall" | "exists") && children.len() >= 2 {

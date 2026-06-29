@@ -1,13 +1,13 @@
 //! Script representation, split/splice, and command helpers.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use z3::ast::Bool;
 
-use crate::command::{declare_fun_name_cmd, SmtCommand};
+use crate::ast_util::{free_int_symbols, free_uf_function_symbols};
+use crate::command::{declare_fun_name_cmd, parse_single_command, SmtCommand};
 use crate::sexpr::SExpr;
 use crate::z3_parse::ParseCtx;
-use crate::ast_util::free_int_symbols;
 
 const PREFIX_CMDS: &[&str] = &[
     "set-info",
@@ -192,7 +192,69 @@ pub fn ensure_free_symbols_declared(
         }
         ctx.ingest_command(&format!("(declare-fun {sym} () Int)"))?;
     }
+    for (sym, arity) in free_uf_function_symbols(b) {
+        if !declared.insert(sym.clone()) {
+            continue;
+        }
+        let args = (0..arity).map(|_| "Int").collect::<Vec<_>>().join(" ");
+        ctx.ingest_command(&format!("(declare-fun {sym} ({args}) Int)"))?;
+    }
     Ok(())
+}
+
+/// Insert ``declare-fun`` for symbols free in asserts but missing from the script prefix.
+pub fn ensure_declarations_for_asserts(script: &Script) -> Result<Script, String> {
+    let declared: HashSet<String> = declared_symbol_names(&script.commands).into_iter().collect();
+    let mut missing_int = BTreeMap::<String, ()>::new();
+    let mut missing_uf = BTreeMap::<String, usize>::new();
+    for cmd in &script.commands {
+        let Some(b) = cmd.assert_bool() else {
+            continue;
+        };
+        for sym in free_int_symbols(b) {
+            if !declared.contains(&sym) {
+                missing_int.insert(sym, ());
+            }
+        }
+        for (sym, arity) in free_uf_function_symbols(b) {
+            if !declared.contains(&sym) {
+                missing_uf.insert(sym, arity);
+            }
+        }
+    }
+    if missing_int.is_empty() && missing_uf.is_empty() {
+        return Ok(script.clone());
+    }
+    let Some(first_assert) = script
+        .commands
+        .iter()
+        .position(|c| c.name() == "assert")
+    else {
+        return Ok(script.clone());
+    };
+
+    let mut ctx = ParseCtx::new();
+    seed_parser_context(&mut ctx, script)?;
+    let mut decls = Vec::new();
+    for sym in missing_int.keys() {
+        decls.push(parse_single_command(
+            &format!("(declare-fun {sym} () Int)"),
+            &mut ctx,
+        )?);
+    }
+    for (sym, arity) in &missing_uf {
+        let args = (0..*arity).map(|_| "Int").collect::<Vec<_>>().join(" ");
+        decls.push(parse_single_command(
+            &format!("(declare-fun {sym} ({args}) Int)"),
+            &mut ctx,
+        )?);
+    }
+
+    let mut commands = Vec::with_capacity(script.commands.len() + decls.len());
+    commands.extend_from_slice(&script.commands[..first_assert]);
+    commands.extend(decls);
+    commands.extend_from_slice(&script.commands[first_assert..]);
+    Ok(Script::from_commands(&script.source, commands))
 }
 
 /// Transform each assert formula; other commands unchanged.
@@ -285,5 +347,32 @@ mod tests {
     fn parse_assert_without_declare() {
         let script = Script::parse("(assert (= x@0 y))\n(check-sat)\n").unwrap();
         assert!(script.commands[0].assert_bool().is_some());
+    }
+
+    #[test]
+    fn ensure_declarations_adds_uf_and() {
+        let mut ctx = ParseCtx::new();
+        ctx.ingest_command("(declare-fun uf_xor (Int Int) Int)")
+            .unwrap();
+        ctx.ingest_command("(declare-fun x () Int)").unwrap();
+        ctx.ingest_command("(declare-fun y () Int)").unwrap();
+        ctx.ingest_command("(declare-fun uf_and (Int Int) Int)")
+            .unwrap();
+        let b = crate::ast_build::parse_bool_formula(&mut ctx, "(= (uf_and x y) 0)").unwrap();
+        let script = Script::from_commands(
+            "",
+            vec![
+                parse_single_command("(declare-fun uf_xor (Int Int) Int)", &mut ParseCtx::new())
+                    .unwrap(),
+                parse_single_command("(declare-fun x () Int)", &mut ParseCtx::new()).unwrap(),
+                parse_single_command("(declare-fun y () Int)", &mut ParseCtx::new()).unwrap(),
+                SmtCommand::new_assert(b),
+                SmtCommand::CheckSat,
+            ],
+        );
+        let fixed = ensure_declarations_for_asserts(&script).unwrap();
+        let s = crate::dump_string(&fixed);
+        assert!(s.contains("(declare-fun uf_and (Int Int) Int)"));
+        assert!(Script::parse(&s).is_ok());
     }
 }
