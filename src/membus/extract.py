@@ -64,15 +64,13 @@ def build(pre: dict, mem_id: int, addr_space: int | None, post: dict | None) -> 
         by_ptr[em.expr_str(b["args"][1])].append(b)
     ptr_atom: dict[str, str] = {}
     for pexpr, lst in by_ptr.items():
-        low = keys.low_limb_of(lst[0]["args"][1])
-        bo = keys.base_offset_of_limb(pre, low) if low else None
-        if bo is None:
-            ptr_atom[pexpr] = em.atom(lst[0]["args"][1], "ptr")
-        else:
-            base_key, off = bo
-            var = f"ptr_{base_key}_{off}"
+        k = keys.recover_key(pre, lst[0])
+        if isinstance(k, keys.BaseOffset):
+            var = f"ptr_{k.base}_{k.offset}"
             ptr_atom[pexpr] = var
-            em.defs.setdefault(var, f"BASE_{base_key} + {off}")
+            em.defs.setdefault(var, f"BASE_{k.base} + {k.offset}")
+        else:                       # Const -> integer literal; Unresolved -> free pointer var
+            ptr_atom[pexpr] = em.atom(lst[0]["args"][1], "ptr")
 
     # (a) one abstract symbol per distinct timestamp expression
     ts_sym: dict[str, str] = {}

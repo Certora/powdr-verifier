@@ -1,41 +1,57 @@
-"""Recover memory keys (the ``(address_space, pointer)`` of an interaction) and
-classify an address space's alias structure.
+"""Recover memory keys (the address of an interaction) and classify alias structure.
 
-A pointer is one of:
-- a **constant** (a fixed address — register file / fixed slot);
-- a symbolic **base + offset** — recovered from the limb-decomposition gadget,
-  where the offset is a clean integer and the base identifies the register the
-  address is computed from (``rs1`` directly, or a value loaded from memory);
-- **unresolved** — symbolic but not in the recognized shape.
+The pointer in ``args[1]`` is an expression over columns (the address limbs). We
+normalize it to ``base + offset`` by **tracing the constraint that defines a limb**
+— NOT by matching column names. A byte-decomposition gadget appears as a product
+of two linear factors differing by a constant, ``F · (F − 1) == 0`` (so the inner
+value is a bit); the in-range root ``F == 0`` gives the limb as an affine function
+of the base register's bytes with integer weights and an integer offset:
 
-Whether an address space partitions cleanly into alias sets (no cross-set
-aliasing) is decidable only when keys are pairwise distinguishable: all
-constant, or all ``base+offset`` sharing one base (distinct offsets ⟹ distinct).
-Otherwise — multiple bases, or unresolved keys — aliasing is *not* statically
-known, and we flag it rather than assert disjointness.
+    30720·lim − 30720·base0 − 7864320·base1 − 1228800 = 0
+    ⟹  lim = base0 + 256·base1 + 40                       (offset 40)
 
-Key recovery is ported from ``busat/tools/dump_to_bus_coi.py``.
+The **base** is identified by the actual base columns in that gadget (their column
+identity, not their family name), so two addresses computed off the same loaded
+register value share a base. Only the low limb has a clean affine gadget (the high
+limb is field-carry encoded), so the recovered ``base+offset`` is the low-16-bit
+decomposition — exact when addresses don't differ in their high 16 bits (true for
+the small heap offsets here). A pointer that doesn't reduce to affine-over-roots
+(e.g. flag-multiplexed addresses) is left ``Unresolved``.
+
+Whether an address space partitions into provably-disjoint alias sets is decidable
+only when keys are pairwise distinguishable: all constant, or all ``base+offset``
+sharing one base. Otherwise (multiple bases, or unresolved) aliasing is not
+statically known and we flag it rather than assert disjointness.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any
 
 from src.lens.normalize import to_signed
 
-from .busfmt import Emitter, flatten_sum, names_of
+from .order import linterms, names
 
-# The low-limb address-decomposition constraint scales register/limb by this
-# factor; offset = -const / SCALE. Calibrated to the keccak (2100224) dumps.
-ADDR_SCALE = 30720
+# A base low-byte column is ``<family>__0_<access>@<colid>``. Used ONLY to render
+# a readable label for an already-identified base column — never to *find* a base.
+_FAM_RE = re.compile(r"(.+?)__0_(\d+)@\d+$")
 
-_LOW_LIMB_RE = re.compile(r"mem_ptr_limbs__0_\d+@\d+")
-# Base register low byte in a low-limb constraint: <base>_data__0_<k>@<col>.
-# E.g. rs1_data__0_0@3 (direct) or read_data__0_314@12875 (indirect). The base
-# KEY is everything before the byte index, so addresses off the same register
-# share a base.
-_BASE_RE = re.compile(r"(.+)_data__0_(\d+)@\d+")
+
+def _product_index(dump: dict) -> dict[str, list]:
+    """Column -> product constraints (``A*B``) mentioning it. Cached on the dump.
+
+    `affine_decomp` only needs the product constraints that reference a given
+    limb; this index makes that O(few) instead of scanning all constraints.
+    """
+    idx = dump.get("_membus_prod_index")
+    if idx is None:
+        idx = {}
+        for c in dump.get("constraints", []):
+            if isinstance(c, list) and len(c) == 3 and c[1] == "*":
+                for col in names(c):
+                    idx.setdefault(col, []).append(c)
+        dump["_membus_prod_index"] = idx
+    return idx
 
 
 @dataclass(frozen=True)
@@ -49,7 +65,12 @@ class Const:
 
 @dataclass(frozen=True)
 class BaseOffset:
-    """``base + offset`` — a symbolic address with a recovered constant offset."""
+    """``base + offset`` — a symbolic address with a recovered constant offset.
+
+    ``base`` is a readable, 1:1 label of the recovered base register value
+    (``rs1_0`` = the rs1 value loaded at access 0, ``read_314``, ``a_0``, …);
+    distinct loaded values get distinct labels, so it doubles as the alias key.
+    """
     base: str
     offset: int
 
@@ -59,7 +80,7 @@ class BaseOffset:
 
 @dataclass(frozen=True)
 class Unresolved:
-    """A symbolic pointer not in the recognized base+offset shape."""
+    """A symbolic pointer that does not reduce to affine ``base+offset``."""
     expr: str
 
     def __str__(self) -> str:
@@ -69,50 +90,42 @@ class Unresolved:
 Key = Const | BaseOffset | Unresolved
 
 
-def _const_of(e: Any) -> int:
-    """Sum of bare integer terms in an additive expression (signed)."""
-    tot = 0
-    for t in flatten_sum(e):
-        if isinstance(t, int):
-            tot += to_signed(t)
-        elif isinstance(t, list) and len(t) == 2 and t[0] == "-" and isinstance(t[1], int):
-            tot -= to_signed(t[1])
-    return tot
+def _fam_access(col: str) -> str:
+    """Readable label for a base low-byte column (``rs1_data__0_0@3`` -> ``rs1_0``)."""
+    m = _FAM_RE.fullmatch(col)
+    if not m:
+        return col
+    fam = m.group(1)
+    fam = fam[:-5] if fam.endswith("_data") else fam   # rs1_data -> rs1, read_data -> read
+    return f"{fam}_{m.group(2)}"
 
 
-def low_limb_of(ptr_expr: Any) -> str | None:
-    """The low-limb column of a pointer expr ``lim0 + 65536*lim1``."""
-    for n in sorted(names_of(ptr_expr, set())):
-        if _LOW_LIMB_RE.fullmatch(n):
-            return n
-    return None
+def affine_decomp(dump: dict, col: str) -> tuple[dict[str, int], int] | None:
+    """If ``col`` is defined by a byte-decomposition gadget, return its affine form.
 
-
-def base_offset_of_limb(dump: dict, low_limb: str) -> tuple[str, int] | None:
-    """Recover ``(base_key, offset)`` from a low-limb decomposition constraint.
-
-    The constraint is a product ``(Y + c)*(Y + c - 1) == 0`` with
-    ``Y = SCALE*(low_limb - base0 - 256*base1)``; the offset is ``-c / SCALE``
-    and ``base_key`` (e.g. ``rs1_0`` / ``read_314``) identifies the base register.
-    Returns None if no such constraint is present.
+    Looks for a constraint ``F · (F ± 1) == 0`` (a product of two linear factors
+    differing by a constant) with ``col`` in a factor ``F``. Solving ``F == 0`` for
+    ``col`` must give **integer** weights on the other columns and an **integer**
+    offset (this selects the in-range root and confirms a clean affine relation).
+    Returns ``(weights, offset)`` so that ``col == Σ weights·other + offset``, or
+    None. No column-name matching — the gadget is recognized structurally.
     """
-    for c in dump["constraints"]:
-        if not (isinstance(c, list) and len(c) == 3 and c[1] == "*"):
+    for c in _product_index(dump).get(col, []):
+        fa, fb = linterms(c[0]), linterms(c[2])
+        if fa is None or fb is None:
             continue
-        f = c[0]
-        fn = names_of(f, set())
-        if low_limb not in fn:
+        # the two factors must differ only by a constant (the `F·(F−1)` bit gadget)
+        if fa[0] != fb[0]:
             continue
-        if any("mem_ptr_limbs__1" in x for x in fn):     # high-limb (carry) constraint
-            continue
-        base0 = [x for x in fn if _BASE_RE.fullmatch(x)]
-        if not base0 or any("_data__2_" in x for x in fn):
-            continue
-        m = _BASE_RE.fullmatch(base0[0])
-        base_key = m.group(1) + "_" + m.group(2)
-        k = _const_of(f)
-        if k % ADDR_SCALE == 0:
-            return base_key, -k // ADDR_SCALE
+        for coeffs, const in (fa, fb):
+            a = coeffs.get(col)
+            if not a:
+                continue
+            others = {k: v for k, v in coeffs.items() if k != col}
+            if any(v % a != 0 for v in others.values()) or const % a != 0:
+                continue
+            weights = {k: -(v // a) for k, v in others.items()}
+            return weights, -(const // a)
     return None
 
 
@@ -121,12 +134,27 @@ def recover_key(dump: dict, bi: dict) -> Key:
     ptr = bi["args"][1]
     if isinstance(ptr, int):
         return Const(to_signed(ptr))
-    low = low_limb_of(ptr)
-    if low is not None:
-        bo = base_offset_of_limb(dump, low)
-        if bo is not None:
-            return BaseOffset(*bo)
-    return Unresolved(Emitter().expr_str(ptr))
+    lt = linterms(ptr)
+    if lt is None:                                   # nonlinear (e.g. flag-multiplexed)
+        from .busfmt import Emitter
+        return Unresolved(Emitter().expr_str(ptr))
+    coeffs, const = {k: v for k, v in lt[0].items() if v != 0}, lt[1]
+    if not coeffs:
+        return Const(const)
+    # decomposable columns of the pointer (the limbs that have an affine gadget)
+    decs = [(k, d) for k in coeffs if (d := affine_decomp(dump, k)) is not None]
+    if not decs:
+        from .busfmt import Emitter
+        return Unresolved(Emitter().expr_str(ptr))
+    # use the low limb (smallest |coeff| in the pointer = the low 16 bits)
+    col, (weights, off) = min(decs, key=lambda kd: abs(coeffs[kd[0]]))
+    # base = the byte-0 base column (weight 1); offset = pointer's affine offset
+    byte0 = min((b for b, w in weights.items() if w == 1),
+                default=min(weights, key=lambda b: abs(weights[b])) if weights else None)
+    if byte0 is None:
+        from .busfmt import Emitter
+        return Unresolved(Emitter().expr_str(ptr))
+    return BaseOffset(_fam_access(byte0), coeffs[col] * off + const)
 
 
 def address_space_of(bi: dict) -> int | None:
@@ -138,8 +166,8 @@ def address_space_of(bi: dict) -> int | None:
 def classify_address_space(keys: list[Key]) -> tuple[bool, str]:
     """Can this address space be partitioned into provably-disjoint alias sets?
 
-    Returns ``(determined, reason)``. Determined iff all keys are constant, or
-    all are ``base+offset`` sharing a single base (distinct offsets ⟹ distinct).
+    Determined iff all keys are constant, or all are ``base+offset`` sharing a
+    single base (distinct offsets ⟹ distinct). Returns ``(determined, reason)``.
     """
     if not keys:
         return True, "empty"
