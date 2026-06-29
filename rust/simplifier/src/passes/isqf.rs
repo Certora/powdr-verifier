@@ -1,8 +1,6 @@
 //! Quantifier-freedom check on asserts (mirrors PySMT ``QuantifierOracle``).
 
-use smt2::{term::assert_body, Script, Term};
-
-use crate::passes::skolem::term_util::expand_lets;
+use smt2::{has_quantifier, Script};
 
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let is_qf = script_is_quantifier_free(script)?;
@@ -16,33 +14,13 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
 
 fn script_is_quantifier_free(script: &Script) -> Result<bool, String> {
     for cmd in &script.commands {
-        if cmd.name() != "assert" {
-            continue;
-        }
-        let Some(body) = assert_body(&cmd.raw) else {
-            continue;
-        };
-        let term = Term::parse(&body)?;
-        let expanded = expand_lets(&term);
-        if term_has_quantifier(&expanded) {
-            return Ok(false);
+        if let Some(b) = cmd.assert_bool() {
+            if has_quantifier(b) {
+                return Ok(false);
+            }
         }
     }
     Ok(true)
-}
-
-fn term_has_quantifier(term: &Term) -> bool {
-    match term {
-        Term::List(items) if !items.is_empty() => {
-            if let Term::Atom(head) = &items[0] {
-                if head == "forall" || head == "exists" {
-                    return true;
-                }
-            }
-            items.iter().any(term_has_quantifier)
-        }
-        _ => false,
-    }
 }
 
 #[cfg(test)]

@@ -1,14 +1,14 @@
 //! Equality rewrites for modular products via FLINT polynomial factorization.
 
 use std::collections::{BTreeSet, HashMap};
-use std::str::FromStr;
 use std::time::Instant;
 
-use smt2::{map_asserts, Script, Term};
+use smt2::{int_from_i128, map_asserts, map_bool_children, unwrap_zero_mod_eq, Script};
 use z3::ast::{Ast, AstKind, Dynamic, Int};
+use z3::ast::Bool;
 use z3::{FuncDecl, SortKind};
 
-use crate::passes::skolem::term_util::{atom, field_mod, int_literal, list, unwrap_zero_mod_eq};
+use crate::passes::normalize::field_mod;
 use crate::poly_factor::{factor, FactorError};
 
 const MAX_REWRITE_COUNT: usize = 5;
@@ -27,11 +27,11 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut global = RewriteStats::default();
 
     let mut assert_index = 0usize;
-    let out = map_asserts(script, |body| {
-        let term = Term::parse(body)?;
+    let out = map_asserts(script, |b: &Bool| {
         let t0 = Instant::now();
         let mut stats = RewriteStats::default();
-        let new = rewrite_formula(&term, field, &mut stats);
+        let new = rewrite_formula(b, field, &mut stats);
+        let body = b.to_string();
         let sec = t0.elapsed().as_secs_f64();
         if sec >= 0.05 {
             global.slow_asserts.push(serde_json::json!({
@@ -43,11 +43,10 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         assert_index += 1;
         global.rewrites += stats.rewrites;
         global.factor_calls += stats.factor_calls;
-        let new_body = new.to_string();
-        if new_body != body {
+        if new.to_string() != body {
             changed += 1;
         }
-        Ok(new_body)
+        Ok(new)
     })?;
 
     Ok((
@@ -62,7 +61,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     ))
 }
 
-fn rewrite_formula(term: &Term, p: i128, stats: &mut RewriteStats) -> Term {
+fn rewrite_formula(term: &Bool, p: i128, stats: &mut RewriteStats) -> Bool {
     let mut cur = term.clone();
     for _ in 0..MAX_REWRITE_COUNT {
         let next = rewrite_once(&cur, p, stats);
@@ -74,34 +73,21 @@ fn rewrite_formula(term: &Term, p: i128, stats: &mut RewriteStats) -> Term {
     cur
 }
 
-fn rewrite_once(term: &Term, p: i128, stats: &mut RewriteStats) -> Term {
+fn rewrite_once(term: &Bool, p: i128, stats: &mut RewriteStats) -> Bool {
     if let Some(rewritten) = try_rewrite_equality(term, p, stats) {
         return rewritten;
     }
-    let Term::List(items) = term else {
-        return term.clone();
-    };
-    if items.is_empty() {
-        return term.clone();
-    }
-    let head = items[0].clone();
-    let args: Vec<Term> = items[1..]
-        .iter()
-        .map(|a| rewrite_once(a, p, stats))
-        .collect();
-    Term::List(std::iter::once(head).chain(args).collect())
+    map_bool_children(term, &mut |child| rewrite_once(child, p, stats))
 }
 
-fn try_rewrite_equality(term: &Term, p: i128, stats: &mut RewriteStats) -> Option<Term> {
+fn try_rewrite_equality(term: &Bool, p: i128, stats: &mut RewriteStats) -> Option<Bool> {
     let expr = unwrap_zero_mod_eq(term, p)?;
-    let mut vars = HashMap::new();
-    let z3_expr = term_to_z3_int(&expr, &mut vars)?;
-    let rewritten = rewrite_choice(&z3_expr, p, stats)?;
+    let rewritten = rewrite_choice(&expr, p, stats)?;
     stats.rewrites += 1;
     Some(rewritten)
 }
 
-fn rewrite_choice(expr: &Int, p: i128, stats: &mut RewriteStats) -> Option<Term> {
+fn rewrite_choice(expr: &Int, p: i128, stats: &mut RewriteStats) -> Option<Bool> {
     stats.factor_calls += 1;
     let fac = match factor(expr) {
         Ok(f) => f,
@@ -118,61 +104,61 @@ fn rewrite_choice(expr: &Int, p: i128, stats: &mut RewriteStats) -> Option<Term>
     }
 
     if flat.is_empty() {
-        return Some(atom("false"));
+        return Some(Bool::from_bool(false));
     }
     if flat.len() >= 2 {
         if let Some((var, roots)) = solved_roots(&flat, p) {
             return Some(roots_with_range(&var, &roots, p));
         }
-        let parts: Vec<Term> = flat
+        let parts: Vec<Bool> = flat
             .iter()
             .map(|f| mod_zero_eq(f, p))
-            .collect::<Option<_>>()?;
+            .collect();
         return Some(or_terms(parts));
     }
     rewrite_quadratic(expr, p)
 }
 
-fn rewrite_quadratic(expr: &Int, p: i128) -> Option<Term> {
+fn rewrite_quadratic(expr: &Int, p: i128) -> Option<Bool> {
     let (var, roots) = solved_quadratic(expr, p)?;
     if roots.is_empty() {
-        return Some(atom("false"));
+        return Some(Bool::from_bool(false));
     }
     Some(roots_with_range(&var, &roots, p))
 }
 
-fn mod_zero_eq(expr: &Int, p: i128) -> Option<Term> {
-    let body = z3_to_term(expr)?;
-    Some(list("=", vec![list("mod", vec![body, atom(&p.to_string())]), atom("0")]))
+fn mod_zero_eq(expr: &Int, p: i128) -> Bool {
+    expr.modulo(int_from_i128(p)).eq(int_from_i128(0))
 }
 
-fn or_terms(mut parts: Vec<Term>) -> Term {
+fn or_terms(mut parts: Vec<Bool>) -> Bool {
     if parts.len() == 1 {
         return parts.pop().unwrap();
     }
-    list("or", parts)
+    Bool::or(&parts.iter().collect::<Vec<_>>())
 }
 
-fn and_terms(mut parts: Vec<Term>) -> Term {
+fn and_terms(mut parts: Vec<Bool>) -> Bool {
     if parts.len() == 1 {
         return parts.pop().unwrap();
     }
-    list("and", parts)
+    Bool::and(&parts.iter().collect::<Vec<_>>())
 }
 
-fn roots_with_range(var: &str, values: &BTreeSet<i128>, _p: i128) -> Term {
+fn roots_with_range(var: &str, values: &BTreeSet<i128>, _p: i128) -> Bool {
     let min_v = *values.iter().next().unwrap();
     let max_v = *values.iter().next_back().unwrap();
+    let sym = Int::new_const(var);
     let disj = or_terms(
         values
             .iter()
-            .map(|v| list("=", vec![atom(var), atom(&v.to_string())]))
+            .map(|v| sym.eq(int_from_i128(*v)))
             .collect(),
     );
     and_terms(vec![
         disj,
-        list("<=", vec![atom(&min_v.to_string()), atom(var)]),
-        list("<=", vec![atom(var), atom(&max_v.to_string())]),
+        int_from_i128(min_v).le(&sym),
+        sym.le(&int_from_i128(max_v)),
     ])
 }
 
@@ -545,68 +531,6 @@ fn z3_int_value(e: &Int) -> i128 {
     e.to_string().parse().unwrap_or(0)
 }
 
-fn term_to_z3_int(t: &Term, vars: &mut HashMap<String, Int>) -> Option<Int> {
-    match t {
-        Term::Atom(s) => {
-            if let Some(v) = int_literal(t) {
-                return Some(z3_from_i128(v));
-            }
-            Some(
-                vars.entry(s.clone())
-                    .or_insert_with(|| Int::new_const(s.as_str()))
-                    .clone(),
-            )
-        }
-        Term::List(items) if !items.is_empty() => {
-            let Term::Atom(head) = &items[0] else {
-                return None;
-            };
-            match head.as_str() {
-                "+" => {
-                    let args: Vec<Int> = items[1..]
-                        .iter()
-                        .map(|a| term_to_z3_int(a, vars))
-                        .collect::<Option<_>>()?;
-                    Some(Int::add(&args).simplify())
-                }
-                "*" => {
-                    let args: Vec<Int> = items[1..]
-                        .iter()
-                        .map(|a| term_to_z3_int(a, vars))
-                        .collect::<Option<_>>()?;
-                    Some(Int::mul(&args).simplify())
-                }
-                "-" => match items.len() {
-                    2 => {
-                        let a = term_to_z3_int(&items[1], vars)?;
-                        Some(Int::unary_minus(&a).simplify())
-                    }
-                    3 => {
-                        let a = term_to_z3_int(&items[1], vars)?;
-                        let b = term_to_z3_int(&items[2], vars)?;
-                        Some(Int::sub(&[&a, &b]).simplify())
-                    }
-                    _ => None,
-                },
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-fn z3_from_i128(v: i128) -> Int {
-    if v >= i64::MIN as i128 && v <= i64::MAX as i128 {
-        Int::from_i64(v as i64)
-    } else {
-        Int::from_str(&v.to_string()).expect("invalid int literal")
-    }
-}
-
-fn z3_to_term(e: &Int) -> Option<Term> {
-    Term::parse(&e.simplify().to_string()).ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -621,8 +545,9 @@ mod tests {
         f();
     }
 
-    fn rewrite_assert(body: &str) -> Term {
-        let term = Term::parse(body).unwrap();
+    fn rewrite_assert(body: &str) -> Bool {
+        let script = Script::parse(&format!("(assert {body})\n(check-sat)\n")).unwrap();
+        let term = script.commands[0].assert_bool().unwrap().clone();
         let mut stats = RewriteStats::default();
         rewrite_formula(&term, field(), &mut stats)
     }

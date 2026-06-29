@@ -2,13 +2,11 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use smt2::{Script, Term};
-use smt2::parse::Command;
+use smt2::{and_parts, int_from_i128, or_parts, Script, SmtCommand};
 use z3::SatResult;
+use z3::ast::{Ast, Bool, Dynamic, Int};
 
-use crate::passes::skolem::term_util::{
-    atom, int_literal, is_symbol, list, scoped_free_variables, symbol_name,
-};
+use crate::expr_util::{rebuild_script, AssertBuildCtx};
 
 const MAX_VALUES: usize = 3;
 const MAX_PAIRS: usize = 20;
@@ -97,30 +95,37 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         return Ok((script.clone(), stats));
     }
 
-    let mut commands = script.commands.clone();
-    let insert_at = commands
-        .iter()
-        .position(|c| c.name() == "check-sat")
-        .unwrap_or(commands.len());
-    for (i, fact) in batch.into_iter().enumerate() {
-        commands.insert(insert_at + i, Command::new(format!("(assert {fact})")));
-    }
-
-    Ok((Script::from_commands(commands), stats))
-}
-
-fn collect_assert_terms(script: &Script) -> Vec<Term> {
-    let mut out = Vec::new();
+    let mut ctx = AssertBuildCtx::from_script(script)?;
+    let mut commands: Vec<SmtCommand> = Vec::new();
+    let mut inserted = false;
     for cmd in &script.commands {
-        if cmd.name() == "assert" {
-            if let Some(body) = smt2::term::assert_body(&cmd.raw) {
-                if let Ok(term) = Term::parse(&body) {
-                    out.push(term);
-                }
+        if !inserted && cmd.name() == "check-sat" {
+            for fact in &batch {
+                ctx.push_raw(&mut commands, &format!("(assert {fact})"))?;
             }
+            inserted = true;
+        }
+        if let Some(b) = cmd.assert_bool() {
+            ctx.push_assert(&mut commands, b)?;
+        } else {
+            ctx.push_raw(&mut commands, &cmd.to_smtlib(&script.source))?;
         }
     }
-    out
+    if !inserted {
+        for fact in &batch {
+            ctx.push_raw(&mut commands, &format!("(assert {fact})"))?;
+        }
+    }
+
+    Ok((rebuild_script(&script.source, commands), stats))
+}
+
+fn collect_assert_terms(script: &Script) -> Vec<Bool> {
+    script
+        .commands
+        .iter()
+        .filter_map(|c| c.assert_bool().cloned())
+        .collect()
 }
 
 fn declare_block(script: &Script) -> String {
@@ -128,14 +133,14 @@ fn declare_block(script: &Script) -> String {
     out.push_str("(set-logic ALL)\n");
     for cmd in &script.commands {
         if cmd.name() == "declare-fun" {
-            out.push_str(&cmd.raw);
+            out.push_str(&cmd.to_smtlib(&script.source));
             out.push('\n');
         }
     }
     out
 }
 
-fn collect_choices(assertions: &[Term], max_n: usize) -> BTreeMap<String, Vec<i128>> {
+fn collect_choices(assertions: &[Bool], max_n: usize) -> BTreeMap<String, Vec<i128>> {
     let mut raw: BTreeMap<String, Vec<i128>> = BTreeMap::new();
     for a in assertions {
         for (sym, _, vals) in choices_in_assertion(a) {
@@ -153,23 +158,23 @@ fn collect_choices(assertions: &[Term], max_n: usize) -> BTreeMap<String, Vec<i1
         .collect()
 }
 
-fn choices_in_assertion(f: &Term) -> Vec<(String, Term, Vec<i128>)> {
+fn choices_in_assertion(f: &Bool) -> Vec<(String, Bool, Vec<i128>)> {
     if let Some((sym, vals)) = parse_or_equalities(f) {
         return vec![(sym, f.clone(), vals)];
     }
-    if !is_and(f) {
+    let Some(and_terms) = and_parts(f) else {
         return Vec::new();
-    }
+    };
     let mut out = Vec::new();
-    for arg in and_parts(f) {
+    for arg in and_terms {
         if let Some((sym, vals)) = parse_or_equalities(&arg) {
-            out.push((sym, arg, vals));
+            out.push((sym, arg.clone(), vals));
         }
     }
     out
 }
 
-fn parse_or_equalities(f: &Term) -> Option<(String, Vec<i128>)> {
+fn parse_or_equalities(f: &Bool) -> Option<(String, Vec<i128>)> {
     let parts = or_parts(f)?;
     let mut sym: Option<String> = None;
     let mut vals = Vec::new();
@@ -193,42 +198,42 @@ fn parse_or_equalities(f: &Term) -> Option<(String, Vec<i128>)> {
     Some((sym, vals))
 }
 
-fn eq_symbol_int(term: &Term) -> Option<(String, i128)> {
-    let Term::List(items) = term else {
-        return None;
-    };
-    if !matches!(items.first(), Some(Term::Atom(s)) if s == "=") || items.len() != 3 {
+fn eq_symbol_int(term: &Bool) -> Option<(String, i128)> {
+    let ast = Dynamic::from_ast(term);
+    if ast.kind() != z3::AstKind::App {
         return None;
     }
-    if is_symbol(&items[1]) {
-        if let Some(v) = int_literal(&items[2]) {
-            return Some((symbol_name(&items[1])?.to_string(), v));
+    if smt2::decl_name(&ast.decl()) != "=" || ast.num_children() != 2 {
+        return None;
+    }
+    let lhs = ast.nth_child(0)?;
+    let rhs = ast.nth_child(1)?;
+    if let Some(sym) = smt2::symbol_name_dyn(&lhs) {
+        if let Some(v) = smt2::int_literal_dyn(&rhs) {
+            return Some((sym, v));
         }
     }
-    if is_symbol(&items[2]) {
-        if let Some(v) = int_literal(&items[1]) {
-            return Some((symbol_name(&items[2])?.to_string(), v));
+    if let Some(sym) = smt2::symbol_name_dyn(&rhs) {
+        if let Some(v) = smt2::int_literal_dyn(&lhs) {
+            return Some((sym, v));
         }
     }
     None
 }
 
-fn const_pinned_in(f: &Term) -> HashSet<String> {
+fn const_pinned_in(f: &Bool) -> HashSet<String> {
     if let Some((sym, _)) = eq_symbol_int(f) {
         return HashSet::from([sym]);
     }
-    if is_and(f) {
-        return and_parts(f)
-            .iter()
-            .flat_map(const_pinned_in)
-            .collect();
+    if let Some(parts) = and_parts(f) {
+        return parts.iter().flat_map(const_pinned_in).collect();
     }
     HashSet::new()
 }
 
 fn flag_cluster(
     seed: &str,
-    assertions: &[Term],
+    assertions: &[Bool],
     choices: &BTreeMap<String, Vec<i128>>,
 ) -> HashSet<String> {
     let choice_syms: HashSet<String> = choices.keys().cloned().collect();
@@ -237,7 +242,7 @@ fn flag_cluster(
     while changed {
         changed = false;
         for a in assertions {
-            let fvs = scoped_free_variables(a, &HashSet::new());
+            let fvs = smt2::free_variables_bool(a);
             if fvs.is_disjoint(&cluster) {
                 continue;
             }
@@ -251,7 +256,7 @@ fn flag_cluster(
             }
         }
         for a in assertions {
-            let fvs: HashSet<String> = scoped_free_variables(a, &HashSet::new())
+            let fvs: HashSet<String> = smt2::free_variables_bool(a)
                 .into_iter()
                 .filter(|name| is_int_symbol_name(name))
                 .collect();
@@ -275,10 +280,10 @@ fn is_int_symbol_name(_name: &str) -> bool {
     true
 }
 
-fn cluster_assertions(assertions: &[Term], cluster: &HashSet<String>) -> Vec<Term> {
+fn cluster_assertions(assertions: &[Bool], cluster: &HashSet<String>) -> Vec<Bool> {
     assertions
         .iter()
-        .filter(|a| scoped_free_variables(a, &HashSet::new()).is_subset(cluster))
+        .filter(|a| smt2::free_variables_bool(a).is_subset(cluster))
         .cloned()
         .collect()
 }
@@ -292,7 +297,7 @@ struct ProbeOutcomes {
 
 fn probe_cluster(
     prefix: &str,
-    rel: &[Term],
+    rel: &[Bool],
     cluster_choices: &BTreeMap<String, Vec<i128>>,
     batch: &mut BTreeSet<String>,
 ) -> ProbeOutcomes {
@@ -315,17 +320,17 @@ fn probe_cluster(
 
     for (sym, vals) in cluster_choices {
         for v in vals {
-            let probe = list("=", vec![atom(sym), atom(&v.to_string())]);
+            let probe = Int::new_const(sym.as_str()).eq(&int_from_i128(*v));
             let r = probe_assumption(&solver, &probe);
             match r {
                 Some(true) => out.probes_sat += 1,
                 Some(false) => {
                     out.probes_unsat += 1;
-                    let ne = list("not", vec![probe.clone()]);
-                    let key = ne.to_string();
-                    if batch.insert(key.clone()) {
+                    let ne = probe.not();
+                    let ne_text = ne.to_string();
+                    if batch.insert(ne_text.clone()) {
                         out.excluded += 1;
-                        solver.from_string(format!("(assert {key})\n").as_bytes());
+                        solver.from_string(format!("(assert {ne_text})\n").as_bytes());
                     }
                 }
                 None => out.probes_unknown += 1,
@@ -341,7 +346,7 @@ fn set_rlimit(solver: &z3::Solver) {
     solver.set_params(&params);
 }
 
-fn probe_assumption(solver: &z3::Solver, assumption: &Term) -> Option<bool> {
+fn probe_assumption(solver: &z3::Solver, assumption: &Bool) -> Option<bool> {
     solver.push();
     let s = format!("(assert {})\n", assumption.to_string());
     solver.from_string(s.as_bytes());
@@ -352,27 +357,6 @@ fn probe_assumption(solver: &z3::Solver, assumption: &Term) -> Option<bool> {
         SatResult::Unsat => Some(false),
         SatResult::Unknown => None,
     }
-}
-
-fn is_and(term: &Term) -> bool {
-    matches!(term, Term::List(items) if matches!(items.first(), Some(Term::Atom(s)) if s == "and"))
-}
-
-fn and_parts(term: &Term) -> Vec<Term> {
-    let Term::List(items) = term else {
-        return vec![term.clone()];
-    };
-    items[1..].to_vec()
-}
-
-fn or_parts(term: &Term) -> Option<Vec<Term>> {
-    let Term::List(items) = term else {
-        return None;
-    };
-    if !matches!(items.first(), Some(Term::Atom(s)) if s == "or") {
-        return None;
-    }
-    Some(items[1..].to_vec())
 }
 
 #[cfg(test)]
@@ -389,9 +373,14 @@ mod tests {
 
     #[test]
     fn flag_cluster_drops_wide_columns() {
-        let flag_dom = Term::parse("(or (= opcode_and_flag 0) (= opcode_and_flag 1))").unwrap();
-        let wide = Term::parse("(= (* opcode_and_flag a__0_0) a__0_0)").unwrap();
-        let asserts = vec![flag_dom.clone(), wide];
+        let script = Script::parse(
+            "(assert (or (= opcode_and_flag 0) (= opcode_and_flag 1)))\n\
+             (assert (= (* opcode_and_flag a__0_0) a__0_0))\n\
+             (check-sat)\n",
+        )
+        .unwrap();
+        let asserts = collect_assert_terms(&script);
+        let flag_dom = asserts[0].clone();
         let choices = collect_choices(&asserts, 3);
         let cluster = flag_cluster("opcode_and_flag", &asserts, &choices);
         assert!(cluster.contains("opcode_and_flag"));
@@ -403,11 +392,11 @@ mod tests {
 
     #[test]
     fn flag_cluster_links_pinned_aux_vars() {
-        let f = Term::parse(
-            "(and (or (= x 0) (= x 1)) (= y 0))",
+        let script = Script::parse(
+            "(assert (and (or (= x 0) (= x 1)) (= y 0)))\n(check-sat)\n",
         )
         .unwrap();
-        let asserts = vec![f];
+        let asserts = collect_assert_terms(&script);
         let choices = collect_choices(&asserts, 3);
         let cluster = flag_cluster("x", &asserts, &choices);
         assert_eq!(cluster, HashSet::from(["x".to_string(), "y".to_string()]));

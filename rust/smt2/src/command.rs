@@ -1,5 +1,7 @@
 //! Typed SMT-LIB commands.
 
+use std::collections::HashMap;
+
 use z3::ast::Bool;
 
 use crate::sexpr::{SExpr, Span, Spanned};
@@ -55,9 +57,7 @@ impl SmtCommand {
                 Ok(SmtCommand::DeclareFun(form))
             }
             "assert" => {
-                let b = ctx
-                    .ingest_command(slice)?
-                    .ok_or_else(|| format!("assert produced no formula in `{slice}`"))?;
+                let b = parse_assert(&form, slice, ctx)?;
                 Ok(SmtCommand::Assert {
                     bool: b,
                     span: Some(form.span),
@@ -215,6 +215,138 @@ pub fn command_text<'a>(cmd: &SmtCommand, source: &'a str) -> &'a str {
         | SmtCommand::Echo(f)
         | SmtCommand::Raw(f) => f.text(source),
     }
+}
+
+pub(crate) fn parse_assert(form: &Spanned<SExpr>, slice: &str, ctx: &mut ParseCtx) -> Result<Bool, String> {
+    if let Some(b) = ctx.ingest_command(slice)? {
+        return Ok(b);
+    }
+    let body = form
+        .node
+        .args()
+        .and_then(|a| a.first())
+        .ok_or_else(|| format!("malformed assert: `{slice}`"))?;
+    for (sym, is_bool) in infer_sexpr_symbol_sorts(&body.node) {
+        let sort = if is_bool {
+            "Bool"
+        } else if sym.contains("memory_is") || sym.contains("memory_match") {
+            "Bool"
+        } else {
+            "Int"
+        };
+        let _ = ctx.ingest_command(&format!("(declare-fun {sym} () {sort})"));
+    }
+    let body_text = body.node.to_string();
+    ctx.ingest_command(&format!("(assert {body_text})"))?
+        .ok_or_else(|| format!("assert produced no formula in `{slice}`"))
+}
+
+fn infer_sexpr_symbol_sorts(expr: &SExpr) -> HashMap<String, bool> {
+    let mut sorts: HashMap<String, bool> = HashMap::new();
+    infer_sorts(expr, &[], false, &mut sorts);
+    sorts
+}
+
+fn infer_sorts(expr: &SExpr, bound: &[&str], bool_ctx: bool, sorts: &mut HashMap<String, bool>) {
+    match expr {
+        SExpr::Atom(s) => {
+            if is_sexpr_symbol(s) && !bound.contains(&s.as_str()) {
+                sorts
+                    .entry(s.clone())
+                    .and_modify(|b| *b = *b && bool_ctx)
+                    .or_insert(bool_ctx);
+            }
+        }
+        SExpr::List(items) if !items.is_empty() => {
+            let head = items[0].node.head().unwrap_or("");
+            if (head == "forall" || head == "exists") && items.len() >= 3 {
+                let mut new_bound: Vec<String> = bound.iter().map(|s| s.to_string()).collect();
+                if let SExpr::List(decls) = &items[1].node {
+                    for d in decls {
+                        let name = d
+                            .node
+                            .as_atom()
+                            .or_else(|| d.node.args()?.first()?.node.as_atom());
+                        if let Some(name) = name {
+                            new_bound.push(name.to_string());
+                        }
+                    }
+                }
+                let bound_refs: Vec<&str> = new_bound.iter().map(|s| s.as_str()).collect();
+                infer_sorts(&items[2].node, &bound_refs, false, sorts);
+                return;
+            }
+            if head == "let" && items.len() >= 3 {
+                let mut new_bound: Vec<String> = bound.iter().map(|s| s.to_string()).collect();
+                if let SExpr::List(binders) = &items[1].node {
+                    for binder in binders {
+                        if let Some(pair) = binder.node.args() {
+                            if let Some(name) = pair.first().and_then(|p| p.node.as_atom()) {
+                                new_bound.push(name.to_string());
+                            }
+                            if pair.len() >= 2 {
+                                infer_sorts(&pair[1].node, bound, false, sorts);
+                            }
+                        }
+                    }
+                }
+                let bound_refs: Vec<&str> = new_bound.iter().map(|s| s.as_str()).collect();
+                infer_sorts(&items[2].node, &bound_refs, bool_ctx, sorts);
+                return;
+            }
+            let arith = matches!(head, "+" | "-" | "*" | "mod" | "<" | "<=" | ">" | ">=");
+            let bool_op = matches!(head, "not" | "and" | "or" | "=>" | "ite");
+            if head == "=" && items.len() >= 3 {
+                let lhs_arith = is_arithish(&items[1].node);
+                let rhs_arith = is_arithish(&items[2].node);
+                let int_eq = lhs_arith || rhs_arith;
+                infer_sorts(&items[1].node, bound, !int_eq && bool_ctx, sorts);
+                infer_sorts(&items[2].node, bound, !int_eq && bool_ctx, sorts);
+                return;
+            }
+            let child_bool = bool_op || bool_ctx;
+            let child_int = arith;
+            for item in &items[1..] {
+                infer_sorts(
+                    &item.node,
+                    bound,
+                    if child_int {
+                        false
+                    } else {
+                        child_bool
+                    },
+                    sorts,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_arithish(expr: &SExpr) -> bool {
+    match expr {
+        SExpr::Atom(s) => is_sexpr_symbol(s) || crate::ast_util::is_int_literal_string(s),
+        SExpr::List(items) if !items.is_empty() => {
+            let head = items[0].node.head().unwrap_or("");
+            matches!(head, "+" | "-" | "*" | "mod" | "<" | "<=" | ">" | ">=")
+                || items[1..].iter().any(|i| is_arithish(&i.node))
+        }
+        _ => false,
+    }
+}
+
+fn is_sexpr_symbol(s: &str) -> bool {
+    if s == "true" || s == "false" {
+        return false;
+    }
+    if crate::ast_util::is_int_literal_string(s) {
+        return false;
+    }
+    const KEYWORDS: &[&str] = &[
+        "Int", "Bool", "Real", "Array", "Select", "Store", "and", "or", "not", "=>", "ite",
+        "forall", "exists", "let", "=", "distinct", "mod", "+", "-", "*", "<", "<=", ">", ">=",
+    ];
+    !KEYWORDS.contains(&s)
 }
 
 fn form_matches_source_slice(node: &SExpr, slice: &str) -> bool {

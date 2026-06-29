@@ -1,5 +1,7 @@
 //! Simplifier pass registry and pipeline runner.
 
+pub mod expr_util;
+pub mod fold;
 pub mod passes;
 pub mod poly_factor;
 pub mod tactic;

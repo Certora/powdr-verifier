@@ -3,8 +3,8 @@
 use std::collections::HashSet;
 
 use smt2::{
-    ast_util::free_int_symbols, declare_fun_name_cmd, declared_symbol_names, map_asserts,
-    parse_single_command, ParseCtx, Script, SmtCommand,
+    declare_fun_name_cmd, declared_symbol_names, ensure_free_symbols_declared, map_asserts,
+    parse_single_command, seed_parser_context, ParseCtx, Script, SmtCommand,
 };
 use z3::ast::Bool;
 
@@ -55,6 +55,18 @@ impl AssertBuildCtx {
         }
         Ok(())
     }
+
+    pub fn parse(&mut self) -> &mut ParseCtx {
+        &mut self.parse
+    }
+
+    pub fn declared(&self) -> &HashSet<String> {
+        &self.declared
+    }
+
+    pub fn declared_mut(&mut self) -> &mut HashSet<String> {
+        &mut self.declared
+    }
 }
 
 fn parse_declare_fun_name(raw: &str) -> Option<String> {
@@ -66,47 +78,13 @@ fn parse_declare_fun_name(raw: &str) -> Option<String> {
 
 pub fn map_asserts_with_decl(
     script: &Script,
-    mut f: impl FnMut(&Bool) -> Result<Bool, String>,
+    f: impl FnMut(&Bool) -> Result<Bool, String>,
 ) -> Result<Script, String> {
-    let mut parse = ParseCtx::new();
-    seed_parser_context(&mut parse, script)?;
-    let mut declared = declared_names(script);
-    map_asserts(script, |b| {
-        let new_b = f(b)?;
-        ensure_free_symbols_declared(&new_b, &mut parse, &mut declared)?;
-        Ok(new_b)
-    })
-}
-
-pub fn seed_parser_context(ctx: &mut ParseCtx, script: &Script) -> Result<(), String> {
-    smt2::seed_parser_context(ctx, script)
+    map_asserts(script, f)
 }
 
 pub fn declared_names(script: &Script) -> HashSet<String> {
-    declared_symbol_names(
-        &script
-            .commands
-            .iter()
-            .filter(|c| c.name() == "declare-fun")
-            .cloned()
-            .collect::<Vec<_>>(),
-    )
-    .into_iter()
-    .collect()
-}
-
-pub(crate) fn ensure_free_symbols_declared(
-    b: &Bool,
-    ctx: &mut ParseCtx,
-    declared: &mut HashSet<String>,
-) -> Result<(), String> {
-    for sym in free_int_symbols(b) {
-        if !declared.insert(sym.clone()) {
-            continue;
-        }
-        ctx.ingest_command(&format!("(declare-fun {sym} () Int)"))?;
-    }
-    Ok(())
+    declared_symbol_names(&script.commands).into_iter().collect()
 }
 
 pub fn is_true(b: &Bool) -> bool {

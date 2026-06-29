@@ -2,12 +2,14 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use smt2::{parse::Command, map_asserts, splice_z3_result, Script, Term};
+use smt2::{
+    asserts_excluding_true, declare_fun_name_cmd, declared_symbol_names,
+    extra_declarations, free_variables_bool, parse_single_command, splice_z3_result,
+    Script,
+};
 use z3::{SatResult, Tactic};
 
-use crate::passes::skolem::term_util::{expand_lets, free_variables, swap_prefix, symbol_sort};
-use crate::passes::skolem::types::SortKind;
-use crate::passes::skolem::utils::{collect_symbol_sorts, declare_fun_name};
+use crate::expr_util::AssertBuildCtx;
 
 const DEFAULT_TACTICS: &[&str] = &[
     "propagate-values",
@@ -50,30 +52,34 @@ fn sat_result_str(r: SatResult) -> &'static str {
     }
 }
 
-fn sort_kind_to_smt(sort: SortKind) -> &'static str {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeclSort {
+    Int,
+    Bool,
+    Array,
+}
+
+fn sort_kind_to_smt(sort: DeclSort) -> &'static str {
     match sort {
-        SortKind::Bool => "Bool",
-        SortKind::Array => "(Array Int Int)",
-        SortKind::Int | SortKind::Other => "Int",
+        DeclSort::Bool => "Bool",
+        DeclSort::Array => "(Array Int Int)",
+        DeclSort::Int => "Int",
     }
 }
 
-fn infer_free_symbol_sort(
-    name: &str,
-    sorts: &std::collections::HashMap<String, SortKind>,
-) -> SortKind {
-    if sorts.contains_key(name) {
-        return symbol_sort(name, sorts);
+fn infer_free_symbol_sort(name: &str, sorts: &std::collections::HashMap<String, DeclSort>) -> DeclSort {
+    if let Some(sort) = sorts.get(name) {
+        return *sort;
     }
-    if let Some(swapped) = swap_prefix(name) {
-        if sorts.contains_key(&swapped) {
-            return symbol_sort(&swapped, sorts);
+    if let Some(swapped) = smt2::swap_prefix(name) {
+        if let Some(sort) = sorts.get(&swapped) {
+            return *sort;
         }
     }
     if name.contains("memory_is") {
-        return SortKind::Bool;
+        return DeclSort::Bool;
     }
-    SortKind::Int
+    DeclSort::Int
 }
 
 fn is_let_temp_symbol(name: &str) -> bool {
@@ -86,23 +92,19 @@ fn is_let_temp_symbol(name: &str) -> bool {
 /// Declare symbols free in ``assert`` bodies but missing from ``declare-fun``.
 /// Mirrors Python ``_ensure_declarations_for_asserts`` before Z3 sees the script.
 fn ensure_assert_declarations(script: &Script) -> Result<(Script, usize), String> {
+    let mut build = AssertBuildCtx::from_script(script)?;
     let mut sorts = collect_symbol_sorts(script);
     let declared: HashSet<String> = script
         .commands
         .iter()
-        .filter(|c| c.name() == "declare-fun")
-        .filter_map(|c| declare_fun_name(&c.raw))
+        .filter_map(declare_fun_name_cmd)
         .collect();
-    let mut missing: BTreeMap<String, SortKind> = BTreeMap::new();
+    let mut missing: BTreeMap<String, DeclSort> = BTreeMap::new();
     for cmd in &script.commands {
-        if cmd.name() != "assert" {
-            continue;
-        }
-        let Some(body) = smt2::term::assert_body(&cmd.raw) else {
+        let Some(body) = cmd.assert_bool() else {
             continue;
         };
-        let term = Term::parse(&body)?;
-        for sym in free_variables(&term) {
+        for sym in free_variables_bool(body) {
             if is_let_temp_symbol(&sym) {
                 continue;
             }
@@ -120,28 +122,25 @@ fn ensure_assert_declarations(script: &Script) -> Result<(Script, usize), String
     let first_assert = script
         .commands
         .iter()
-        .position(|c| c.name() == "assert")
+        .position(|c| c.assert_bool().is_some())
         .ok_or("missing assert")?;
-    let decl_cmds: Vec<Command> = missing
-        .iter()
-        .map(|(name, sort)| {
-            Command::new(format!(
-                "(declare-fun {name} () {})",
-                sort_kind_to_smt(*sort)
-            ))
-        })
-        .collect();
+    let mut decl_cmds = Vec::new();
+    for (name, sort) in &missing {
+        let raw = format!("(declare-fun {name} () {})", sort_kind_to_smt(*sort));
+        let cmd = parse_single_command(&raw, build.parse())?;
+        decl_cmds.push(cmd);
+    }
     let n = decl_cmds.len();
     let mut commands = script.commands.clone();
     commands.splice(first_assert..first_assert, decl_cmds);
-    Ok((Script::from_commands(commands), n))
+    Ok((Script::from_commands(&script.source, commands), n))
 }
 
 pub fn apply(script: &Script, tactic_args: &[String]) -> Result<(Script, serde_json::Value), String> {
     let (script, ensured_decls) = ensure_assert_declarations(script)?;
     let parts = script.split_at_check_sat()?;
     let asserts_in = parts.asserts_in();
-    let z3_input = parts.z3_input_string();
+    let z3_input = parts.z3_input_string(&script.source);
 
     let tactic = build_tactic(tactic_args);
     let solver = tactic.solver();
@@ -150,16 +149,12 @@ pub fn apply(script: &Script, tactic_args: &[String]) -> Result<(Script, serde_j
 
     let processed_str = solver.to_string();
     let processed = Script::parse(&processed_str)?;
-    let processed = map_asserts(&processed, |body| {
-        let term = Term::parse(body)?;
-        Ok(expand_lets(&term).to_string())
-    })?;
 
-    let prefix_names = smt2::declared_symbol_names(&parts.prefix);
-    let extra = smt2::extra_declarations(&processed.commands, &prefix_names);
-    let new_asserts = smt2::asserts_excluding_true(&processed.commands);
+    let prefix_names = declared_symbol_names(&parts.prefix);
+    let extra = extra_declarations(&processed.commands, &prefix_names);
+    let new_asserts = asserts_excluding_true(&processed.commands);
 
-    let out = splice_z3_result(&parts, &processed.commands);
+    let out = splice_z3_result(&parts, &processed.commands, &script.source);
     let stats = serde_json::json!({
         "backend": "rust",
         "z3_version": z3::full_version(),
@@ -171,4 +166,25 @@ pub fn apply(script: &Script, tactic_args: &[String]) -> Result<(Script, serde_j
         "tactic_args": if tactic_args.is_empty() { serde_json::Value::Null } else { serde_json::json!(tactic_args) },
     });
     Ok((out, stats))
+}
+
+fn sort_from_decl(raw: &str) -> DeclSort {
+    if raw.contains("(Array") || raw.contains(" Array ") {
+        DeclSort::Array
+    } else if raw.contains("Bool") {
+        DeclSort::Bool
+    } else {
+        DeclSort::Int
+    }
+}
+
+fn collect_symbol_sorts(script: &Script) -> std::collections::HashMap<String, DeclSort> {
+    let mut out = std::collections::HashMap::new();
+    for cmd in &script.commands {
+        if let Some(name) = declare_fun_name_cmd(cmd) {
+            let raw = cmd.to_smtlib(&script.source);
+            out.insert(name, sort_from_decl(&raw));
+        }
+    }
+    out
 }

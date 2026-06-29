@@ -1,33 +1,27 @@
 use std::collections::{HashMap, HashSet};
 
-use smt2::Term;
-use z3::ast::{Bool, Int as ZInt};
+use smt2::{and_parts, free_variables_bool, or_parts};
+use z3::ast::{Bool, Dynamic, Int as ZInt};
 use z3::{SatResult, Solver};
 
 use super::map::SkolemMap;
-use super::term_util::{atom, field_mod, free_variables, list, symbol_sort};
+use super::ast_build::{field_mod, symbol_sort};
 use super::types::SortKind;
 
 pub fn contribute(
     map: &mut SkolemMap,
-    body: &Term,
+    body: &Bool,
     sorts: &HashMap<String, SortKind>,
     decl_block: &str,
 ) {
-    let Term::List(items) = body else {
+    let Some(items) = or_parts(body) else {
         return;
     };
-    if !matches!(items.first(), Some(Term::Atom(s)) if s == "or") {
-        return;
-    }
 
     let cand: HashSet<String> = map
         .qvars
         .iter()
-        .filter(|q| {
-            !map.is_pinned(q)
-                && matches!(symbol_sort(q, sorts), SortKind::Int | SortKind::Bool)
-        })
+        .filter(|q| !map.is_pinned(q) && matches!(symbol_sort(q, sorts), SortKind::Int | SortKind::Bool))
         .cloned()
         .collect();
     if cand.is_empty() {
@@ -56,23 +50,23 @@ pub fn contribute(
     }
 
     let mut tainted: HashSet<String> = HashSet::new();
-    let mut disj_cands: Vec<(Vec<String>, Term)> = Vec::new();
+    let mut disj_cands: Vec<(Vec<String>, Bool)> = Vec::new();
 
-    for d in &items[1..] {
-        let cset: Vec<String> = cand
-            .iter()
-            .filter(|q| free_variables(d).contains(*q))
-            .cloned()
-            .collect();
+    for d in items {
+        let d_free = free_variables_bool(&d);
+        let cset: Vec<String> = cand.iter().filter(|q| d_free.contains(*q)).cloned().collect();
         if cset.is_empty() {
             continue;
         }
-        let rel_parts = qvar_conjuncts(d, &cand);
-        let rel_fv: HashSet<String> = rel_parts.iter().flat_map(free_variables).collect();
+        let rel_parts = qvar_conjuncts(&d, &cand);
+        let rel_fv: HashSet<String> = rel_parts
+            .iter()
+            .flat_map(free_variables_bool)
+            .collect();
         let relevant = if rel_parts.len() == 1 {
             rel_parts[0].clone()
         } else {
-            list("and", rel_parts)
+            Bool::and(&rel_parts.iter().collect::<Vec<_>>())
         };
         disj_cands.push((cset.clone(), relevant));
         for other in &cset[1..] {
@@ -89,7 +83,7 @@ pub fn contribute(
 
     let field = field_mod();
     let mut members_by_root: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut disjuncts_by_root: HashMap<String, Vec<Term>> = HashMap::new();
+    let mut disjuncts_by_root: HashMap<String, Vec<Bool>> = HashMap::new();
     for q in &cand {
         let root = find(&mut parent, q);
         members_by_root.entry(root).or_default().insert(q.clone());
@@ -107,7 +101,7 @@ pub fn contribute(
         let Some(members) = members_by_root.get(&root) else {
             continue;
         };
-        let falsify: Vec<Term> = disjuncts.iter().map(|d| list("not", vec![d.clone()])).collect();
+        let falsify: Vec<Bool> = disjuncts.iter().map(|d| d.not()).collect();
         let model = solve_island(&falsify, members, sorts, decl_block, field);
         for q in members {
             let val = model
@@ -120,36 +114,28 @@ pub fn contribute(
     }
 }
 
-fn qvar_conjuncts(d: &Term, cand: &HashSet<String>) -> Vec<Term> {
-    let conjs = if let Term::List(items) = d {
-        if matches!(items.first(), Some(Term::Atom(s)) if s == "and") {
-            items[1..].to_vec()
-        } else {
-            vec![d.clone()]
-        }
-    } else {
-        vec![d.clone()]
-    };
+fn qvar_conjuncts(d: &Bool, cand: &HashSet<String>) -> Vec<Bool> {
+    let conjs = and_parts(d).unwrap_or_else(|| vec![d.clone()]);
     conjs
         .into_iter()
-        .filter(|c| !free_variables(c).is_disjoint(cand))
+        .filter(|c| !free_variables_bool(c).is_disjoint(cand))
         .collect()
 }
 
-fn default_value(q: &str, sorts: &HashMap<String, SortKind>) -> Term {
+fn default_value(q: &str, sorts: &HashMap<String, SortKind>) -> Dynamic {
     match symbol_sort(q, sorts) {
-        SortKind::Bool => atom("false"),
-        _ => atom("0"),
+        SortKind::Bool => Dynamic::from_ast(&Bool::from_bool(false)),
+        _ => Dynamic::from_ast(&ZInt::from_i64(0)),
     }
 }
 
 fn solve_island(
-    falsify: &[Term],
+    falsify: &[Bool],
     members: &HashSet<String>,
     sorts: &HashMap<String, SortKind>,
     decl_block: &str,
     field: Option<i128>,
-) -> Option<HashMap<String, Term>> {
+) -> Option<HashMap<String, Dynamic>> {
     let mut input = decl_block.to_string();
     if let Some(p) = field {
         for m in members {
@@ -159,7 +145,7 @@ fn solve_island(
         }
     }
     for f in falsify {
-        input.push_str(&format!("(assert {})\n", f.to_string()));
+        input.push_str(&format!("(assert {})\n", f));
     }
     input.push_str("(check-sat)\n");
 
@@ -175,30 +161,17 @@ fn solve_island(
             SortKind::Int => {
                 let sym = ZInt::new_const(m.as_str());
                 if let Some(val) = model.get_const_interp(&sym) {
-                    out.insert(m.clone(), ast_to_term(&val.to_string(), Some(SortKind::Int)));
+                    out.insert(m.clone(), Dynamic::from_ast(&val));
                 }
             }
             SortKind::Bool => {
                 let sym = Bool::new_const(m.as_str());
                 if let Some(val) = model.get_const_interp(&sym) {
-                    out.insert(m.clone(), ast_to_term(&val.to_string(), Some(SortKind::Bool)));
+                    out.insert(m.clone(), Dynamic::from_ast(&val));
                 }
             }
             _ => {}
         }
     }
     Some(out)
-}
-
-fn ast_to_term(s: &str, sort: Option<SortKind>) -> Term {
-    if s == "true" || s == "false" {
-        return atom(s);
-    }
-    if let Ok(t) = Term::parse(s) {
-        return t;
-    }
-    match sort {
-        Some(SortKind::Bool) => atom("false"),
-        _ => atom("0"),
-    }
 }

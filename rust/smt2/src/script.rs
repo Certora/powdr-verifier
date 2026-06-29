@@ -1,6 +1,13 @@
 //! Script representation, split/splice, and command helpers.
 
-use crate::parse::{parse_commands, Command};
+use std::collections::HashSet;
+
+use z3::ast::Bool;
+
+use crate::command::{declare_fun_name_cmd, SmtCommand};
+use crate::sexpr::SExpr;
+use crate::z3_parse::ParseCtx;
+use crate::ast_util::free_int_symbols;
 
 const PREFIX_CMDS: &[&str] = &[
     "set-info",
@@ -12,25 +19,35 @@ const PREFIX_CMDS: &[&str] = &[
     "echo",
 ];
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default)]
 pub struct Script {
-    pub commands: Vec<Command>,
+    pub source: String,
+    pub commands: Vec<SmtCommand>,
 }
 
 impl Script {
-    pub fn from_commands(commands: Vec<Command>) -> Self {
-        Self { commands }
+    pub fn from_commands(source: impl Into<String>, commands: Vec<SmtCommand>) -> Self {
+        Self {
+            source: source.into(),
+            commands,
+        }
     }
 
     pub fn parse(input: &str) -> Result<Self, String> {
-        Ok(Self::from_commands(parse_commands(input)?))
+        let forms = SExpr::read_all(input)?;
+        let mut ctx = ParseCtx::new();
+        let mut commands = Vec::with_capacity(forms.len());
+        for form in forms {
+            commands.push(SmtCommand::from_spanned(form, input, &mut ctx)?);
+        }
+        Ok(Self::from_commands(input, commands))
     }
 
     /// Split at the first `check-sat`, mirroring Python `simplify_z3` scan logic.
     pub fn split_at_check_sat(&self) -> Result<ScriptParts, String> {
         let mut prefix = Vec::new();
         let mut z3_feed = Vec::new();
-        let mut check_sat: Option<Command> = None;
+        let mut check_sat: Option<SmtCommand> = None;
         let mut suffix = Vec::new();
         let mut phase = Phase::BeforeCheckSat;
 
@@ -69,24 +86,24 @@ enum Phase {
 
 #[derive(Clone, Debug)]
 pub struct ScriptParts {
-    pub prefix: Vec<Command>,
-    pub z3_feed: Vec<Command>,
-    pub check_sat: Command,
-    pub suffix: Vec<Command>,
+    pub prefix: Vec<SmtCommand>,
+    pub z3_feed: Vec<SmtCommand>,
+    pub check_sat: SmtCommand,
+    pub suffix: Vec<SmtCommand>,
 }
 
 impl ScriptParts {
     /// Build the SMT-LIB fragment fed to Z3: prefix `declare-fun` + all `assert`s.
-    pub fn z3_input_string(&self) -> String {
+    pub fn z3_input_string(&self, source: &str) -> String {
         let mut out = String::new();
         for cmd in &self.prefix {
             if cmd.name() == "declare-fun" {
-                out.push_str(&cmd.raw);
+                out.push_str(&cmd.to_smtlib(source));
                 out.push('\n');
             }
         }
         for cmd in &self.z3_feed {
-            out.push_str(&cmd.raw);
+            out.push_str(&cmd.to_smtlib(source));
             out.push('\n');
         }
         out
@@ -98,30 +115,25 @@ impl ScriptParts {
 }
 
 /// Symbol names from `declare-fun` commands.
-pub fn declared_symbol_names(commands: &[Command]) -> Vec<String> {
+pub fn declared_symbol_names(commands: &[SmtCommand]) -> Vec<String> {
     commands
         .iter()
-        .filter(|c| c.name() == "declare-fun")
-        .filter_map(|c| declare_fun_symbol(&c.raw))
+        .filter_map(declare_fun_name_cmd)
         .collect()
 }
 
-fn declare_fun_symbol(raw: &str) -> Option<String> {
-    let inner = raw.trim().strip_prefix('(')?.trim();
-    let rest = inner.strip_prefix("declare-fun")?.trim();
-    let end = rest.find(|c: char| c.is_whitespace())?;
-    Some(rest[..end].to_string())
-}
-
 /// `declare-fun` in `processed` not already in `prefix_names`.
-pub fn extra_declarations(processed: &[Command], prefix_names: &[String]) -> Vec<Command> {
-    let mut seen: std::collections::HashSet<String> = prefix_names.to_vec().into_iter().collect();
+pub fn extra_declarations(
+    processed: &[SmtCommand],
+    prefix_names: &[String],
+) -> Vec<SmtCommand> {
+    let mut seen: HashSet<String> = prefix_names.to_vec().into_iter().collect();
     let mut out = Vec::new();
     for cmd in processed {
         if cmd.name() != "declare-fun" {
             continue;
         }
-        if let Some(sym) = declare_fun_symbol(&cmd.raw) {
+        if let Some(sym) = declare_fun_name_cmd(cmd) {
             if seen.insert(sym) {
                 out.push(cmd.clone());
             }
@@ -131,23 +143,21 @@ pub fn extra_declarations(processed: &[Command], prefix_names: &[String]) -> Vec
 }
 
 /// Assert commands whose body is not literal `true`.
-pub fn asserts_excluding_true(processed: &[Command]) -> Vec<Command> {
+pub fn asserts_excluding_true(processed: &[SmtCommand]) -> Vec<SmtCommand> {
     processed
         .iter()
-        .filter(|c| c.name() == "assert" && !is_assert_true(&c.raw))
+        .filter(|c| {
+            c.name() == "assert"
+                && c.assert_bool()
+                    .map(|b| b.as_bool() != Some(true))
+                    .unwrap_or(true)
+        })
         .cloned()
         .collect()
 }
 
-fn is_assert_true(raw: &str) -> bool {
-    let inner = raw.trim().strip_prefix('(').unwrap_or(raw).trim();
-    let rest = inner.strip_prefix("assert").unwrap_or("").trim();
-    let body = rest.strip_suffix(')').unwrap_or(rest).trim();
-    body == "true" || body == "(true)"
-}
-
 /// Assert commands in `script` (before `check-sat`).
-pub fn assert_commands(script: &Script) -> Vec<&Command> {
+pub fn assert_commands(script: &Script) -> Vec<&SmtCommand> {
     script
         .commands
         .iter()
@@ -156,37 +166,68 @@ pub fn assert_commands(script: &Script) -> Vec<&Command> {
         .collect()
 }
 
-/// Transform each assert command body; other commands unchanged.
+/// Ingest prefix commands into a Z3 parser context.
+pub fn seed_parser_context(ctx: &mut ParseCtx, script: &Script) -> Result<(), String> {
+    for cmd in &script.commands {
+        if cmd.name() == "check-sat" {
+            break;
+        }
+        if cmd.name() == "assert" {
+            continue;
+        }
+        let raw = cmd.to_smtlib(&script.source);
+        ctx.ingest_command(&raw)?;
+    }
+    Ok(())
+}
+
+pub fn ensure_free_symbols_declared(
+    b: &Bool,
+    ctx: &mut ParseCtx,
+    declared: &mut HashSet<String>,
+) -> Result<(), String> {
+    for sym in free_int_symbols(b) {
+        if !declared.insert(sym.clone()) {
+            continue;
+        }
+        ctx.ingest_command(&format!("(declare-fun {sym} () Int)"))?;
+    }
+    Ok(())
+}
+
+/// Transform each assert formula; other commands unchanged.
 pub fn map_asserts(
     script: &Script,
-    mut f: impl FnMut(&str) -> Result<String, String>,
+    mut f: impl FnMut(&Bool) -> Result<Bool, String>,
 ) -> Result<Script, String> {
-    use crate::term::{assert_body, replace_assert_body};
+    let mut ctx = ParseCtx::new();
+    seed_parser_context(&mut ctx, script)?;
+    let mut declared: HashSet<String> = declared_symbol_names(&script.commands).into_iter().collect();
 
     let mut commands = Vec::with_capacity(script.commands.len());
     for cmd in &script.commands {
-        if cmd.name() == "assert" {
-            let body = assert_body(&cmd.raw).ok_or_else(|| {
-                format!("malformed assert command: {}", cmd.raw)
-            })?;
-            let new_body = f(&body)?;
-            if new_body != body {
-                commands.push(Command::new(replace_assert_body(&cmd.raw, &new_body)));
-            } else {
-                commands.push(cmd.clone());
+        match cmd {
+            SmtCommand::Assert { bool: b, span, .. } => {
+                let new_b = f(b)?;
+                ensure_free_symbols_declared(&new_b, &mut ctx, &mut declared)?;
+                if new_b.to_string() != b.to_string() {
+                    commands.push(SmtCommand::Assert {
+                        bool: new_b,
+                        span: *span,
+                        term_text: None,
+                    });
+                } else {
+                    commands.push(cmd.clone());
+                }
             }
-        } else {
-            commands.push(cmd.clone());
+            _ => commands.push(cmd.clone()),
         }
     }
-    Ok(Script::from_commands(commands))
+    Ok(Script::from_commands(&script.source, commands))
 }
 
 /// Reassemble after Z3 processing.
-pub fn splice_z3_result(
-    parts: &ScriptParts,
-    processed: &[Command],
-) -> Script {
+pub fn splice_z3_result(parts: &ScriptParts, processed: &[SmtCommand], source: &str) -> Script {
     let prefix_names = declared_symbol_names(&parts.prefix);
     let extra = extra_declarations(processed, &prefix_names);
     let new_asserts = asserts_excluding_true(processed);
@@ -197,7 +238,7 @@ pub fn splice_z3_result(
     commands.extend(new_asserts);
     commands.push(parts.check_sat.clone());
     commands.extend(parts.suffix.iter().cloned());
-    Script::from_commands(commands)
+    Script::from_commands(source, commands)
 }
 
 #[cfg(test)]
@@ -226,13 +267,23 @@ mod tests {
         .commands;
         let extra = extra_declarations(&processed, &["x".to_string()]);
         assert_eq!(extra.len(), 1);
-        assert_eq!(declare_fun_symbol(&extra[0].raw).as_deref(), Some("mod!0"));
+        assert_eq!(declare_fun_name_cmd(&extra[0]).as_deref(), Some("mod!0"));
     }
 
     #[test]
     fn drops_assert_true() {
-        let processed = Script::parse("(assert true)\n(assert (= x 1))\n").unwrap().commands;
+        let processed = Script::parse(
+            "(declare-fun x () Int)\n(assert true)\n(assert (= x 1))\n",
+        )
+        .unwrap()
+        .commands;
         let asserts = asserts_excluding_true(&processed);
         assert_eq!(asserts.len(), 1);
+    }
+
+    #[test]
+    fn parse_assert_without_declare() {
+        let script = Script::parse("(assert (= x@0 y))\n(check-sat)\n").unwrap();
+        assert!(script.commands[0].assert_bool().is_some());
     }
 }

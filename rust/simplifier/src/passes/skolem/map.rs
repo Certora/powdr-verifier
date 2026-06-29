@@ -1,14 +1,16 @@
 use std::collections::{HashMap, HashSet};
 
-use smt2::Term;
+use smt2::ast_util::int_from_i128;
+use smt2::wrap_mod_expr_int;
+use z3::ast::{Bool, Dynamic, Int};
 
-use super::term_util::{field_mod, list, wrap_mod_expr};
+use super::ast_build::field_mod;
 use super::types::SortKind;
 
 pub struct SkolemMap {
     pub qvars: HashSet<String>,
     qvar_sorts: HashMap<String, SortKind>,
-    pins: HashMap<String, Term>,
+    pins: HashMap<String, Dynamic>,
     pub sources: HashMap<String, String>,
 }
 
@@ -28,7 +30,7 @@ impl SkolemMap {
         }
     }
 
-    pub fn pin(&mut self, q: &str, expr: Term, source: &str) -> bool {
+    pub fn pin(&mut self, q: &str, expr: Dynamic, source: &str) -> bool {
         if !self.qvars.contains(q) || self.pins.contains_key(q) {
             return false;
         }
@@ -41,22 +43,38 @@ impl SkolemMap {
         self.pins.contains_key(q)
     }
 
-    pub fn emit_disjuncts(&self) -> Vec<Term> {
+    pub fn emit_disjuncts(&self) -> Vec<Bool> {
         let p = field_mod();
         let mut out = Vec::new();
         for (q, expr) in &self.pins {
             let sort = self.qvar_sorts.get(q).copied().unwrap_or(SortKind::Other);
-            let rhs = if sort == SortKind::Int {
-                if let Some(m) = p {
-                    wrap_mod_expr(expr.clone(), m)
-                } else {
-                    expr.clone()
+            match sort {
+                SortKind::Bool => {
+                    let Some(rhs) = expr.as_bool() else {
+                        continue;
+                    };
+                    out.push(Bool::new_const(q.as_str()).eq(&rhs).not());
                 }
-            } else {
-                expr.clone()
-            };
-            let qterm = Term::Atom(q.clone());
-            out.push(list("not", vec![list("=", vec![qterm, rhs])]));
+                _ => {
+                    let rhs = if let Some(i) = expr.as_int() {
+                        i
+                    } else if let Some(b) = expr.as_bool() {
+                        b.ite(&int_from_i128(1), &int_from_i128(0))
+                    } else {
+                        continue;
+                    };
+                    let rhs = if sort == SortKind::Int {
+                        if let Some(m) = p {
+                            wrap_mod_expr_int(rhs, m)
+                        } else {
+                            rhs
+                        }
+                    } else {
+                        rhs
+                    };
+                    out.push(Int::new_const(q.as_str()).eq(&rhs).not());
+                }
+            }
         }
         out
     }

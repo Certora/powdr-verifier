@@ -578,4 +578,12 @@ mod tests {
             .unwrap();
         assert!(has_quantifier(&b));
     }
+
+    #[test]
+    fn mod_int_literal_string_reduces_beyond_i128() {
+        let p = 2_013_265_921_i128;
+        let huge = "32561662554329978067493305279605223446198353920";
+        let reduced = mod_int_literal_string(huge, p).unwrap();
+        assert_eq!(reduced, "1069547521");
+    }
 }

@@ -3,17 +3,14 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
-use smt2::{assert_commands, map_asserts, Script, Term};
+use smt2::{
+    assert_commands, declare_fun_name_cmd, int_from_i128, int_value, int_value_dyn, map_asserts,
+    map_bool_children, Script,
+};
+use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
 type Monomial = Vec<u32>;
 type Poly = HashMap<Monomial, i128>;
-
-fn declare_fun_symbol(raw: &str) -> Option<String> {
-    let inner = raw.trim().strip_prefix('(')?.trim();
-    let rest = inner.strip_prefix("declare-fun")?.trim();
-    let end = rest.find(|c: char| c.is_whitespace())?;
-    Some(rest[..end].to_string())
-}
 
 fn declare_fun_sort(raw: &str) -> Option<&str> {
     let body = raw.trim().strip_suffix(')')?.trim();
@@ -23,26 +20,23 @@ fn declare_fun_sort(raw: &str) -> Option<&str> {
 fn collect_bool_symbols(script: &Script) -> HashSet<String> {
     let mut out = HashSet::new();
     for cmd in &script.commands {
-        if cmd.name() != "declare-fun" {
+        let Some(sym) = declare_fun_name_cmd(cmd) else {
             continue;
-        }
-        if declare_fun_sort(&cmd.raw) != Some("Bool") {
-            continue;
-        }
-        if let Some(sym) = declare_fun_symbol(&cmd.raw) {
+        };
+        let raw = cmd.to_smtlib(&script.source);
+        if declare_fun_sort(&raw) == Some("Bool") {
             out.insert(sym);
         }
     }
     out
 }
 
-fn contains_bool_symbol(t: &Term, bool_symbols: &HashSet<String>) -> bool {
-    match t {
-        Term::Atom(s) => bool_symbols.contains(s),
-        Term::List(items) => items[1..]
-            .iter()
-            .any(|a| contains_bool_symbol(a, bool_symbols)),
-    }
+fn contains_bool_symbol(ast: &Dynamic, bool_symbols: &HashSet<String>) -> bool {
+    smt2::iter_nodes_dyn(ast).into_iter().any(|n| {
+        smt2::symbol_name_dyn(&n)
+            .map(|name| bool_symbols.contains(&name))
+            .unwrap_or(false)
+    })
 }
 
 pub fn field_mod() -> Option<i128> {
@@ -69,14 +63,12 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
 
     let total = assert_commands(script).len();
     let mut changed = 0usize;
-    let out = map_asserts(script, |body| {
-        let term = Term::parse(body)?;
-        let new = normalize_term(&term, &ctx);
-        let new_body = new.to_string();
-        if new_body != body {
+    let out = map_asserts(script, |b| {
+        let new = normalize_term(b, &ctx);
+        if new.to_string() != b.to_string() {
             changed += 1;
         }
-        Ok(new_body)
+        Ok(new)
     })?;
 
     let stats = serde_json::json!({
@@ -89,42 +81,17 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
 
 struct NormalizeCtx<'a> {
     var_index: &'a HashMap<String, usize>,
-    vars: &'a [Term],
+    vars: &'a [Int],
     field_mod: Option<i128>,
     bool_symbols: &'a HashSet<String>,
 }
 
-fn int_literal(t: &Term) -> Option<i128> {
-    match t {
-        Term::Atom(s) => smt2::term::parse_int_literal(s),
-        _ => None,
-    }
-}
-
-fn int_literal_mod(t: &Term, modulo: Option<i128>) -> Option<i128> {
+fn int_literal_mod(t: &Int, modulo: Option<i128>) -> Option<i128> {
     let m = modulo?;
-    match t {
-        Term::Atom(s) => {
-            if let Some(v) = smt2::term::parse_int_literal(s) {
-                return Some(coeff_mod(v, m));
-            }
-            smt2::term::mod_int_literal_string(s, m)?.parse().ok()
-        }
-        _ => None,
-    }
+    int_value(t).map(|v| coeff_mod(v, m))
 }
 
-fn atom(s: &str) -> Term {
-    Term::Atom(s.to_string())
-}
-
-fn list(head: &str, args: Vec<Term>) -> Term {
-    let mut items = vec![atom(head)];
-    items.extend(args);
-    Term::List(items)
-}
-
-fn term_key(t: &Term) -> String {
+fn term_key(t: &Int) -> String {
     t.to_string()
 }
 
@@ -139,93 +106,109 @@ fn is_bool_or_relation_head(head: &str) -> bool {
     )
 }
 
-fn field_mod_wrap(t: &Term, p: i128) -> bool {
-    let Term::List(items) = t else {
-        return false;
-    };
-    matches!(items.first(), Some(Term::Atom(s)) if s == "mod")
-        && items.len() == 3
-        && int_literal(&items[2]) == Some(p)
+fn field_mod_wrap(t: &Int, p: i128) -> bool {
+    let ast = Dynamic::from_ast(t);
+    ast.kind() == AstKind::App
+        && smt2::decl_name(&ast.decl()) == "mod"
+        && ast.num_children() == 2
+        && ast
+            .nth_child(1)
+            .and_then(|m| int_value_dyn(&m))
+            .map(|m| m == p)
+            .unwrap_or(false)
 }
 
-fn unwrap_field_mod_body(t: &Term, p: i128) -> &Term {
-    if field_mod_wrap(t, p) {
-        let Term::List(items) = t else {
-            return t;
-        };
-        &items[1]
-    } else {
-        t
+fn unwrap_field_mod_body(t: &Int, p: i128) -> Int {
+    if !field_mod_wrap(t, p) {
+        return t.clone();
     }
+    Dynamic::from_ast(t)
+        .nth_child(0)
+        .and_then(|c| c.as_int())
+        .unwrap_or_else(|| t.clone())
 }
 
-fn collect_variables(script: &Script, field_mod: Option<i128>) -> Vec<Term> {
+fn collect_variables(script: &Script, field_mod: Option<i128>) -> Vec<Int> {
     let mut gens: HashSet<String> = HashSet::new();
-    let mut gen_terms: HashMap<String, Term> = HashMap::new();
+    let mut gen_terms: HashMap<String, Int> = HashMap::new();
     let mut seen: HashSet<String> = HashSet::new();
 
     fn visit(
-        n: &Term,
+        n: &Dynamic,
         field_mod: Option<i128>,
         gens: &mut HashSet<String>,
-        gen_terms: &mut HashMap<String, Term>,
+        gen_terms: &mut HashMap<String, Int>,
         seen: &mut HashSet<String>,
     ) {
-        let key = term_key(n);
+        let key = n.to_string();
         if seen.contains(&key) {
             return;
         }
         seen.insert(key.clone());
 
-        if int_literal(n).is_some() {
+        if int_value_dyn(n).is_some() {
             return;
         }
 
-        let Term::List(items) = n else {
+        if let Some(int_n) = n.as_int() {
+            if n.kind() == AstKind::App {
+                let head = smt2::decl_name(&n.decl());
+                if let Some(p) = field_mod {
+                    if head == "mod"
+                        && n.num_children() == 2
+                        && n
+                            .nth_child(1)
+                            .and_then(|m| int_value_dyn(&m))
+                            .map(|m| m == p)
+                            .unwrap_or(false)
+                    {
+                        if let Some(body) = n.nth_child(0) {
+                            visit(&body, field_mod, gens, gen_terms, seen);
+                            return;
+                        }
+                    }
+                }
+                if is_combinator(&head) {
+                    for i in 0..n.num_children() {
+                        if let Some(ch) = n.nth_child(i) {
+                            visit(&ch, field_mod, gens, gen_terms, seen);
+                        }
+                    }
+                    return;
+                }
+            }
             gens.insert(key.clone());
-            gen_terms.insert(key, n.clone());
+            gen_terms.insert(key, int_n);
             return;
-        };
+        }
 
-        let head = match &items[0] {
-            Term::Atom(s) => s.as_str(),
-            _ => {
-                gens.insert(key.clone());
-                gen_terms.insert(key, n.clone());
-                return;
-            }
-        };
-
-        if let Some(p) = field_mod {
-            if head == "mod" && items.len() == 3 && int_literal(&items[2]) == Some(p) {
-                visit(&items[1], field_mod, gens, gen_terms, seen);
+        if n.kind() == AstKind::App {
+            let head = smt2::decl_name(&n.decl());
+            if is_bool_or_relation_head(&head) {
+                for i in 0..n.num_children() {
+                    if let Some(ch) = n.nth_child(i) {
+                        visit(&ch, field_mod, gens, gen_terms, seen);
+                    }
+                }
                 return;
             }
         }
-
-        if is_combinator(head) {
-            for arg in &items[1..] {
-                visit(arg, field_mod, gens, gen_terms, seen);
+        for i in 0..n.num_children() {
+            if let Some(ch) = n.nth_child(i) {
+                visit(&ch, field_mod, gens, gen_terms, seen);
             }
-            return;
         }
-
-        if is_bool_or_relation_head(head) {
-            for arg in &items[1..] {
-                visit(arg, field_mod, gens, gen_terms, seen);
-            }
-            return;
-        }
-
-        gens.insert(key.clone());
-        gen_terms.insert(key, n.clone());
     }
 
     for cmd in assert_commands(script) {
-        if let Some(body) = smt2::term::assert_body(&cmd.raw) {
-            if let Ok(term) = Term::parse(&body) {
-                visit(&term, field_mod, &mut gens, &mut gen_terms, &mut seen);
-            }
+        if let Some(b) = cmd.assert_bool() {
+            visit(
+                &Dynamic::from_ast(b),
+                field_mod,
+                &mut gens,
+                &mut gen_terms,
+                &mut seen,
+            );
         }
     }
 
@@ -341,23 +324,23 @@ fn poly_mul(a: &Poly, b: &Poly, modulo: Option<i128>) -> Poly {
     out
 }
 
-fn relation_modular(lhs: &Term, rhs: &Term, p: i128) -> Option<bool> {
+fn relation_modular(lhs: &Int, rhs: &Int, p: i128) -> Option<bool> {
     let lhs_m = field_mod_wrap(lhs, p);
     let rhs_m = field_mod_wrap(rhs, p);
     if lhs_m == rhs_m {
         return Some(lhs_m);
     }
-    if lhs_m && int_literal(rhs).is_some() {
+    if lhs_m && int_value(rhs).is_some() {
         return Some(true);
     }
-    if rhs_m && int_literal(lhs).is_some() {
+    if rhs_m && int_value(lhs).is_some() {
         return Some(true);
     }
     None
 }
 
-fn expr_to_poly(n: &Term, var_index: &HashMap<String, usize>, modulo: Option<i128>) -> Option<Poly> {
-    if let Some(m) = int_literal_mod(n, modulo).or_else(|| int_literal(n)) {
+fn expr_to_poly(n: &Int, var_index: &HashMap<String, usize>, modulo: Option<i128>) -> Option<Poly> {
+    if let Some(m) = int_literal_mod(n, modulo).or_else(|| int_value(n)) {
         return if m == 0 {
             Some(Poly::new())
         } else {
@@ -365,56 +348,79 @@ fn expr_to_poly(n: &Term, var_index: &HashMap<String, usize>, modulo: Option<i12
         };
     }
 
-    let Term::List(items) = n else {
-        let key = term_key(n);
-        let idx = *var_index.get(&key)?;
-        return Some(HashMap::from([(vec![idx as u32], 1)]));
+    let dyn_ = Dynamic::from_ast(n);
+    let head = if dyn_.kind() == AstKind::App {
+        smt2::decl_name(&dyn_.decl())
+    } else {
+        String::new()
     };
 
-    let head = match &items[0] {
-        Term::Atom(s) => s.as_str(),
-        _ => return None,
-    };
-
-    match head {
+    match head.as_str() {
         "+" => {
             let mut acc = Poly::new();
-            for a in &items[1..] {
-                let q = expr_to_poly(a, var_index, modulo)?;
+            for ch in dyn_.children() {
+                let q = expr_to_poly(&ch.as_int()?, var_index, modulo)?;
                 acc = poly_add(&acc, &q, 1, modulo);
             }
             Some(acc)
         }
-        "-" if items.len() == 2 => expr_to_poly(&items[1], var_index, modulo).map(|mut p| {
-            for v in p.values_mut() {
-                *v = -*v;
-                if let Some(m) = modulo {
-                    *v = coeff_mod(*v, m);
+        "-" if dyn_.num_children() == 1 => {
+            let ch = dyn_.nth_child(0)?.as_int()?;
+            expr_to_poly(&ch, var_index, modulo).map(|mut p| {
+                for v in p.values_mut() {
+                    *v = -*v;
+                    if let Some(m) = modulo {
+                        *v = coeff_mod(*v, m);
+                    }
                 }
-            }
-            p.retain(|_, v| *v != 0);
-            p
-        }),
-        "-" if items.len() == 3 => {
-            let pa = expr_to_poly(&items[1], var_index, modulo)?;
-            let pb = expr_to_poly(&items[2], var_index, modulo)?;
+                p.retain(|_, v| *v != 0);
+                p
+            })
+        }
+        "-" if dyn_.num_children() == 2 => {
+            let pa = expr_to_poly(&dyn_.nth_child(0)?.as_int()?, var_index, modulo)?;
+            let pb = expr_to_poly(&dyn_.nth_child(1)?.as_int()?, var_index, modulo)?;
             Some(poly_add(&pa, &pb, -1, modulo))
         }
         "*" => {
             let mut acc = Poly::from([(Vec::new(), 1i128)]);
-            for a in &items[1..] {
-                let q = expr_to_poly(a, var_index, modulo)?;
+            for ch in dyn_.children() {
+                let q = expr_to_poly(&ch.as_int()?, var_index, modulo)?;
                 acc = poly_mul(&acc, &q, modulo);
             }
             Some(acc)
         }
-        _ => None,
+        _ => {
+            let key = term_key(n);
+            let idx = *var_index.get(&key)?;
+            Some(HashMap::from([(vec![idx as u32], 1)]))
+        }
     }
 }
 
-fn poly_to_expr(poly: &Poly, vars: &[Term]) -> Term {
+fn int_mul(args: &[Int]) -> Int {
+    if args.is_empty() {
+        return int_from_i128(1);
+    }
+    if args.len() == 1 {
+        return args[0].clone();
+    }
+    Int::mul(&args.iter().collect::<Vec<_>>())
+}
+
+fn int_add(args: &[Int]) -> Int {
+    if args.is_empty() {
+        return int_from_i128(0);
+    }
+    if args.len() == 1 {
+        return args[0].clone();
+    }
+    Int::add(&args.iter().collect::<Vec<_>>())
+}
+
+fn poly_to_expr(poly: &Poly, vars: &[Int]) -> Int {
     if poly.is_empty() {
-        return atom("0");
+        return int_from_i128(0);
     }
     let mut items: Vec<(&Monomial, i128)> = poly.iter().map(|(k, v)| (k, *v)).collect();
     items.sort_by(|a, b| compare_monomials(b.0, a.0));
@@ -424,35 +430,31 @@ fn poly_to_expr(poly: &Poly, vars: &[Term]) -> Term {
         if c == 0 {
             continue;
         }
-        let mono_factors: Vec<Term> = e.iter().map(|&idx| vars[idx as usize].clone()).collect();
+        let mono_factors: Vec<Int> = e.iter().map(|&idx| vars[idx as usize].clone()).collect();
         let term = if e.is_empty() {
-            atom(&c.to_string())
+            int_from_i128(c)
         } else if c == 1 {
-            if mono_factors.len() == 1 {
-                mono_factors[0].clone()
-            } else {
-                list("*", mono_factors)
-            }
+            int_mul(&mono_factors)
+        } else if c == -1 {
+            Int::unary_minus(&int_mul(&mono_factors))
         } else {
-            let mut factors = vec![atom(&c.to_string())];
+            let mut factors = vec![int_from_i128(c)];
             factors.extend(mono_factors);
-            list("*", factors)
+            int_mul(&factors)
         };
         terms.push(term);
     }
 
     if terms.is_empty() {
-        atom("0")
-    } else if terms.len() == 1 {
-        terms.into_iter().next().unwrap()
+        int_from_i128(0)
     } else {
-        list("+", terms)
+        int_add(&terms)
     }
 }
 
 fn poly_diff_poly(
-    la: &Term,
-    lb: &Term,
+    la: &Int,
+    lb: &Int,
     var_index: &HashMap<String, usize>,
     modulo: Option<i128>,
 ) -> Option<Poly> {
@@ -529,12 +531,12 @@ fn rescale_gcd(poly: Poly) -> Poly {
 }
 
 fn relation_poly_diff_plain(
-    lhs: &Term,
-    rhs: &Term,
+    lhs: &Int,
+    rhs: &Int,
     ctx: &NormalizeCtx<'_>,
 ) -> Option<(Poly, bool)> {
-    if contains_bool_symbol(lhs, ctx.bool_symbols)
-        || contains_bool_symbol(rhs, ctx.bool_symbols)
+    if contains_bool_symbol(&Dynamic::from_ast(lhs), ctx.bool_symbols)
+        || contains_bool_symbol(&Dynamic::from_ast(rhs), ctx.bool_symbols)
     {
         return None;
     }
@@ -544,32 +546,32 @@ fn relation_poly_diff_plain(
         let la = if modular {
             unwrap_field_mod_body(lhs, p)
         } else {
-            lhs
+            lhs.clone()
         };
         let lb = if modular {
             unwrap_field_mod_body(rhs, p)
         } else {
-            rhs
+            rhs.clone()
         };
-        let diff = poly_diff_poly(la, lb, ctx.var_index, modulo)?;
+        let diff = poly_diff_poly(&la, &lb, ctx.var_index, modulo)?;
         return Some((diff, modular));
     }
     let diff = poly_diff_poly(lhs, rhs, ctx.var_index, None)?;
     Some((diff, false))
 }
 
-fn wrap_mod_expr(rep: Term, p: i128) -> Term {
-    list("mod", vec![rep, atom(&p.to_string())])
+fn wrap_mod_expr(rep: Int, p: i128) -> Int {
+    rep.modulo(int_from_i128(p))
 }
 
-fn field_eq(rep: Term, p: i128) -> Term {
-    list("=", vec![wrap_mod_expr(rep, p), atom("0")])
+fn field_eq(rep: Int, p: i128) -> Bool {
+    wrap_mod_expr(rep, p).eq(int_from_i128(0))
 }
 
-fn normalize_int_rel_gcd(lhs: &Term, rhs: &Term, ctx: &NormalizeCtx<'_>) -> Option<Term> {
+fn normalize_int_rel_gcd(lhs: &Int, rhs: &Int, ctx: &NormalizeCtx<'_>) -> Option<Int> {
     let (diff, modular) = relation_poly_diff_plain(lhs, rhs, ctx)?;
     let rep = if diff.is_empty() {
-        atom("0")
+        int_from_i128(0)
     } else if modular {
         poly_to_expr(&rescale_gcd(diff), ctx.vars)
     } else {
@@ -582,10 +584,10 @@ fn normalize_int_rel_gcd(lhs: &Term, rhs: &Term, ctx: &NormalizeCtx<'_>) -> Opti
     }
 }
 
-fn normalize_equals(lhs: &Term, rhs: &Term, ctx: &NormalizeCtx<'_>) -> Option<Term> {
+fn normalize_equals(lhs: &Int, rhs: &Int, ctx: &NormalizeCtx<'_>) -> Option<Bool> {
     let (diff, modular) = relation_poly_diff_plain(lhs, rhs, ctx)?;
     let rep = if diff.is_empty() {
-        atom("0")
+        int_from_i128(0)
     } else if modular {
         let p = ctx.field_mod?;
         let scaled = rescale_monic(diff.clone(), p).unwrap_or_else(|| rescale_gcd(diff));
@@ -596,43 +598,38 @@ fn normalize_equals(lhs: &Term, rhs: &Term, ctx: &NormalizeCtx<'_>) -> Option<Te
     if modular {
         Some(field_eq(rep, ctx.field_mod?))
     } else {
-        Some(list("=", vec![rep, atom("0")]))
+        Some(rep.eq(int_from_i128(0)))
     }
 }
 
-fn normalize_term(term: &Term, ctx: &NormalizeCtx<'_>) -> Term {
-    if let Term::List(items) = term {
-        if items.len() == 3 {
-            if let Some(Term::Atom(head)) = items.first() {
-                match head.as_str() {
-                    "=" => {
-                        if let Some(rep) = normalize_equals(&items[1], &items[2], ctx) {
-                            return rep;
-                        }
+fn normalize_term(term: &Bool, ctx: &NormalizeCtx<'_>) -> Bool {
+    let ast = Dynamic::from_ast(term);
+    if ast.kind() == AstKind::App && ast.num_children() == 2 {
+        let head = smt2::decl_name(&ast.decl());
+        let lhs = ast.nth_child(0).and_then(|c| c.as_int());
+        let rhs = ast.nth_child(1).and_then(|c| c.as_int());
+        if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
+            match head.as_str() {
+                "=" => {
+                    if let Some(rep) = normalize_equals(&lhs, &rhs, ctx) {
+                        return rep;
                     }
-                    "<" => {
-                        if let Some(rep) = normalize_int_rel_gcd(&items[1], &items[2], ctx) {
-                            return list("<", vec![rep, atom("0")]);
-                        }
-                    }
-                    "<=" => {
-                        if let Some(rep) = normalize_int_rel_gcd(&items[1], &items[2], ctx) {
-                            return list("<=", vec![rep, atom("0")]);
-                        }
-                    }
-                    _ => {}
                 }
+                "<" => {
+                    if let Some(rep) = normalize_int_rel_gcd(&lhs, &rhs, ctx) {
+                        return rep.lt(&int_from_i128(0));
+                    }
+                }
+                "<=" => {
+                    if let Some(rep) = normalize_int_rel_gcd(&lhs, &rhs, ctx) {
+                        return rep.le(&int_from_i128(0));
+                    }
+                }
+                _ => {}
             }
         }
-        let head = items[0].clone();
-        Term::List(
-            std::iter::once(head)
-                .chain(items[1..].iter().map(|a| normalize_term(a, ctx)))
-                .collect(),
-        )
-    } else {
-        term.clone()
     }
+    map_bool_children(term, &mut |a| normalize_term(a, ctx))
 }
 
 #[cfg(test)]

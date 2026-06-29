@@ -1,14 +1,35 @@
+pub mod ast_build;
+pub mod ast_util;
+pub mod command;
 pub mod io;
 pub mod parse;
 pub mod pretty;
 pub mod script;
-pub mod term;
+pub mod sexpr;
+pub mod z3_parse;
 
-pub use io::{dump_string, dump_writer, load_path, load_reader};
-pub use parse::{command_name, parse_commands, Command};
-pub use script::{
-    assert_commands, asserts_excluding_true, declared_symbol_names, extra_declarations,
-    map_asserts, splice_z3_result, Script, ScriptParts,
+pub use ast_build::{
+    bool_atom, free_variables_bool, int_atom, int_literal_dyn, is_symbol_dyn,
+    iter_nodes_dyn, list_bool, list_int, parse_bool_formula, parse_int_or_const, split_product_int,
+    substitute_bool, substitute_dyn, substitute_int, symbol_name_dyn, wrap_mod_expr_int,
 };
-pub use pretty::{pretty_print_command, pretty_print_script, pretty_print_term, pretty_print_term_in_script};
-pub use term::{assert_body, fold_constants, fold_constants_fixpoint, replace_assert_body, Term};
+pub use ast_util::{
+    and_parts, bool_children, bool_decl_name, decl_name, flatten_and, flatten_or, free_int_symbols,
+    has_quantifier, int_const_name, int_from_i128, int_value, int_value_dyn, is_exists, is_forall,
+    is_implies, is_int_const, is_int_literal_string, is_ite, is_not, map_bool_children,
+    mod_int_literal_string, or_parts, parse_int_literal,
+    quantifier_body_bool, quantifier_bound_names, quantifier_bounds, rebuild_app,
+    rebuild_forall_dyn, rebuild_quantifier_dyn, scoped_free_int_symbols, strip_prefix,
+    swap_prefix, unwrap_zero_mod_eq,
+};
+pub use command::{
+    declare_fun_name_cmd, declare_fun_symbol, parse_single_command, SmtCommand,
+};
+pub use io::{dump_string, dump_writer, load_path, load_reader};
+pub use pretty::{pretty_print_command, pretty_print_script};
+pub use script::{
+    assert_commands, asserts_excluding_true, declared_symbol_names, ensure_free_symbols_declared,
+    extra_declarations, map_asserts, seed_parser_context, splice_z3_result, Script, ScriptParts,
+};
+pub use sexpr::{SExpr, Span, Spanned};
+pub use z3_parse::ParseCtx;
