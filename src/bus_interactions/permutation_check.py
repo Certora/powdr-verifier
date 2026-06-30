@@ -627,18 +627,15 @@ class PermutationCheckMixin:
         if skip_matches:
             logging.info("skipping matches for %s", self.NAME)
         # provide match variables for all pairs i <= j
-        is_inputs: dict[int, Any] = {
-            i: self._symbol(f"{self.NAME}_isinput_{i}", BOOL)
-            for i in range(n)
-        }
-        is_outputs: dict[int, Any] = {
-            i: self._symbol(f"{self.NAME}_isoutput_{i}", BOOL)
-            for i in range(n)
-        }
-        is_disableds: dict[int, Any] = {
-            i: self._symbol(f"{self.NAME}_isdisabled_{i}", BOOL)
-            for i in range(n)
-        }
+        is_inputs = [
+            self._symbol(f"{self.NAME}_isinput_{i}", BOOL) for i in range(n)
+        ]
+        is_outputs = [
+            self._symbol(f"{self.NAME}_isoutput_{i}", BOOL) for i in range(n)
+        ]
+        is_disableds = [
+            self._symbol(f"{self.NAME}_isdisabled_{i}", BOOL) for i in range(n)
+        ]
 
         mem_key_const: list[tuple[int | None, int | None]] = []
         for inter in interactions:
@@ -985,8 +982,8 @@ class PermutationCheckMixin:
         conjuncts = boolean_propagate(simplified, presimplify=False)
         return (
             conjuncts,
-            [is_inputs[i] for i in range(n)],
-            [is_outputs[i] for i in range(n)],
+            is_inputs,
+            is_outputs,
         )
 
     def busat_permutation_check(
