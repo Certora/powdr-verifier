@@ -3,6 +3,7 @@ use std::io::{self, Read, Write, stdin, stdout};
 use std::process;
 
 use smt2::{dump_string, load_path, load_reader, pretty_print_script};
+use simplifier::budget::Budget;
 use simplifier::{run_pipeline, write_step_stats};
 
 fn main() {
@@ -34,7 +35,10 @@ fn run() -> Result<(), String> {
             _ => break,
         }
     }
-    let _ = timeout;
+    let budget = match timeout {
+        Some(secs) => Budget::from_timeout_secs(secs),
+        None => Budget::unlimited(),
+    };
 
     let positional: Vec<String> = args[i..].to_vec();
     if positional.len() != 3 {
@@ -57,7 +61,7 @@ fn run() -> Result<(), String> {
     };
 
     let tactics: Vec<String> = tactic_pipeline.split(':').map(|s| s.to_string()).collect();
-    let (out_script, steps) = run_pipeline(&script, &tactics)?;
+    let (out_script, steps) = run_pipeline(&script, &tactics, budget)?;
     let out_script = if pretty {
         pretty_print_script(&out_script)?
     } else {

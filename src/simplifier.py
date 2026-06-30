@@ -272,10 +272,20 @@ def _run_rust_tactics(
     parent: Action,
     smt_script: script.SmtLibScript,
     raw_tactics: list[str],
+    *,
+    timeout: float | None = None,
+    profile_input: Path | None = None,
+    profile_output: Path | None = None,
 ) -> script.SmtLibScript:
     pipeline = ":".join(raw_tactics)
     try:
-        smt_script, steps = run_rust_pipeline(smt_script, pipeline)
+        smt_script, steps = run_rust_pipeline(
+            smt_script,
+            pipeline,
+            timeout=timeout,
+            profile_input=profile_input,
+            profile_output=profile_output,
+        )
     except (FileNotFoundError, RuntimeError) as exc:
         logging.warning(
             "rust simplifier batch %s failed (%s), falling back to python",
@@ -446,27 +456,17 @@ def simplify_smt_script(
                     continue
 
                 logging.info("simplifying with rust batch %s", batch_label)
-                backup_script = _backup_script(smt_script)
-                backup_pretty = ARGS().pretty
 
-                def run_batch():
-                    return _run_rust_tactics(parent, smt_script, raw_list)
-
-                timed_out, step_script = _run_with_itimer(remaining, run_batch)
-
-                if timed_out:
-                    smt_script = backup_script
-                    ARGS().pretty = backup_pretty
-                    logging.warning("rust batch %s hit timeout, skipping", batch_label)
-                    for raw_tactic in raw_list:
-                        step_index += 1
-                        with parent.action(raw_tactic) as subaction:
-                            subaction += {"result": "timeout"}
-                else:
-                    assert step_script is not None
-                    smt_script = step_script
-                    _ensure_declarations_for_asserts(smt_script)
-                    step_index = step_end
+                smt_script = _run_rust_tactics(
+                    parent,
+                    smt_script,
+                    raw_list,
+                    timeout=remaining,
+                    profile_input=getattr(ARGS(), "input", None) or output,
+                    profile_output=output,
+                )
+                _ensure_declarations_for_asserts(smt_script)
+                step_index = step_end
 
                 if getattr(ARGS(), "dump_steps", False) and output is not None:
                     stem = (

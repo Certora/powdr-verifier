@@ -4,3 +4,6 @@ members = ["smt2", "simplifier"]
 
 [workspace.package]
 edition = "2021"
+
+[profile.release]
+debug = true
