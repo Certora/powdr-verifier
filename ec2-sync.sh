@@ -3,7 +3,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 1 ]; then
-    echo "usage: $0 <upload-reth|keccak|keccak-selection|pairing|reth|reports>" >&2
+    echo "usage: $0 <upload-reth|keccak|keccak-selection|pairing|reth>" >&2
     exit 1
 fi
 
@@ -59,6 +59,9 @@ case "$scenario" in
             "verifier/reports/guest-keccak/" \
             "$script_dir/powdr-dumps/guest-keccak" \
             "$script_dir/reports/guest-keccak"
+        echo "report guest-keccak"
+        python3 "$script_dir/main.py" report "$script_dir/reports/guest-keccak" "$script_dir/report-keccak.html"
+        archive_report "$script_dir/report-keccak.html" "$script_dir/reports/guest-keccak"
         ;;
     keccak-selection)
         download \
@@ -66,6 +69,9 @@ case "$scenario" in
             "verifier/reports/guest-keccak-selection/" \
             "$script_dir/powdr-dumps/guest-keccak-selection" \
             "$script_dir/reports/guest-keccak-selection"
+        echo "report guest-keccak-selection"
+        python3 "$script_dir/main.py" report "$script_dir/reports/guest-keccak-selection" "$script_dir/report-keccak-selection.html"
+        archive_report "$script_dir/report-keccak-selection.html" "$script_dir/reports/guest-keccak-selection"
         ;;
     pairing)
         download \
@@ -73,6 +79,9 @@ case "$scenario" in
             "verifier/reports/guest-pairing-selection/" \
             "$script_dir/powdr-dumps/guest-pairing-selection" \
             "$script_dir/reports/guest-pairing-selection"
+        echo "report guest-pairing-selection"
+        python3 "$script_dir/main.py" report "$script_dir/reports/guest-pairing-selection" "$script_dir/report-pairing.html"
+        archive_report "$script_dir/report-pairing.html" "$script_dir/reports/guest-pairing-selection"
         ;;
     reth)
         download \
@@ -80,20 +89,9 @@ case "$scenario" in
             "verifier/reports/reth-selection/" \
             "$script_dir/powdr-dumps/reth-selection" \
             "$script_dir/reports/reth-selection"
-        ;;
-    reports)
-        echo "report guest-keccak"
-        #python3 "$script_dir/main.py" report "$script_dir/reports/guest-keccak" "$script_dir/report-keccak.html"
-        #archive_report "$script_dir/report-keccak.html" "$script_dir/reports/guest-keccak"
-        echo "report guest-keccak-selection"
-        python3 "$script_dir/main.py" report "$script_dir/reports/guest-keccak-selection" "$script_dir/report-keccak-selection.html"
-        archive_report "$script_dir/report-keccak-selection.html" "$script_dir/reports/guest-keccak-selection"
-        echo "report guest-pairing-selection"
-        #python3 "$script_dir/main.py" report "$script_dir/reports/guest-pairing-selection" "$script_dir/report-pairing.html"
-        #archive_report "$script_dir/report-pairing.html" "$script_dir/reports/guest-pairing-selection"
         echo "report reth-selection"
-        #python3 "$script_dir/main.py" report "$script_dir/reports/reth-selection" "$script_dir/report-reth.html"
-        #archive_report "$script_dir/report-reth.html" "$script_dir/reports/reth-selection"
+        python3 "$script_dir/main.py" report "$script_dir/reports/reth-selection" "$script_dir/report-reth.html"
+        archive_report "$script_dir/report-reth.html" "$script_dir/reports/reth-selection"
         ;;
     *)
         echo "unknown scenario: $scenario" >&2
