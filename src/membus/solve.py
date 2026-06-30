@@ -2,12 +2,11 @@
 matching per memory cell, and classify each interaction as an **input**, an
 **output**, or interior **data flow**.
 
-Graph (combinatorial) solver for an address space whose memkeys are all
-constant (AS1). Ported + extended from ``busat/tools/combinatorial_check.py``
-(the prefix-interval matching) on top of the deduced timestamp order
-(:func:`order.deduce` / :func:`order.total_order` / :func:`order.send_offsets`).
+Graph solver for AS1, where every active memory interaction has a constant
+key. It derives send order and recv bounds from timestamp constraints, then
+matches recvs to the latest available send in each feasible prefix.
 
-Model (no memory-consistency assumption — we solve the constraints):
+Per-cell matching rules:
 
 - Per constant key (cell) the sends are totally ordered (positions ``1..k``).
 - Each recv's feasible sends are the **prefix** ``{1 .. cutoff-1}`` where
@@ -18,7 +17,7 @@ Model (no memory-consistency assumption — we solve the constraints):
 - A complete recv→send mapping (a bijection respecting the prefixes, with the
   single input recv reading entry) is **a solution**. We report whether it is
   **unique**: iff exactly one boundary recv and the sorted interior cutoffs are
-  ``2,3,…,k`` (the busat criterion).
+  ``2,3,…,k``.
 """
 from __future__ import annotations
 
