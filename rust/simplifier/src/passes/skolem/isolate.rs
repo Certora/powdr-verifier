@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
 
 use smt2::ast_util::bound_var_index;
 use smt2::{and_parts, free_variables_bool, iter_nodes_dyn};
@@ -26,34 +25,6 @@ pub fn contribute(
         })
         .cloned()
         .collect();
-    // #region agent log
-    {
-        let ast = Dynamic::from_ast(body);
-        let head = if ast.kind() == z3::ast::AstKind::App {
-            smt2::ast_util::decl_name(&ast.decl())
-        } else {
-            format!("{:?}", ast.kind())
-        };
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/home/gereon/certora/powdr/.cursor/debug-ffd052.log")
-        {
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
-            let _ = writeln!(
-                f,
-                r#"{{"sessionId":"ffd052","runId":"post-fix","hypothesisId":"B","location":"skolem/isolate.rs:contribute","message":"enter","data":{{"head":"{head}","or_body_parts":{},"cand_unpinned":{},"unpinned":{:?}}},"timestamp":{}}}"#,
-                smt2::or_body_parts(body).map(|v| v.len()).unwrap_or(0),
-                unpinned.len(),
-                unpinned,
-                ts
-            );
-        }
-    }
-    // #endregion
     let Some(items) = smt2::or_body_parts(body) else {
         return;
     };
@@ -87,7 +58,6 @@ pub fn contribute(
     let mut tainted: HashSet<String> = HashSet::new();
     let mut disj_cands: Vec<(Vec<String>, Bool)> = Vec::new();
 
-    let n_items = items.len();
     for d in items {
         let mentioned = qvars_mentioned_in(&d, &cand, bound_order);
         let cset: Vec<String> = mentioned.into_iter().collect();
@@ -118,46 +88,8 @@ pub fn contribute(
     }
 
     if disj_cands.is_empty() {
-        // #region agent log
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/home/gereon/certora/powdr/.cursor/debug-ffd052.log")
-        {
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
-            let _ = writeln!(
-                f,
-                r#"{{"sessionId":"ffd052","runId":"post-fix","hypothesisId":"B","location":"skolem/isolate.rs:contribute","message":"empty disj_cands","data":{{"items":{}}},"timestamp":{}}}"#,
-                n_items,
-                ts
-            );
-        }
-        // #endregion
         return;
     }
-    // #region agent log
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/home/gereon/certora/powdr/.cursor/debug-ffd052.log")
-    {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let _ = writeln!(
-            f,
-            r#"{{"sessionId":"ffd052","runId":"post-fix","hypothesisId":"B","location":"skolem/isolate.rs:contribute","message":"island setup","data":{{"disj_cands":{},"tainted":{},"cand":{}}},"timestamp":{}}}"#,
-            disj_cands.len(),
-            tainted.len(),
-            cand.len(),
-            ts
-        );
-    }
-    // #endregion
 
     let field = field_mod();
     let mut members_by_root: HashMap<String, HashSet<String>> = HashMap::new();
@@ -190,30 +122,6 @@ pub fn contribute(
             map.pin(q, val, "isolate");
         }
     }
-    // #region agent log
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/home/gereon/certora/powdr/.cursor/debug-ffd052.log")
-    {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let pinned: Vec<_> = map
-            .sources
-            .iter()
-            .filter(|(_, s)| *s == "isolate")
-            .map(|(k, _)| k.as_str())
-            .collect();
-        let _ = writeln!(
-            f,
-            r#"{{"sessionId":"ffd052","runId":"post-fix","hypothesisId":"B","location":"skolem/isolate.rs:contribute","message":"isolate pins","data":{{"pinned":{:?}}},"timestamp":{}}}"#,
-            pinned,
-            ts
-        );
-    }
-    // #endregion
 }
 
 fn qvars_mentioned_in(d: &Bool, cand: &HashSet<String>, bound_order: &[String]) -> HashSet<String> {
@@ -286,29 +194,9 @@ fn solve_island(
     let solver = Solver::new();
     solver.from_string(input.as_bytes());
     let sat = solver.check();
-    // #region agent log
     if sat != SatResult::Sat {
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/home/gereon/certora/powdr/.cursor/debug-ffd052.log")
-        {
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
-            let members: Vec<_> = members.iter().map(String::as_str).collect();
-            let _ = writeln!(
-                f,
-                r#"{{"sessionId":"ffd052","runId":"post-fix","hypothesisId":"B","location":"skolem/isolate.rs:solve_island","message":"solve failed","data":{{"sat":"{:?}","members":{:?}}},"timestamp":{}}}"#,
-                sat,
-                members,
-                ts
-            );
-        }
         return None;
     }
-    // #endregion
     let model = solver.get_model()?;
     let mut out = HashMap::new();
     for m in members {
