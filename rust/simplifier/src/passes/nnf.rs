@@ -44,6 +44,9 @@ fn negate(b: &Bool) -> Bool {
         let args: Vec<Bool> = parts.iter().map(negate).collect();
         return flatten_and(args);
     }
+    if let Some((a, c)) = is_implies(b) {
+        return flatten_and(vec![a.clone(), negate(&c)]);
+    }
     b.not()
 }
 
@@ -67,6 +70,12 @@ mod tests {
     fn demorgan() {
         let t = parse_assert("(not (and a b))");
         assert_eq!(convert_to_nnf(&t).to_string(), "(or (not a) (not b))");
+    }
+
+    #[test]
+    fn negated_implies() {
+        let t = parse_assert("(not (=> a b))");
+        assert_eq!(convert_to_nnf(&t).to_string(), "(and a (not b))");
     }
 
     #[test]
