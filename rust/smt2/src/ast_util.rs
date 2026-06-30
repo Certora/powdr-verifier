@@ -449,11 +449,16 @@ pub fn rebuild_exists(bounds: &[Int], body: &Bool) -> Bool {
 }
 
 /// Heuristic correction when SMT-LIB binds Bool symbols with the wrong sort.
-pub fn quantifier_bound_sort_is_bool(name: &str, z3_sk: SortKind) -> bool {
-    if z3_sk == SortKind::Bool {
-        return true;
-    }
-    name.contains("memory_is") || name.contains("memory_match")
+pub fn quantifier_bound_sort_is_bool(_name: &str, z3_sk: SortKind) -> bool {
+    z3_sk == SortKind::Bool
+}
+
+/// ``Var`` nodes and nullary ``App`` symbols whose Z3 sort is ``Bool``.
+pub fn has_bool_sort_leaf_dyn(ast: &Dynamic) -> bool {
+    crate::ast_build::iter_nodes_dyn(ast).into_iter().any(|n| {
+        n.get_sort().kind() == SortKind::Bool
+            && matches!(n.kind(), AstKind::Var | AstKind::App if n.is_const())
+    })
 }
 
 /// Bound constants in De Bruijn index order: ``bounds[i]`` replaces ``(:var i)``.

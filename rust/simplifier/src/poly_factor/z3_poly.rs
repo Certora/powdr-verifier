@@ -231,8 +231,7 @@ fn extract_terms(expr: &Int, gens: &mut GeneratorMap) -> Result<TermMap, FactorE
             }
         };
     }
-    let idx = gens.register(expr);
-    Ok(poly_generator(idx))
+    Err(FactorError::BuildFailed)
 }
 
 enum ArithOp {
@@ -433,10 +432,10 @@ mod tests {
     }
 
     #[test]
-    fn treats_non_arithmetic_as_generator() {
+    fn rejects_non_polynomial_subtrees() {
         let x = Int::new_const("x");
         let g = x.div(&Int::from_i64(2));
         let p = int_add(&int_mul(&g, &x), &Int::from_i64(1));
-        factor(&p).expect("factor");
+        assert!(matches!(factor(&p), Err(FactorError::BuildFailed)));
     }
 }
