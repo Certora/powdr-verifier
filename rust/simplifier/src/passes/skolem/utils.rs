@@ -1,9 +1,8 @@
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
 
 use smt2::ast_build::{int_literal_dyn, iter_nodes_dyn, parse_bool_formula, symbol_name_dyn};
 use smt2::ast_util::{decl_name, quantifier_bounds, quantifier_body_bool, strip_prefix};
-use smt2::{declare_fun_name_cmd, seed_parser_context, ParseCtx, Script, SmtCommand};
+use smt2::{declare_fun_name_cmd, free_variables_bool, seed_parser_context, ParseCtx, Script, SmtCommand};
 use z3::ast::{Ast, AstKind, Bool, Dynamic};
 use z3::SortKind as Z3SortKind;
 
@@ -212,16 +211,83 @@ fn prebind_pin_identifiers(
     }
 }
 
-pub fn load_skolem_setinfos(script: &Script) -> Vec<SkolemPin> {
+fn is_nullary_declare_fun(raw: &str) -> bool {
+    raw.contains("()")
+}
+
+fn collect_function_symbols(script: &Script) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for cmd in &script.commands {
+        if cmd.name() != "declare-fun" {
+            continue;
+        }
+        let raw = cmd.to_smtlib(&script.source);
+        if is_nullary_declare_fun(&raw) {
+            continue;
+        }
+        if let Some(name) = declare_fun_name(cmd, &script.source) {
+            out.insert(name);
+        }
+    }
+    out
+}
+
+pub fn collect_assert_symbols(script: &Script) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for cmd in &script.commands {
+        if let Some(body) = cmd.assert_bool() {
+            collect_symbols_from_bool(body, &mut out);
+        }
+    }
+    out
+}
+
+fn collect_symbols_from_bool(term: &Bool, out: &mut HashSet<String>) {
+    for node in iter_nodes_dyn(&Dynamic::from_ast(term)) {
+        if let Some(name) = symbol_name_dyn(&node) {
+            if name != "true" && name != "false" && int_literal_dyn(&node).is_none() {
+                out.insert(name);
+            }
+        }
+        if let Some((qvars, _, _)) = parse_forall(&node) {
+            for (n, _) in qvars {
+                out.insert(n);
+            }
+        }
+    }
+}
+
+fn filter_live_pins(pins: Vec<SkolemPin>, script: &Script) -> (Vec<SkolemPin>, usize) {
+    let live = collect_assert_symbols(script);
+    let ufs = collect_function_symbols(script);
+    let mut out = Vec::with_capacity(pins.len());
+    let mut dropped = 0usize;
+    for pin in pins {
+        let vars: HashSet<String> = free_variables_bool(&pin.equation)
+            .into_iter()
+            .filter(|n| n != "true" && n != "false" && !ufs.contains(n))
+            .collect();
+        if vars.is_empty() {
+            dropped += 1;
+            continue;
+        }
+        if vars.iter().all(|n| live.contains(n)) {
+            out.push(pin);
+        } else {
+            dropped += 1;
+        }
+    }
+    (out, dropped)
+}
+
+pub fn load_skolem_setinfos(script: &Script) -> (Vec<SkolemPin>, usize) {
     let sorts = collect_symbol_sorts(script);
     let mut out = Vec::new();
     let mut parse = ParseCtx::new();
     let mut declared = HashSet::new();
     if seed_parser_for_skolem_pins(&mut parse, script, &mut declared).is_err() {
-        return out;
+        return (out, 0);
     }
-    let mut loaded_by_kind: HashMap<String, usize> = HashMap::new();
-    let mut parse_fail = 0usize;
     for cmd in &script.commands {
         if cmd.name() != "set-info" {
             continue;
@@ -245,32 +311,16 @@ pub fn load_skolem_setinfos(script: &Script) -> Vec<SkolemPin> {
                 equation: eq,
                 kind: kind.clone(),
             });
-            *loaded_by_kind.entry(kind).or_insert(0) += 1;
-        } else {
-            parse_fail += 1;
         }
     }
-    // #region agent log
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/home/gereon/certora/powdr/.cursor/debug-ffd052.log")
-    {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let _ = writeln!(
-            f,
-            r#"{{"sessionId":"ffd052","runId":"post-fix","hypothesisId":"A","location":"skolem/utils.rs:load_skolem_setinfos","message":"pin load summary","data":{{"total":{},"parse_fail":{},"by_kind":{}}},"timestamp":{}}}"#,
-            out.len(),
-            parse_fail,
-            serde_json::to_string(&loaded_by_kind).unwrap_or_else(|_| "{}".into()),
-            ts
+    let (filtered, dropped) = filter_live_pins(out, script);
+    if dropped > 0 {
+        eprintln!(
+            "skolem: dropped {dropped} set-info pins (symbols not live in asserts), kept {}",
+            filtered.len()
         );
     }
-    // #endregion
-    out
+    (filtered, dropped)
 }
 
 fn parse_set_info(raw: &str) -> Option<(String, String)> {
@@ -300,11 +350,13 @@ mod tests {
         let script = Script::parse(
             "(declare-fun after-memory_isinput_0 () Bool)\n\
              (set-info :skolem-memory-bus-0 |(= before-memory_isinput_0 after-memory_isinput_0)|)\n\
-             (assert (forall ((before-memory_isinput_0 Bool)) true))\n\
+             (assert (forall ((before-memory_isinput_0 Bool)) \
+               (= before-memory_isinput_0 after-memory_isinput_0)))\n\
              (check-sat)\n",
         )
         .unwrap();
-        let pins = load_skolem_setinfos(&script);
+        let (pins, dropped) = load_skolem_setinfos(&script);
+        assert_eq!(dropped, 0);
         assert_eq!(pins.len(), 1);
         let split = split_equation(&pins[0].equation);
         assert_eq!(
@@ -327,11 +379,30 @@ mod tests {
         let script = Script::parse(
             "(declare-fun after-memory_isinput_0 () Bool)\n\
              (set-info :skolem-memory-bus-0 |(= before-memory_isinput_0 after-memory_isinput_0)|)\n\
-             (assert (forall ((before-memory_isinput_0 Bool)) true))\n\
+             (assert (forall ((before-memory_isinput_0 Bool)) \
+               (= before-memory_isinput_0 after-memory_isinput_0)))\n\
              (check-sat)\n",
         )
         .unwrap();
-        let pins = load_skolem_setinfos(&script);
+        let (pins, dropped) = load_skolem_setinfos(&script);
+        assert_eq!(dropped, 0);
+        assert_eq!(pins.len(), 1);
+        assert_eq!(pins[0].kind, "memory_bus");
+    }
+
+    #[test]
+    fn load_skolem_setinfos_drops_pins_with_ghost_symbols() {
+        let script = Script::parse(
+            "(set-info :skolem-memory-bus-0 |(= before-memory_isdisabled_0 false)|)\n\
+             (set-info :skolem-memory-bus-1 |(= before-memory_isinput_0 after-memory_isinput_0)|)\n\
+             (declare-fun after-memory_isinput_0 () Bool)\n\
+             (assert (forall ((before-memory_isinput_0 Bool)) \
+               (= before-memory_isinput_0 after-memory_isinput_0)))\n\
+             (check-sat)\n",
+        )
+        .unwrap();
+        let (pins, dropped) = load_skolem_setinfos(&script);
+        assert_eq!(dropped, 1);
         assert_eq!(pins.len(), 1);
         assert_eq!(pins[0].kind, "memory_bus");
     }
