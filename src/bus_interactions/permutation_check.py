@@ -184,7 +184,7 @@ def _membus_match_presets(
                 for k in range(i + 1, n):
                     presets[(k, i)] = False
                 remove_candidate(i)
-                logging.warning(
+                logging.info(
                     "%smembus forced self-match: interaction %d alias_class=%d",
                     prefix,
                     i,
@@ -216,7 +216,7 @@ def _membus_match_presets(
                     presets[(i, k)] = False
                 remove_candidate(i)
                 remove_candidate(j)
-                logging.warning(
+                logging.info(
                     "%smembus forced pair match: (%d, %d) alias_class=%d",
                     prefix,
                     i,
