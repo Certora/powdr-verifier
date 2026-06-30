@@ -1,4 +1,5 @@
 """Mixins and formulas for multiset permutation invariants and timestamp monotonicity."""
+from dataclasses import dataclass
 from itertools import batched, pairwise
 import itertools
 import logging
@@ -14,6 +15,16 @@ from ..smt.utils import *
 from ..utils.args import ARGS
 from ..utils.enums import MemoryPresolve
 from ..utils.stats import profile
+
+
+@dataclass
+class PlainPermutationIo:
+    """Plain-encoding I/O flags and match vars after static kills (symbols or constants)."""
+
+    is_inputs: list[FNode]
+    is_outputs: list[FNode]
+    is_disableds: list[FNode]
+    match_vars: dict[tuple[int, int], FNode]
 
 
 def _plain_static_profile(
@@ -980,6 +991,12 @@ class PermutationCheckMixin:
                 simplified.append(keep_comment(s, c))
         # ``simplified`` is already fully simplified, so skip BCP's presimplify pass.
         conjuncts = boolean_propagate(simplified, presimplify=False)
+        self.plain_permutation_io = PlainPermutationIo(
+            is_inputs=list(is_inputs),
+            is_outputs=list(is_outputs),
+            is_disableds=list(is_disableds),
+            match_vars=dict(match_vars),
+        )
         return (
             conjuncts,
             is_inputs,
