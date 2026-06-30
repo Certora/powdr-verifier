@@ -22,7 +22,7 @@ def evaluate():
 
     res = {}
 
-    with SmtConverter("input", BasicBlock(input["block"])) as conv:
+    with SmtConverter("input", BasicBlock(input["block"]), source_path=ARGS().input) as conv:
         smt = conv.to_formula_with_axioms(input)
         interpreters = conv.bus_interaction_encoder.get_interpreters()
 

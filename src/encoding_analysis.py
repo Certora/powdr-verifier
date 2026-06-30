@@ -21,7 +21,7 @@ def analyze_aliases():
 
     input = load_apc_dump(ARGS().input)
 
-    with SmtConverter(None, BasicBlock(input["block"])) as conv:
+    with SmtConverter(None, BasicBlock(input["block"]), source_path=ARGS().input) as conv:
         smt = conv.to_formula_with_axioms(input)
         n = len(conv.bus_interaction_encoder.memory._interactions)
         mem_vars = [

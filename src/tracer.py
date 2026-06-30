@@ -24,7 +24,7 @@ def trace():
     with Action("tracer") as action:
         action += {"outputs": [out_core, out_sanity]}
         with action.action("encode"):
-            with SmtConverter(None, BasicBlock(input["block"])) as conv:
+            with SmtConverter(None, BasicBlock(input["block"]), source_path=filename) as conv:
                 formula = conv.to_formula_with_axioms(input)
 
         with action.action("out-core"):

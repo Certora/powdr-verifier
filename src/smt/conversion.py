@@ -3,6 +3,7 @@ import collections
 import itertools
 import logging
 import pprint
+from pathlib import Path
 from typing import Any, Iterable, Optional
 
 
@@ -43,6 +44,7 @@ class SmtConverter:
         basic_block: BasicBlock,
         *,
         verify_preanalysis: VerifyPreanalysis = DEFAULT_VERIFY_PREANALYSIS,
+        source_path: Path | None = None,
     ):
         """Create a converter that turns JSON-like dumps into SMT, namespacing symbols by `name`."""
         self.basic_block = basic_block
@@ -50,6 +52,7 @@ class SmtConverter:
         self.derived_columns = {}
         self.name = name
         self.verify_preanalysis = verify_preanalysis
+        self.source_path = source_path
         self.symbols: set[FNode] = set()
         self.constraint_solver = Solver(solver_options={":timeout": 2000})
         type(self.constraint_solver).check_is_valid = _check_is_valid
