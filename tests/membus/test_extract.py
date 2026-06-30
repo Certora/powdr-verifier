@@ -43,6 +43,10 @@ def test_build_dict_json_shape():
     ts = [r["abstract_ts"] for r in pub["interactions"]]
     assert len(set(ts)) == len(ts)
     assert pub["order_edges"]
+    assert all(r["alias_class"] == 0 for r in pub["interactions"])
+    assert pub["interactions"][0]["alias_determined"] is True
+    assert pub["interactions"][0]["address_space"] == "1"
+    assert pub["interactions"][0]["key"] == "const 8"
 
 
 def test_extract_emits_abstract_bus():
