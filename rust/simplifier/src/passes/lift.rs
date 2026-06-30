@@ -9,7 +9,7 @@ use smt2::ast_util::{
     resolve_bound_or_free_name, substitute_bound_vars_dyn, contains_bound_var_dyn,
     de_bruijn_bound_name,
 };
-use smt2::ast_build::{free_variables_bool, parse_bool_formula};
+use smt2::ast_build::{free_variables_bool, iter_nodes_dyn, parse_bool_formula, symbol_name_dyn};
 use smt2::{declare_fun_name_cmd, map_bool_children, parse_single_command, seed_parser_context, ParseCtx, Script, SmtCommand};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
@@ -57,8 +57,38 @@ fn collect_symbol_sorts(script: &Script) -> HashMap<String, DeclSort> {
     out
 }
 
-fn infer_symbol_sort(name: &str, sorts: &HashMap<String, DeclSort>) -> DeclSort {
-    sorts.get(name).copied().unwrap_or(DeclSort::Int)
+fn dyn_sort(ast: &Dynamic) -> DeclSort {
+    match ast.get_sort().kind() {
+        z3::SortKind::Bool => DeclSort::Bool,
+        z3::SortKind::Array => DeclSort::Array,
+        _ => DeclSort::Int,
+    }
+}
+
+fn symbol_sort_in_eq(name: &str, eq: &Bool) -> Option<DeclSort> {
+    let ast = Dynamic::from_ast(eq);
+    for node in iter_nodes_dyn(&ast) {
+        if symbol_name_dyn(&node).as_deref() == Some(name) {
+            return Some(dyn_sort(&node));
+        }
+    }
+    None
+}
+
+fn infer_symbol_sort(
+    name: &str,
+    sorts: &HashMap<String, DeclSort>,
+    eq_hint: Option<&Bool>,
+) -> DeclSort {
+    if let Some(sort) = sorts.get(name) {
+        return *sort;
+    }
+    if let Some(eq) = eq_hint {
+        if let Some(sort) = symbol_sort_in_eq(name, eq) {
+            return sort;
+        }
+    }
+    DeclSort::Int
 }
 
 struct LiftWalker {
@@ -248,7 +278,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
             }
             for sym in free_variables_bool(eq) {
                 if !declared.contains(&sym) {
-                    let sort = infer_symbol_sort(&sym, &walker.sorts);
+                    let sort = infer_symbol_sort(&sym, &walker.sorts, Some(eq));
                     to_declare.entry(sym).or_insert(sort);
                 }
             }
@@ -405,7 +435,7 @@ mod tests {
         let ast = Dynamic::from_ast(b);
         let bound_order = quantifier_bound_names(&ast);
         let body = quantifier_body_bool(&ast).unwrap();
-        let disjuncts = or_parts(&body).unwrap();
+        let disjuncts = or_body_parts(&body).unwrap();
         let qvars: HashSet<String> = bound_order.iter().cloned().collect();
         assert!(match_lift_pair(&disjuncts[0], &bound_order, &qvars, &script).is_some());
     }
@@ -447,7 +477,7 @@ mod tests {
         let ast = Dynamic::from_ast(b);
         if is_forall(&ast) {
             let body = quantifier_body_bool(&ast).unwrap();
-            if let Some(disjuncts) = or_parts(&body) {
+            if let Some(disjuncts) = or_body_parts(&body) {
                 eprintln!("or with {} disjuncts", disjuncts.len());
                 for d in disjuncts {
                     let ds = d.to_string();
