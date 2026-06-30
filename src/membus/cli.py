@@ -7,6 +7,7 @@ second pass of the same block as ``<stepB>`` (or ``--file-b``).
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -134,7 +135,12 @@ def _run_extract(args):
         data_b = loader.load(Path(args.file_b))
     elif args.step_b:
         data_b, _, _ = _load_circuit(args.group, args.block, args.step_b, None, args.root)
-    text = extract.build(data_a, memory_bus_id(labels), args.addr_space, data_b)
+    mem_id = memory_bus_id(labels)
+    model = extract.build_dict(data_a, mem_id, args.addr_space, data_b)
+    if args.json:
+        print(json.dumps(extract.extract_json(model), indent=2))
+        return
+    text = extract.format_bus(model)
     if args.output:
         Path(args.output).write_text(text)
         print(f"wrote {args.output}", file=sys.stderr)

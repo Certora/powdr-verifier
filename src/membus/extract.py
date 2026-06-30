@@ -34,11 +34,11 @@ def _offset_of(arg: Any) -> int:
     return off
 
 
-def build(pre: dict, mem_id: int, addr_space: int | None, post: dict | None) -> str:
-    """Emit the busat ``.bus`` text for the memory bus of ``pre``.
+def build_dict(pre: dict, mem_id: int, addr_space: int | None, post: dict | None) -> dict:
+    """Structured extract result for JSON export and match-var preanalysis.
 
-    ``post`` given ⟹ extract only the interactions removed (``pre − post``).
-    ``addr_space`` given ⟹ restrict to that address space.
+    Returns ``interactions`` (ordinal + abstract_ts), ``order_edges`` (lhs/rhs),
+    plus ``_mem_lines`` / ``_defs`` for :func:`format_bus`.
     """
     pre = machine_of(pre)
     if post is not None:
@@ -75,10 +75,9 @@ def build(pre: dict, mem_id: int, addr_space: int | None, post: dict | None) -> 
             var = f"ptr_{k.base}_{k.offset}"
             ptr_atom[pexpr] = var
             em.defs.setdefault(var, f"BASE_{k.base} + {k.offset}")
-        else:                       # Const -> integer literal; Unresolved -> free pointer var
+        else:
             ptr_atom[pexpr] = em.atom(lst[0]["args"][1], "ptr")
 
-    # (a) one abstract symbol per distinct timestamp expression
     ts_sym: dict[str, str] = {}
 
     def tsym(arg: Any) -> str:
@@ -89,7 +88,8 @@ def build(pre: dict, mem_id: int, addr_space: int | None, post: dict | None) -> 
 
     sends_by_k: dict[int, list[tuple[int, str]]] = collections.defaultdict(list)
     recvs_by_k: dict[int, list[tuple[int | None, str]]] = collections.defaultdict(list)
-    mem_lines = []
+    interactions: list[dict[str, Any]] = []
+    mem_lines: list[str] = []
     for i, b in enumerate(rows):
         a = b["args"]
         mult = to_signed(b["mult"]) if isinstance(b["mult"], int) else None
@@ -106,36 +106,75 @@ def build(pre: dict, mem_id: int, addr_space: int | None, post: dict | None) -> 
         addr = em.atom(a[0], "as")
         ptr = ptr_atom[em.expr_str(a[1])]
         data = [em.atom(a[j], f"b{j - 2}") for j in range(2, 6)]
-        mem_lines.append(f"{i}: {mult}, {addr}, {ptr}, " + ", ".join(data) + f", {sym}")
+        line = f"{i}: {mult}, {addr}, {ptr}, " + ", ".join(data) + f", {sym}"
+        mem_lines.append(line)
+        interactions.append({"ordinal": i, "abstract_ts": sym})
 
-    # (b) inferred order edges, each justified
-    edges: list[tuple[str, str, str]] = []
+    order_edges: list[dict[str, str]] = []
+    raw_edges: list[tuple[str, str, str]] = []
     for k, sends in sends_by_k.items():
         ss = sorted(sends)
         for (o1, s1), (o2, s2) in zip(ss, ss[1:]):
-            edges.append((s1, s2, f"intra-instr K={k}: offset {o1} < {o2}"))
+            raw_edges.append((s1, s2, f"intra-instr K={k}: offset {o1} < {o2}"))
     ks = sorted([k for k in sends_by_k if k in access_rank], key=lambda k: access_rank[k])
     for ka, kb in zip(ks, ks[1:]):
         last = sorted(sends_by_k[ka])[-1][1]
         first = sorted(sends_by_k[kb])[0][1]
-        edges.append((last, first, f"R1 from_state chain: K={ka} < K={kb}"))
+        raw_edges.append((last, first, f"R1 from_state chain: K={ka} < K={kb}"))
     for k, recvs in recvs_by_k.items():
         sends = sorted(sends_by_k.get(k, []))
         rs = sorted(recvs, key=lambda t: (t[0] if t[0] is not None else -10**9))
         for j, (c, rsym) in enumerate(rs):
             if sends:
                 own = sends[min(j, len(sends) - 1)][1]
-                edges.append((rsym, own, f"R2 LessThan: recv(K={k},const={c}) < own send"))
+                raw_edges.append((rsym, own, f"R2 LessThan: recv(K={k},const={c}) < own send"))
 
-    # (c) emit
-    out = ["MEM", *mem_lines, ""]
-    if em.defs:
+    for lhs, rhs, why in raw_edges:
+        order_edges.append({"lhs": lhs, "rhs": rhs, "why": why})
+
+    return {
+        "interactions": interactions,
+        "order_edges": order_edges,
+        "_mem_lines": mem_lines,
+        "_defs": dict(em.defs),
+    }
+
+
+def format_bus(model: dict) -> str:
+    """Render a :func:`build_dict` result as busat ``.bus`` text."""
+    out = ["MEM", *model["_mem_lines"], ""]
+    defs = model["_defs"]
+    if defs:
         out.append("DEFS")
-        out += [f"{v} := {em.defs[v]}" for v in sorted(em.defs)]
+        out += [f"{v} := {defs[v]}" for v in sorted(defs)]
         out.append("")
     out.append("CONSTRAINTS")
-    for lhs, rhs, why in edges:
-        out.append(f"# {why}")
-        out.append(f"{lhs} < {rhs}")
+    for e in model["order_edges"]:
+        if "why" in e:
+            out.append(f"# {e['why']}")
+        out.append(f"{e['lhs']} < {e['rhs']}")
     out.append("")
     return "\n".join(out)
+
+
+def build(pre: dict, mem_id: int, addr_space: int | None, post: dict | None) -> str:
+    """Emit the busat ``.bus`` text for the memory bus of ``pre``.
+
+    ``post`` given ⟹ extract only the interactions removed (``pre − post``).
+    ``addr_space`` given ⟹ restrict to that address space.
+    """
+    return format_bus(build_dict(pre, mem_id, addr_space, post))
+
+
+def extract_json(model: dict) -> dict:
+    """Public JSON subset (no internal ``_`` keys)."""
+    return {
+        "interactions": [
+            {"ordinal": r["ordinal"], "abstract_ts": r["abstract_ts"]}
+            for r in model["interactions"]
+        ],
+        "order_edges": [
+            {"lhs": e["lhs"], "rhs": e["rhs"]}
+            for e in model["order_edges"]
+        ],
+    }
