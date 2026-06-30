@@ -4,8 +4,8 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use smt2::{
-    assert_commands, declare_fun_name_cmd, int_from_i128, int_value, int_value_dyn, map_asserts,
-    map_bool_children, Script,
+    assert_commands, contains_bound_var_dyn, declare_fun_name_cmd, int_from_i128, int_value,
+    int_value_dyn, map_asserts, map_bool_children, Script,
 };
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
@@ -589,6 +589,11 @@ fn relation_poly_diff_plain(
     rhs: &Int,
     ctx: &NormalizeCtx<'_>,
 ) -> Option<(Poly, bool)> {
+    if contains_bound_var_dyn(&Dynamic::from_ast(lhs))
+        || contains_bound_var_dyn(&Dynamic::from_ast(rhs))
+    {
+        return None;
+    }
     if text_has_bool_marker(&lhs.to_string()) || text_has_bool_marker(&rhs.to_string()) {
         return None;
     }
