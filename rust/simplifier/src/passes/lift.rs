@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use smt2::ast_util::{
     bound_var_index, decl_name, flatten_or, is_forall, or_parts, quantifier_body_bool,
-    quantifier_body_deps, quantifier_bound_names, quantifier_bounds, quantifier_bounds_de_bruijn, rebuild_forall_dyn,
+    quantifier_body_deps, quantifier_bound_names, quantifier_bounds_de_bruijn, rebuild_forall_dyn,
     resolve_bound_or_free_name, substitute_bound_vars_dyn, contains_bound_var_dyn,
     de_bruijn_bound_name,
 };

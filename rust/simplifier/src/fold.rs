@@ -1,6 +1,9 @@
 //! Constant folding on Z3 AST (evaluator pass).
 
-use smt2::ast_util::{decl_name, int_from_i128, int_value, int_value_dyn, rebuild_app};
+use smt2::ast_util::{
+    debug_assert_direct_int_operand, decl_name, int_from_i128, int_value, int_value_dyn,
+    rebuild_app,
+};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
 pub fn fold_constants_fixpoint(b: &Bool, field_mod: Option<u64>, max_iters: usize) -> Bool {
@@ -241,6 +244,9 @@ fn fold_nary_int(ast: &Dynamic, f: fn(&[i128]) -> i128, field_mod: Option<i128>)
         return args.into_iter().next().unwrap();
     }
     let refs: Vec<&Int> = args.iter().collect();
+    for a in &args {
+        debug_assert_direct_int_operand(a);
+    }
     if head == "+" {
         Int::add(&refs)
     } else {

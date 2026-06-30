@@ -4,10 +4,11 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use smt2::{
-    assert_commands, contains_bound_var_dyn, declare_fun_name_cmd, int_from_i128, int_value,
-    int_value_dyn, map_asserts, map_bool_children, Script,
+    assert_commands, contains_bound_var_dyn, debug_assert_direct_int_operand, declare_fun_name_cmd,
+    int_from_i128, int_value, int_value_dyn, map_asserts, map_bool_children, Script,
 };
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
+use z3::SortKind;
 
 type Monomial = Vec<u32>;
 type Poly = HashMap<Monomial, i128>;
@@ -235,6 +236,16 @@ fn collect_variables(
                 }
             }
             gens.insert(key.clone());
+            debug_assert!(
+                n.get_sort().kind() != SortKind::Bool,
+                "polynomial generator must not be Bool-sorted: {key}"
+            );
+            if let Some(name) = smt2::symbol_name_dyn(n) {
+                debug_assert!(
+                    !bool_symbols.contains(&name) && !symbol_is_bool_name(&name),
+                    "Bool symbol registered as polynomial generator: {name}"
+                );
+            }
             gen_terms.insert(key, int_n);
             return;
         }
@@ -460,6 +471,9 @@ fn expr_to_poly(n: &Int, var_index: &HashMap<String, usize>, modulo: Option<i128
 }
 
 fn int_mul(args: &[Int]) -> Int {
+    for a in args {
+        debug_assert_direct_int_operand(a);
+    }
     if args.is_empty() {
         return int_from_i128(1);
     }
@@ -470,6 +484,9 @@ fn int_mul(args: &[Int]) -> Int {
 }
 
 fn int_add(args: &[Int]) -> Int {
+    for a in args {
+        debug_assert_direct_int_operand(a);
+    }
     if args.is_empty() {
         return int_from_i128(0);
     }
