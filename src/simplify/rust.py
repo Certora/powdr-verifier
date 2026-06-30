@@ -101,13 +101,15 @@ def _build_simplifier_cmd(
     rust_pipeline: str,
     *,
     timeout: float | None,
+    input_path: str = "-",
+    output_path: str = "-",
 ) -> list[str]:
     cmd = [str(bin_path)]
     if timeout is not None:
         cmd.extend(["--timeout", str(timeout)])
     if getattr(ARGS(), "pretty", False):
         cmd.append("--pretty")
-    cmd.extend(["-", rust_pipeline, "-"])
+    cmd.extend([input_path, rust_pipeline, output_path])
     return cmd
 
 
@@ -133,13 +135,16 @@ def _wrap_with_perf(cmd: list[str], profile_path: Path) -> list[str] | None:
 
 
 def run_rust_pipeline(
-    smt_script: script.SmtLibScript,
+    smt_script: script.SmtLibScript | None,
     tactic_pipeline: str,
     *,
     timeout: float | None = None,
     profile_input: Path | None = None,
     profile_output: Path | None = None,
-) -> tuple[script.SmtLibScript, list[dict]]:
+    input_path: Path | None = None,
+    output_path: Path | None = None,
+    parse_output: bool = True,
+) -> tuple[script.SmtLibScript | None, list[dict]]:
     global _last_rust_profile_path
     bin_path = resolve_simplifier_bin()
     if bin_path is None:
@@ -149,8 +154,18 @@ def run_rust_pipeline(
         strip_executor(part) for part in tactic_pipeline.split(":")
     )
 
-    smt_in = _script_to_string(smt_script)
-    cmd = _build_simplifier_cmd(bin_path, rust_pipeline, timeout=timeout)
+    use_file_input = input_path is not None
+    use_file_output = output_path is not None
+    smt_in: str | None = None
+    if not use_file_input:
+        smt_in = _script_to_string(smt_script)
+    cmd = _build_simplifier_cmd(
+        bin_path,
+        rust_pipeline,
+        timeout=timeout,
+        input_path=str(input_path) if use_file_input else "-",
+        output_path=str(output_path) if use_file_output else "-",
+    )
     profile_path: Path | None = None
     if getattr(ARGS(), "cprofile", False):
         profile_path = rust_profile_data_path(profile_input, profile_output)
@@ -216,4 +231,9 @@ def run_rust_pipeline(
         else:
             stats_dump(base, data)
 
+    if not parse_output:
+        return None, steps
+    if use_file_output:
+        with open(output_path, encoding="utf-8") as out:
+            return _string_to_script(out.read()), steps
     return _string_to_script(proc.stdout), steps

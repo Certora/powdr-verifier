@@ -436,7 +436,7 @@ def simplify_and_check(
             else Action("simplify-and-check")
         )
         with root_cm as check_action:
-            smt = simplify_smt_script(
+            smt, _ = simplify_smt_script(
                 smt,
                 tactic=tactic,
                 timeout=float(simplify_timeout),
