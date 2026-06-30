@@ -54,6 +54,44 @@ def _product_index(dump: dict) -> dict[str, list]:
     return idx
 
 
+def _range_checked(dump: dict) -> set[str]:
+    """Columns proven bounded by a range-check bus (VariableRangeChecker id 3 /
+    BitwiseLookup 6 / TupleRangeChecker 7). Cached on the dump.
+
+    Selecting the integer root of the ``F·(F−1)`` gadget is sound only if the
+    decomposed limb is a bounded integer — i.e. range-checked. We verify it.
+    """
+    rc = dump.get("_membus_range_checked")
+    if rc is None:
+        rc = set()
+        for b in dump.get("bus_interactions", []):
+            if b.get("id") in (3, 6, 7):
+                for a in b["args"]:
+                    names(a, rc)
+        dump["_membus_range_checked"] = rc
+    return rc
+
+
+def _bounded(dump: dict) -> set[str]:
+    """Columns proven to hold bounded integers (bytes): range-checked columns,
+    plus the data bytes (args[2:6]) of memory-bus interactions.
+
+    The latter relies on the invariant that **everything on the memory bus is a
+    byte** — reads are assumed byte-valued, writes are checked separately, and
+    prior basic blocks uphold the same. This is what bounds the base register
+    bytes (e.g. ``rs1_data``) that the address decomposition is computed from.
+    """
+    b = dump.get("_membus_bounded")
+    if b is None:
+        b = set(_range_checked(dump))
+        for bi in dump.get("bus_interactions", []):
+            if bi.get("id") == 1:
+                for a in bi["args"][2:6]:        # b0..b3 data bytes
+                    names(a, b)
+        dump["_membus_bounded"] = b
+    return b
+
+
 @dataclass(frozen=True)
 class Const:
     """A constant (fixed) address."""
@@ -109,7 +147,14 @@ def affine_decomp(dump: dict, col: str) -> tuple[dict[str, int], int] | None:
     offset (this selects the in-range root and confirms a clean affine relation).
     Returns ``(weights, offset)`` so that ``col == Σ weights·other + offset``, or
     None. No column-name matching — the gadget is recognized structurally.
+
+    Integer-root selection is sound only if every column in the factor is a
+    bounded integer: the limb ``col`` must be range-checked, and the base columns
+    must be bounded (range-checked or memory-bus data bytes). Otherwise we decline.
     """
+    if col not in _range_checked(dump):
+        return None
+    bounded = _bounded(dump)
     for c in _product_index(dump).get(col, []):
         fa, fb = linterms(c[0]), linterms(c[2])
         if fa is None or fb is None:
@@ -121,7 +166,9 @@ def affine_decomp(dump: dict, col: str) -> tuple[dict[str, int], int] | None:
             a = coeffs.get(col)
             if not a:
                 continue
-            others = {k: v for k, v in coeffs.items() if k != col}
+            others = {k: v for k, v in coeffs.items() if k != col and v != 0}
+            if any(o not in bounded for o in others):     # base must be bounded bytes
+                continue
             if any(v % a != 0 for v in others.values()) or const % a != 0:
                 continue
             weights = {k: -(v // a) for k, v in others.items()}
