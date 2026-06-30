@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use smt2::ast_util::bound_var_index;
 use smt2::{and_parts, free_variables_bool, iter_nodes_dyn};
-use z3::ast::{Ast, Bool, Dynamic, Int as ZInt};
+use z3::ast::{Bool, Dynamic, Int as ZInt};
 use z3::{SatResult, Solver};
 
 use super::map::SkolemMap;
@@ -67,11 +67,7 @@ pub fn contribute(
         let rel_parts = qvar_conjuncts(&d, &cand, bound_order);
         let rel_fv: HashSet<String> = rel_parts
             .iter()
-            .flat_map(|c| {
-                let mut vars = free_variables_bool(c);
-                vars.extend(qvars_mentioned_in(c, &map.qvars, bound_order));
-                vars
-            })
+            .flat_map(|c| free_variables_bool(c))
             .collect();
         let relevant = if rel_parts.len() == 1 {
             rel_parts[0].clone()
@@ -112,13 +108,13 @@ pub fn contribute(
             continue;
         };
         let falsify: Vec<Bool> = disjuncts.iter().map(|d| d.not()).collect();
-        let model = solve_island(&falsify, members, sorts, decl_block, field);
+        let Some(model) = solve_island(&falsify, members, sorts, decl_block, field) else {
+            continue;
+        };
         for q in members {
-            let val = model
-                .as_ref()
-                .and_then(|m| m.get(q))
-                .cloned()
-                .unwrap_or_else(|| default_value(q, sorts));
+            let Some(val) = model.get(q).cloned() else {
+                continue;
+            };
             map.pin(q, val, "isolate");
         }
     }
@@ -148,13 +144,6 @@ fn qvar_conjuncts(d: &Bool, cand: &HashSet<String>, bound_order: &[String]) -> V
         .into_iter()
         .filter(|c| !qvars_mentioned_in(c, cand, bound_order).is_empty())
         .collect()
-}
-
-fn default_value(q: &str, sorts: &HashMap<String, SortKind>) -> Dynamic {
-    match symbol_sort(q, sorts) {
-        SortKind::Bool => Dynamic::from_ast(&Bool::from_bool(false)),
-        _ => Dynamic::from_ast(&ZInt::from_i64(0)),
-    }
 }
 
 fn sort_kind_to_smt(sort: SortKind) -> &'static str {

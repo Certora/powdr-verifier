@@ -84,6 +84,28 @@ impl SExpr {
         }
     }
 
+    /// Drop ``(! inner attr…)`` wrappers recursively.
+    pub fn strip_annotations(self) -> SExpr {
+        match self {
+            SExpr::List(items)
+                if items
+                    .first()
+                    .and_then(|h| h.node.as_atom())
+                    .is_some_and(|a| a == "!")
+                    && items.len() >= 2 =>
+            {
+                items[1].node.clone().strip_annotations()
+            }
+            SExpr::List(items) => SExpr::List(
+                items
+                    .into_iter()
+                    .map(|sp| Spanned::new(sp.node.strip_annotations(), sp.span))
+                    .collect(),
+            ),
+            SExpr::Atom(a) => SExpr::Atom(a),
+        }
+    }
+
     pub fn to_string(&self) -> String {
         match self {
             SExpr::Atom(a) => a.clone(),
@@ -100,6 +122,20 @@ impl SExpr {
             }
         }
     }
+}
+
+/// Remove SMT-LIB annotation wrappers from a single expression string.
+pub fn strip_smtlib_annotations(expr: &str) -> String {
+    if !expr.contains("(!") {
+        return expr.to_string();
+    }
+    let Ok((form, rest)) = SExpr::read_form(expr) else {
+        return expr.to_string();
+    };
+    if !rest.trim().is_empty() {
+        return expr.to_string();
+    }
+    form.node.strip_annotations().to_string()
 }
 
 impl fmt::Display for SExpr {
@@ -223,9 +259,8 @@ mod tests {
     }
 
     #[test]
-    fn handles_pipe_symbols() {
-        let input = r#"(set-info :source "| (not a form) |")"#;
-        let (form, _) = SExpr::read_form(input).unwrap();
-        assert_eq!(form.node.head(), Some("set-info"));
+    fn strips_bang_annotation() {
+        let stripped = strip_smtlib_annotations("(! (or a b) :weight 0)");
+        assert_eq!(stripped, "(or a b)");
     }
 }

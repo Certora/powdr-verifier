@@ -22,6 +22,7 @@ pub use ast_util::{
     quantifier_body, quantifier_body_bool, quantifier_body_deps, quantifier_bound_names,
     quantifier_bounds, quantifier_bounds_de_bruijn,
     rebuild_app, rebuild_forall_dyn, rebuild_quantifier_dyn, resolve_bound_or_free_name,
+    strip_annotations, strip_annotations_deep,
     scoped_free_int_symbols, strip_prefix, substitute_bound_vars_dyn, swap_prefix,
     contains_bound_var_dyn, de_bruijn_bound_name, debug_assert_direct_int_operand,
     has_bool_sort_leaf_dyn, unwrap_zero_mod_eq,
@@ -36,5 +37,5 @@ pub use script::{
     ensure_free_symbols_declared,
     extra_declarations, map_asserts, seed_parser_context, splice_z3_result, Script, ScriptParts,
 };
-pub use sexpr::{SExpr, Span, Spanned};
+pub use sexpr::{strip_smtlib_annotations, SExpr, Span, Spanned};
 pub use z3_parse::ParseCtx;

@@ -142,10 +142,71 @@ fn match_collapsed(f: &Bool, field: i128) -> Option<WitnessCandidate> {
     Some((factors, cmp, free_var))
 }
 
+#[cfg(test)]
+pub fn match_collapsed_for_test(f: &Bool, field: i128) -> Option<WitnessCandidate> {
+    match_collapsed(f, field)
+}
+
 pub fn contribute(map: &mut SkolemMap, body: &Bool, candidates: &[WitnessCandidate], field: i128) {
     if candidates.is_empty() {
         return;
     }
+    let witness_before = map
+        .sources
+        .values()
+        .filter(|s| s.as_str() == "witness")
+        .count();
+    contribute_from_body(map, body, candidates, field);
+    if map
+        .sources
+        .values()
+        .filter(|s| s.as_str() == "witness")
+        .count()
+        == witness_before
+    {
+        contribute_from_candidate_bundles(map, candidates);
+    }
+}
+
+fn bundle_id(stripped: &str) -> Option<String> {
+    let (_, tail) = stripped.rsplit_once('_')?;
+    tail.split('@').next().map(str::to_string)
+}
+
+fn contribute_from_candidate_bundles(map: &mut SkolemMap, candidates: &[WitnessCandidate]) {
+    for (factors, cmp, free_var) in candidates {
+        let bundle_ids: HashSet<String> = factors.iter().filter_map(|f| bundle_id(f)).collect();
+        if bundle_ids.len() != 1 {
+            continue;
+        }
+        let bundle = bundle_ids.into_iter().next().unwrap();
+        let has_cmp = map
+            .qvars
+            .iter()
+            .any(|q| strip_prefix(q) == cmp.as_str());
+        if !has_cmp {
+            continue;
+        }
+        let markers: Vec<String> = map
+            .qvars
+            .iter()
+            .filter(|q| !map.is_pinned(q))
+            .filter(|q| {
+                let s = strip_prefix(q);
+                s.contains("diff_inv_marker") && bundle_id(s) == Some(bundle.clone())
+            })
+            .cloned()
+            .collect();
+        if markers.len() < 2 {
+            continue;
+        }
+        for qvar in markers {
+            map.pin(&qvar, free_var.clone(), "witness");
+        }
+    }
+}
+
+fn contribute_from_body(map: &mut SkolemMap, body: &Bool, candidates: &[WitnessCandidate], field: i128) {
     let unpinned: HashSet<String> = map
         .qvars
         .iter()

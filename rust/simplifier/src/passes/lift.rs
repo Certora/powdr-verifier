@@ -359,7 +359,7 @@ fn name_debruijn_dyn(d: &Dynamic, quant: &Dynamic, script: &Script) -> Result<Dy
     .map_err(|_| "substitute_bound_vars_dyn panicked".into())
 }
 
-fn name_debruijn_bool(b: &Bool, quant: &Dynamic, script: &Script) -> Result<Bool, String> {
+pub(crate) fn name_debruijn_bool(b: &Bool, quant: &Dynamic, script: &Script) -> Result<Bool, String> {
     name_debruijn_dyn(&Dynamic::from_ast(b), quant, script)?
         .as_bool()
         .ok_or_else(|| "expected bool after de Bruijn naming".into())
