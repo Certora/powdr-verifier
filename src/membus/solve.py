@@ -29,10 +29,39 @@ from typing import Any
 
 from src.lens.loader import machine_of
 from src.lens.metrics import mult_kind
-from src.lens.normalize import to_signed
+from src.lens.normalize import BABYBEAR_PRIME, to_signed
 
 from . import keys, order
 from .busfmt import find_duplicates, memory_bis
+
+
+def _is_valid_col(name: str) -> bool:
+    """The openvm autoprecompile activation selector ``is_valid`` (global, no
+    per-instruction index — distinct from the early-pass ``is_valid_<K>``)."""
+    return name.split("@", 1)[0] == "is_valid"
+
+
+def _kind_assuming_is_valid(mult: Any) -> str | None:
+    """Classify a multiplicity under the assumption ``is_valid == 1``.
+
+    The final exported APC gates every interaction by the openvm activation
+    selector (``mult = ±is_valid``). With ``is_valid := 1`` this is just a normal
+    send/recv. Returns send/recv/disabled when the mult is a linear combination of
+    *only* ``is_valid`` columns; otherwise None (a genuinely symbolic mult)."""
+    lt = order.linterms(mult)
+    if lt is None:
+        return None
+    coeffs = {k: v for k, v in lt[0].items() if v != 0}
+    if not coeffs or any(not _is_valid_col(k) for k in coeffs):
+        return None
+    val = (lt[1] + sum(coeffs.values())) % BABYBEAR_PRIME      # substitute is_valid := 1
+    if val == 1:
+        return "send"
+    if val == BABYBEAR_PRIME - 1:
+        return "recv"
+    if val == 0:
+        return "disabled"
+    return None
 
 
 def _t(n: int) -> str:
@@ -96,20 +125,28 @@ class Solution:
     unique: bool             # every cell solved cleanly and uniquely
     n_inputs: int
     n_outputs: int
+    assumed_is_valid: bool   # multiplicities were resolved by assuming is_valid==1
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "mem_id": self.mem_id, "address_space": self.addr_space,
             "ts_entry": self.ts_entry, "ts_exit": self.ts_exit,
             "unique": self.unique, "n_inputs": self.n_inputs, "n_outputs": self.n_outputs,
+            "assumed_is_valid": self.assumed_is_valid,
             "cells": [c.as_dict() for c in self.cells],
             "interactions": [r.as_dict() for r in self.rows],
         }
 
 
-def compute(data: Any, mem_id: int = 1, addr_space: int = 1) -> Solution:
+def compute(data: Any, mem_id: int = 1, addr_space: int = 1,
+            assume_is_valid: bool = True) -> Solution:
     """Solve the memory bus of one circuit for ``addr_space``. Raises ``ValueError``
-    (caught by the CLI → exit 2) when a precondition for the graph solver fails."""
+    (caught by the CLI → exit 2) when a precondition for the graph solver fails.
+
+    ``assume_is_valid`` (default True): in the final exported APC every interaction
+    is gated by the openvm activation selector (``mult = ±is_valid``); assuming
+    ``is_valid == 1`` turns those into ordinary send/recv. This only affects that
+    final APC — no other step carries the global ``is_valid`` in its multiplicities."""
     if addr_space != 1:
         raise ValueError(f"solve: only address space 1 is supported in v1 (got {addr_space})")
     machine = machine_of(data)
@@ -123,12 +160,27 @@ def compute(data: Any, mem_id: int = 1, addr_space: int = 1) -> Solution:
         raise ValueError(f"solve: no memory interactions (id={mem_id}, as={addr_space})")
 
     # classify: active sends/recvs vs disabled (mult 0 — inert: no timestamp
-    # constraint, matches nothing). Symbolic / other multiplicities are refused.
+    # constraint, matches nothing). With assume_is_valid, ±is_valid resolves to
+    # send/recv. Other symbolic multiplicities are refused.
     active: list[tuple[int, dict]] = []
     disabled: set[int] = set()
     key_of: dict[int, int | None] = {}
+    eff_kind: dict[int, str] = {}
+    used_is_valid = False
     for ordn, b in rows_idx:
         kind = mult_kind(b["mult"])
+        if kind not in ("send", "recv"):
+            ek = _kind_assuming_is_valid(b["mult"]) if assume_is_valid else None
+            if ek is not None:
+                used_is_valid = True
+                kind = ek
+            elif isinstance(b["mult"], int) and to_signed(b["mult"]) == 0:
+                kind = "disabled"
+            else:
+                raise ValueError(
+                    f"solve: interaction #{ordn} has unsupported multiplicity "
+                    f"{b['mult']!r} (not send / recv / disabled)")
+        eff_kind[ordn] = kind
         if kind in ("send", "recv"):
             k = keys.recover_key(machine, b)
             if not isinstance(k, keys.Const):
@@ -137,14 +189,10 @@ def compute(data: Any, mem_id: int = 1, addr_space: int = 1) -> Solution:
                     f"constant-key address spaces are supported (graph fast path)")
             key_of[ordn] = k.value
             active.append((ordn, b))
-        elif isinstance(b["mult"], int) and to_signed(b["mult"]) == 0:
+        else:  # disabled
             disabled.add(ordn)
             dk = keys.recover_key(machine, b)
             key_of[ordn] = dk.value if isinstance(dk, keys.Const) else None
-        else:
-            raise ValueError(
-                f"solve: interaction #{ordn} has unsupported multiplicity "
-                f"{b['mult']!r} (not send / recv / disabled)")
 
     if not active:
         raise ValueError(f"solve: no active memory interactions (id={mem_id}, as={addr_space})")
@@ -180,7 +228,7 @@ def compute(data: Any, mem_id: int = 1, addr_space: int = 1) -> Solution:
         sends: list[tuple[int, int]] = []        # (vtime, ordinal)
         recvs: list[tuple[int, int]] = []        # (threshold, ordinal): prev_ts <= threshold
         for ordn, b in grp:
-            kind = mult_kind(b["mult"])
+            kind = eff_kind[ordn]
             tsarg = b["args"][6]
             tscol = order.ts_col(tsarg)
             if kind == "send":
@@ -269,12 +317,12 @@ def compute(data: Any, mem_id: int = 1, addr_space: int = 1) -> Solution:
         cells.append(CellResult(keyval, k, len(recvs), unique, "", cell_edges,
                                 input_recv, output_send))
 
-    rows = _build_rows(rows_idx, key_of, meta, str(addr_space), ts_entry, disabled)
+    rows = _build_rows(rows_idx, key_of, meta, str(addr_space), ts_entry, disabled, eff_kind)
     return Solution(mem_id, addr_space, ts_entry, max_send_vtime, rows, cells,
-                    all_unique, n_inputs, n_outputs)
+                    all_unique, n_inputs, n_outputs, used_is_valid)
 
 
-def _build_rows(rows_idx, key_of, meta, asv, ts_entry, disabled) -> list[SolveRow]:
+def _build_rows(rows_idx, key_of, meta, asv, ts_entry, disabled, eff_kind) -> list[SolveRow]:
     out: list[SolveRow] = []
     for ordn, b in sorted(rows_idx):
         keyval = key_of[ordn]
@@ -283,7 +331,7 @@ def _build_rows(rows_idx, key_of, meta, asv, ts_entry, disabled) -> list[SolveRo
             out.append(SolveRow(ordn, "disabled", asv, keystr, "", "·", "disabled",
                                 keyval, None, None, []))
             continue
-        kind = mult_kind(b["mult"])
+        kind = eff_kind[ordn]
         m = meta.get(ordn, {})
         note = m.get("note")
         io = m.get("io", "")

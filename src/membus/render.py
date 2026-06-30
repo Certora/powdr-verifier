@@ -156,8 +156,9 @@ def _solve_summary(s: "Solution") -> str:
     uniq = "yes" if s.unique else "no/unknown"
     notes = [f"{c.key}:{c.note}" for c in s.cells if c.note]
     tail = f"  unsolved_cells={','.join(notes)}" if notes else ""
+    iv = "  [assumed is_valid=1]" if s.assumed_is_valid else ""
     return (f"as={s.addr_space} cells={len(s.cells)} inputs={s.n_inputs} "
-            f"outputs={s.n_outputs} ts_entry=T+0 ts_exit={exit_s} unique={uniq}{tail}")
+            f"outputs={s.n_outputs} ts_entry=T+0 ts_exit={exit_s} unique={uniq}{iv}{tail}")
 
 
 def _solve_plain(s: "Solution", t: Target) -> str:

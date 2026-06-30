@@ -67,6 +67,10 @@ def _build_parser() -> argparse.ArgumentParser:
     _circuit_a_args(sp_solve)
     sp_solve.add_argument("--as", dest="addr_space", type=int, default=1,
                           help="address space to solve (default 1; v1 supports AS1 only)")
+    sp_solve.add_argument("--assume-is-valid", dest="assume_is_valid",
+                          action=argparse.BooleanOptionalAction, default=True,
+                          help="assume the openvm activation selector is_valid==1 "
+                               "(default on; only affects the final exported APC)")
 
     sp_ex = sub.add_parser("extract", parents=[common],
                            help="emit busat .bus (abstract timestamp order)")
@@ -137,7 +141,7 @@ def _run_info(args, mode):
 def _run_solve(args, mode):
     data, labels, t = _load_circuit(args.group, args.block, args.step,
                                     getattr(args, "file_a", None), args.root)
-    sol = solve.compute(data, memory_bus_id(labels), args.addr_space)
+    sol = solve.compute(data, memory_bus_id(labels), args.addr_space, args.assume_is_valid)
     print(render.render_solve(sol, t, mode))
 
 

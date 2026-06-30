@@ -164,6 +164,38 @@ def test_recv_bound_from_range_check_arg():
     assert _row(sol, 0).io == "out"     # the lone send escapes
 
 
+def test_assume_is_valid_resolves_selector_gated_mult():
+    # final exported APC: every interaction gated by the global is_valid selector
+    fs = "from_state__timestamp_0@1"
+    pv = "aux__base__prev_timestamp_0@7"
+    limb = "aux__base__timestamp_lt_aux__lower_decomp__0_0@8"
+    iv = "is_valid@99"
+    arg = [_add(_m(15360, pv), _m(15360, limb), 15360), "-", _m(15360, fs)]
+    d = {
+        "bus_interactions": [
+            {"id": 1, "mult": iv, "args": [1, 8, 0, 0, 0, 0, [fs, "+", 5]]},   # send = is_valid
+            {"id": 1, "mult": ["-", iv], "args": [1, 8, 0, 0, 0, 0, pv]},      # recv = -is_valid
+            {"id": 3, "mult": 1, "args": [arg, 12]},
+        ],
+        "constraints": [],
+    }
+    sol = solve.compute(d, 1, 1)                        # default: assume is_valid == 1
+    assert sol.assumed_is_valid is True
+    assert sol.n_inputs == 1 and sol.n_outputs == 1 and sol.unique is True
+    assert _row(sol, 1).io == "in" and _row(sol, 0).io == "out"
+    with pytest.raises(ValueError, match="unsupported multiplicity"):
+        solve.compute(d, 1, 1, assume_is_valid=False)   # opt out -> refuse
+
+
+def test_per_instruction_is_valid_not_assumed():
+    # is_valid_<K> (per-instruction, early passes) is NOT the global selector
+    from src.membus import solve as _s
+    assert _s._kind_assuming_is_valid("is_valid@99") == "send"
+    assert _s._kind_assuming_is_valid(["-", "is_valid@99"]) == "recv"
+    assert _s._kind_assuming_is_valid("is_valid_0@27") is None          # per-instruction
+    assert _s._kind_assuming_is_valid(["opcode_add_flag_0@31", "+", "is_valid@99"]) is None
+
+
 def test_rejects_unresolved_ts_base():
     # no R1 chain -> fs1's offset from the base is unknown -> ts_entry not well defined
     with pytest.raises(ValueError, match="offsets from a fixed base"):
