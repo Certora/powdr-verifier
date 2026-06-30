@@ -11,6 +11,7 @@ from .memory_plain_utils import (
     plain_memory_presolve_incremental,
     plain_memory_presolve_individual,
 )
+from .membus_subprocess import fetch_extract_json
 from ..smt.utils import *
 from ..utils.args import ARGS
 from ..utils.enums import MemoryPresolve
@@ -74,18 +75,64 @@ def _plain_pairwise_match_impossible_static(
     return False
 
 
+def _membus_ordered_ts_pairs(order_edges: list[dict]) -> set[frozenset[str]]:
+    """Pairs of abstract timestamps with a strict order (transitive closure of edges)."""
+    nodes = sorted({e["lhs"] for e in order_edges} | {e["rhs"] for e in order_edges})
+    if not nodes:
+        return set()
+    idx = {n: i for i, n in enumerate(nodes)}
+    n = len(nodes)
+    before = [[False] * n for _ in range(n)]
+    for e in order_edges:
+        before[idx[e["lhs"]]][idx[e["rhs"]]] = True
+    for k in range(n):
+        for i in range(n):
+            if not before[i][k]:
+                continue
+            for j in range(n):
+                before[i][j] = before[i][j] or before[k][j]
+    return {
+        frozenset({nodes[i], nodes[j]})
+        for i in range(n)
+        for j in range(i + 1, n)
+        if before[i][j] or before[j][i]
+    }
+
+
+def _membus_kill_index_pairs(membus_extract: dict | None, n: int) -> frozenset[tuple[int, int]]:
+    """``(i, j)`` with ``i < j`` where membus timestamp order forbids a cross-match."""
+    if membus_extract is None:
+        return frozenset()
+    rows = membus_extract.get("interactions") or []
+    ordered = _membus_ordered_ts_pairs(membus_extract.get("order_edges") or [])
+    out: set[tuple[int, int]] = set()
+    lim = min(n, len(rows))
+    for i in range(lim):
+        ts_i = rows[i].get("abstract_ts")
+        if not ts_i:
+            continue
+        for j in range(i + 1, lim):
+            ts_j = rows[j].get("abstract_ts")
+            if ts_j and ts_i != ts_j and frozenset({ts_i, ts_j}) in ordered:
+                out.add((i, j))
+    return frozenset(out)
+
+
 def _plain_build_match_vars(
     interactions: list,
     n: int,
     symbol: Callable[[int, int], FNode],
     *,
     log_prefix: str | None = None,
+    membus_extract: dict | None = None,
 ) -> dict[tuple[int, int], FNode]:
     """Build ``memory_match_i_j`` variables for all ``i <= j``, using ``FALSE`` when static."""
     p = ARGS().field_type.value
     mult_const, const_args = _plain_static_profile(interactions, p)
+    membus_kill = _membus_kill_index_pairs(membus_extract, n)
     match_vars: dict[tuple[int, int], FNode] = {}
     static_false = 0
+    membus_false = 0
     symbols = 0
 
     for i in range(n):
@@ -95,16 +142,20 @@ def _plain_build_match_vars(
             ):
                 match_vars[(i, j)] = FALSE()
                 static_false += 1
+            elif i != j and (i, j) in membus_kill:
+                match_vars[(i, j)] = FALSE()
+                membus_false += 1
             else:
                 match_vars[(i, j)] = symbol(i, j)
                 symbols += 1
 
     prefix = f"{log_prefix} " if log_prefix else ""
     logging.info(
-        "%splain_build_match_vars: %d symbols / %d false",
+        "%splain_build_match_vars: %d symbols / %d false / %d membus_false",
         prefix,
         symbols,
         static_false,
+        membus_false,
     )
     return match_vars
 
@@ -671,6 +722,9 @@ class PermutationCheckMixin:
             n,
             lambda i, j: self._symbol(f"{self.NAME}_match_{i}_{j}", BOOL),
             log_prefix=self.NAME,
+            membus_extract=fetch_extract_json(self._cur_state.source_path)
+            if self.NAME == "memory"
+            else None,
         )
 
         def m(i: int, j: int) -> FNode:

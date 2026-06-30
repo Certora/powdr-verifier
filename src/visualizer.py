@@ -82,7 +82,7 @@ def visualize():
 
     interactions: list[VisualizedInteraction] = []
 
-    with SmtConverter(ARGS().var_prefix, BasicBlock(input["block"])) as conv:
+    with SmtConverter(ARGS().var_prefix, BasicBlock(input["block"]), source_path=ARGS().input) as conv:
         conv.to_formula_with_axioms(input)
         interpreters = conv.bus_interaction_encoder.get_interpreters()
         eval_fn = lambda f: evaluate(f, model, interpreters)

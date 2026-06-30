@@ -102,8 +102,16 @@ def verify():
 
     with (
         Action("verify-encode") as action,
-        SmtConverter(BEFORE_PREFIX, block, verify_preanalysis=verify_preanalysis) as before_conv,
-        SmtConverter(AFTER_PREFIX, block, verify_preanalysis=verify_preanalysis) as after_conv,
+        SmtConverter(
+            BEFORE_PREFIX, block,
+            verify_preanalysis=verify_preanalysis,
+            source_path=ARGS().input_before,
+        ) as before_conv,
+        SmtConverter(
+            AFTER_PREFIX, block,
+            verify_preanalysis=verify_preanalysis,
+            source_path=ARGS().input_after,
+        ) as after_conv,
     ):
         action += {"outputs": []}
         if optimization_step:

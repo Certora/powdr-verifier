@@ -36,6 +36,15 @@ def _chain_dump():
     }
 
 
+def test_build_dict_json_shape():
+    model = extract.build_dict(_chain_dump(), 1, 1, None)
+    pub = extract.extract_json(model)
+    assert len(pub["interactions"]) == 3
+    ts = [r["abstract_ts"] for r in pub["interactions"]]
+    assert len(set(ts)) == len(ts)
+    assert pub["order_edges"]
+
+
 def test_extract_emits_abstract_bus():
     txt = extract.build(_chain_dump(), 1, 1, None)
     assert txt.startswith("MEM")
