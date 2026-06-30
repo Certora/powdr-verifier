@@ -461,7 +461,7 @@ pub fn has_bool_sort_leaf_dyn(ast: &Dynamic) -> bool {
     })
 }
 
-/// Bound constants in De Bruijn index order: ``bounds[i]`` replaces ``(:var i)``.
+/// Bound constants in declaration order (outermost first), matching ``forall_const`` / Z3 text order.
 pub fn quantifier_bounds(ast: &Dynamic) -> Vec<Dynamic> {
     if ast.kind() != AstKind::Quantifier {
         return Vec::new();
@@ -470,20 +470,12 @@ pub fn quantifier_bounds(ast: &Dynamic) -> Vec<Dynamic> {
     unsafe {
         let z3 = ctx.get_z3_context();
         let n = Z3_get_quantifier_num_bound(z3, ast.get_z3_ast()) as usize;
-        let mut names = Vec::with_capacity(n);
-        let mut sorts = Vec::with_capacity(n);
+        let mut out = Vec::with_capacity(n);
         for i in 0..n {
             let sym = Z3_get_quantifier_bound_name(z3, ast.get_z3_ast(), i as u32).unwrap();
             let sort = Z3_get_quantifier_bound_sort(z3, ast.get_z3_ast(), i as u32).unwrap();
-            names.push(z3_symbol_to_string(ctx, sym));
-            sorts.push(sort);
-        }
-        let mut out = Vec::with_capacity(n);
-        for de_bruijn_idx in 0..n {
-            let text_idx = n - 1 - de_bruijn_idx;
-            let name = &names[text_idx];
-            let sort = sorts[text_idx];
-            let bound: Dynamic = if quantifier_bound_sort_is_bool(name, Z3_get_sort_kind(z3, sort)) {
+            let name = z3_symbol_to_string(ctx, sym);
+            let bound: Dynamic = if quantifier_bound_sort_is_bool(&name, Z3_get_sort_kind(z3, sort)) {
                 Dynamic::from_ast(&Bool::new_const(name.as_str()))
             } else {
                 Dynamic::from_ast(&Int::new_const(name.as_str()))
@@ -504,6 +496,13 @@ pub fn rebuild_exists_dyn(bounds: &[Dynamic], body: &Bool) -> Bool {
     use z3::ast::exists_const;
     let bound_refs: Vec<&dyn Ast> = bounds.iter().map(|d| d as &dyn Ast).collect();
     exists_const(&bound_refs, &[], body)
+}
+
+/// Bound constants indexed by de Bruijn level: ``bounds[i]`` replaces ``(:var i)`` (innermost at ``0``).
+pub fn quantifier_bounds_de_bruijn(ast: &Dynamic) -> Vec<Dynamic> {
+    let mut bounds = quantifier_bounds(ast);
+    bounds.reverse();
+    bounds
 }
 
 pub fn quantifier_bounds_int(ast: &Dynamic) -> Vec<Int> {
@@ -769,6 +768,52 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(has_quantifier(&b));
+    }
+
+    #[test]
+    fn quantifier_rebuild_preserves_bound_names() {
+        if !has_z3() {
+            return;
+        }
+        let mut ctx = ParseCtx::new();
+        let b = ctx
+            .ingest_command(
+                "(assert (forall ((x Int) (flag Bool)) (or (not flag) (= x 0))))",
+            )
+            .unwrap()
+            .unwrap();
+        let ast = Dynamic::from_ast(&b);
+        let bounds = quantifier_bounds(&ast);
+        let names: Vec<String> = bounds
+            .iter()
+            .filter_map(|d| crate::ast_build::symbol_name_dyn(d))
+            .collect();
+        assert_eq!(names, vec!["x", "flag"]);
+        let body = quantifier_body_bool(&ast).expect("body");
+        let rebuilt = rebuild_quantifier_dyn(true, &bounds, &body);
+        let rebuilt_ast = Dynamic::from_ast(&rebuilt);
+        assert_eq!(quantifier_bound_names(&rebuilt_ast), vec!["x", "flag"]);
+        assert_eq!(rebuilt.to_string(), b.to_string());
+    }
+
+    #[test]
+    fn map_bool_children_preserves_quantifier_body_symbols() {
+        if !has_z3() {
+            return;
+        }
+        let mut ctx = ParseCtx::new();
+        let b = ctx
+            .ingest_command(
+                "(assert (forall ((x Int) (flag Bool))
+                  (or (not flag)
+                      (not (< (mod x 2013265921) 131072)))))",
+            )
+            .unwrap()
+            .unwrap();
+        let mapped = map_bool_children(&b, &mut |c| c.clone());
+        let s = mapped.to_string();
+        assert!(s.contains("(mod x"));
+        assert!(!s.contains("(mod flag"));
     }
 
     #[test]

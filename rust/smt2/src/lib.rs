@@ -20,7 +20,7 @@ pub use ast_util::{
     is_implies, is_int_const, is_int_literal_string, is_ite, is_not, map_bool_children,
     mod_int_literal_string, or_parts, parse_int_literal, smtlib_decl_name, z3_if_to_ite,
     quantifier_body, quantifier_body_bool, quantifier_body_deps, quantifier_bound_names,
-    quantifier_bounds,
+    quantifier_bounds, quantifier_bounds_de_bruijn,
     rebuild_app, rebuild_forall_dyn, rebuild_quantifier_dyn, resolve_bound_or_free_name,
     scoped_free_int_symbols, strip_prefix, substitute_bound_vars_dyn, swap_prefix,
     contains_bound_var_dyn, de_bruijn_bound_name, has_bool_sort_leaf_dyn, unwrap_zero_mod_eq,
