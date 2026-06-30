@@ -461,42 +461,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    fn debug_skolem_pin_strings() {
-        let text = std::fs::read_to_string("/tmp/skolem.smt2").unwrap();
-        let script = Script::parse(&text).unwrap();
-        let b = script
-            .commands
-            .iter()
-            .find_map(|c| c.assert_bool())
-            .unwrap();
-        find_pin_disjunct_str(b);
-    }
-
-    fn find_pin_disjunct_str(b: &Bool) {
-        let ast = Dynamic::from_ast(b);
-        if is_forall(&ast) {
-            let body = quantifier_body_bool(&ast).unwrap();
-            if let Some(disjuncts) = or_body_parts(&body) {
-                eprintln!("or with {} disjuncts", disjuncts.len());
-                for d in disjuncts {
-                    let ds = d.to_string();
-                    if ds.contains("(:var 0)") && ds.contains("(mod") {
-                        eprintln!("z3 d={ds}");
-                    }
-                }
-            }
-            find_pin_disjunct_str(&body);
-            return;
-        }
-        if let Some(parts) = smt2::and_parts(b) {
-            for p in parts {
-                find_pin_disjunct_str(&p);
-            }
-        }
-    }
-
-    #[test]
     fn lift_ordered_dependencies() {
         let script = Script::parse(
             "(assert (forall ((x Int) (y Int)) (or (not (= y 5)) (not (= x (mod y 10))))))\n(check-sat)\n",
