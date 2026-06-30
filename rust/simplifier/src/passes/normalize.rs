@@ -17,24 +17,48 @@ fn declare_fun_sort(raw: &str) -> Option<&str> {
     body.rsplit_once(' ').map(|(_, sort)| sort)
 }
 
+fn symbol_is_bool_name(name: &str) -> bool {
+    name.contains("memory_is") || name.contains("memory_match")
+}
+
 fn collect_bool_symbols(script: &Script) -> HashSet<String> {
     let mut out = HashSet::new();
     for cmd in &script.commands {
-        let Some(sym) = declare_fun_name_cmd(cmd) else {
+        if let Some(name) = declare_fun_name_cmd(cmd) {
+            let raw = cmd.to_smtlib(&script.source);
+            if declare_fun_sort(&raw) == Some("Bool") {
+                out.insert(name);
+            }
             continue;
-        };
-        let raw = cmd.to_smtlib(&script.source);
-        if declare_fun_sort(&raw) == Some("Bool") {
-            out.insert(sym);
+        }
+        if let Some(b) = cmd.assert_bool() {
+            collect_bool_symbols_from_ast(&Dynamic::from_ast(b), &mut out);
         }
     }
     out
 }
 
+fn collect_bool_symbols_from_ast(ast: &Dynamic, out: &mut HashSet<String>) {
+    if ast.kind() == AstKind::Quantifier {
+        for name in smt2::quantifier_bound_names(ast) {
+            if symbol_is_bool_name(&name) {
+                out.insert(name);
+            }
+        }
+    }
+    for n in smt2::iter_nodes_dyn(ast) {
+        if let Some(name) = smt2::symbol_name_dyn(&n) {
+            if symbol_is_bool_name(&name) {
+                out.insert(name);
+            }
+        }
+    }
+}
+
 fn contains_bool_symbol(ast: &Dynamic, bool_symbols: &HashSet<String>) -> bool {
     smt2::iter_nodes_dyn(ast).into_iter().any(|n| {
         smt2::symbol_name_dyn(&n)
-            .map(|name| bool_symbols.contains(&name))
+            .map(|name| bool_symbols.contains(&name) || symbol_is_bool_name(&name))
             .unwrap_or(false)
     })
 }
@@ -47,13 +71,13 @@ pub fn field_mod() -> Option<i128> {
 
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let p = field_mod();
-    let vars = collect_variables(script, p);
+    let bool_symbols = collect_bool_symbols(script);
+    let vars = collect_variables(script, p, &bool_symbols);
     let var_index: HashMap<String, usize> = vars
         .iter()
         .enumerate()
         .map(|(i, v)| (term_key(v), i))
         .collect();
-    let bool_symbols = collect_bool_symbols(script);
     let ctx = NormalizeCtx {
         var_index: &var_index,
         vars: &vars,
@@ -128,7 +152,11 @@ fn unwrap_field_mod_body(t: &Int, p: i128) -> Int {
         .unwrap_or_else(|| t.clone())
 }
 
-fn collect_variables(script: &Script, field_mod: Option<i128>) -> Vec<Int> {
+fn collect_variables(
+    script: &Script,
+    field_mod: Option<i128>,
+    bool_symbols: &HashSet<String>,
+) -> Vec<Int> {
     let mut gens: HashSet<String> = HashSet::new();
     let mut gen_terms: HashMap<String, Int> = HashMap::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -136,6 +164,7 @@ fn collect_variables(script: &Script, field_mod: Option<i128>) -> Vec<Int> {
     fn visit(
         n: &Dynamic,
         field_mod: Option<i128>,
+        bool_symbols: &HashSet<String>,
         gens: &mut HashSet<String>,
         gen_terms: &mut HashMap<String, Int>,
         seen: &mut HashSet<String>,
@@ -154,9 +183,15 @@ fn collect_variables(script: &Script, field_mod: Option<i128>) -> Vec<Int> {
             return;
         }
 
+        if let Some(name) = smt2::symbol_name_dyn(n) {
+            if bool_symbols.contains(&name) {
+                return;
+            }
+        }
+
         if n.kind() == AstKind::Quantifier {
             if let Some(body) = smt2::quantifier_body(n) {
-                visit(&body, field_mod, gens, gen_terms, seen);
+                visit(&body, field_mod, bool_symbols, gens, gen_terms, seen);
             }
             return;
         }
@@ -174,7 +209,7 @@ fn collect_variables(script: &Script, field_mod: Option<i128>) -> Vec<Int> {
                             .unwrap_or(false)
                     {
                         if let Some(body) = n.nth_child(0) {
-                            visit(&body, field_mod, gens, gen_terms, seen);
+                            visit(&body, field_mod, bool_symbols, gens, gen_terms, seen);
                             return;
                         }
                     }
@@ -182,7 +217,7 @@ fn collect_variables(script: &Script, field_mod: Option<i128>) -> Vec<Int> {
                 if is_combinator(&head) {
                     for i in 0..n.num_children() {
                         if let Some(ch) = n.nth_child(i) {
-                            visit(&ch, field_mod, gens, gen_terms, seen);
+                            visit(&ch, field_mod, bool_symbols, gens, gen_terms, seen);
                         }
                     }
                     return;
@@ -198,7 +233,7 @@ fn collect_variables(script: &Script, field_mod: Option<i128>) -> Vec<Int> {
             if is_bool_or_relation_head(&head) {
                 for i in 0..n.num_children() {
                     if let Some(ch) = n.nth_child(i) {
-                        visit(&ch, field_mod, gens, gen_terms, seen);
+                        visit(&ch, field_mod, bool_symbols, gens, gen_terms, seen);
                     }
                 }
                 return;
@@ -206,7 +241,7 @@ fn collect_variables(script: &Script, field_mod: Option<i128>) -> Vec<Int> {
         }
         for i in 0..n.num_children() {
             if let Some(ch) = n.nth_child(i) {
-                visit(&ch, field_mod, gens, gen_terms, seen);
+                visit(&ch, field_mod, bool_symbols, gens, gen_terms, seen);
             }
         }
     }
@@ -216,6 +251,7 @@ fn collect_variables(script: &Script, field_mod: Option<i128>) -> Vec<Int> {
             visit(
                 &Dynamic::from_ast(b),
                 field_mod,
+                bool_symbols,
                 &mut gens,
                 &mut gen_terms,
                 &mut seen,
@@ -403,6 +439,9 @@ fn expr_to_poly(n: &Int, var_index: &HashMap<String, usize>, modulo: Option<i128
         }
         _ => {
             let key = term_key(n);
+            if var_index.get(&key).is_none() {
+                return None;
+            }
             let idx = *var_index.get(&key)?;
             Some(HashMap::from([(vec![idx as u32], 1)]))
         }
@@ -541,11 +580,18 @@ fn rescale_gcd(poly: Poly) -> Poly {
         .collect()
 }
 
+fn text_has_bool_marker(s: &str) -> bool {
+    s.contains("memory_match") || s.contains("memory_is")
+}
+
 fn relation_poly_diff_plain(
     lhs: &Int,
     rhs: &Int,
     ctx: &NormalizeCtx<'_>,
 ) -> Option<(Poly, bool)> {
+    if text_has_bool_marker(&lhs.to_string()) || text_has_bool_marker(&rhs.to_string()) {
+        return None;
+    }
     if contains_bool_symbol(&Dynamic::from_ast(lhs), ctx.bool_symbols)
         || contains_bool_symbol(&Dynamic::from_ast(rhs), ctx.bool_symbols)
     {
@@ -696,6 +742,24 @@ mod tests {
         let (out, _) = apply(&script).unwrap();
         let s = smt2::dump_string(&out);
         assert!(s.contains("(assert (= a b))"));
+        assert!(!s.contains("(* -1"));
+    }
+
+    #[test]
+    fn skips_int_bool_products() {
+        let p = 2013265921i128;
+        std::env::set_var("SIMPLIFIER_FIELD_MOD", p.to_string());
+        let script = Script::parse(&format!(
+            "(declare-fun x () Int)\n\
+             (declare-fun flag () Bool)\n\
+             (assert (= (mod (+ (* x flag) 1) {p}) 0))\n\
+             (check-sat)\n"
+        ))
+        .unwrap();
+        let (out, stats) = apply(&script).unwrap();
+        assert_eq!(stats["asserts_changed"], 0);
+        let s = smt2::dump_string(&out);
+        assert!(s.contains("flag"));
         assert!(!s.contains("(* -1"));
     }
 

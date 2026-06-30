@@ -354,9 +354,29 @@ pub fn bound_var_index(ast: &Dynamic) -> Option<usize> {
     }
 }
 
+pub fn contains_bound_var_dyn(ast: &Dynamic) -> bool {
+    if bound_var_index(ast).is_some() {
+        return true;
+    }
+    if ast.kind() == AstKind::Quantifier {
+        return false;
+    }
+    for ch in ast.children() {
+        if contains_bound_var_dyn(&ch) {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn de_bruijn_bound_name(bound_order: &[String], idx: usize) -> Option<String> {
+    let pos = bound_order.len().checked_sub(1)?.checked_sub(idx)?;
+    bound_order.get(pos).cloned()
+}
+
 pub fn resolve_bound_or_free_name(ast: &Dynamic, bound_order: &[String]) -> Option<String> {
     if let Some(idx) = bound_var_index(ast) {
-        return bound_order.get(idx).cloned();
+        return de_bruijn_bound_name(bound_order, idx);
     }
     crate::ast_build::symbol_name_dyn(ast)
 }
@@ -396,9 +416,9 @@ pub fn quantifier_body_deps(
             continue;
         }
         if let Some(idx) = bound_var_index(&node) {
-            if let Some(name) = bound_order.get(idx) {
-                if qvars.contains(name) {
-                    out.insert(name.clone());
+            if let Some(name) = de_bruijn_bound_name(bound_order, idx) {
+                if qvars.contains(&name) {
+                    out.insert(name);
                 }
             }
             continue;
@@ -436,7 +456,7 @@ pub fn quantifier_bound_sort_is_bool(name: &str, z3_sk: SortKind) -> bool {
     name.contains("memory_is") || name.contains("memory_match")
 }
 
-/// Quantifier bound constants with sorts taken from the Z3 quantifier (Bool or Int).
+/// Bound constants in De Bruijn index order: ``bounds[i]`` replaces ``(:var i)``.
 pub fn quantifier_bounds(ast: &Dynamic) -> Vec<Dynamic> {
     if ast.kind() != AstKind::Quantifier {
         return Vec::new();
@@ -444,13 +464,21 @@ pub fn quantifier_bounds(ast: &Dynamic) -> Vec<Dynamic> {
     let ctx = ast.get_ctx();
     unsafe {
         let z3 = ctx.get_z3_context();
-        let n = Z3_get_quantifier_num_bound(z3, ast.get_z3_ast());
-        let mut out = Vec::with_capacity(n as usize);
+        let n = Z3_get_quantifier_num_bound(z3, ast.get_z3_ast()) as usize;
+        let mut names = Vec::with_capacity(n);
+        let mut sorts = Vec::with_capacity(n);
         for i in 0..n {
-            let sym = Z3_get_quantifier_bound_name(z3, ast.get_z3_ast(), i).unwrap();
-            let sort = Z3_get_quantifier_bound_sort(z3, ast.get_z3_ast(), i).unwrap();
-            let name = z3_symbol_to_string(ctx, sym);
-            let bound: Dynamic = if quantifier_bound_sort_is_bool(&name, Z3_get_sort_kind(z3, sort)) {
+            let sym = Z3_get_quantifier_bound_name(z3, ast.get_z3_ast(), i as u32).unwrap();
+            let sort = Z3_get_quantifier_bound_sort(z3, ast.get_z3_ast(), i as u32).unwrap();
+            names.push(z3_symbol_to_string(ctx, sym));
+            sorts.push(sort);
+        }
+        let mut out = Vec::with_capacity(n);
+        for de_bruijn_idx in 0..n {
+            let text_idx = n - 1 - de_bruijn_idx;
+            let name = &names[text_idx];
+            let sort = sorts[text_idx];
+            let bound: Dynamic = if quantifier_bound_sort_is_bool(name, Z3_get_sort_kind(z3, sort)) {
                 Dynamic::from_ast(&Bool::new_const(name.as_str()))
             } else {
                 Dynamic::from_ast(&Int::new_const(name.as_str()))

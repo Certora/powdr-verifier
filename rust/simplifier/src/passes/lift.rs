@@ -3,12 +3,14 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use smt2::ast_util::{
-    decl_name, flatten_or, is_forall, or_parts, quantifier_body_bool, quantifier_body_deps,
-    quantifier_bound_names, quantifier_bounds, rebuild_forall_dyn, resolve_bound_or_free_name,
+    bound_var_index, decl_name, flatten_or, is_forall, or_parts, quantifier_body_bool,
+    quantifier_body_deps, quantifier_bound_names, quantifier_bounds, rebuild_forall_dyn,
+    resolve_bound_or_free_name, substitute_bound_vars_dyn, contains_bound_var_dyn,
+    de_bruijn_bound_name,
 };
 use smt2::ast_build::{free_variables_bool, parse_bool_formula};
-use smt2::{declare_fun_name_cmd, map_bool_children, parse_single_command, ParseCtx, Script, SmtCommand};
-use z3::ast::{Ast, AstKind, Bool, Dynamic};
+use smt2::{declare_fun_name_cmd, map_bool_children, parse_single_command, seed_parser_context, ParseCtx, Script, SmtCommand};
+use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
 use crate::expr_util::AssertBuildCtx;
 
@@ -59,13 +61,15 @@ fn infer_symbol_sort(name: &str, sorts: &HashMap<String, DeclSort>) -> DeclSort 
 }
 
 struct LiftWalker {
+    script: Script,
     lifted: BTreeMap<String, Bool>,
     sorts: HashMap<String, DeclSort>,
 }
 
 impl LiftWalker {
-    fn new(sorts: HashMap<String, DeclSort>) -> Self {
+    fn new(script: Script, sorts: HashMap<String, DeclSort>) -> Self {
         Self {
+            script,
             lifted: BTreeMap::new(),
             sorts,
         }
@@ -90,8 +94,8 @@ impl LiftWalker {
         let ast = Dynamic::from_ast(b);
         let all_bounds = quantifier_bounds(&ast);
         let bound_order: Vec<String> = quantifier_bound_names(&ast);
-        for bound in &all_bounds {
-            if let Some(name) = resolve_bound_or_free_name(bound, &bound_order) {
+        for (idx, bound) in all_bounds.iter().enumerate() {
+            if let Some(name) = de_bruijn_bound_name(&bound_order, idx) {
                 let sort = if bound.as_bool().is_some() {
                     DeclSort::Bool
                 } else if bound.as_int().is_some() {
@@ -125,13 +129,30 @@ impl LiftWalker {
             candidates.sort_by(|a, c| a.to_string().cmp(&c.to_string()));
             let mut next = Vec::new();
             for d in candidates {
-                if let Some((lifted_name, eq)) = match_lift_pair(&d, &bound_order, &qvars) {
+                if let Some((lifted_name, expr)) = match_lift_pair(&d, &bound_order, &qvars, &self.script) {
                     if !self.lifted.contains_key(&lifted_name) {
-                        let Ok(named) = name_debruijn_bool(&eq, &bound_order, &all_bounds) else {
+                        let Ok(named_expr) = name_debruijn_dyn(&expr, &ast, &self.script) else {
                             next.push(d);
                             continue;
                         };
-                        self.lifted.insert(lifted_name.clone(), named);
+                        let sort = self.sorts.get(&lifted_name).copied().unwrap_or(DeclSort::Int);
+                        let hoisted = match sort {
+                            DeclSort::Bool => {
+                                let Some(rhs) = named_expr.as_bool() else {
+                                    next.push(d);
+                                    continue;
+                                };
+                                Bool::new_const(lifted_name.as_str()).eq(&rhs)
+                            }
+                            _ => {
+                                let Some(rhs) = named_expr.as_int() else {
+                                    next.push(d);
+                                    continue;
+                                };
+                                Int::new_const(lifted_name.as_str()).eq(&rhs)
+                            }
+                        };
+                        self.lifted.insert(lifted_name.clone(), hoisted);
                         qvars.remove(&lifted_name);
                         lifted_disjuncts.insert(d.to_string());
                         progressed = true;
@@ -157,19 +178,21 @@ impl LiftWalker {
         } else {
             flatten_or(remaining)
         };
-        let named_body = match name_debruijn_bool(&body_out, &bound_order, &all_bounds) {
+        let named_body = match name_debruijn_bool(&body_out, &ast, &self.script) {
             Ok(b) => b,
             Err(_) => return b.clone(),
         };
 
-        let qvars_remaining: Vec<Dynamic> = all_bounds
+        let qvars_remaining: Vec<Dynamic> = bound_order
             .iter()
-            .filter(|bound| {
-                resolve_bound_or_free_name(bound, &bound_order)
-                    .map(|n| qvars.contains(&n))
-                    .unwrap_or(false)
+            .filter(|name| qvars.contains(*name))
+            .map(|name| {
+                let sort = self.sorts.get(name).copied().unwrap_or(DeclSort::Int);
+                match sort {
+                    DeclSort::Bool => Dynamic::from_ast(&Bool::new_const(name.as_str())),
+                    _ => Dynamic::from_ast(&Int::new_const(name.as_str())),
+                }
             })
-            .cloned()
             .collect();
 
         if qvars_remaining.is_empty() {
@@ -183,7 +206,7 @@ impl LiftWalker {
 
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let sorts = collect_symbol_sorts(script);
-    let mut walker = LiftWalker::new(sorts);
+    let mut walker = LiftWalker::new(script.clone(), sorts);
 
     let mut prefix = Vec::new();
     let mut suffix = Vec::new();
@@ -257,29 +280,57 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     Ok((Script::from_commands(&script.source, commands), stats))
 }
 
-fn name_debruijn_bool(
-    b: &Bool,
-    bound_order: &[String],
-    bounds: &[Dynamic],
-) -> Result<Bool, String> {
-    let mut raw = b.to_string();
-    for i in (0..bound_order.len()).rev() {
-        raw = raw.replace(&format!("(:var {i})"), &bound_order[i]);
-    }
+fn refresh_bool_from_text(b: &Bool, script: &Script) -> Result<Bool, String> {
     let mut ctx = ParseCtx::new();
-    for bound in bounds {
-        if let Some(name) = resolve_bound_or_free_name(bound, bound_order) {
-            let sort = if bound.as_bool().is_some() {
-                "Bool"
-            } else if bound.as_int().is_some() {
-                "Int"
-            } else {
-                "(Array Int Int)"
-            };
-            let _ = ctx.ingest_command(&format!("(declare-fun {name} () {sort})"));
+    seed_parser_context(&mut ctx, script)?;
+    parse_bool_formula(&mut ctx, &b.to_string())
+}
+
+fn parse_named_dyn(raw: &str, hint: &Dynamic, script: &Script) -> Result<Dynamic, String> {
+    let mut ctx = ParseCtx::new();
+    seed_parser_context(&mut ctx, script)?;
+    if hint.as_bool().is_some() {
+        return parse_bool_formula(&mut ctx, raw).map(|b| Dynamic::from_ast(&b));
+    }
+    let eq = format!("(= __lift_parse_tmp__ {raw})");
+    let parsed = parse_bool_formula(&mut ctx, &eq)?;
+    Dynamic::from_ast(&parsed)
+        .nth_child(1)
+        .ok_or_else(|| "expected rhs in parsed pin expr".into())
+}
+
+fn refresh_dyn_from_text(d: &Dynamic, script: &Script) -> Dynamic {
+    parse_named_dyn(&d.to_string(), d, script).unwrap_or_else(|_| d.clone())
+}
+
+fn name_debruijn_dyn(d: &Dynamic, quant: &Dynamic, script: &Script) -> Result<Dynamic, String> {
+    let d = refresh_dyn_from_text(d, script);
+    if !contains_bound_var_dyn(&d) {
+        return Ok(d);
+    }
+    let bound_order = quantifier_bound_names(quant);
+    let mut raw = d.to_string();
+    if raw.contains("(:var ") {
+        for i in (0..bound_order.len()).rev() {
+            if let Some(name) = de_bruijn_bound_name(&bound_order, i) {
+                raw = raw.replace(&format!("(:var {i})"), &name);
+            }
         }
     }
-    parse_bool_formula(&mut ctx, &raw)
+    if let Ok(out) = parse_named_dyn(&raw, &d, script) {
+        return Ok(out);
+    }
+    let replacements = quantifier_bounds(quant);
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        substitute_bound_vars_dyn(&d, &replacements)
+    }))
+    .map_err(|_| "substitute_bound_vars_dyn panicked".into())
+}
+
+fn name_debruijn_bool(b: &Bool, quant: &Dynamic, script: &Script) -> Result<Bool, String> {
+    name_debruijn_dyn(&Dynamic::from_ast(b), quant, script)?
+        .as_bool()
+        .ok_or_else(|| "expected bool after de Bruijn naming".into())
 }
 
 fn is_potential_lift_pair(d: &Bool) -> bool {
@@ -298,25 +349,32 @@ fn is_not_eq(d: &Bool) -> Option<Bool> {
     inner.as_bool()
 }
 
+fn disjunct_from_text(d: &Bool, script: &Script) -> Bool {
+    refresh_bool_from_text(d, script).unwrap_or_else(|_| d.clone())
+}
+
 fn match_lift_pair(
     d: &Bool,
     bound_order: &[String],
     qvars: &HashSet<String>,
-) -> Option<(String, Bool)> {
-    let eq = is_not_eq(d)?;
+    script: &Script,
+) -> Option<(String, Dynamic)> {
+    let d = disjunct_from_text(d, script);
+    let eq = is_not_eq(&d)?;
     let ast = Dynamic::from_ast(&eq);
     let lhs = ast.nth_child(0)?;
     let rhs = ast.nth_child(1)?;
     for (vside, expr) in [(lhs.clone(), rhs.clone()), (rhs, lhs)] {
-        let Some(name) = resolve_bound_or_free_name(&vside, bound_order) else {
-            continue;
-        };
+        let name = resolve_bound_or_free_name(&vside, bound_order)?;
         if !qvars.contains(&name) {
+            continue;
+        }
+        if bound_var_index(&vside).is_none() && smt2::symbol_name_dyn(&vside).is_none() {
             continue;
         }
         let deps = quantifier_body_deps(&expr, bound_order, qvars);
         if deps.is_empty() {
-            return Some((name, eq));
+            return Some((name, expr));
         }
     }
     None
@@ -347,7 +405,76 @@ mod tests {
         let body = quantifier_body_bool(&ast).unwrap();
         let disjuncts = or_parts(&body).unwrap();
         let qvars: HashSet<String> = bound_order.iter().cloned().collect();
-        assert!(match_lift_pair(&disjuncts[0], &bound_order, &qvars).is_some());
+        assert!(match_lift_pair(&disjuncts[0], &bound_order, &qvars, &script).is_some());
+    }
+
+    #[test]
+    fn lift_mod_pin_repro() {
+        let raw = r#"(declare-fun before-a__3_1@58 () Int)
+(assert (forall ((before-writes_aux__prev_data__3_5@199 Int))
+  (or (not (= before-writes_aux__prev_data__3_5@199 (mod before-a__3_1@58 2013265921)))
+      false)))
+(check-sat)
+"#;
+        let script = Script::parse(raw).unwrap();
+        let (out, stats) = apply(&script).unwrap();
+        assert_eq!(stats["pins_lifted"], 1);
+        let asserts = top_asserts(&out);
+        assert!(
+            asserts.iter().any(|a| a.contains("before-a__3_1@58")),
+            "pins: {:?}",
+            asserts
+        );
+        assert!(!asserts.iter().any(|a| a.contains("(mod 0")));
+    }
+
+    #[test]
+    #[ignore]
+    fn debug_skolem_pin_strings() {
+        let text = std::fs::read_to_string("/tmp/skolem.smt2").unwrap();
+        let script = Script::parse(&text).unwrap();
+        let b = script
+            .commands
+            .iter()
+            .find_map(|c| c.assert_bool())
+            .unwrap();
+        find_pin_disjunct_str(b);
+    }
+
+    fn find_pin_disjunct_str(b: &Bool) {
+        let ast = Dynamic::from_ast(b);
+        if is_forall(&ast) {
+            let body = quantifier_body_bool(&ast).unwrap();
+            if let Some(disjuncts) = or_parts(&body) {
+                eprintln!("or with {} disjuncts", disjuncts.len());
+                for d in disjuncts {
+                    let ds = d.to_string();
+                    if ds.contains("(:var 0)") && ds.contains("(mod") {
+                        eprintln!("z3 d={ds}");
+                    }
+                }
+            }
+            find_pin_disjunct_str(&body);
+            return;
+        }
+        if let Some(parts) = smt2::and_parts(b) {
+            for p in parts {
+                find_pin_disjunct_str(&p);
+            }
+        }
+    }
+
+    #[test]
+    fn lift_ordered_dependencies() {
+        let script = Script::parse(
+            "(assert (forall ((x Int) (y Int)) (or (not (= y 5)) (not (= x (mod y 10))))))\n(check-sat)\n",
+        )
+        .unwrap();
+        let (out, stats) = apply(&script).unwrap();
+        assert_eq!(stats["pins_lifted"], 2);
+        let asserts = top_asserts(&out);
+        assert!(asserts.iter().any(|a| a == "(= y 5)"), "{asserts:?}");
+        assert!(asserts.iter().any(|a| a == "(= x (mod y 10))"), "{asserts:?}");
     }
 
     #[test]
