@@ -28,7 +28,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from src.lens.normalize import to_signed
+from src.lens.normalize import BABYBEAR_PRIME, to_signed
 
 from .order import linterms, names
 
@@ -70,6 +70,60 @@ def _range_checked(dump: dict) -> set[str]:
                     names(a, rc)
         dump["_membus_range_checked"] = rc
     return rc
+
+
+def _col_bound(dump: dict) -> dict[str, int]:
+    """Column -> a known integer upper bound ``B`` (so ``col ∈ [0, B)``). Cached.
+
+    Used to bound the no-wrap window (see `affine_decomp`). Sources:
+
+    - VariableRangeChecker (id 3): ``args = [value, bits]`` bounds ``value`` to
+      ``[0, 2^bits)``. ``value`` may be a **scaled** column ``[c, "*", col]`` — a
+      common encoding where ``c ≡ s⁻¹ (mod p)`` for a small integer ``s``, so
+      ``col/s ∈ [0, 2^bits)`` ⟹ ``col ∈ [0, s·2^bits)`` *as small integers*, valid
+      only when ``s·2^bits < p`` (no field wrap). A lone column is ``s = 1``.
+    - BitwiseLookup (id 6): byte operands ⟹ bound 2^8.
+    - memory-bus data (id 1, args[2:6]): bytes (the membus-byte invariant) ⟹ 2^8.
+
+    TupleRangeChecker (id 7) carries no per-column width in its args, so a column
+    known *only* via id 7 gets no bound and a gadget depending on it is declined.
+    """
+    cb = dump.get("_membus_col_bound")
+    if cb is None:
+        cb = {}
+
+        def put(col, bound: int) -> None:
+            if isinstance(col, str) and (cb.get(col) is None or bound < cb[col]):
+                cb[col] = bound
+
+        for b in dump.get("bus_interactions", []):
+            tid, args = b.get("id"), b.get("args", [])
+            if tid == 3 and len(args) >= 2:
+                w = args[1]
+                if isinstance(w, str) and w.isdigit():
+                    w = int(w)
+                if not isinstance(w, int):
+                    continue
+                val, span = args[0], 1 << w
+                if isinstance(val, str):
+                    put(val, span)                              # lone column, s = 1
+                elif (isinstance(val, list) and len(val) == 3 and val[1] == "*"
+                      and isinstance(val[0], int) and isinstance(val[2], str)):
+                    # scaled: c·col ∈ [0, 2^w); s = c⁻¹ mod p; bound col to s·2^w
+                    try:
+                        s = pow(val[0] % BABYBEAR_PRIME, -1, BABYBEAR_PRIME)
+                    except ValueError:
+                        continue                                # c not invertible
+                    if s * span < BABYBEAR_PRIME:               # no wrap -> sound bound
+                        put(val[2], s * span)
+            elif tid == 6:
+                for a in args[:2]:
+                    put(a, 1 << 8)
+            elif tid == 1:
+                for a in args[2:6]:
+                    put(a, 1 << 8)
+        dump["_membus_col_bound"] = cb
+    return cb
 
 
 def _bounded(dump: dict) -> set[str]:
@@ -149,10 +203,13 @@ def affine_decomp(dump: dict, col: str) -> tuple[dict[str, int], int] | None:
     None. No column-name matching — the gadget is recognized structurally.
 
     Integer-root selection is sound only if every column in the factor is a
-    bounded integer: the limb ``col`` must be range-checked, and the base columns
-    must be bounded (range-checked or memory-bus data bytes). Otherwise we decline.
+    bounded integer with a *small enough* range that the field equality cannot
+    wrap. The limb ``col`` and every base column must therefore be range-checked
+    with a known width (`_col_bits`), and the no-wrap window must stay below the
+    field prime (see the window check below). Otherwise we decline.
     """
-    if col not in _range_checked(dump):
+    cb = _col_bound(dump)
+    if col not in cb:                                 # limb bound unknown -> decline
         return None
     bounded = _bounded(dump)
     for c in _product_index(dump).get(col, []):
@@ -172,7 +229,18 @@ def affine_decomp(dump: dict, col: str) -> tuple[dict[str, int], int] | None:
             if any(v % a != 0 for v in others.values()) or const % a != 0:
                 continue
             weights = {k: -(v // a) for k, v in others.items()}
-            return weights, -(const // a)
+            offset = -(const // a)
+            # No-wrap check. The field equality forces a·k ≡ 0 (mod p) where
+            # k = col − Σ weights·other − offset; since gcd(a,p)=1 the solutions are
+            # spaced exactly p apart, so k = 0 is the unique root iff k's integer
+            # window is < p. Bound that window from the columns' range-check bounds.
+            if any(o not in cb for o in others):          # base bound unknown
+                continue
+            window = cb[col] + abs(offset)
+            window += sum(abs(w) * cb[o] for o, w in weights.items())
+            if window >= BABYBEAR_PRIME:                  # could wrap -> root not unique
+                continue
+            return weights, offset
     return None
 
 

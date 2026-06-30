@@ -29,13 +29,13 @@ def test_unresolved_symbolic_key():
 
 
 def _gadget_dump(limb, rs0="rs1_data__0_0@3", rs1c="rs1_data__1_0@4",
-                 range_check=True, base_bounded=True):
+                 range_check=True, base_bounded=True, limb_bits=14):
     # low-limb gadget: (Y + c)*(Y + c - 1) == 0, c = -1228800 = -30720*40
     f = _add(_m(-30720, rs0), _m(-7864320, rs1c), _m(30720, limb), -1228800)
     g = _add(_m(-30720, rs0), _m(-7864320, rs1c), _m(30720, limb), -1228801)
     bis = []
     if range_check:
-        bis.append({"id": 3, "mult": 1, "args": [limb, "14"]})   # limb range-checked
+        bis.append({"id": 3, "mult": 1, "args": [limb, limb_bits]})  # limb range-checked
     if base_bounded:
         # base bytes are data of a memory-bus (id 1) read -> bounded (bytes)
         bis.append({"id": 1, "mult": 1, "args": [1, 99, rs0, rs1c, "z0@1", "z1@2", "t@3"]})
@@ -62,6 +62,23 @@ def test_unbounded_base_is_unresolved():
     ptr = [limb, "+", [65536, "*", "mem_ptr_limbs__1_5@10"]]
     assert isinstance(keys.recover_key(_gadget_dump(limb, base_bounded=False), _bi(ptr)),
                       keys.Unresolved)
+
+
+def test_wide_limb_is_unresolved():
+    # limb range-checked but to 31 bits -> window 2^31 + ... >= p -> could wrap ->
+    # integer root not provably unique -> declined.
+    limb = "mem_ptr_limbs__0_5@9"
+    ptr = [limb, "+", [65536, "*", "mem_ptr_limbs__1_5@10"]]
+    assert isinstance(keys.recover_key(_gadget_dump(limb, limb_bits=31), _bi(ptr)),
+                      keys.Unresolved)
+
+
+def test_wide_limb_boundary_resolves():
+    # 30-bit limb: window = 2^30 + 256 + 256*256 + 40 < p -> still resolves.
+    limb = "mem_ptr_limbs__0_5@9"
+    ptr = [limb, "+", [65536, "*", "mem_ptr_limbs__1_5@10"]]
+    assert keys.recover_key(_gadget_dump(limb, limb_bits=30), _bi(ptr)) == \
+        keys.BaseOffset("rs1_0", 40)
 
 
 def test_classify_address_space():
