@@ -49,6 +49,19 @@ def test_build_dict_json_shape():
     assert pub["interactions"][0]["key"] == "const 8"
 
 
+def test_extract_unary_minus_mult():
+    d = {
+        "bus_interactions": [
+            {"id": 1, "mult": ["-", 1], "args": [1, 8, 0, 0, 0, 0, FS0]},
+            {"id": 1, "mult": 1, "args": [1, 8, 0, 0, 0, 0, [FS1, "+", 1]]},
+        ],
+        "constraints": [_add(FS1, _m(-1, FS0), -3)],
+    }
+    txt = extract.build(d, 1, 1, None)
+    assert "0: -1," in txt
+    assert "1: 1," in txt
+
+
 def test_extract_emits_abstract_bus():
     txt = extract.build(_chain_dump(), 1, 1, None)
     assert txt.startswith("MEM")

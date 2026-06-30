@@ -18,6 +18,7 @@ import collections
 from typing import Any
 
 from src.lens.loader import machine_of
+from src.lens.metrics import _eval_const
 from src.lens.normalize import to_signed
 
 from . import keys, order
@@ -96,7 +97,8 @@ def build_dict(pre: dict, mem_id: int, addr_space: int | None, post: dict | None
     mem_lines: list[str] = []
     for i, b in enumerate(rows):
         a = b["args"]
-        mult = to_signed(b["mult"]) if isinstance(b["mult"], int) else None
+        cv = _eval_const(b["mult"])
+        mult = to_signed(cv) if cv is not None else None
         if mult not in (-1, 0, 1):
             raise ValueError(f"interaction {i}: mult {mult} not in -1/0/1")
         sym = tsym(a[6])
