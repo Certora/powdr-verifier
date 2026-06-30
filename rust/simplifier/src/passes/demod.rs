@@ -27,7 +27,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut stats = DemodStats::default();
     let out = map_asserts(script, |b| {
         let next = rewrite_bool(b, field_mod, &mut stats);
-        if next.to_string() != b.to_string() {
+        if !next.ast_eq(b) {
             changed += 1;
         }
         Ok(next)

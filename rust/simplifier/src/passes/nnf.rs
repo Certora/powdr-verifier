@@ -10,7 +10,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut changed = 0usize;
     let out = map_asserts(script, |b| {
         let nnf = convert_to_nnf(b);
-        if nnf.to_string() != b.to_string() {
+        if !nnf.ast_eq(b) {
             changed += 1;
         }
         Ok(nnf)

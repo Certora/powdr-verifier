@@ -43,7 +43,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         assert_index += 1;
         global.rewrites += stats.rewrites;
         global.factor_calls += stats.factor_calls;
-        if new.to_string() != body {
+        if !new.ast_eq(b) {
             changed += 1;
         }
         Ok(new)
@@ -65,7 +65,7 @@ fn rewrite_formula(term: &Bool, p: i128, stats: &mut RewriteStats) -> Bool {
     let mut cur = term.clone();
     for _ in 0..MAX_REWRITE_COUNT {
         let next = rewrite_once(&cur, p, stats);
-        if next.to_string() == cur.to_string() {
+        if next.ast_eq(&cur) {
             break;
         }
         cur = next;

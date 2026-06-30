@@ -17,7 +17,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let field_mod = field_mod();
     let out = map_asserts(script, |b: &Bool| {
         let folded = fold_constants_fixpoint(b, field_mod, 3);
-        if folded.to_string() != b.to_string() {
+        if !folded.ast_eq(b) {
             changed += 1;
         }
         Ok(folded)
