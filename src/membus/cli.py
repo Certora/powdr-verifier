@@ -13,7 +13,7 @@ from pathlib import Path
 
 from src.lens import loader, resolve
 
-from . import extract, meminfo, memstats, render
+from . import extract, meminfo, memstats, render, solve
 from .busfmt import memory_bus_id
 from .render import JSON, PLAIN, Target, default_mode
 
@@ -39,6 +39,7 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog="examples:\n"
                "  membus stats keccak 2100224 022\n"
                "  membus info keccak 2100224 021 --as 2\n"
+               "  membus solve keccak 2100224 022 --as 1\n"
                "  membus extract keccak 2100224 021 022 --as 2 -o as2.bus\n"
                "\nRun `membus --agent` for the agent-oriented guide.")
     p.add_argument("--agent", action="store_true",
@@ -60,6 +61,12 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="restrict to this address space")
     sp_info.add_argument("--limit", type=int, default=0,
                          help="max interactions listed (default 0 = all)")
+
+    sp_solve = sub.add_parser("solve", parents=[common],
+                              help="solve the memory bus: inputs / outputs / data flow")
+    _circuit_a_args(sp_solve)
+    sp_solve.add_argument("--as", dest="addr_space", type=int, default=1,
+                          help="address space to solve (default 1; v1 supports AS1 only)")
 
     sp_ex = sub.add_parser("extract", parents=[common],
                            help="emit busat .bus (abstract timestamp order)")
@@ -127,6 +134,13 @@ def _run_info(args, mode):
     print(render.render_info(rows, t, mode, total))
 
 
+def _run_solve(args, mode):
+    data, labels, t = _load_circuit(args.group, args.block, args.step,
+                                    getattr(args, "file_a", None), args.root)
+    sol = solve.compute(data, memory_bus_id(labels), args.addr_space)
+    print(render.render_solve(sol, t, mode))
+
+
 def _run_extract(args):
     data_a, labels, _ = _load_circuit(args.group, args.block, args.step,
                                       getattr(args, "file_a", None), args.root)
@@ -162,6 +176,8 @@ def main(argv: list[str] | None = None) -> int:
             _run_stats(args, mode)
         elif args.command == "info":
             _run_info(args, mode)
+        elif args.command == "solve":
+            _run_solve(args, mode)
         elif args.command == "extract":
             _run_extract(args)
         elif args.command == "align":

@@ -12,6 +12,7 @@ from src.lens.render import JSON, PLAIN, RICH, Target, default_mode  # noqa: F40
 
 from .meminfo import InfoRow
 from .memstats import MemStats
+from .solve import Solution
 
 _KIND_COLOR = {"send": "green", "recv": "red", "sym": "yellow"}
 _AS_PALETTE = ["cyan", "magenta", "blue", "bright_green", "bright_red"]
@@ -30,6 +31,14 @@ def _as_markup(asv: str) -> str:
         return f"[{c}]{asv}[/]"
     except ValueError:
         return asv
+
+
+_IO_COLOR = {"in": "cyan", "out": "magenta"}
+
+
+def _io_markup(io: str) -> str:
+    c = _IO_COLOR.get(io)
+    return f"[{c}]{io}[/]" if c else io
 
 
 # --------------------------------------------------------------------------- #
@@ -132,6 +141,52 @@ def _info_rich(rows: list[InfoRow], t: Target, total: int) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# solve
+# --------------------------------------------------------------------------- #
+def render_solve(sol: "Solution", target: Target, mode: str) -> str:
+    if mode == JSON:
+        return json.dumps({"target": vars(target), **sol.as_dict()}, indent=2)
+    if mode == RICH:
+        return _solve_rich(sol, target)
+    return _solve_plain(sol, target)
+
+
+def _solve_summary(s: "Solution") -> str:
+    exit_s = "?" if s.ts_exit is None else f"T+{s.ts_exit}"
+    uniq = "yes" if s.unique else "no/unknown"
+    notes = [f"{c.key}:{c.note}" for c in s.cells if c.note]
+    tail = f"  unsolved_cells={','.join(notes)}" if notes else ""
+    return (f"as={s.addr_space} cells={len(s.cells)} inputs={s.n_inputs} "
+            f"outputs={s.n_outputs} ts_entry=T+0 ts_exit={exit_s} unique={uniq}{tail}")
+
+
+def _solve_plain(s: "Solution", t: Target) -> str:
+    out = [f"# {t.group}/{t.block} {t.label}  ({t.path})",
+           f"# {_solve_summary(s)}",
+           "id\tio\tkind\tkey\tvtime\tflow"]
+    for r in s.rows:
+        out.append(f"{r.ordinal}\t{r.io}\t{r.kind}\t{r.key}\t{r.vtime}\t{r.flow}")
+    return "\n".join(out)
+
+
+def _solve_rich(s: "Solution", t: Target) -> str:
+    from rich.console import Console
+    from rich.table import Table
+
+    table = Table(title=f"{t.group}/{t.block} {t.label} — solve {_solve_summary(s)}")
+    for col in ("id", "io", "kind", "key", "vtime", "flow"):
+        table.add_column(col)
+    for r in s.rows:
+        table.add_row(str(r.ordinal), _io_markup(r.io), _kind_markup(r.kind), r.key,
+                      ("[green]" if r.kind == "send" else "[red]") + r.vtime + "[/]",
+                      r.flow)
+    con = Console()
+    with con.capture() as cap:
+        con.print(table)
+    return cap.get().rstrip("\n")
+
+
+# --------------------------------------------------------------------------- #
 # agent guide
 # --------------------------------------------------------------------------- #
 def agent_guide() -> str:
@@ -151,6 +206,7 @@ WHAT / WHY
 DECIDE (goal -> command)
   shape of one circuit's memory bus      -> stats  <group> <block> <step>
   per-interaction key/timestamp/alias    -> info   <group> <block> <step> [--as N]
+  solve matching: inputs/outputs/flow    -> solve  <group> <block> <step> [--as N]
   emit busat .bus (abstract ts order)    -> extract <group> <block> <stepA> [stepB]
   (align two circuits' memory busses     -> align   ... [v2, not yet implemented])
 
@@ -176,6 +232,16 @@ EXTRACT OUTPUT
   busat .bus: MEM rows (abstract ts symbols), DEFS (base+offset keys), and
   CONSTRAINTS = strict `<` order edges, each preceded by a `# justification`.
   One circuit -> all memory interactions; two -> only the REMOVED set (A - B).
+
+SOLVE (v1: AS1, constant keys, graph solver; fails gracefully otherwise)
+  Solves the bus constraints (no memory-consistency assumption) to recover, per
+  cell, the recv<->send matching, and marks each interaction in/out/flow:
+    input  = the recv reading the entry value (prev_ts < ts_entry);
+    output = the lone send no recv reads (escapes the block);
+    flow   = recv "← #send" reads that send; send "→ #recv" is read by it.
+  vtime is virtual time relative to ts_entry (T+0); ts_exit = last clock. Any
+  complete mapping is a solution; `unique` reports whether it is forced. Row id
+  is the membus ordinal, stable across --as so solutions can be merged.
 
 LIMITATIONS (v1)
   Symbolic base+offset recovery is calibrated to the keccak (2100224) dumps

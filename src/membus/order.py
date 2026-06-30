@@ -67,23 +67,30 @@ def access_index(col: str) -> int | None:
 def linterms(e: Any) -> tuple[dict[str, int], int] | None:
     """Linear form ``(coeff_by_col, const)``, or None if nonlinear.
 
-    Constants are signed-normalized. A product is linear only if one side is a
-    constant (``col*col`` ⟹ None).
+    Constants are signed-normalized. Handles ``+``/``-`` (binary and unary) and
+    ``*`` where one side is constant (``col*col`` ⟹ None). powdr emits timestamp
+    gaps both as ``a + (-1)*b`` and as ``a - (b + c)``, so ``-`` must be parsed.
     """
     if isinstance(e, int):
         return ({}, to_signed(e))
     if isinstance(e, str):
         return ({e: 1}, 0)
+    if isinstance(e, list) and len(e) == 2 and e[0] == "-":     # unary minus
+        inner = linterms(e[1])
+        if inner is None:
+            return None
+        return ({k: -v for k, v in inner[0].items()}, -inner[1])
     if isinstance(e, list) and len(e) == 3:
         a, op, b = e
         la, lb = linterms(a), linterms(b)
         if la is None or lb is None:
             return None
-        if op == "+":
+        if op in ("+", "-"):
+            s = 1 if op == "+" else -1
             d = dict(la[0])
             for k, v in lb[0].items():
-                d[k] = d.get(k, 0) + v
-            return (d, la[1] + lb[1])
+                d[k] = d.get(k, 0) + s * v
+            return (d, la[1] + s * lb[1])
         if op == "*":
             if not la[0]:
                 s = la[1]
