@@ -153,12 +153,12 @@ fn fold_int(i: &Int) -> Int {
         return match name.as_str() {
             UF_XOR if is_zero(&x) => y,
             UF_XOR if is_zero(&y) => x,
-            UF_XOR if x.to_string() == y.to_string() => int_from_i128(0),
+            UF_XOR if x.ast_eq(&y) => int_from_i128(0),
             UF_AND if is_zero(&x) || is_zero(&y) => int_from_i128(0),
-            UF_AND if x.to_string() == y.to_string() => x,
+            UF_AND if x.ast_eq(&y) => x,
             UF_OR if is_zero(&x) => y,
             UF_OR if is_zero(&y) => x,
-            UF_OR if x.to_string() == y.to_string() => x,
+            UF_OR if x.ast_eq(&y) => x,
             _ => apply_uf(name.as_str(), x, y),
         };
     }
@@ -180,7 +180,7 @@ fn emit_axioms(terms: &BitwiseTerms, stats: &mut BitwiseStats) -> Vec<Bool> {
     let mut out = Vec::new();
     for term in terms.xors.values() {
         if let Some((_, x, y)) = uf_binary_dyn(&Dynamic::from_ast(term)) {
-            if x.to_string() == y.to_string() {
+            if x.ast_eq(&y) {
                 continue;
             }
             let xor = term.clone();

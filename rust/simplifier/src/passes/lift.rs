@@ -1,6 +1,7 @@
 //! Hoist ``Not(= q expr)`` skolem disjuncts from ``forall`` bodies to top-level asserts.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{hash_map::DefaultHasher, BTreeMap, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 use smt2::ast_util::{
     bound_var_index, decl_name, flatten_or, is_forall, or_parts, quantifier_body_bool,
@@ -37,6 +38,12 @@ fn sort_from_decl(raw: &str) -> DeclSort {
     } else {
         DeclSort::Int
     }
+}
+
+fn bool_ast_hash(b: &Bool) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    b.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn collect_symbol_sorts(script: &Script) -> HashMap<String, DeclSort> {
@@ -116,12 +123,12 @@ impl LiftWalker {
             .filter(|d| is_potential_lift_pair(d))
             .cloned()
             .collect();
-        let mut lifted_disjuncts: HashSet<String> = HashSet::new();
+        let mut lifted_disjuncts: Vec<Bool> = Vec::new();
 
         let mut progressed = true;
         while progressed {
             progressed = false;
-            candidates.sort_by(|a, c| a.to_string().cmp(&c.to_string()));
+            candidates.sort_by_key(|a| bool_ast_hash(a));
             let mut next = Vec::new();
             for d in candidates {
                 if let Some((lifted_name, expr)) = match_lift_pair(&d, &bound_order, &qvars, &self.script) {
@@ -149,7 +156,7 @@ impl LiftWalker {
                         };
                         self.lifted.insert(lifted_name.clone(), hoisted);
                         qvars.remove(&lifted_name);
-                        lifted_disjuncts.insert(d.to_string());
+                        lifted_disjuncts.push(d.clone());
                         progressed = true;
                     }
                 } else {
@@ -165,7 +172,7 @@ impl LiftWalker {
 
         let remaining: Vec<Bool> = disjuncts
             .iter()
-            .filter(|d| !lifted_disjuncts.contains(&d.to_string()))
+            .filter(|d| !lifted_disjuncts.iter().any(|lifted| d.ast_eq(lifted)))
             .cloned()
             .collect();
         let body_out = if remaining.is_empty() {

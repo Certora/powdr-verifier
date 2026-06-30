@@ -387,7 +387,7 @@ mod tests {
         assert!(!cluster.contains("a__0_0"));
         let sliced = cluster_assertions(&asserts, &cluster);
         assert_eq!(sliced.len(), 1);
-        assert_eq!(sliced[0].to_string(), flag_dom.to_string());
+        assert!(sliced[0].ast_eq(&flag_dom));
     }
 
     #[test]

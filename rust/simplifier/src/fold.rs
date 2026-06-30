@@ -10,7 +10,7 @@ pub fn fold_constants_fixpoint(b: &Bool, field_mod: Option<u64>, max_iters: usiz
     let mut cur = b.clone();
     for _ in 0..max_iters {
         let next = fold_bool(&cur, field_mod);
-        if next.to_string() == cur.to_string() {
+        if next.ast_eq(&cur) {
             break;
         }
         cur = next;

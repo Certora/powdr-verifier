@@ -90,7 +90,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut changed = 0usize;
     let out = map_asserts(script, |b| {
         let new = normalize_term(b, &ctx);
-        if new.to_string() != b.to_string() {
+        if !new.ast_eq(b) {
             changed += 1;
         }
         Ok(new)
