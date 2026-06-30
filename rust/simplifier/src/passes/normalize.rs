@@ -110,6 +110,17 @@ struct NormalizeCtx<'a> {
     bool_symbols: &'a HashSet<String>,
 }
 
+fn expr_mentions_bound_name(ast: &Dynamic, bound_names: &HashSet<String>) -> bool {
+    if bound_names.is_empty() {
+        return false;
+    }
+    smt2::iter_nodes_dyn(ast).into_iter().any(|n| {
+        smt2::symbol_name_dyn(&n)
+            .map(|name| bound_names.contains(&name))
+            .unwrap_or(false)
+    })
+}
+
 fn int_literal_mod(t: &Int, modulo: Option<i128>) -> Option<i128> {
     let m = modulo?;
     int_value(t).map(|v| coeff_mod(v, m))
@@ -588,9 +599,15 @@ fn relation_poly_diff_plain(
     lhs: &Int,
     rhs: &Int,
     ctx: &NormalizeCtx<'_>,
+    bound_names: &HashSet<String>,
 ) -> Option<(Poly, bool)> {
     if contains_bound_var_dyn(&Dynamic::from_ast(lhs))
         || contains_bound_var_dyn(&Dynamic::from_ast(rhs))
+    {
+        return None;
+    }
+    if expr_mentions_bound_name(&Dynamic::from_ast(lhs), bound_names)
+        || expr_mentions_bound_name(&Dynamic::from_ast(rhs), bound_names)
     {
         return None;
     }
@@ -630,8 +647,13 @@ fn field_eq(rep: Int, p: i128) -> Bool {
     wrap_mod_expr(rep, p).eq(int_from_i128(0))
 }
 
-fn normalize_int_rel_gcd(lhs: &Int, rhs: &Int, ctx: &NormalizeCtx<'_>) -> Option<Int> {
-    let (diff, modular) = relation_poly_diff_plain(lhs, rhs, ctx)?;
+fn normalize_int_rel_gcd(
+    lhs: &Int,
+    rhs: &Int,
+    ctx: &NormalizeCtx<'_>,
+    bound_names: &HashSet<String>,
+) -> Option<Int> {
+    let (diff, modular) = relation_poly_diff_plain(lhs, rhs, ctx, bound_names)?;
     let rep = if diff.is_empty() {
         int_from_i128(0)
     } else if modular {
@@ -646,8 +668,13 @@ fn normalize_int_rel_gcd(lhs: &Int, rhs: &Int, ctx: &NormalizeCtx<'_>) -> Option
     }
 }
 
-fn normalize_equals(lhs: &Int, rhs: &Int, ctx: &NormalizeCtx<'_>) -> Option<Bool> {
-    let (diff, modular) = relation_poly_diff_plain(lhs, rhs, ctx)?;
+fn normalize_equals(
+    lhs: &Int,
+    rhs: &Int,
+    ctx: &NormalizeCtx<'_>,
+    bound_names: &HashSet<String>,
+) -> Option<Bool> {
+    let (diff, modular) = relation_poly_diff_plain(lhs, rhs, ctx, bound_names)?;
     let rep = if diff.is_empty() {
         int_from_i128(0)
     } else if modular {
@@ -665,7 +692,23 @@ fn normalize_equals(lhs: &Int, rhs: &Int, ctx: &NormalizeCtx<'_>) -> Option<Bool
 }
 
 fn normalize_term(term: &Bool, ctx: &NormalizeCtx<'_>) -> Bool {
+    normalize_term_scoped(term, ctx, &HashSet::new())
+}
+
+fn normalize_term_scoped(
+    term: &Bool,
+    ctx: &NormalizeCtx<'_>,
+    bound_names: &HashSet<String>,
+) -> Bool {
     let ast = Dynamic::from_ast(term);
+    if ast.kind() == AstKind::Quantifier {
+        let names: HashSet<String> = smt2::quantifier_bound_names(&ast).into_iter().collect();
+        let bounds = smt2::quantifier_bounds(&ast);
+        let is_forall = smt2::is_forall(&ast);
+        let body = smt2::quantifier_body_bool(&ast).expect("quantifier body");
+        let new_body = normalize_term_scoped(&body, ctx, &names);
+        return smt2::rebuild_quantifier_dyn(is_forall, &bounds, &new_body);
+    }
     if ast.kind() == AstKind::App && ast.num_children() == 2 {
         let head = smt2::decl_name(&ast.decl());
         let lhs = ast.nth_child(0).and_then(|c| c.as_int());
@@ -673,17 +716,17 @@ fn normalize_term(term: &Bool, ctx: &NormalizeCtx<'_>) -> Bool {
         if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
             match head.as_str() {
                 "=" => {
-                    if let Some(rep) = normalize_equals(&lhs, &rhs, ctx) {
+                    if let Some(rep) = normalize_equals(&lhs, &rhs, ctx, bound_names) {
                         return rep;
                     }
                 }
                 "<" => {
-                    if let Some(rep) = normalize_int_rel_gcd(&lhs, &rhs, ctx) {
+                    if let Some(rep) = normalize_int_rel_gcd(&lhs, &rhs, ctx, bound_names) {
                         return rep.lt(&int_from_i128(0));
                     }
                 }
                 "<=" => {
-                    if let Some(rep) = normalize_int_rel_gcd(&lhs, &rhs, ctx) {
+                    if let Some(rep) = normalize_int_rel_gcd(&lhs, &rhs, ctx, bound_names) {
                         return rep.le(&int_from_i128(0));
                     }
                 }
@@ -691,7 +734,7 @@ fn normalize_term(term: &Bool, ctx: &NormalizeCtx<'_>) -> Bool {
             }
         }
     }
-    map_bool_children(term, &mut |a| normalize_term(a, ctx))
+    map_bool_children(term, &mut |a| normalize_term_scoped(a, ctx, bound_names))
 }
 
 #[cfg(test)]
@@ -766,6 +809,27 @@ mod tests {
         let s = smt2::dump_string(&out);
         assert!(s.contains("flag"));
         assert!(!s.contains("(* -1"));
+    }
+
+    #[test]
+    fn skips_quantifier_bound_int_relations() {
+        let p = 2013265921i128;
+        std::env::set_var("SIMPLIFIER_FIELD_MOD", p.to_string());
+        let script = Script::parse(&format!(
+            "(assert (forall ((x Int) (flag Bool))
+              (and (<= 131072 (mod x {p}))
+                   (<= 4096 (mod (* 15360 x) {p}))
+                   (not flag))))\n\
+             (check-sat)\n"
+        ))
+        .unwrap();
+        let (out, _) = apply(&script).unwrap();
+        let s = smt2::dump_string(&out);
+        assert!(s.contains("forall"));
+        assert!(s.contains("(mod x"));
+        assert!(s.contains("(not flag)"));
+        assert!(!s.contains("(mod flag"));
+        assert!(!s.contains("(* 15360 flag)"));
     }
 
     #[test]
