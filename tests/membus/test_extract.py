@@ -1,6 +1,8 @@
 """Abstract-order .bus extraction + removed-set diff."""
+import pytest
+
 from src.membus import extract
-from src.membus.busfmt import removed_memory_bis
+from src.membus.busfmt import find_duplicates, removed_memory_bis
 
 
 def _m(c, col):
@@ -43,6 +45,21 @@ def test_extract_emits_abstract_bus():
     # abstract timestamps only — no raw from_state in the MEM rows
     assert all("from_state" not in r for r in rows)
     assert all(", ts" in r for r in rows)
+
+
+def test_extract_rejects_duplicate_interactions():
+    # two identical interactions (same mult + args, including timestamp) -> ill-defined
+    dup = {"id": 1, "mult": 1, "args": [1, 8, 0, 0, 0, 0, FS0]}
+    d = {"bus_interactions": [dup, dict(dup)], "constraints": []}
+    with pytest.raises(ValueError, match="duplicated memory interaction"):
+        extract.build(d, 1, 1, None)
+
+
+def test_find_duplicates():
+    a = {"id": 1, "mult": 1, "args": [1, 8, 0, 0, 0, 0, "t@1"]}
+    b = {"id": 1, "mult": -1, "args": [1, 8, 0, 0, 0, 0, "t@1"]}   # differs by mult
+    assert find_duplicates([a, b]) == []                          # distinct
+    assert find_duplicates([a, dict(a)]) and find_duplicates([a, dict(a)])[0][1] == 2
 
 
 def test_removed_set_is_multiset_diff():

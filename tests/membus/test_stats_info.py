@@ -49,7 +49,18 @@ def test_stats_json_schema():
     out = json.loads(render.render_stats(st, Target("g", "b", "s", "p"), JSON))
     assert out["n_memory"] == 3
     assert out["preconditions"]["sends_totally_ordered"] is True
+    assert out["preconditions"]["no_duplicates"] is True
+    assert out["preconditions"]["duplicates"] == 0
     assert "address_spaces" in out and "alias_determined" in out["address_spaces"][0]
+
+
+def test_stats_counts_duplicates():
+    d = _dump()
+    d["bus_interactions"].append(dict(d["bus_interactions"][0]))   # exact dup of first
+    st = memstats.compute(d, 1)
+    assert st.duplicates == 1
+    out = json.loads(render.render_stats(st, Target("g", "b", "s", "p"), JSON))
+    assert out["preconditions"]["no_duplicates"] is False
 
 
 def test_info_keys_and_classes():

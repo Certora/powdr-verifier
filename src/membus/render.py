@@ -45,7 +45,8 @@ def render_stats(stats: MemStats, target: Target, mode: str) -> str:
 
 def _precond(stats: MemStats) -> str:
     return (f"sends_ordered={'yes' if stats.sends_ordered else 'NO'} "
-            f"recvs_bounded={'yes' if stats.recvs_bounded else 'NO'}")
+            f"recvs_bounded={'yes' if stats.recvs_bounded else 'NO'} "
+            f"duplicates={stats.duplicates}")
 
 
 def _stats_plain(s: MemStats, t: Target) -> str:

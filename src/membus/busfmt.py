@@ -38,6 +38,21 @@ def _bi_key(bi: dict) -> str:
     return json.dumps([bi["id"], bi["mult"], bi["args"]], sort_keys=True)
 
 
+def find_duplicates(bis: list[dict]) -> list[tuple[str, int]]:
+    """Identical interactions (same mult + args) in ``bis``, as ``(key, count)``.
+
+    A memory bus must not contain a duplicated interaction: each access has a
+    unique timestamp, so two interactions identical in every field (including
+    timestamp) would make the offline-memory pairing ill-defined. Returns the
+    groups whose count > 1 (empty ⟹ all interactions are distinct).
+    """
+    counts: dict[str, int] = {}
+    for b in bis:
+        k = _bi_key(b)
+        counts[k] = counts.get(k, 0) + 1
+    return [(k, c) for k, c in counts.items() if c > 1]
+
+
 def removed_memory_bis(pre: Any, post: Any, mem_id: int = 1) -> list[dict]:
     """Memory interactions present in `pre` but removed in `post` (multiset diff).
 

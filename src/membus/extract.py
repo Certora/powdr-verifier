@@ -21,7 +21,7 @@ from src.lens.loader import machine_of
 from src.lens.normalize import to_signed
 
 from . import keys, order
-from .busfmt import Emitter, memory_bis, removed_memory_bis
+from .busfmt import Emitter, find_duplicates, memory_bis, removed_memory_bis
 
 
 def _offset_of(arg: Any) -> int:
@@ -49,6 +49,12 @@ def build(pre: dict, mem_id: int, addr_space: int | None, post: dict | None) -> 
                 if isinstance(b["args"][0], int) and to_signed(b["args"][0]) == addr_space]
     if not rows:
         raise ValueError(f"no memory interactions (id={mem_id}, as={addr_space})")
+    dups = find_duplicates(rows)
+    if dups:
+        raise ValueError(
+            f"{len(dups)} duplicated memory interaction(s) — a sound memory bus has "
+            f"none (each access has a unique timestamp); the abstract bus would be "
+            f"ill-defined. First: {dups[0][1]}× {dups[0][0]}")
 
     edges_R1, recv_bound, _nonneg = order.deduce(pre)
     chain = order.total_order(pre, edges_R1)

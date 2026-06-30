@@ -16,7 +16,7 @@ from src.lens.loader import machine_of
 from src.lens.metrics import mem_key_symbolic, mult_kind
 
 from . import keys, order
-from .busfmt import memory_bis
+from .busfmt import find_duplicates, memory_bis
 
 
 @dataclass
@@ -54,6 +54,7 @@ class MemStats:
     address_spaces: list[ASStats]
     sends_ordered: bool
     recvs_bounded: bool
+    duplicates: int        # interactions identical in every field (should be 0)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -62,6 +63,8 @@ class MemStats:
             "preconditions": {
                 "sends_totally_ordered": self.sends_ordered,
                 "recvs_bounded": self.recvs_bounded,
+                "no_duplicates": self.duplicates == 0,
+                "duplicates": self.duplicates,
             },
         }
 
@@ -105,4 +108,5 @@ def compute(data: Any, mem_id: int = 1) -> MemStats:
         elif mk == "recv":
             if not (tscol and order.is_prev(tscol) and tscol in recv_bound):
                 recvs_bounded = False
-    return MemStats(mem_id, len(bis), as_list, sends_ordered, recvs_bounded)
+    duplicates = sum(c - 1 for _, c in find_duplicates(bis))
+    return MemStats(mem_id, len(bis), as_list, sends_ordered, recvs_bounded, duplicates)
