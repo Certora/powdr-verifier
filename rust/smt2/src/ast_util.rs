@@ -636,6 +636,21 @@ pub fn or_parts(b: &Bool) -> Option<Vec<Bool>> {
     Some(bool_children(b))
 }
 
+fn peel_annotation(b: &Bool) -> Bool {
+    let ast = Dynamic::from_ast(b);
+    if ast.kind() == AstKind::App && decl_name(&ast.decl()) == "!" {
+        if let Some(inner) = ast.nth_child(0).and_then(|c| c.as_bool()) {
+            return peel_annotation(&inner);
+        }
+    }
+    b.clone()
+}
+
+/// Like :func:`or_parts`, but unwraps SMT-LIB ``(! inner attr)`` around the body.
+pub fn or_body_parts(b: &Bool) -> Option<Vec<Bool>> {
+    or_parts(&peel_annotation(b))
+}
+
 pub fn is_implies(b: &Bool) -> Option<(Bool, Bool)> {
     let ast = Dynamic::from_ast(b);
     if ast.kind() != AstKind::App {
