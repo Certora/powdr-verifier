@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::io::Write;
 
-use smt2::ast_build::{is_symbol_dyn, iter_nodes_dyn, parse_bool_formula, symbol_name_dyn};
+use smt2::ast_build::{int_literal_dyn, iter_nodes_dyn, parse_bool_formula, symbol_name_dyn};
 use smt2::ast_util::{decl_name, quantifier_bounds, quantifier_body_bool, strip_prefix};
 use smt2::{declare_fun_name_cmd, seed_parser_context, ParseCtx, Script, SmtCommand};
 use z3::ast::{Ast, AstKind, Bool, Dynamic};
@@ -98,6 +99,17 @@ pub fn parse_forall(term: &Dynamic) -> Option<(Vec<(String, SortKind)>, Vec<Dyna
     Some((out, bounds, quantifier_body_bool(term)?))
 }
 
+fn equation_var_symbol(ast: &Dynamic) -> Option<String> {
+    if ast.kind() != AstKind::App || !ast.is_const() || int_literal_dyn(ast).is_some() {
+        return None;
+    }
+    let name = symbol_name_dyn(ast)?;
+    if name == "true" || name == "false" {
+        return None;
+    }
+    Some(name)
+}
+
 pub fn split_equation(eq: &Bool) -> Option<(String, Dynamic)> {
     let ast = Dynamic::from_ast(eq);
     if ast.kind() != AstKind::App || decl_name(&ast.decl()) != "=" || ast.num_children() != 2 {
@@ -105,21 +117,111 @@ pub fn split_equation(eq: &Bool) -> Option<(String, Dynamic)> {
     }
     let a = ast.nth_child(0)?;
     let b = ast.nth_child(1)?;
-    if is_symbol_dyn(&a) {
-        return Some((symbol_name_dyn(&a)?, b));
+    if let Some(name) = equation_var_symbol(&a) {
+        return Some((name, b));
     }
-    if is_symbol_dyn(&b) {
-        return Some((symbol_name_dyn(&b)?, a));
+    if let Some(name) = equation_var_symbol(&b) {
+        return Some((name, a));
     }
     None
 }
 
+fn sort_kind_to_smt(sort: SortKind) -> &'static str {
+    match sort {
+        SortKind::Bool => "Bool",
+        SortKind::Int => "Int",
+        SortKind::Array => "(Array Int Int)",
+        SortKind::Other => "Int",
+    }
+}
+
+const PIN_SKIP: &[&str] = &[
+    "ite", "not", "and", "or", "xor", "true", "false", "Int", "Bool", "Real", "mod", "div", "abs",
+    "select", "store", "distinct", "=>", "implies", "forall", "exists", "let", "as", "const",
+];
+
+fn collect_pin_tokens(value: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = value.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
+            let start = i;
+            i += 1;
+            while i < bytes.len()
+                && (bytes[i].is_ascii_alphanumeric()
+                    || bytes[i] == b'_'
+                    || bytes[i] == b'@'
+                    || bytes[i] == b'.'
+                    || bytes[i] == b'-')
+            {
+                i += 1;
+            }
+            out.push(value[start..i].to_string());
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+fn seed_parser_for_skolem_pins(
+    parse: &mut ParseCtx,
+    script: &Script,
+    declared: &mut HashSet<String>,
+) -> Result<(), String> {
+    seed_parser_context(parse, script)?;
+    for cmd in &script.commands {
+        if let Some(name) = declare_fun_name(cmd, &script.source) {
+            declared.insert(name);
+        }
+    }
+    for (name, sort) in collect_forall_qvar_sorts(script) {
+        if !declared.insert(name.clone()) {
+            continue;
+        }
+        parse.ingest_command(&format!(
+            "(declare-fun {} () {})",
+            name,
+            sort_kind_to_smt(sort)
+        ))?;
+    }
+    Ok(())
+}
+
+fn prebind_pin_identifiers(
+    parse: &mut ParseCtx,
+    value: &str,
+    sorts: &HashMap<String, SortKind>,
+    declared: &mut HashSet<String>,
+) {
+    for tok in collect_pin_tokens(value) {
+        if PIN_SKIP.contains(&tok.as_str()) || declared.contains(&tok) {
+            continue;
+        }
+        let smt_sort = sorts
+            .get(&tok)
+            .map(|s| sort_kind_to_smt(*s))
+            .unwrap_or(if tok.contains('@') { "Int" } else { "Bool" });
+        if parse
+            .ingest_command(&format!("(declare-fun {tok} () {smt_sort})"))
+            .is_ok()
+        {
+            declared.insert(tok);
+        }
+    }
+}
+
 pub fn load_skolem_setinfos(script: &Script) -> Vec<SkolemPin> {
+    let sorts = collect_symbol_sorts(script);
     let mut out = Vec::new();
     let mut parse = ParseCtx::new();
-    if seed_parser_context(&mut parse, script).is_err() {
+    let mut declared = HashSet::new();
+    if seed_parser_for_skolem_pins(&mut parse, script, &mut declared).is_err() {
         return out;
     }
+    let mut loaded_by_kind: HashMap<String, usize> = HashMap::new();
+    let mut parse_fail = 0usize;
     for cmd in &script.commands {
         if cmd.name() != "set-info" {
             continue;
@@ -137,13 +239,37 @@ pub fn load_skolem_setinfos(script: &Script) -> Vec<SkolemPin> {
         };
         let kind_slug = &rest[..dash];
         let kind = kind_slug.replace('-', "_");
+        prebind_pin_identifiers(&mut parse, &value, &sorts, &mut declared);
         if let Ok(eq) = parse_bool_formula(&mut parse, &value) {
             out.push(SkolemPin {
                 equation: eq,
-                kind,
+                kind: kind.clone(),
             });
+            *loaded_by_kind.entry(kind).or_insert(0) += 1;
+        } else {
+            parse_fail += 1;
         }
     }
+    // #region agent log
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/home/gereon/certora/powdr/.cursor/debug-ffd052.log")
+    {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let _ = writeln!(
+            f,
+            r#"{{"sessionId":"ffd052","runId":"post-fix","hypothesisId":"A","location":"skolem/utils.rs:load_skolem_setinfos","message":"pin load summary","data":{{"total":{},"parse_fail":{},"by_kind":{}}},"timestamp":{}}}"#,
+            out.len(),
+            parse_fail,
+            serde_json::to_string(&loaded_by_kind).unwrap_or_else(|_| "{}".into()),
+            ts
+        );
+    }
+    // #endregion
     out
 }
 
@@ -168,6 +294,47 @@ fn strip_set_info_value(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_loaded_memory_bus_pin() {
+        let script = Script::parse(
+            "(declare-fun after-memory_isinput_0 () Bool)\n\
+             (set-info :skolem-memory-bus-0 |(= before-memory_isinput_0 after-memory_isinput_0)|)\n\
+             (assert (forall ((before-memory_isinput_0 Bool)) true))\n\
+             (check-sat)\n",
+        )
+        .unwrap();
+        let pins = load_skolem_setinfos(&script);
+        assert_eq!(pins.len(), 1);
+        let split = split_equation(&pins[0].equation);
+        assert_eq!(
+            split.as_ref().map(|(v, _)| v.as_str()),
+            Some("before-memory_isinput_0")
+        );
+        let body = script
+            .commands
+            .iter()
+            .find_map(|c| c.assert_bool())
+            .unwrap();
+        let forall = Dynamic::from_ast(body);
+        let (qvars, _, _) = parse_forall(&forall).unwrap();
+        let qnames: HashSet<String> = qvars.iter().map(|(n, _)| n.clone()).collect();
+        assert!(qnames.contains("before-memory_isinput_0"));
+    }
+
+    #[test]
+    fn load_memory_bus_pins_with_forall_qvars() {
+        let script = Script::parse(
+            "(declare-fun after-memory_isinput_0 () Bool)\n\
+             (set-info :skolem-memory-bus-0 |(= before-memory_isinput_0 after-memory_isinput_0)|)\n\
+             (assert (forall ((before-memory_isinput_0 Bool)) true))\n\
+             (check-sat)\n",
+        )
+        .unwrap();
+        let pins = load_skolem_setinfos(&script);
+        assert_eq!(pins.len(), 1);
+        assert_eq!(pins[0].kind, "memory_bus");
+    }
 
     #[test]
     fn set_info_value_strips_pipe_quotes() {

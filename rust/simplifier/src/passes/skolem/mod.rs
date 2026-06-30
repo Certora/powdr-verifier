@@ -10,7 +10,7 @@ mod witness;
 
 use std::collections::{HashMap, HashSet};
 
-use smt2::ast_util::{is_forall, or_parts, rebuild_quantifier_dyn};
+use smt2::ast_util::{is_forall, or_body_parts, rebuild_quantifier_dyn};
 use smt2::{map_asserts, map_bool_children, Script};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
@@ -210,7 +210,7 @@ fn walk_forall(
     if let Some(p) = field {
         witness::contribute(&mut skolem, &body, candidates, p);
     }
-    isolate::contribute(&mut skolem, &body, sorts, decl_block);
+    isolate::contribute(&mut skolem, &body, sorts, decl_block, &qvars.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>());
 
     for src in skolem.sources.values() {
         *applied.entry(src.clone()).or_insert(0) += 1;
@@ -221,7 +221,7 @@ fn walk_forall(
         return term.as_bool().unwrap_or_else(|| Bool::from_bool(true));
     }
 
-    let new_body = if let Some(mut args) = or_parts(&body) {
+    let new_body = if let Some(mut args) = or_body_parts(&body) {
         args.extend(disjuncts);
         Bool::or(&args.iter().collect::<Vec<_>>())
     } else {
@@ -238,6 +238,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn skolem_applies_memory_bus_pins() {
+        std::env::set_var("SIMPLIFIER_FIELD_MOD", "2013265921");
+        let script = Script::parse(
+            "(declare-fun after-memory_isinput_0 () Bool)\n\
+             (declare-fun after-memory_isoutput_0 () Bool)\n\
+             (set-info :skolem-memory-bus-0 |(= before-memory_isinput_0 after-memory_isinput_0)|)\n\
+             (set-info :skolem-memory-bus-1 |(= before-memory_isoutput_0 after-memory_isoutput_0)|)\n\
+             (assert (forall ((before-memory_isinput_0 Bool) (before-memory_isoutput_0 Bool)) \
+               (or true)))\n\
+             (check-sat)\n",
+        )
+        .unwrap();
+        let (out, stats) = apply(&script).unwrap();
+        assert!(
+            stats["pins_by_source"]["memory_bus"]
+                .as_u64()
+                .unwrap_or(0)
+                >= 2
+        );
+        let s = smt2::dump_string(&out);
+        assert!(s.contains("not (= before-memory_isinput_0 after-memory_isinput_0)"));
+        assert!(s.contains("not (= before-memory_isoutput_0 after-memory_isoutput_0)"));
+    }
+
+    #[test]
     fn pins_same_name_program_var() {
         let script = Script::parse(
             "(declare-fun before-x@0 () Int)\n\
@@ -251,6 +276,42 @@ mod tests {
         let s = smt2::dump_string(&out);
         assert!(s.contains("(not (= before-x@0"));
         assert!(stats["pins_by_source"]["names"].as_u64().unwrap_or(0) >= 1);
+    }
+
+    #[test]
+    fn forall_body_or_body_parts_after_nnf() {
+        use smt2::ast_util::{or_body_parts, or_parts, quantifier_body_bool};
+        use smt2::iter_nodes_dyn;
+        use super::utils::parse_forall;
+        std::env::set_var("SIMPLIFIER_FIELD_MOD", "2013265921");
+        let raw = std::fs::read_to_string(
+            "/home/gereon/certora/powdr/verifier/data/guest-keccak-selection/verify-apc_candidate_2105892_035_inlining-apc_candidate_2105892_036_remove_disconnected.soundness.smt2",
+        )
+        .unwrap();
+        let script = Script::parse(&raw).unwrap();
+        let (nnf, _) = crate::passes::nnf::apply(&script).unwrap();
+        let top = nnf.commands.iter().find_map(|c| c.assert_bool()).unwrap();
+        let mut body = None;
+        for node in iter_nodes_dyn(&Dynamic::from_ast(top)) {
+            if let Some((qvars, _, b)) = parse_forall(&node) {
+                if qvars.iter().any(|(n, _)| n.contains("rs1_aux_cols__base__timestamp_lt_aux__lower_decomp__0_1@24")) {
+                    body = Some(b);
+                    break;
+                }
+            }
+        }
+        let body = body.expect("inner forall");
+        let ast = Dynamic::from_ast(&body);
+        let head = if ast.kind() == AstKind::App {
+            smt2::ast_util::decl_name(&ast.decl())
+        } else {
+            format!("{:?}", ast.kind())
+        };
+        assert!(
+            or_body_parts(&body).is_some(),
+            "head={head} or_parts={:?}",
+            or_parts(&body).map(|v| v.len())
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::collections::{hash_map::DefaultHasher, BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 use smt2::ast_util::{
-    bound_var_index, decl_name, flatten_or, is_forall, or_parts, quantifier_body_bool,
+    bound_var_index, decl_name, flatten_or, is_forall, or_body_parts, quantifier_body_bool,
     quantifier_body_deps, quantifier_bound_names, quantifier_bounds_de_bruijn, rebuild_forall_dyn,
     resolve_bound_or_free_name, substitute_bound_vars_dyn, contains_bound_var_dyn,
     de_bruijn_bound_name,
@@ -114,7 +114,7 @@ impl LiftWalker {
             Some(body) => body,
             None => return b.clone(),
         };
-        let Some(disjuncts) = or_parts(&body) else {
+        let Some(disjuncts) = or_body_parts(&body) else {
             return b.clone();
         };
 

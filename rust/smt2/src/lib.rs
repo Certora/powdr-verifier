@@ -18,7 +18,7 @@ pub use ast_util::{
     free_uf_function_symbols, has_quantifier, int_const_name, int_from_i128, int_value, int_value_dyn,
     is_exists, is_forall,
     is_implies, is_int_const, is_int_literal_string, is_ite, is_not, map_bool_children,
-    mod_int_literal_string, or_parts, parse_int_literal, smtlib_decl_name, z3_if_to_ite,
+    mod_int_literal_string, or_body_parts, or_parts, parse_int_literal, smtlib_decl_name, z3_if_to_ite,
     quantifier_body, quantifier_body_bool, quantifier_body_deps, quantifier_bound_names,
     quantifier_bounds, quantifier_bounds_de_bruijn,
     rebuild_app, rebuild_forall_dyn, rebuild_quantifier_dyn, resolve_bound_or_free_name,
