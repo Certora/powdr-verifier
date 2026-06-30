@@ -667,22 +667,26 @@ def _plain_encoding_symbol_pairs(
     after_conv: SmtConverter,
 ) -> dict[FNode, FNode]:
     """Map before symbols to after symbols or constants (``true`` for aligned xmatch)."""
+    before_io = before_conv.bus_interaction_encoder.memory.plain_permutation_io
+    after_io = after_conv.bus_interaction_encoder.memory.plain_permutation_io
+    if before_io is None or after_io is None:
+        raise RuntimeError(
+            "plain_permutation_io missing: plain memory encoding did not run on both sides"
+        )
     m = alignment.before_to_after
     nm = before_conv.bus_interaction_encoder.memory.NAME
     subs: dict[FNode, FNode] = {}
-    def add_sub(b, a):
-        subs[before_conv._symbol(b, BOOL)] = after_conv._symbol(a, BOOL)
 
     for i_b, i_a in m.items():
         subs[Symbol(f"{nm}_xmatch_{i_b}_{i_a}", BOOL)] = TRUE()
 
-        add_sub(f"{nm}_isinput_{i_b}", f"{nm}_isinput_{i_a}")
-        add_sub(f"{nm}_isoutput_{i_b}", f"{nm}_isoutput_{i_a}")
-        add_sub(f"{nm}_isdisabled_{i_b}", f"{nm}_isdisabled_{i_a}")
+        subs[before_io.is_inputs[i_b]] = after_io.is_inputs[i_a]
+        subs[before_io.is_outputs[i_b]] = after_io.is_outputs[i_a]
+        subs[before_io.is_disableds[i_b]] = after_io.is_disableds[i_a]
         for j_b, j_a in m.items():
             if i_b > j_b:
                 continue
-            add_sub(f"{nm}_match_{i_b}_{j_b}", f"{nm}_match_{i_a}_{j_a}")
+            subs[before_io.match_vars[(i_b, j_b)]] = after_io.match_vars[(i_a, j_a)]
 
     return subs
 
