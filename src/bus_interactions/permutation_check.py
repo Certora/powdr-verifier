@@ -1,4 +1,5 @@
 """Mixins and formulas for multiset permutation invariants and timestamp monotonicity."""
+import collections
 from dataclasses import dataclass
 from itertools import batched, pairwise
 import itertools
@@ -99,28 +100,136 @@ def _membus_ordered_ts_pairs(order_edges: list[dict]) -> set[frozenset[str]]:
     }
 
 
-def _membus_kill_index_pairs(membus_extract: dict | None, n: int) -> frozenset[tuple[int, int]]:
-    """``(i, j)`` with ``i < j`` where membus timestamp order forbids a cross-match."""
+def _membus_match_presets(
+    membus_extract: dict | None,
+    n: int,
+    mult_const: list[int | None],
+    const_args: list[tuple[int | None, ...] | None],
+    p: int,
+    *,
+    log_prefix: str | None = None,
+) -> dict[tuple[int, int], bool]:
+    """Membus-derived presets for match vars: off-diagonal ``(i, j)`` with ``i < j``, diagonal ``(i, i)``."""
     if membus_extract is None:
-        return frozenset()
+        return {}
     rows = membus_extract.get("interactions") or []
-    ordered = _membus_ordered_ts_pairs(membus_extract.get("order_edges") or [])
-    out: set[tuple[int, int]] = set()
-    lim = min(n, len(rows))
-    for i in range(lim):
+    assert n == len(rows)
+    if n == 0:
+        return {}
+
+    prefix = f"{log_prefix} " if log_prefix else ""
+    ordered_ts = _membus_ordered_ts_pairs(membus_extract.get("order_edges") or [])
+    presets: dict[tuple[int, int], bool] = {}
+
+    def ts_blocks_cross(i: int, j: int) -> bool:
         ts_i = rows[i].get("abstract_ts")
-        if not ts_i:
+        ts_j = rows[j].get("abstract_ts")
+        return bool(
+            ts_i and ts_j and ts_i != ts_j and frozenset({ts_i, ts_j}) in ordered_ts
+        )
+
+    for i in range(n):
+        if mult_const[i] == 0:
+            presets[(i, i)] = True
+            for j in range(i):
+                presets[(j, i)] = False
+            for j in range(i + 1, n):
+                presets[(i, j)] = False
             continue
-        for j in range(i + 1, lim):
-            ts_j = rows[j].get("abstract_ts")
-            if ts_j and ts_i != ts_j and frozenset({ts_i, ts_j}) in ordered:
-                out.add((i, j))
-    return frozenset(out)
+
+        for j in range(i + 1, n):
+            if ts_blocks_cross(i, j):
+                presets[(i, j)] = False
+
+    if any(not rows[i].get("alias_determined") for i in range(n)):
+        return presets
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if rows[i]["alias_class"] != rows[j]["alias_class"]:
+                presets[(i, j)] = False
+
+    groups: dict[int, set[int]] = collections.defaultdict(set)
+    for i in range(n):
+        if mult_const[i] != 0:
+            groups[rows[i]["alias_class"]].add(i)
+
+    candidates: dict[int, set[int]] = {i: set() for i in range(n)}
+    for members in groups.values():
+        for i in members:
+            for j in members:
+                if presets.get((i, j), None) is False:
+                    continue
+                if presets.get((j, i), None) is False:
+                    continue
+                if (mult_const[i] + mult_const[j]) % p != 0:
+                    continue
+                candidates[i].add(j)
+
+    def remove_candidate(i: int) -> None:
+        for partners in candidates.values():
+            partners.discard(i)
+        del candidates[i]
+
+    changed = True
+    while changed:
+        changed = False
+        for gid, members in groups.items():
+            for i in sorted(candidates.keys()):
+                if candidates[i]:
+                    continue
+                presets[(i, i)] = True
+                for k in range(i):
+                    presets[(i, k)] = False
+                for k in range(i + 1, n):
+                    presets[(k, i)] = False
+                remove_candidate(i)
+                logging.warning(
+                    "%smembus forced self-match: interaction %d alias_class=%d",
+                    prefix,
+                    i,
+                    gid,
+                )
+                changed = True
+            for i in sorted(candidates.keys()):
+                if i not in candidates:
+                    continue
+                partners = candidates[i]
+                if len(partners) != 1:
+                    continue
+                j = next(iter(partners))
+                if j not in candidates:
+                    continue
+                if i > j:
+                    i, j = j, i
+                presets[(i, j)] = True
+                presets[(i, i)] = True
+                presets[(j, j)] = True
+                for k in range(i):
+                    presets[(k, j)] = False
+                    presets[(k, i)] = False
+                for k in range(i + 1, j):
+                    presets[(k, j)] = False
+                    presets[(i, k)] = False
+                for k in range(j + 1, n):
+                    presets[(j, k)] = False
+                    presets[(i, k)] = False
+                remove_candidate(i)
+                remove_candidate(j)
+                logging.warning(
+                    "%smembus forced pair match: (%d, %d) alias_class=%d",
+                    prefix,
+                    i,
+                    j,
+                    gid,
+                )
+                changed = True
+
+    return presets
 
 
 def _plain_build_match_vars(
     interactions: list,
-    n: int,
     symbol: Callable[[int, int], FNode],
     *,
     log_prefix: str | None = None,
@@ -128,34 +237,43 @@ def _plain_build_match_vars(
 ) -> dict[tuple[int, int], FNode]:
     """Build ``memory_match_i_j`` variables for all ``i <= j``, using ``FALSE`` when static."""
     p = ARGS().field_type.value
+    n = len(interactions)
     mult_const, const_args = _plain_static_profile(interactions, p)
-    membus_kill = _membus_kill_index_pairs(membus_extract, n)
+    membus_presets = _membus_match_presets(
+        membus_extract,
+        n,
+        mult_const,
+        const_args,
+        p,
+        log_prefix=log_prefix,
+    )
     match_vars: dict[tuple[int, int], FNode] = {}
     static_false = 0
-    membus_false = 0
+    membus_preset = 0
     symbols = 0
 
     for i in range(n):
         for j in range(i, n):
+            key = (i, j)
             if i != j and _plain_pairwise_match_impossible_static(
                 i, j, mult_const, const_args, p
             ):
-                match_vars[(i, j)] = FALSE()
+                match_vars[key] = FALSE()
                 static_false += 1
-            elif i != j and (i, j) in membus_kill:
-                match_vars[(i, j)] = FALSE()
-                membus_false += 1
+            elif key in membus_presets:
+                match_vars[key] = TRUE() if membus_presets[key] else FALSE()
+                membus_preset += 1
             else:
-                match_vars[(i, j)] = symbol(i, j)
+                match_vars[key] = symbol(i, j)
                 symbols += 1
 
     prefix = f"{log_prefix} " if log_prefix else ""
     logging.info(
-        "%splain_build_match_vars: %d symbols / %d false / %d membus_false",
+        "%splain_build_match_vars: %d symbols / %d static_false / %d membus_preset",
         prefix,
         symbols,
         static_false,
-        membus_false,
+        membus_preset,
     )
     return match_vars
 
@@ -719,7 +837,6 @@ class PermutationCheckMixin:
 
         match_vars = _plain_build_match_vars(
             interactions,
-            n,
             lambda i, j: self._symbol(f"{self.NAME}_match_{i}_{j}", BOOL),
             log_prefix=self.NAME,
             membus_extract=fetch_extract_json(self._cur_state.source_path)
