@@ -164,7 +164,7 @@ def compute(data: Any, mem_id: int = 1, addr_space: int = 1) -> Solution:
         raise ValueError(
             "solve: timestamps are not all offsets from a fixed base (unresolved chain gap)")
     ts_entry = 0
-    ts_exit = max((v for v in soff.values() if v is not None), default=None)
+    max_send_vtime: int | None = None     # ts_exit = the last write (post-inline all share one base)
 
     by_key: dict[int, list[tuple[int, dict]]] = collections.defaultdict(list)
     for ordn, b in active:
@@ -186,7 +186,12 @@ def compute(data: Any, mem_id: int = 1, addr_space: int = 1) -> Solution:
             if kind == "send":
                 if tscol is None or not order.is_fs(tscol):
                     raise ValueError(f"solve: send #{ordn} has no from_state timestamp")
-                sends.append((soff[tscol] + order.intra_offset(tsarg), ordn))
+                if soff.get(tscol) is None:
+                    raise ValueError(f"solve: send #{ordn} timestamp is unresolved (no fixed base)")
+                vt = soff[tscol] + order.intra_offset(tsarg)
+                sends.append((vt, ordn))
+                if max_send_vtime is None or vt > max_send_vtime:
+                    max_send_vtime = vt
             elif kind == "recv":
                 if tscol is None or tscol not in recv_bound:
                     raise ValueError(f"solve: recv #{ordn} is not bounded (no R2 LessThan gadget)")
@@ -265,7 +270,7 @@ def compute(data: Any, mem_id: int = 1, addr_space: int = 1) -> Solution:
                                 input_recv, output_send))
 
     rows = _build_rows(rows_idx, key_of, meta, str(addr_space), ts_entry, disabled)
-    return Solution(mem_id, addr_space, ts_entry, ts_exit, rows, cells,
+    return Solution(mem_id, addr_space, ts_entry, max_send_vtime, rows, cells,
                     all_unique, n_inputs, n_outputs)
 
 

@@ -139,6 +139,31 @@ def test_handles_subtraction_in_gap_constraint():
     assert sol.ts_exit == 3 and sol.unique is True
 
 
+def test_recv_bound_from_range_check_arg():
+    # post-`inlining`: the LessThan gadget lives in a range-check (id-3) ARG, not a
+    # constraint, and sends are `from_state_0 + offset` in the bus args. solve must
+    # recover the order from args and the recv bound from the range-check arg.
+    fs = "from_state__timestamp_0@1"
+    pv = "aux__base__prev_timestamp_0@7"
+    limb = "aux__base__timestamp_lt_aux__lower_decomp__0_0@8"
+    # arg = 15360*pv + 15360*limb + 15360 - 15360*fs  (range-checked to 12 bits;
+    # 15360 >= 2^12 forces the inner combo to 0 -> pv <= fs - 1)
+    arg = [_add(_m(15360, pv), _m(15360, limb), 15360), "-", _m(15360, fs)]
+    d = {
+        "bus_interactions": [
+            {"id": 1, "mult": 1, "args": [1, 8, 0, 0, 0, 0, [fs, "+", 5]]},   # send @ T+5
+            {"id": 1, "mult": -1, "args": [1, 8, 0, 0, 0, 0, pv]},            # recv (input)
+            {"id": 3, "mult": 1, "args": [arg, 12]},                          # relocated R2
+        ],
+        "constraints": [],
+    }
+    sol = solve.compute(d, 1, 1)
+    assert sol.ts_entry == 0 and sol.ts_exit == 5
+    assert sol.n_inputs == 1 and sol.n_outputs == 1 and sol.unique is True
+    assert _row(sol, 1).io == "in"      # recv reads entry (pv <= fs-1 = before ts_entry)
+    assert _row(sol, 0).io == "out"     # the lone send escapes
+
+
 def test_rejects_unresolved_ts_base():
     # no R1 chain -> fs1's offset from the base is unknown -> ts_entry not well defined
     with pytest.raises(ValueError, match="offsets from a fixed base"):

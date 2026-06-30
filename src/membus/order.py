@@ -153,14 +153,57 @@ def deduce(dump: dict) -> tuple[set[tuple[str, str]], dict[str, tuple[str, bool,
                 if (not limb_coeffs) or all(v < 0 for v in limb_coeffs.values()):
                     if pv0 not in recv_bound:
                         recv_bound[pv0] = (f, const <= -1, const)
+
+    # R2 can also live in a range-check (id 3) ARG once `inlining` removes the
+    # LessThan constraint: an arg ``s·(from_state − prev_ts − Σnonneg_limbs − d)``
+    # range-checked to ``w`` bits with ``s ≥ 2^w`` forces the inner combo to 0
+    # (0 is the only multiple of s whose field residue is < 2^w, for the bounded
+    # timestamp witnesses) ⟹ ``prev_ts ≤ from_state − d`` — the same gadget, just
+    # relocated into the trusted bus data (NOT the substitutions side-file). Same
+    # field-residue basis as the address gadget (`30720`/`15360 · 2^k = p−1`).
+    for b in bis:
+        if b.get("id") != 3 or len(b.get("args", [])) < 2:
+            continue
+        bits = b["args"][1]
+        lt = linterms(b["args"][0])
+        if lt is None or not isinstance(bits, int):
+            continue
+        coeffs = {k: v for k, v in lt[0].items() if v != 0}
+        fs = [k for k in coeffs if is_fs(k)]
+        pv = [k for k in coeffs if is_prev(k)]
+        others = [k for k in coeffs if not is_ts(k)]
+        if len(fs) != 1 or len(pv) != 1:
+            continue
+        cf, cp, s = coeffs[fs[0]], coeffs[pv[0]], abs(coeffs[fs[0]])
+        if cf != -cp or s == 0 or (1 << bits) > s:        # residue must force inner==0
+            continue
+        if any(v % s != 0 for v in coeffs.values()) or lt[1] % s != 0:
+            continue
+        sign = 1 if cf > 0 else -1                         # normalize: from_state coeff +1
+        nc = {k: sign * v // s for k, v in coeffs.items()}
+        nconst = sign * lt[1] // s
+        if nc[fs[0]] != 1 or nc[pv[0]] != -1:
+            continue
+        if any(nc[o] >= 0 for o in others) or any(o not in nonneg for o in others):
+            continue
+        if pv[0] not in recv_bound:
+            recv_bound[pv[0]] = (fs[0], nconst <= -1, nconst)
     return edges, recv_bound, nonneg
 
 
-def _all_cols(cons: list) -> set[str]:
+def _fs_all(dump: dict) -> set[str]:
+    """All from_state (send) timestamp columns, from constraints AND bus args.
+
+    After `inlining`, the per-instruction from_state columns survive only as
+    ``from_state_0 + offset`` inside bus interaction args (the R1 chain collapses
+    into a single base), so scanning constraints alone misses them.
+    """
     s: set[str] = set()
-    for c in cons:
+    for c in dump["constraints"]:
         names(c, s)
-    return s
+    for b in dump.get("bus_interactions", []):
+        names(b.get("args", []), s)
+    return {c for c in s if is_fs(c)}
 
 
 def _chain(nodes: list[str], edges: set[tuple[str, str]]) -> list[str] | None:
@@ -188,8 +231,7 @@ def _chain(nodes: list[str], edges: set[tuple[str, str]]) -> list[str] | None:
 
 def total_order(dump: dict, edges: set[tuple[str, str]]) -> list[str]:
     """Linear order of from_state columns if the edges chain them; else ``[]``."""
-    fs_all = sorted({c for c in _all_cols(dump["constraints"]) if is_fs(c)})
-    return _chain(fs_all, edges) or []
+    return _chain(sorted(_fs_all(dump)), edges) or []
 
 
 def intra_offset(arg: Any) -> int:
