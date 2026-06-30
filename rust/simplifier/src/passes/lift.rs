@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use smt2::ast_util::{
     bound_var_index, decl_name, flatten_or, is_forall, or_parts, quantifier_body_bool,
-    quantifier_body_deps, quantifier_bound_names, quantifier_bounds, rebuild_forall_dyn,
+    quantifier_body_deps, quantifier_bound_names, quantifier_bounds, quantifier_bounds_de_bruijn, rebuild_forall_dyn,
     resolve_bound_or_free_name, substitute_bound_vars_dyn, contains_bound_var_dyn,
     de_bruijn_bound_name,
 };
@@ -86,10 +86,11 @@ impl LiftWalker {
 
     fn process_forall(&mut self, b: &Bool) -> Bool {
         let ast = Dynamic::from_ast(b);
-        let all_bounds = quantifier_bounds(&ast);
+        let all_bounds = quantifier_bounds_de_bruijn(&ast);
         let bound_order: Vec<String> = quantifier_bound_names(&ast);
-        for (idx, bound) in all_bounds.iter().enumerate() {
-            if let Some(name) = de_bruijn_bound_name(&bound_order, idx) {
+        for de_bruijn_idx in 0..all_bounds.len() {
+            let bound = &all_bounds[de_bruijn_idx];
+            if let Some(name) = de_bruijn_bound_name(&bound_order, de_bruijn_idx) {
                 let sort = if bound.as_bool().is_some() {
                     DeclSort::Bool
                 } else if bound.as_int().is_some() {
@@ -314,7 +315,7 @@ fn name_debruijn_dyn(d: &Dynamic, quant: &Dynamic, script: &Script) -> Result<Dy
     if let Ok(out) = parse_named_dyn(&raw, &d, script) {
         return Ok(out);
     }
-    let replacements = quantifier_bounds(quant);
+    let replacements = quantifier_bounds_de_bruijn(quant);
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         substitute_bound_vars_dyn(&d, &replacements)
     }))
