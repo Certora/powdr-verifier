@@ -715,6 +715,12 @@ def emit_memory_equalities(
     (after-vars quantified) pass ``reverse=True`` so pins read ``Equals(after, before)``.
     For *soundness* (before-vars quantified) use ``reverse=False``.
 
+    Plain encoding may *kill* I/O flags (``isinput`` / ``isoutput`` / ``isdisabled``)
+    to ``true``/``false`` when interaction multiplicity is constant; witnesses
+    are then constants or one-sided symbols. Pins referencing symbols eliminated
+    from the script are dropped in the skolem pass
+    (:func:`~.simplify.skolem_utils.load_skolem_setinfos`), not here.
+
     Encoding follows ``ARGS().memory_encoding`` (``array``, ``plain``, ``none``, or empty for others).
 
     ``before_constraints`` / ``after_constraints`` are passed from the verifier:

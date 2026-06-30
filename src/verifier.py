@@ -149,9 +149,9 @@ def verify():
             info = SetInfos()
             if substitutions_map:
                 info += derived_columns_skolem_setinfo(
-                    formula, substitutions_map, kind=SkolemPinKind.SUBSTITUTION
+                    substitutions_map, kind=SkolemPinKind.SUBSTITUTION
                 )
-            info += derived_columns_skolem_setinfo(formula, derived, kind=SkolemPinKind.DERIVED)
+            info += derived_columns_skolem_setinfo(derived, kind=SkolemPinKind.DERIVED)
             info += emit_memory_equalities(
                 before,
                 after,

@@ -31,6 +31,7 @@ def test_load_skolem_setinfos_preserves_script_order_and_kinds():
     smt = script.SmtLibScript()
     smt.commands = [
         script.SmtLibCommand("declare-fun", [x]),
+        script.SmtLibCommand("assert", [Equals(x, Int(0))]),
         emit_pin_setinfo(skolem_setinfo_keyword_prefix(SkolemPinKind.SUBSTITUTION), 0, eq),
         emit_pin_setinfo(skolem_setinfo_keyword_prefix(SkolemPinKind.DERIVED), 0, eq),
     ]

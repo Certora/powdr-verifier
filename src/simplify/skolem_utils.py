@@ -158,6 +158,22 @@ def _skolem_pin_keyword_re() -> re.Pattern[str]:
     )
 
 
+def _collect_assert_symbols(smt_script: script.SmtLibScript) -> frozenset[FNode]:
+    """Every symbol in any ``assert`` (free or quantifier-bound)."""
+    out: set[FNode] = set()
+    for cmd in smt_script:
+        if cmd.name != "assert":
+            continue
+        for n in iter_unique_subnodes(cmd.args[0]):
+            if n.is_symbol():
+                out.add(n)
+            if n.is_quantifier():
+                for q in n.quantifier_vars():
+                    if q.is_symbol():
+                        out.add(q)
+    return frozenset(out)
+
+
 def load_skolem_setinfos(smt_script: script.SmtLibScript) -> "SetInfos":
     """Load skolem pin equations from ``set-info`` keys sharing ``:skolem-``."""
     from ..verify import SetInfos, SkolemPin, SkolemPinKind
@@ -192,6 +208,21 @@ def load_skolem_setinfos(smt_script: script.SmtLibScript) -> "SetInfos":
         eq = _parse_equation(parser, cmd.args[1], declare_types=declare_types)
         if eq is not None:
             equations.append(SkolemPin(eq, pin_type))
+    from ..verify.skolem_pins import filter_loaded_skolem_pins
+    from ..utils.stats import stats_dump
+
+    live = _collect_assert_symbols(smt_script)
+    raw_count = len(equations)
+    equations, dropped = filter_loaded_skolem_pins(equations, live)
+    if dropped:
+        logging.info(
+            "skolem: dropped %d set-info pins (symbols not live in asserts)",
+            dropped,
+        )
+    stats_dump(
+        "skolem-pins-filter",
+        {"pin_count_raw": raw_count, "pin_count": len(equations), "dropped_not_live": dropped},
+    )
     return SetInfos(equations=equations)
 
 

@@ -29,7 +29,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let field = field_mod();
     let declared = collect_declared_symbols(script);
     let sorts = collect_symbol_sorts(script);
-    let pins = load_skolem_setinfos(script);
+    let (pins, pins_dropped_not_live) = load_skolem_setinfos(script);
     let candidates = field
         .map(|p| witness::collect_candidates(script, p))
         .unwrap_or_default();
@@ -98,6 +98,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let stats = serde_json::json!({
         "pins_by_source": applied,
         "free_value_asserts": applied.get("rules-free").copied().unwrap_or(0),
+        "pins_dropped_not_live": pins_dropped_not_live,
     });
     Ok((out, stats))
 }
@@ -246,7 +247,8 @@ mod tests {
              (set-info :skolem-memory-bus-0 |(= before-memory_isinput_0 after-memory_isinput_0)|)\n\
              (set-info :skolem-memory-bus-1 |(= before-memory_isoutput_0 after-memory_isoutput_0)|)\n\
              (assert (forall ((before-memory_isinput_0 Bool) (before-memory_isoutput_0 Bool)) \
-               (or true)))\n\
+               (or (= before-memory_isinput_0 after-memory_isinput_0) \
+                   (= before-memory_isoutput_0 after-memory_isoutput_0))))\n\
              (check-sat)\n",
         )
         .unwrap();
