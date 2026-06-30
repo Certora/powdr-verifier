@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -113,20 +114,191 @@ def _build_simplifier_cmd(
     return cmd
 
 
+def _perf_report_timeout_sec(profile_path: Path) -> float:
+    size_mb = profile_path.stat().st_size / (1024 * 1024)
+    return min(300.0, 45.0 + size_mb * 0.5)
+
+
+_PERF_SYMBOL_ROW = re.compile(
+    r"^\s+"
+    r"(?:(?P<children>\d+\.\d+%)\s+)?"
+    r"(?P<self>\d+\.\d+%)\s+"
+    r"(?P<samples>\d+)\s+"
+    r"\[(?P<space>[^\]]+)\]\s+"
+    r"(?P<symbol>.+?)"
+    r"(?:\s{2,}-.+)?$"
+)
+
+
+def _is_useful_perf_symbol(symbol: str, space: str) -> bool:
+    if space == "k":
+        return False
+    sym = symbol.strip()
+    if not sym or sym.endswith("@plt"):
+        return False
+    if re.fullmatch(r"0x[0-9a-fA-F]+", sym):
+        return False
+    if re.fullmatch(r"0xffffffff[0-9a-fA-F]+", sym):
+        return False
+    return True
+
+
+def _parse_perf_symbol_row(line: str) -> str | None:
+    m = _PERF_SYMBOL_ROW.match(line.rstrip())
+    if m is None:
+        return None
+    if not _is_useful_perf_symbol(m.group("symbol"), m.group("space")):
+        return None
+    return f"{m.group('self')}  {m.group('symbol').strip()}"
+
+
+def _format_perf_report_summary(stdout: str, *, top_n: int) -> list[str]:
+    meta: list[str] = []
+    rows: list[str] = []
+    in_table = False
+    for line in stdout.splitlines():
+        if line.startswith("#"):
+            stripped = line.lstrip("# ").strip()
+            if stripped.startswith(("Total Lost Samples:", "Samples:", "Event count")):
+                meta.append(stripped)
+            if "Symbol" in stripped and ("Overhead" in stripped or "Self" in stripped):
+                in_table = True
+            continue
+        if not in_table:
+            continue
+        if not line.strip() or line.lstrip().startswith("|"):
+            if rows:
+                break
+            continue
+        if line.strip().startswith("(") or re.fullmatch(r"[.\s]+", line):
+            continue
+        parsed = _parse_perf_symbol_row(line)
+        if parsed is None:
+            continue
+        rows.append(parsed)
+        if len(rows) >= top_n:
+            break
+    return meta + rows
+
+
+def _emit_rust_pass_timings(steps: list[dict]) -> None:
+    timed = [
+        (step.get("pass", "?"), step["running_time"])
+        for step in steps
+        if step.get("running_time") is not None
+    ]
+    if not timed:
+        return
+    logging.warning("rust simplifier pass timings:")
+    for name, running_time in timed:
+        logging.warning("  %s: %.3fs", name, running_time)
+
+
+def emit_perf_profile_summary(
+    profile_path: Path, *, top_n: int = 12, timeout_sec: float | None = None
+) -> None:
+    """Run ``perf report`` and log a short symbol summary to stderr."""
+    perf = shutil.which("perf")
+    if perf is None or not profile_path.is_file():
+        return
+    if profile_path.stat().st_size == 0:
+        logging.warning("perf profile %s is empty", profile_path)
+        return
+    if timeout_sec is None:
+        timeout_sec = _perf_report_timeout_sec(profile_path)
+    try:
+        proc = subprocess.run(
+            [
+                perf,
+                "report",
+                "-i",
+                str(profile_path),
+                "--stdio",
+                "--sort=symbol",
+                "--no-children",
+                "-g",
+                "none",
+                "--dsos",
+                "simplifier",
+                "-n",
+                str(top_n),
+                "--percent-limit",
+                "0.5",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        logging.warning(
+            "perf report timed out after %.0fs for %s",
+            timeout_sec,
+            profile_path,
+        )
+        return
+    if proc.returncode != 0:
+        logging.warning(
+            "perf report failed (%d): %s",
+            proc.returncode,
+            (proc.stderr or proc.stdout).strip()[:500],
+        )
+        return
+    summary = _format_perf_report_summary(proc.stdout, top_n=top_n)
+    if not summary:
+        logging.warning(
+            "perf profile summary for %s: no symbols (rebuild simplifier with debug info?)",
+            profile_path,
+        )
+        return
+    logging.warning(
+        "perf profile summary for %s (top %d symbols in simplifier, --percent-limit 0.5):",
+        profile_path,
+        top_n,
+    )
+    for line in summary:
+        logging.warning("  %s", line)
+
+
+_DEFAULT_PERF_FREQ = 99
+_PERF_CALL_GRAPH = "dwarf,1024"
+
+
+def _perf_sample_freq() -> int:
+    override = os.environ.get("RUST_PERF_FREQ")
+    if override is None:
+        return _DEFAULT_PERF_FREQ
+    try:
+        freq = int(override)
+    except ValueError:
+        logging.warning("RUST_PERF_FREQ=%r is not an integer; using %d", override, _DEFAULT_PERF_FREQ)
+        return _DEFAULT_PERF_FREQ
+    if freq <= 0:
+        logging.warning("RUST_PERF_FREQ=%d must be positive; using %d", freq, _DEFAULT_PERF_FREQ)
+        return _DEFAULT_PERF_FREQ
+    return freq
+
+
 def _wrap_with_perf(cmd: list[str], profile_path: Path) -> list[str] | None:
     perf = shutil.which("perf")
     if perf is None:
         logging.warning("perf not found; rust profiling skipped")
         return None
     profile_path.parent.mkdir(parents=True, exist_ok=True)
+    freq = _perf_sample_freq()
+    logging.warning(
+        "perf record: -F %d -g %s (override: RUST_PERF_FREQ)",
+        freq,
+        _PERF_CALL_GRAPH,
+    )
     return [
         perf,
         "record",
         "-F",
-        "997",
+        str(freq),
         "-g",
         "--call-graph",
-        "dwarf,4096",
+        _PERF_CALL_GRAPH,
         "-o",
         str(profile_path),
         "--",
@@ -196,8 +368,12 @@ def run_rust_pipeline(
             profile_path,
             profile_path,
         )
+        emit_perf_profile_summary(profile_path)
 
     steps = parse_rust_stats(proc.stderr)
+    if profile_path is not None and profile_path.is_file():
+        _emit_rust_pass_timings(steps)
+
     for stat in steps:
         pass_name = stat.get("pass", "rust")
         data = {k: v for k, v in stat.items() if k != "pass"}
