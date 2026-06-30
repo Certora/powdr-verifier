@@ -2,13 +2,21 @@
 import json
 import logging
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
+from ..paths import DATA_DIR, POWDR_DUMPS_DIR, VERIFIER_DIR, data_path_for_dump
 from ..smt_backends.pysmt import script
 from ..utils.args import ARGS
 from ..utils.stats import stats_dump
 from .utils import _script_to_string, _string_to_script
+
+_last_rust_profile_path: Path | None = None
+
+
+def last_rust_profile_path() -> Path | None:
+    return _last_rust_profile_path
 
 
 def _verifier_root() -> Path:
@@ -28,6 +36,35 @@ def resolve_simplifier_bin() -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def rust_profile_data_path(
+    input_path: Path | None, output_path: Path | None
+) -> Path | None:
+    ref = input_path or output_path
+    if ref is None:
+        return None
+    ref = ref.resolve()
+    name = f"rust-cprofile-{ref.stem}.data"
+    try:
+        ref.relative_to(POWDR_DUMPS_DIR.resolve())
+        return data_path_for_dump(ref, name)
+    except ValueError:
+        pass
+    try:
+        ref.relative_to(DATA_DIR.resolve())
+        out = ref.parent / name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        return out
+    except ValueError:
+        pass
+    if output_path is not None:
+        out = output_path.resolve().parent / name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        return out
+    out = VERIFIER_DIR / name
+    out.parent.mkdir(parents=True, exist_ok=True)
+    return out
 
 
 def parse_rust_stats(stderr: str) -> list[dict]:
@@ -59,9 +96,51 @@ def rust_step_action_props(step: dict) -> dict:
     return {k: v for k, v in step.items() if k not in ("pass", "running_time")}
 
 
+def _build_simplifier_cmd(
+    bin_path: Path,
+    rust_pipeline: str,
+    *,
+    timeout: float | None,
+) -> list[str]:
+    cmd = [str(bin_path)]
+    if timeout is not None:
+        cmd.extend(["--timeout", str(timeout)])
+    if getattr(ARGS(), "pretty", False):
+        cmd.append("--pretty")
+    cmd.extend(["-", rust_pipeline, "-"])
+    return cmd
+
+
+def _wrap_with_perf(cmd: list[str], profile_path: Path) -> list[str] | None:
+    perf = shutil.which("perf")
+    if perf is None:
+        logging.warning("perf not found; rust profiling skipped")
+        return None
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    return [
+        perf,
+        "record",
+        "-F",
+        "997",
+        "-g",
+        "--call-graph",
+        "dwarf,4096",
+        "-o",
+        str(profile_path),
+        "--",
+        *cmd,
+    ]
+
+
 def run_rust_pipeline(
-    smt_script: script.SmtLibScript, tactic_pipeline: str
+    smt_script: script.SmtLibScript,
+    tactic_pipeline: str,
+    *,
+    timeout: float | None = None,
+    profile_input: Path | None = None,
+    profile_output: Path | None = None,
 ) -> tuple[script.SmtLibScript, list[dict]]:
+    global _last_rust_profile_path
     bin_path = resolve_simplifier_bin()
     if bin_path is None:
         raise FileNotFoundError("simplifier binary not found")
@@ -71,10 +150,15 @@ def run_rust_pipeline(
     )
 
     smt_in = _script_to_string(smt_script)
-    cmd = [str(bin_path)]
-    if getattr(ARGS(), "pretty", False):
-        cmd.append("--pretty")
-    cmd.extend(["-", rust_pipeline, "-"])
+    cmd = _build_simplifier_cmd(bin_path, rust_pipeline, timeout=timeout)
+    profile_path: Path | None = None
+    if getattr(ARGS(), "cprofile", False):
+        profile_path = rust_profile_data_path(profile_input, profile_output)
+        if profile_path is not None:
+            wrapped = _wrap_with_perf(cmd, profile_path)
+            if wrapped is not None:
+                cmd = wrapped
+
     env = os.environ.copy()
     env["SIMPLIFIER_FIELD_MOD"] = str(ARGS().field_type.value)
     proc = subprocess.run(
@@ -88,6 +172,14 @@ def run_rust_pipeline(
     if proc.returncode != 0:
         raise RuntimeError(
             f"simplifier exited {proc.returncode}: {proc.stderr.strip()}"
+        )
+
+    if profile_path is not None and profile_path.is_file():
+        _last_rust_profile_path = profile_path
+        logging.warning(
+            "Rust profile data written to %s (render: verifier/flamegraph.py %s)",
+            profile_path,
+            profile_path,
         )
 
     steps = parse_rust_stats(proc.stderr)

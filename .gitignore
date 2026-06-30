@@ -8,3 +8,5 @@ report-*.html
 report-*.db
 benchmark-results.json
 cprofile.prof
+rust-cprofile-*.data
+rust-cprofile-*.svg
