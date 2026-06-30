@@ -6,7 +6,9 @@ the ``pretty`` tactic (sets ``ARGS().pretty``).
 """
 import copy
 import logging
+import os
 import signal
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,6 +97,21 @@ def resolve_tactic(tactic: str, optimization_step: str | None = None) -> str:
     if optimization_step and optimization_step in STEP_TACTICS:
         return STEP_TACTICS[optimization_step]
     return DEFAULT_TACTIC
+
+
+def _pipeline_groups(
+    tactic: str, optimization_step: str | None = None
+) -> list[tuple[str, list[str]]]:
+    resolved = resolve_tactic(tactic, optimization_step)
+    default_executor = getattr(ARGS(), "default_executor", "p")
+    return _group_tactics(resolved.split(":"), default_executor=default_executor)
+
+
+def _load_script(path: Path) -> script.SmtLibScript:
+    with open_file(path, "r") as f:
+        parser = SmtLibParser()
+        logging.info(f"loading from {f.name}")
+        return parser.get_script(f)
 
 
 class _PassTimeout(Exception):
@@ -270,13 +287,16 @@ def _run_python_passes(
 
 def _run_rust_tactics(
     parent: Action,
-    smt_script: script.SmtLibScript,
+    smt_script: script.SmtLibScript | None,
     raw_tactics: list[str],
     *,
     timeout: float | None = None,
     profile_input: Path | None = None,
     profile_output: Path | None = None,
-) -> script.SmtLibScript:
+    input_path: Path | None = None,
+    rust_output_path: Path | None = None,
+    parse_output: bool = True,
+) -> script.SmtLibScript | None:
     pipeline = ":".join(raw_tactics)
     try:
         smt_script, steps = run_rust_pipeline(
@@ -285,6 +305,9 @@ def _run_rust_tactics(
             timeout=timeout,
             profile_input=profile_input,
             profile_output=profile_output,
+            input_path=input_path,
+            output_path=rust_output_path,
+            parse_output=parse_output,
         )
     except (FileNotFoundError, RuntimeError) as exc:
         logging.warning(
@@ -292,6 +315,9 @@ def _run_rust_tactics(
             pipeline,
             exc,
         )
+        if smt_script is None:
+            assert input_path is not None
+            smt_script = _load_script(input_path)
         smt_script, _ = _run_python_passes(
             parent,
             smt_script,
@@ -409,26 +435,28 @@ def _ensure_declarations_for_asserts(smt_script: script.SmtLibScript) -> None:
 
 
 def simplify_smt_script(
-    smt_script: script.SmtLibScript,
+    smt_script: script.SmtLibScript | None,
     *,
     tactic: str,
     timeout: float,
     output: Path | None = None,
     parent_action: Action | None = None,
     optimization_step: str | None = None,
-) -> script.SmtLibScript:
-    """Run colon-separated tactics on ``smt_script`` (mutated in place)."""
+    input_path: Path | None = None,
+) -> tuple[script.SmtLibScript | None, bool]:
+    """Run colon-separated tactics. Returns ``(script, wrote_final_output)``."""
     parent = parent_action or Action("simplify-programmatic")
-    resolved = resolve_tactic(tactic, optimization_step)
-    tactics = resolved.split(":")
-    default_executor = getattr(ARGS(), "default_executor", "p")
+    groups = _pipeline_groups(tactic, optimization_step)
     deadline = time.monotonic() + float(timeout)
     step_index = 0
-    for executor, raw_list in _group_tactics(
-        tactics, default_executor=default_executor
-    ):
+    wrote_final_output = False
+    defer_input = input_path is not None and smt_script is None
+    for group_idx, (executor, raw_list) in enumerate(groups):
         match executor:
             case "p":
+                if smt_script is None:
+                    assert input_path is not None
+                    smt_script = _load_script(input_path)
                 smt_script, step_index = _run_python_passes(
                     parent,
                     smt_script,
@@ -457,15 +485,40 @@ def simplify_smt_script(
 
                 logging.info("simplifying with rust batch %s", batch_label)
 
-                smt_script = _run_rust_tactics(
-                    parent,
-                    smt_script,
-                    raw_list,
-                    timeout=remaining,
-                    profile_input=getattr(ARGS(), "input", None) or output,
-                    profile_output=output,
-                )
-                _ensure_declarations_for_asserts(smt_script)
+                batch_input_path = input_path if defer_input else None
+                defer_input = False
+                rust_out: Path | None = None
+                temp_out: Path | None = None
+                parse_output = True
+                if batch_input_path is not None:
+                    if group_idx < len(groups) - 1:
+                        fd, temp_name = tempfile.mkstemp(suffix=".smt2")
+                        os.close(fd)
+                        temp_out = Path(temp_name)
+                        rust_out = temp_out
+                    elif output is not None:
+                        rust_out = output
+                        parse_output = False
+                        wrote_final_output = True
+
+                try:
+                    smt_script = _run_rust_tactics(
+                        parent,
+                        smt_script,
+                        raw_list,
+                        timeout=remaining,
+                        profile_input=getattr(ARGS(), "input", None) or input_path or output,
+                        profile_output=output,
+                        input_path=batch_input_path,
+                        rust_output_path=rust_out,
+                        parse_output=parse_output,
+                    )
+                finally:
+                    if temp_out is not None and temp_out.is_file():
+                        temp_out.unlink()
+
+                if smt_script is not None:
+                    _ensure_declarations_for_asserts(smt_script)
                 step_index = step_end
 
                 if getattr(ARGS(), "dump_steps", False) and output is not None:
@@ -477,10 +530,15 @@ def simplify_smt_script(
                     )
                     with open_file(dump_file, "w") as out:
                         logging.info("dumping intermediate formula to %s", out.name)
-                        write_smtlib_script(smt_script, out)
+                        if smt_script is not None:
+                            write_smtlib_script(smt_script, out)
+                        elif rust_out is not None and rust_out.is_file():
+                            with open(rust_out, encoding="utf-8") as src:
+                                out.write(src.read())
 
-    _ensure_declarations_for_asserts(smt_script)
-    return smt_script
+    if smt_script is not None:
+        _ensure_declarations_for_asserts(smt_script)
+    return smt_script, wrote_final_output
 
 
 def simplify():
@@ -492,6 +550,9 @@ def simplify():
         init_stats_run(wipe=False)
         set_stats_tag(getattr(ARGS(), "stats_tag", None) or stats_tag_from_path(ARGS().input))
 
+    groups = _pipeline_groups(ARGS().tactic, optimization_step)
+    rust_first = bool(groups and groups[0][0] == "r")
+
     with Action("simplifier") as action:
         action += {
             "inputs": [ARGS().input],
@@ -501,22 +562,25 @@ def simplify():
         }
         if optimization_step:
             action += {"optimization_step": optimization_step}
-        with action.action("load"):
-            with open_file(ARGS().input, "r") as f:
-                parser = SmtLibParser()
-                logging.info(f"loading from {f.name}")
-                smt_script = parser.get_script(f)
+        smt_script: script.SmtLibScript | None = None
+        if not rust_first:
+            with action.action("load"):
+                smt_script = _load_script(ARGS().input)
+        else:
+            logging.info("deferring parse; forwarding %s to rust", ARGS().input)
 
-        smt_script = simplify_smt_script(
+        smt_script, wrote_final_output = simplify_smt_script(
             smt_script,
             tactic=ARGS().tactic,
             timeout=float(ARGS().timeout),
             output=ARGS().output,
             parent_action=action,
             optimization_step=optimization_step,
+            input_path=ARGS().input if rust_first else None,
         )
-        with action.action("dump"):
-            with open_file(ARGS().output, "w") as out:
-                logging.info(f"dumping formula to {out.name}")
-                write_smtlib_script(smt_script, out)
+        if not wrote_final_output:
+            with action.action("dump"):
+                with open_file(ARGS().output, "w") as out:
+                    logging.info(f"dumping formula to {out.name}")
+                    write_smtlib_script(smt_script, out)
         return action
