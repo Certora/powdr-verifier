@@ -69,8 +69,10 @@ def build_dict(pre: dict, mem_id: int, addr_space: int | None, post: dict | None
     for b in rows:
         by_ptr[em.expr_str(b["args"][1])].append(b)
     ptr_atom: dict[str, str] = {}
+    ptr_key: dict[str, keys.Key] = {}
     for pexpr, lst in by_ptr.items():
         k = keys.recover_key(pre, lst[0])
+        ptr_key[pexpr] = k
         if isinstance(k, keys.BaseOffset):
             var = f"ptr_{k.base}_{k.offset}"
             ptr_atom[pexpr] = var
@@ -88,6 +90,8 @@ def build_dict(pre: dict, mem_id: int, addr_space: int | None, post: dict | None
 
     sends_by_k: dict[int, list[tuple[int, str]]] = collections.defaultdict(list)
     recvs_by_k: dict[int, list[tuple[int | None, str]]] = collections.defaultdict(list)
+    class_id: dict[tuple[str, str], int] = {}
+    as_keys: dict[str, list[keys.Key]] = collections.defaultdict(list)
     interactions: list[dict[str, Any]] = []
     mem_lines: list[str] = []
     for i, b in enumerate(rows):
@@ -104,11 +108,28 @@ def build_dict(pre: dict, mem_id: int, addr_space: int | None, post: dict | None
             const = recv_bound[tscol][2] if tscol in recv_bound else None
             recvs_by_k[k].append((const, sym))
         addr = em.atom(a[0], "as")
-        ptr = ptr_atom[em.expr_str(a[1])]
+        pexpr = em.expr_str(a[1])
+        ptr = ptr_atom[pexpr]
+        rk = ptr_key[pexpr]
+        asp = keys.address_space_of(b)
+        asv = "sym" if asp is None else str(asp)
+        key = str(rk)
+        as_keys[asv].append(rk)
+        cid = class_id.setdefault((asv, key), len(class_id))
         data = [em.atom(a[j], f"b{j - 2}") for j in range(2, 6)]
         line = f"{i}: {mult}, {addr}, {ptr}, " + ", ".join(data) + f", {sym}"
         mem_lines.append(line)
-        interactions.append({"ordinal": i, "abstract_ts": sym})
+        interactions.append({
+            "ordinal": i,
+            "abstract_ts": sym,
+            "address_space": asv,
+            "key": key,
+            "alias_class": cid,
+        })
+
+    as_det = {asv: keys.classify_address_space(ks)[0] for asv, ks in as_keys.items()}
+    for row in interactions:
+        row["alias_determined"] = as_det[row["address_space"]]
 
     order_edges: list[dict[str, str]] = []
     raw_edges: list[tuple[str, str, str]] = []
@@ -167,14 +188,5 @@ def build(pre: dict, mem_id: int, addr_space: int | None, post: dict | None) -> 
 
 
 def extract_json(model: dict) -> dict:
-    """Public JSON subset (no internal ``_`` keys)."""
-    return {
-        "interactions": [
-            {"ordinal": r["ordinal"], "abstract_ts": r["abstract_ts"]}
-            for r in model["interactions"]
-        ],
-        "order_edges": [
-            {"lhs": e["lhs"], "rhs": e["rhs"]}
-            for e in model["order_edges"]
-        ],
-    }
+    """Public JSON subset (drops internal ``_`` keys)."""
+    return {k: v for k, v in model.items() if not k.startswith("_")}
