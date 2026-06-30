@@ -1,7 +1,8 @@
 //! Z3 tactic simplification over SMT-LIB scripts.
 
 use smt2::{
-    asserts_excluding_true, declared_symbol_names, extra_declarations, splice_z3_result, Script,
+    asserts_excluding_true, declared_symbol_names, extra_declarations, splice_z3_result,
+    strip_annotations_deep, Script,
 };
 use z3::{SatResult, Tactic};
 
@@ -58,6 +59,7 @@ pub fn apply(script: &Script, tactic_args: &[String]) -> Result<(Script, serde_j
 
     let processed_str = solver.to_string();
     let processed = Script::parse(&processed_str)?;
+    let processed = smt2::map_asserts(&processed, |b| Ok(strip_annotations_deep(b)))?;
 
     let prefix_names = declared_symbol_names(&parts.prefix);
     let extra = extra_declarations(&processed.commands, &prefix_names);

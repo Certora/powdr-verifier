@@ -646,6 +646,29 @@ fn peel_annotation(b: &Bool) -> Bool {
     b.clone()
 }
 
+/// Drop SMT-LIB ``(! inner attr…)`` wrappers (Z3 pattern / weight annotations).
+pub fn strip_annotations(b: &Bool) -> Bool {
+    peel_annotation(b)
+}
+
+/// Recursively remove annotation wrappers, including inside quantifier bodies.
+pub fn strip_annotations_deep(b: &Bool) -> Bool {
+    let ast = Dynamic::from_ast(b);
+    if ast.kind() == AstKind::App && decl_name(&ast.decl()) == "!" {
+        if let Some(inner) = ast.nth_child(0).and_then(|c| c.as_bool()) {
+            return strip_annotations_deep(&inner);
+        }
+    }
+    if ast.kind() == AstKind::Quantifier {
+        let bounds = quantifier_bounds(&ast);
+        let is_forall = quantifier_is_forall(&ast);
+        let body = quantifier_body_bool(&ast).expect("quantifier body");
+        let new_body = strip_annotations_deep(&peel_annotation(&body));
+        return rebuild_quantifier_dyn(is_forall, &bounds, &new_body);
+    }
+    map_bool_children(b, &mut strip_annotations_deep)
+}
+
 /// Like :func:`or_parts`, but unwraps SMT-LIB ``(! inner attr)`` around the body.
 pub fn or_body_parts(b: &Bool) -> Option<Vec<Bool>> {
     or_parts(&peel_annotation(b))
