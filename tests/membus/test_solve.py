@@ -124,6 +124,15 @@ def test_disabled_interaction_is_marked_not_matched():
     assert all(6 not in e for c in sol.cells for e in c.edges)               # never matched
 
 
+def test_disabled_via_constant_expression_mult():
+    # mult == 0 expressed as a column-free expression (not a bare int) -> still disabled
+    d = _dump()
+    d["bus_interactions"].append({"id": 1, "mult": [1, "-", 1], "args": [1, 8, 0, 0, 0, 0, FS0]})
+    sol = solve.compute(d, 1, 1)
+    assert sol.n_inputs == 2 and sol.unique is True
+    assert _row(sol, 6).kind == "disabled"
+
+
 def test_rejects_symbolic_mult():
     d = {"bus_interactions": [{"id": 1, "mult": "sel@5", "args": [1, 8, 0, 0, 0, 0, FS0]}],
          "constraints": []}

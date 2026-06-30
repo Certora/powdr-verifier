@@ -27,8 +27,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.lens.loader import machine_of
-from src.lens.metrics import mult_kind
-from src.lens.normalize import BABYBEAR_PRIME, to_signed
+from src.lens.metrics import _eval_const, mult_kind
+from src.lens.normalize import BABYBEAR_PRIME
 
 from . import keys, order
 from .busfmt import find_duplicates, memory_bis
@@ -173,8 +173,8 @@ def compute(data: Any, mem_id: int = 1, addr_space: int = 1,
             if ek is not None:
                 used_is_valid = True
                 kind = ek
-            elif isinstance(b["mult"], int) and to_signed(b["mult"]) == 0:
-                kind = "disabled"
+            elif (cv := _eval_const(b["mult"])) is not None and cv % BABYBEAR_PRIME == 0:
+                kind = "disabled"     # mult == 0 (bare int or column-free expr) -> inert
             else:
                 raise ValueError(
                     f"solve: interaction #{ordn} has unsupported multiplicity "
