@@ -51,13 +51,7 @@ fn collect_symbol_sorts(script: &Script) -> HashMap<String, DeclSort> {
 }
 
 fn infer_symbol_sort(name: &str, sorts: &HashMap<String, DeclSort>) -> DeclSort {
-    if let Some(sort) = sorts.get(name) {
-        return *sort;
-    }
-    if name.contains("memory_is") || name.contains("memory_match") {
-        return DeclSort::Bool;
-    }
-    DeclSort::Int
+    sorts.get(name).copied().unwrap_or(DeclSort::Int)
 }
 
 struct LiftWalker {
