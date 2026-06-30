@@ -461,6 +461,15 @@ pub fn has_bool_sort_leaf_dyn(ast: &Dynamic) -> bool {
     })
 }
 
+/// Debug-only: a direct ``Int`` arithmetic operand must not be Bool-sorted.
+pub fn debug_assert_direct_int_operand(n: &Int) {
+    let ast = Dynamic::from_ast(n);
+    debug_assert!(
+        ast.get_sort().kind() != SortKind::Bool,
+        "Bool variable used as direct Int arithmetic operand: {n}"
+    );
+}
+
 /// Bound constants in declaration order (outermost first), matching ``forall_const`` / Z3 text order.
 pub fn quantifier_bounds(ast: &Dynamic) -> Vec<Dynamic> {
     if ast.kind() != AstKind::Quantifier {
@@ -674,11 +683,18 @@ pub fn int_from_i128(v: i128) -> Int {
 pub fn map_bool_children(b: &Bool, f: &mut impl FnMut(&Bool) -> Bool) -> Bool {
     let ast = Dynamic::from_ast(b);
     if ast.kind() == AstKind::Quantifier {
+        let orig_names = quantifier_bound_names(&ast);
         let bounds = quantifier_bounds(&ast);
         let is_forall = quantifier_is_forall(&ast);
         let body = quantifier_body_bool(&ast).expect("quantifier body");
         let new_body = f(&body);
-        return rebuild_quantifier_dyn(is_forall, &bounds, &new_body);
+        let rebuilt = rebuild_quantifier_dyn(is_forall, &bounds, &new_body);
+        debug_assert_eq!(
+            quantifier_bound_names(&Dynamic::from_ast(&rebuilt)),
+            orig_names,
+            "quantifier rebuild changed bound variable order"
+        );
+        return rebuilt;
     }
     if let Some(name) = bool_decl_name(b) {
         match name.as_str() {
