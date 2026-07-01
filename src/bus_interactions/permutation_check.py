@@ -109,29 +109,82 @@ def _preset_force_self(presets: dict[tuple[int, int], bool], n: int, i: int) -> 
         presets[(i, j)] = False
 
 
-def _membus_solve_presets(
+def _preset_force_pair(
+    presets: dict[tuple[int, int], bool], n: int, i: int, j: int
+) -> None:
+    if i > j:
+        i, j = j, i
+    presets[(i, j)] = True
+    presets[(i, i)] = True
+    presets[(j, j)] = True
+    for k in range(i):
+        presets[(k, j)] = False
+        presets[(k, i)] = False
+    for k in range(i + 1, j):
+        presets[(k, j)] = False
+        presets[(i, k)] = False
+    for k in range(j + 1, n):
+        presets[(j, k)] = False
+        presets[(i, k)] = False
+
+
+def _membus_refine_with_solve(
     presets: dict[tuple[int, int], bool],
     solve: dict,
     n: int,
     *,
     log_prefix: str | None = None,
 ) -> set[int]:
-    """Seed ``presets`` from ``membus solve``: each listed interaction self-matches."""
+    """Seed ``presets`` from ``membus solve``: I/O self-matches and read/send pairs."""
     covered: set[int] = set()
-
     prefix = f"{log_prefix} " if log_prefix else ""
-    for row in solve.get("interactions") or []:
+
+    rows = solve.get("interactions") or []
+
+    seen_match: set[tuple[int, int]] = set()
+
+    for row in rows:
         ordn = row.get("ordinal")
         if ordn is None or ordn >= n:
             continue
-        _preset_force_self(presets, n, ordn)
-        covered.add(ordn)
-        logging.info("%smembus solve self-match: interaction %d", prefix, ordn)
 
+        match row:
+            case {"io": "in" | "out"}:
+                _preset_force_self(presets, n, ordn)
+                covered.add(ordn)
+                logging.info(
+                    "%smembus solve self-match: interaction %d",
+                    prefix,
+                    ordn,
+                )
+            case {"read_by": int(recv_ordn) | [int(recv_ordn)]}:
+                assert recv_ordn > ordn, (
+                    f"membus solve read_by[{recv_ordn}] on interaction {ordn} "
+                    f"must refer to a later ordinal"
+                )
+                assert recv_ordn < n
+                seen_match.add((ordn, recv_ordn))
+                _preset_force_pair(presets, n, ordn, recv_ordn)
+                logging.info(
+                    "%smembus solve pair match: (%d, %d) read_by",
+                    prefix,
+                    ordn,
+                    recv_ordn,
+                )
+            case {"reads_from": int(send_ordn) | [int(send_ordn)]}:
+                assert send_ordn < ordn, (
+                    f"membus solve reads_from {send_ordn} on interaction {ordn} "
+                    f"must refer to an earlier ordinal"
+                )
+                assert send_ordn < n
+                assert (send_ordn, ordn) in seen_match
+                seen_match.remove((send_ordn, ordn))
+
+    assert not seen_match, f"membus solve saw unmatched pairs: {seen_match}"
     return covered
 
 
-def _membus_extract_refine_presets(
+def _membus_refine_with_extract(
     presets: dict[tuple[int, int], bool],
     extract: dict,
     n: int,
@@ -236,18 +289,7 @@ def _membus_extract_refine_presets(
                     continue
                 if i > j:
                     i, j = j, i
-                presets[(i, j)] = True
-                presets[(i, i)] = True
-                presets[(j, j)] = True
-                for k in range(i):
-                    presets[(k, j)] = False
-                    presets[(k, i)] = False
-                for k in range(i + 1, j):
-                    presets[(k, j)] = False
-                    presets[(i, k)] = False
-                for k in range(j + 1, n):
-                    presets[(j, k)] = False
-                    presets[(i, k)] = False
+                _preset_force_pair(presets, n, i, j)
                 remove_candidate(i)
                 remove_candidate(j)
                 logging.info(
@@ -258,6 +300,85 @@ def _membus_extract_refine_presets(
                     gid,
                 )
                 changed = True
+
+
+@dataclass(frozen=True)
+class _MembusParsedKey:
+    """Parsed membus ``key`` string: ``const N`` or ``base+offset``."""
+
+    kind: str
+    const_value: int | None = None
+    base: str | None = None
+    offset: int | None = None
+
+
+def _parse_membus_key(key: str | None) -> _MembusParsedKey | None:
+    if not key:
+        return None
+    if key.startswith("const "):
+        try:
+            return _MembusParsedKey("const", const_value=int(key[6:].strip()))
+        except ValueError:
+            return None
+    if "+" in key and not key.startswith("unresolved"):
+        base, off_s = key.rsplit("+", 1)
+        if not base:
+            return None
+        try:
+            return _MembusParsedKey("base_offset", base=base, offset=int(off_s))
+        except ValueError:
+            return None
+    return None
+
+
+def _membus_kill_distinct_key_pairs(
+    presets: dict[tuple[int, int], bool],
+    entries: list[tuple[int, int]],
+) -> int:
+    """Kill ``(id_i, id_j)`` when ``entries`` lists distinct const/offset values."""
+    killed = 0
+    for (id_a, val_a), (id_b, val_b) in itertools.combinations(entries, 2):
+        if val_a == val_b:
+            continue
+        assert id_a < id_b
+        presets[(id_a, id_b)] = False
+        killed += 1
+    return killed
+
+
+def _membus_refine_with_info(
+    presets: dict[tuple[int, int], bool],
+    extract: dict,
+    n: int,
+    *,
+    log_prefix: str | None = None,
+) -> None:
+    """Kill off-diagonal pairs with provably distinct membus keys."""
+    rows = extract.get("interactions") or []
+    if n != len(rows):
+        return
+
+    prefix = f"{log_prefix} " if log_prefix else ""
+    by_const: list[tuple[int, int]] = []
+    by_base: dict[str, list[tuple[int, int]]] = collections.defaultdict(list)
+
+    for i, row in enumerate(rows):
+        pk = _parse_membus_key(row.get("key"))
+        if pk is None:
+            continue
+        match pk.kind:
+            case "const":
+                by_const.append((i, pk.const_value))
+            case "base_offset":
+                assert pk.base is not None and pk.offset is not None
+                by_base[pk.base].append((i, pk.offset))
+
+    killed = _membus_kill_distinct_key_pairs(presets, by_const)
+    for entries in by_base.values():
+        killed += _membus_kill_distinct_key_pairs(presets, entries)
+
+    if killed:
+        logging.info("%smembus info refine: killed %d off-diagonal pairs", prefix, killed)
 
 
 def _membus_match_presets(
@@ -278,13 +399,13 @@ def _membus_match_presets(
 
     solve = fetch_solve_json(source_path)
     if solve is not None:
-        solve_covered = _membus_solve_presets(
+        solve_covered = _membus_refine_with_solve(
             presets, solve, n, log_prefix=log_prefix
         )
 
     extract = fetch_extract_json(source_path)
     if extract is not None:
-        _membus_extract_refine_presets(
+        _membus_refine_with_extract(
             presets,
             extract,
             n,
@@ -293,6 +414,9 @@ def _membus_match_presets(
             p,
             solve_covered=solve_covered,
             log_prefix=log_prefix,
+        )
+        _membus_refine_with_info(
+            presets, extract, n, log_prefix=log_prefix
         )
     return presets
 
