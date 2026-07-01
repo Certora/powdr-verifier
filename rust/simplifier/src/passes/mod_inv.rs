@@ -1,9 +1,9 @@
 //! Interpret ``uf_mod_inv`` as field inverse constraints.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use smt2::ast_util::{decl_name, rebuild_app};
-use smt2::{Script, SmtCommand};
+use smt2::{IntTermSet, Script, SmtCommand};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 use crate::expr_util::AssertBuildCtx;
 
@@ -96,7 +96,8 @@ fn contains_mod_inv_bool(b: &Bool) -> bool {
 struct FallbackRewriter {
     field: i128,
     fresh_counter: usize,
-    replacement_by_term: HashMap<String, Int>,
+    replacement_by_term: IntTermSet,
+    replacement_symbols: Vec<Int>,
     new_symbols: Vec<String>,
     constraints: Vec<Bool>,
     touched: bool,
@@ -107,10 +108,26 @@ impl FallbackRewriter {
         Self {
             field,
             fresh_counter: 0,
-            replacement_by_term: HashMap::new(),
+            replacement_by_term: IntTermSet::new(),
+            replacement_symbols: Vec::new(),
             new_symbols: Vec::new(),
             constraints: Vec::new(),
             touched: false,
+        }
+    }
+
+    fn replacement_for_term(&self, term: &Int) -> Option<Int> {
+        self.replacement_by_term
+            .index_of(term)
+            .map(|i| self.replacement_symbols[i].clone())
+    }
+
+    fn record_replacement(&mut self, term: Int, replacement: Int) {
+        let i = self.replacement_by_term.insert(term);
+        if i == self.replacement_symbols.len() {
+            self.replacement_symbols.push(replacement);
+        } else {
+            self.replacement_symbols[i] = replacement;
         }
     }
 
@@ -134,9 +151,8 @@ impl FallbackRewriter {
         if node.kind() == AstKind::App && decl_name(&node.decl()) == UF_MOD_INV && node.num_children() == 1 {
             if let Some(arg) = node.nth_child(0).and_then(|c| c.as_int()) {
                 let t = self.rewrite_int(&arg);
-                let key = format!("(uf_mod_inv {t})");
-                if let Some(repl) = self.replacement_by_term.get(&key) {
-                    return Dynamic::from_ast(repl);
+                if let Some(repl) = self.replacement_for_term(&t) {
+                    return Dynamic::from_ast(&repl);
                 }
                 let replacement = self.fresh_symbol();
                 let p = Int::from_i64(self.field as i64);
@@ -146,7 +162,7 @@ impl FallbackRewriter {
                 let premise = mod_t.eq(&zero).not();
                 let concl = Int::mul(&[&replacement, &t]).modulo(&p).eq(&one);
                 self.constraints.push(premise.implies(&concl));
-                self.replacement_by_term.insert(key, replacement.clone());
+                self.record_replacement(t, replacement.clone());
                 self.touched = true;
                 return Dynamic::from_ast(&replacement);
             }

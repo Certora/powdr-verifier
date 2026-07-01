@@ -3,7 +3,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::time::Instant;
 
-use smt2::{int_from_i128, map_asserts, map_bool_children, unwrap_zero_mod_eq, Script};
+use smt2::{int_from_i128, int_value, is_int_numeral, map_asserts, map_bool_children, unwrap_zero_mod_eq, Script};
 use z3::ast::{Ast, AstKind, Dynamic, Int};
 use z3::ast::Bool;
 use z3::{FuncDecl, SortKind};
@@ -328,7 +328,7 @@ fn linear_add(
 ) -> bool {
     let dyn_ = Dynamic::from_ast(e);
     if is_int_numeral(&dyn_) {
-        *const_ += c * z3_int_value(e);
+        *const_ += c * int_value(e).unwrap_or(0);
         return true;
     }
     if is_int_var(&dyn_) {
@@ -358,7 +358,7 @@ fn linear_add(
                 for ch in kids {
                     let ch_int = ch.as_int().unwrap();
                     if is_int_numeral(&Dynamic::from_ast(&ch_int)) {
-                        coeff = (coeff * z3_int_value(&ch_int)).rem_euclid(p);
+                        coeff = (coeff * int_value(&ch_int).unwrap_or(0)).rem_euclid(p);
                     } else if rest.is_none() {
                         rest = Some(ch_int);
                     } else {
@@ -380,7 +380,7 @@ fn linear_add(
 fn poly_in_var_z3(e: &Int, var: &str, p: i128, max_deg: usize) -> Option<Vec<i128>> {
     let dyn_ = Dynamic::from_ast(e);
     if is_int_numeral(&dyn_) {
-        return Some(vec![z3_int_value(e).rem_euclid(p)]);
+        return Some(vec![int_value(e).unwrap_or(0).rem_euclid(p)]);
     }
     if is_int_var(&dyn_) {
         return if z3_symbol_name(e) == var {
@@ -509,10 +509,6 @@ fn decl_name(decl: &FuncDecl) -> String {
     decl.name().as_str().to_string()
 }
 
-fn is_int_numeral(ast: &Dynamic) -> bool {
-    ast.kind() == AstKind::Numeral && ast.get_sort().kind() == SortKind::Int
-}
-
 fn is_int_var(ast: &Dynamic) -> bool {
     ast.kind() == AstKind::App
         && ast.is_const()
@@ -522,13 +518,6 @@ fn is_int_var(ast: &Dynamic) -> bool {
 
 fn z3_symbol_name(e: &Int) -> String {
     Dynamic::from_ast(e).decl().name().as_str().to_string()
-}
-
-fn z3_int_value(e: &Int) -> i128 {
-    if let Some(v) = e.as_i64() {
-        return v as i128;
-    }
-    e.to_string().parse().unwrap_or(0)
 }
 
 #[cfg(test)]

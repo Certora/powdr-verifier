@@ -41,7 +41,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut clusters_probed = 0usize;
     let mut flag_vars_total = 0usize;
     let mut flag_local_total = 0usize;
-    let mut batch: BTreeSet<String> = BTreeSet::new();
+    let mut batch: Vec<Bool> = Vec::new();
     let mut cluster_stats = Vec::new();
 
     while !remaining.is_empty() && symbols_probed < MAX_PAIRS {
@@ -101,7 +101,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     for cmd in &script.commands {
         if !inserted && cmd.name() == "check-sat" {
             for fact in &batch {
-                ctx.push_raw(&mut commands, &format!("(assert {fact})"))?;
+                ctx.push_assert(&mut commands, fact)?;
             }
             inserted = true;
         }
@@ -113,7 +113,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     }
     if !inserted {
         for fact in &batch {
-            ctx.push_raw(&mut commands, &format!("(assert {fact})"))?;
+            ctx.push_assert(&mut commands, fact)?;
         }
     }
 
@@ -295,11 +295,19 @@ struct ProbeOutcomes {
     excluded: usize,
 }
 
+fn batch_insert(batch: &mut Vec<Bool>, fact: Bool) -> bool {
+    if batch.iter().any(|b| b.ast_eq(&fact)) {
+        return false;
+    }
+    batch.push(fact);
+    true
+}
+
 fn probe_cluster(
     prefix: &str,
     rel: &[Bool],
     cluster_choices: &BTreeMap<String, Vec<i128>>,
-    batch: &mut BTreeSet<String>,
+    batch: &mut Vec<Bool>,
 ) -> ProbeOutcomes {
     let mut out = ProbeOutcomes {
         probes_sat: 0,
@@ -307,16 +315,13 @@ fn probe_cluster(
         probes_unknown: 0,
         excluded: 0,
     };
-    let mut base = prefix.to_string();
-    for a in rel {
-        base.push_str("(assert ");
-        base.push_str(&a.to_string());
-        base.push_str(")\n");
-    }
 
     let solver = z3::Solver::new();
     set_rlimit(&solver);
-    solver.from_string(base.as_bytes());
+    solver.from_string(prefix.as_bytes());
+    for a in rel {
+        solver.assert(a);
+    }
 
     for (sym, vals) in cluster_choices {
         for v in vals {
@@ -327,10 +332,9 @@ fn probe_cluster(
                 Some(false) => {
                     out.probes_unsat += 1;
                     let ne = probe.not();
-                    let ne_text = ne.to_string();
-                    if batch.insert(ne_text.clone()) {
+                    if batch_insert(batch, ne.clone()) {
                         out.excluded += 1;
-                        solver.from_string(format!("(assert {ne_text})\n").as_bytes());
+                        solver.assert(&ne);
                     }
                 }
                 None => out.probes_unknown += 1,
@@ -348,8 +352,7 @@ fn set_rlimit(solver: &z3::Solver) {
 
 fn probe_assumption(solver: &z3::Solver, assumption: &Bool) -> Option<bool> {
     solver.push();
-    let s = format!("(assert {})\n", assumption.to_string());
-    solver.from_string(s.as_bytes());
+    solver.assert(assumption);
     let r = solver.check();
     solver.pop(1);
     match r {

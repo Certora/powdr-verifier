@@ -4,8 +4,9 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use smt2::{
-    assert_commands, contains_bound_var_dyn, debug_assert_direct_int_operand, declare_fun_name_cmd,
-    int_from_i128, int_value, int_value_dyn, map_asserts, map_bool_children, Script,
+    assert_commands, ast_hash_int, contains_bound_var_dyn, debug_assert_direct_int_operand,
+    declare_fun_name_cmd, int_from_i128, int_value, int_value_dyn, map_asserts, map_bool_children,
+    IntTermSet, Script,
 };
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 use z3::SortKind;
@@ -73,15 +74,9 @@ pub fn field_mod() -> Option<i128> {
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let p = field_mod();
     let bool_symbols = collect_bool_symbols(script);
-    let vars = collect_variables(script, p, &bool_symbols);
-    let var_index: HashMap<String, usize> = vars
-        .iter()
-        .enumerate()
-        .map(|(i, v)| (term_key(v), i))
-        .collect();
+    let var_terms = collect_variables(script, p, &bool_symbols);
     let ctx = NormalizeCtx {
-        var_index: &var_index,
-        vars: &vars,
+        var_terms: &var_terms,
         field_mod: p,
         bool_symbols: &bool_symbols,
     };
@@ -99,14 +94,13 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let stats = serde_json::json!({
         "asserts": total,
         "asserts_changed": changed,
-        "int_vars": vars.len(),
+        "int_vars": var_terms.len(),
     });
     Ok((out, stats))
 }
 
 struct NormalizeCtx<'a> {
-    var_index: &'a HashMap<String, usize>,
-    vars: &'a [Int],
+    var_terms: &'a IntTermSet,
     field_mod: Option<i128>,
     bool_symbols: &'a HashSet<String>,
 }
@@ -127,8 +121,138 @@ fn int_literal_mod(t: &Int, modulo: Option<i128>) -> Option<i128> {
     int_value(t).map(|v| coeff_mod(v, m))
 }
 
-fn term_key(t: &Int) -> String {
-    t.to_string()
+fn collect_variables(
+    script: &Script,
+    field_mod: Option<i128>,
+    bool_symbols: &HashSet<String>,
+) -> IntTermSet {
+    let mut terms = IntTermSet::new();
+    let mut seen: Vec<Dynamic> = Vec::new();
+
+    fn visit(
+        n: &Dynamic,
+        field_mod: Option<i128>,
+        bool_symbols: &HashSet<String>,
+        terms: &mut IntTermSet,
+        seen: &mut Vec<Dynamic>,
+    ) {
+        if seen.iter().any(|d| d.ast_eq(n)) {
+            return;
+        }
+        seen.push(n.clone());
+
+        if int_value_dyn(n).is_some() {
+            return;
+        }
+
+        if n.kind() == AstKind::Var {
+            return;
+        }
+
+        if let Some(name) = smt2::symbol_name_dyn(n) {
+            if bool_symbols.contains(&name) {
+                return;
+            }
+        }
+
+        if n.kind() == AstKind::Quantifier {
+            if let Some(body) = smt2::quantifier_body(n) {
+                visit(&body, field_mod, bool_symbols, terms, seen);
+            }
+            return;
+        }
+
+        if let Some(int_n) = n.as_int() {
+            if n.kind() == AstKind::App {
+                let head = smt2::decl_name(&n.decl());
+                if let Some(p) = field_mod {
+                    if head == "mod"
+                        && n.num_children() == 2
+                        && n
+                            .nth_child(1)
+                            .and_then(|m| int_value_dyn(&m))
+                            .map(|m| m == p)
+                            .unwrap_or(false)
+                    {
+                        if let Some(body) = n.nth_child(0) {
+                            visit(&body, field_mod, bool_symbols, terms, seen);
+                            return;
+                        }
+                    }
+                }
+                if is_combinator(&head) {
+                    for i in 0..n.num_children() {
+                        if let Some(ch) = n.nth_child(i) {
+                            visit(&ch, field_mod, bool_symbols, terms, seen);
+                        }
+                    }
+                    return;
+                }
+            }
+            debug_assert!(
+                n.get_sort().kind() != SortKind::Bool,
+                "polynomial generator must not be Bool-sorted"
+            );
+            if let Some(name) = smt2::symbol_name_dyn(n) {
+                debug_assert!(
+                    !bool_symbols.contains(&name) && !symbol_is_bool_name(&name),
+                    "Bool symbol registered as polynomial generator: {name}"
+                );
+            }
+            terms.insert(int_n);
+            return;
+        }
+
+        if n.kind() == AstKind::App {
+            let head = smt2::decl_name(&n.decl());
+            if is_bool_or_relation_head(&head) {
+                for i in 0..n.num_children() {
+                    if let Some(ch) = n.nth_child(i) {
+                        visit(&ch, field_mod, bool_symbols, terms, seen);
+                    }
+                }
+                return;
+            }
+        }
+        for i in 0..n.num_children() {
+            if let Some(ch) = n.nth_child(i) {
+                visit(&ch, field_mod, bool_symbols, terms, seen);
+            }
+        }
+    }
+
+    for cmd in assert_commands(script) {
+        if let Some(b) = cmd.assert_bool() {
+            visit(
+                &Dynamic::from_ast(b),
+                field_mod,
+                bool_symbols,
+                &mut terms,
+                &mut seen,
+            );
+        }
+    }
+
+    sort_terms(terms)
+}
+
+fn term_sort_key(t: &Int) -> (u8, String) {
+    let dyn_ = Dynamic::from_ast(t);
+    if let Some(name) = smt2::symbol_name_dyn(&dyn_) {
+        (0, name)
+    } else {
+        (1, format!("{:016x}", ast_hash_int(t)))
+    }
+}
+
+fn sort_terms(terms: IntTermSet) -> IntTermSet {
+    let mut ordered: Vec<Int> = terms.terms().to_vec();
+    ordered.sort_by(|a, b| term_sort_key(a).cmp(&term_sort_key(b)));
+    let mut sorted = IntTermSet::new();
+    for t in ordered {
+        sorted.insert(t);
+    }
+    sorted
 }
 
 fn is_combinator(head: &str) -> bool {
@@ -162,128 +286,6 @@ fn unwrap_field_mod_body(t: &Int, p: i128) -> Int {
         .nth_child(0)
         .and_then(|c| c.as_int())
         .unwrap_or_else(|| t.clone())
-}
-
-fn collect_variables(
-    script: &Script,
-    field_mod: Option<i128>,
-    bool_symbols: &HashSet<String>,
-) -> Vec<Int> {
-    let mut gens: HashSet<String> = HashSet::new();
-    let mut gen_terms: HashMap<String, Int> = HashMap::new();
-    let mut seen: HashSet<String> = HashSet::new();
-
-    fn visit(
-        n: &Dynamic,
-        field_mod: Option<i128>,
-        bool_symbols: &HashSet<String>,
-        gens: &mut HashSet<String>,
-        gen_terms: &mut HashMap<String, Int>,
-        seen: &mut HashSet<String>,
-    ) {
-        let key = n.to_string();
-        if seen.contains(&key) {
-            return;
-        }
-        seen.insert(key.clone());
-
-        if int_value_dyn(n).is_some() {
-            return;
-        }
-
-        if n.kind() == AstKind::Var {
-            return;
-        }
-
-        if let Some(name) = smt2::symbol_name_dyn(n) {
-            if bool_symbols.contains(&name) {
-                return;
-            }
-        }
-
-        if n.kind() == AstKind::Quantifier {
-            if let Some(body) = smt2::quantifier_body(n) {
-                visit(&body, field_mod, bool_symbols, gens, gen_terms, seen);
-            }
-            return;
-        }
-
-        if let Some(int_n) = n.as_int() {
-            if n.kind() == AstKind::App {
-                let head = smt2::decl_name(&n.decl());
-                if let Some(p) = field_mod {
-                    if head == "mod"
-                        && n.num_children() == 2
-                        && n
-                            .nth_child(1)
-                            .and_then(|m| int_value_dyn(&m))
-                            .map(|m| m == p)
-                            .unwrap_or(false)
-                    {
-                        if let Some(body) = n.nth_child(0) {
-                            visit(&body, field_mod, bool_symbols, gens, gen_terms, seen);
-                            return;
-                        }
-                    }
-                }
-                if is_combinator(&head) {
-                    for i in 0..n.num_children() {
-                        if let Some(ch) = n.nth_child(i) {
-                            visit(&ch, field_mod, bool_symbols, gens, gen_terms, seen);
-                        }
-                    }
-                    return;
-                }
-            }
-            gens.insert(key.clone());
-            debug_assert!(
-                n.get_sort().kind() != SortKind::Bool,
-                "polynomial generator must not be Bool-sorted: {key}"
-            );
-            if let Some(name) = smt2::symbol_name_dyn(n) {
-                debug_assert!(
-                    !bool_symbols.contains(&name) && !symbol_is_bool_name(&name),
-                    "Bool symbol registered as polynomial generator: {name}"
-                );
-            }
-            gen_terms.insert(key, int_n);
-            return;
-        }
-
-        if n.kind() == AstKind::App {
-            let head = smt2::decl_name(&n.decl());
-            if is_bool_or_relation_head(&head) {
-                for i in 0..n.num_children() {
-                    if let Some(ch) = n.nth_child(i) {
-                        visit(&ch, field_mod, bool_symbols, gens, gen_terms, seen);
-                    }
-                }
-                return;
-            }
-        }
-        for i in 0..n.num_children() {
-            if let Some(ch) = n.nth_child(i) {
-                visit(&ch, field_mod, bool_symbols, gens, gen_terms, seen);
-            }
-        }
-    }
-
-    for cmd in assert_commands(script) {
-        if let Some(b) = cmd.assert_bool() {
-            visit(
-                &Dynamic::from_ast(b),
-                field_mod,
-                bool_symbols,
-                &mut gens,
-                &mut gen_terms,
-                &mut seen,
-            );
-        }
-    }
-
-    let mut keys: Vec<String> = gens.into_iter().collect();
-    keys.sort();
-    keys.into_iter().map(|k| gen_terms.remove(&k).unwrap()).collect()
 }
 
 fn mono_degree(m: &Monomial) -> usize {
@@ -408,7 +410,7 @@ fn relation_modular(lhs: &Int, rhs: &Int, p: i128) -> Option<bool> {
     None
 }
 
-fn expr_to_poly(n: &Int, var_index: &HashMap<String, usize>, modulo: Option<i128>) -> Option<Poly> {
+fn expr_to_poly(n: &Int, var_terms: &IntTermSet, modulo: Option<i128>) -> Option<Poly> {
     if let Some(m) = int_literal_mod(n, modulo).or_else(|| int_value(n)) {
         return if m == 0 {
             Some(Poly::new())
@@ -428,14 +430,14 @@ fn expr_to_poly(n: &Int, var_index: &HashMap<String, usize>, modulo: Option<i128
         "+" => {
             let mut acc = Poly::new();
             for ch in dyn_.children() {
-                let q = expr_to_poly(&ch.as_int()?, var_index, modulo)?;
+                let q = expr_to_poly(&ch.as_int()?, var_terms, modulo)?;
                 acc = poly_add(&acc, &q, 1, modulo);
             }
             Some(acc)
         }
         "-" if dyn_.num_children() == 1 => {
             let ch = dyn_.nth_child(0)?.as_int()?;
-            expr_to_poly(&ch, var_index, modulo).map(|mut p| {
+            expr_to_poly(&ch, var_terms, modulo).map(|mut p| {
                 for v in p.values_mut() {
                     *v = -*v;
                     if let Some(m) = modulo {
@@ -447,24 +449,20 @@ fn expr_to_poly(n: &Int, var_index: &HashMap<String, usize>, modulo: Option<i128
             })
         }
         "-" if dyn_.num_children() == 2 => {
-            let pa = expr_to_poly(&dyn_.nth_child(0)?.as_int()?, var_index, modulo)?;
-            let pb = expr_to_poly(&dyn_.nth_child(1)?.as_int()?, var_index, modulo)?;
+            let pa = expr_to_poly(&dyn_.nth_child(0)?.as_int()?, var_terms, modulo)?;
+            let pb = expr_to_poly(&dyn_.nth_child(1)?.as_int()?, var_terms, modulo)?;
             Some(poly_add(&pa, &pb, -1, modulo))
         }
         "*" => {
             let mut acc = Poly::from([(Vec::new(), 1i128)]);
             for ch in dyn_.children() {
-                let q = expr_to_poly(&ch.as_int()?, var_index, modulo)?;
+                let q = expr_to_poly(&ch.as_int()?, var_terms, modulo)?;
                 acc = poly_mul(&acc, &q, modulo);
             }
             Some(acc)
         }
         _ => {
-            let key = term_key(n);
-            if var_index.get(&key).is_none() {
-                return None;
-            }
-            let idx = *var_index.get(&key)?;
+            let idx = var_terms.index_of(n)?;
             Some(HashMap::from([(vec![idx as u32], 1)]))
         }
     }
@@ -496,7 +494,7 @@ fn int_add(args: &[Int]) -> Int {
     Int::add(&args.iter().collect::<Vec<_>>())
 }
 
-fn poly_to_expr(poly: &Poly, vars: &[Int]) -> Int {
+fn poly_to_expr(poly: &Poly, var_terms: &IntTermSet) -> Int {
     if poly.is_empty() {
         return int_from_i128(0);
     }
@@ -508,7 +506,10 @@ fn poly_to_expr(poly: &Poly, vars: &[Int]) -> Int {
         if c == 0 {
             continue;
         }
-        let mono_factors: Vec<Int> = e.iter().map(|&idx| vars[idx as usize].clone()).collect();
+        let mono_factors: Vec<Int> = e
+            .iter()
+            .map(|&idx| var_terms.get(idx as usize).cloned().unwrap())
+            .collect();
         let term = if e.is_empty() {
             int_from_i128(c)
         } else if c == 1 {
@@ -533,11 +534,11 @@ fn poly_to_expr(poly: &Poly, vars: &[Int]) -> Int {
 fn poly_diff_poly(
     la: &Int,
     lb: &Int,
-    var_index: &HashMap<String, usize>,
+    var_terms: &IntTermSet,
     modulo: Option<i128>,
 ) -> Option<Poly> {
-    let pla = expr_to_poly(la, var_index, modulo)?;
-    let plb = expr_to_poly(lb, var_index, modulo)?;
+    let pla = expr_to_poly(la, var_terms, modulo)?;
+    let plb = expr_to_poly(lb, var_terms, modulo)?;
     Some(poly_add(&pla, &plb, -1, modulo))
 }
 
@@ -608,10 +609,6 @@ fn rescale_gcd(poly: Poly) -> Poly {
         .collect()
 }
 
-fn text_has_bool_marker(s: &str) -> bool {
-    s.contains("memory_match") || s.contains("memory_is")
-}
-
 fn relation_poly_diff_plain(
     lhs: &Int,
     rhs: &Int,
@@ -626,9 +623,6 @@ fn relation_poly_diff_plain(
     if expr_mentions_bound_name(&Dynamic::from_ast(lhs), bound_names)
         || expr_mentions_bound_name(&Dynamic::from_ast(rhs), bound_names)
     {
-        return None;
-    }
-    if text_has_bool_marker(&lhs.to_string()) || text_has_bool_marker(&rhs.to_string()) {
         return None;
     }
     if contains_bool_symbol(&Dynamic::from_ast(lhs), ctx.bool_symbols)
@@ -649,10 +643,10 @@ fn relation_poly_diff_plain(
         } else {
             rhs.clone()
         };
-        let diff = poly_diff_poly(&la, &lb, ctx.var_index, modulo)?;
+        let diff = poly_diff_poly(&la, &lb, ctx.var_terms, modulo)?;
         return Some((diff, modular));
     }
-    let diff = poly_diff_poly(lhs, rhs, ctx.var_index, None)?;
+    let diff = poly_diff_poly(lhs, rhs, ctx.var_terms, None)?;
     Some((diff, false))
 }
 
@@ -674,9 +668,9 @@ fn normalize_int_rel_gcd(
     let rep = if diff.is_empty() {
         int_from_i128(0)
     } else if modular {
-        poly_to_expr(&rescale_gcd(diff), ctx.vars)
+        poly_to_expr(&rescale_gcd(diff), ctx.var_terms)
     } else {
-        poly_to_expr(&rescale_gcd(diff), ctx.vars)
+        poly_to_expr(&rescale_gcd(diff), ctx.var_terms)
     };
     if modular {
         Some(wrap_mod_expr(rep, ctx.field_mod?))
@@ -697,9 +691,9 @@ fn normalize_equals(
     } else if modular {
         let p = ctx.field_mod?;
         let scaled = rescale_monic(diff.clone(), p).unwrap_or_else(|| rescale_gcd(diff));
-        poly_to_expr(&scaled, ctx.vars)
+        poly_to_expr(&scaled, ctx.var_terms)
     } else {
-        poly_to_expr(&rescale_gcd(diff), ctx.vars)
+        poly_to_expr(&rescale_gcd(diff), ctx.var_terms)
     };
     if modular {
         Some(field_eq(rep, ctx.field_mod?))

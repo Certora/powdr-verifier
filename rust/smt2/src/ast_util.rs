@@ -1,6 +1,7 @@
 //! Thin Z3 AST helpers (domain-specific; generic ops use `z3::ast` directly).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
@@ -53,11 +54,107 @@ pub fn int_const_name(ast: &Dynamic) -> Option<String> {
     }
 }
 
+pub fn ast_hash_dyn(ast: &Dynamic) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    ast.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub fn ast_hash_bool(b: &Bool) -> u64 {
+    ast_hash_dyn(&Dynamic::from_ast(b))
+}
+
+pub fn ast_hash_int(i: &Int) -> u64 {
+    ast_hash_dyn(&Dynamic::from_ast(i))
+}
+
+/// Deduplicated Int terms with structural lookup via ``ast_hash`` + ``ast_eq``.
+#[derive(Clone)]
+pub struct IntTermSet {
+    terms: Vec<Int>,
+    hash_to_idx: HashMap<u64, usize>,
+}
+
+impl IntTermSet {
+    pub fn new() -> Self {
+        Self {
+            terms: Vec::new(),
+            hash_to_idx: HashMap::new(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.terms.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.terms.is_empty()
+    }
+
+    pub fn terms(&self) -> &[Int] {
+        &self.terms
+    }
+
+    pub fn contains(&self, term: &Int) -> bool {
+        self.index_of(term).is_some()
+    }
+
+    pub fn index_of(&self, term: &Int) -> Option<usize> {
+        let id = ast_hash_int(term);
+        if let Some(&i) = self.hash_to_idx.get(&id) {
+            if self.terms[i].ast_eq(term) {
+                return Some(i);
+            }
+        }
+        self.terms
+            .iter()
+            .position(|t| t.ast_eq(term))
+    }
+
+    /// Returns the index of ``term`` (existing or newly inserted).
+    pub fn insert(&mut self, term: Int) -> usize {
+        if let Some(i) = self.index_of(&term) {
+            return i;
+        }
+        let i = self.terms.len();
+        let id = ast_hash_int(&term);
+        self.terms.push(term);
+        self.hash_to_idx.insert(id, i);
+        i
+    }
+
+    pub fn get(&self, index: usize) -> Option<&Int> {
+        self.terms.get(index)
+    }
+}
+
+impl Default for IntTermSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn int_value(e: &Int) -> Option<i128> {
     if let Some(v) = e.as_i64() {
         return Some(v as i128);
     }
-    e.to_string().parse().ok()
+    let dyn_ = Dynamic::from_ast(e);
+    if !is_int_numeral(&dyn_) {
+        return None;
+    }
+    unsafe {
+        let ctx = e.get_ctx().get_z3_context();
+        let ast = e.get_z3_ast();
+        if !Z3_is_numeral_ast(ctx, ast) {
+            return None;
+        }
+        let ptr = Z3_get_numeral_string(ctx, ast);
+        if ptr.is_null() {
+            return None;
+        }
+        let s = std::ffi::CStr::from_ptr(ptr).to_string_lossy();
+        parse_int_literal(&s)
+    }
 }
 
 pub fn int_value_dyn(ast: &Dynamic) -> Option<i128> {
