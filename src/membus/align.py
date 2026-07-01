@@ -81,12 +81,25 @@ class Alignment:
         }
 
 
-def _canon_key(bi: dict) -> Any:
-    """(cell, kind, canonical timestamp) — exact representation, à la `lens diff`."""
-    return (_mem_cell(bi), *_mem_order(bi))
+def _eff_kind(bi: dict, aiv: bool) -> str:
+    """Effective send/recv, normalizing the openvm activation selector like `solve`:
+    the final APC gates every interaction by `±is_valid`, which `assume_is_valid`
+    resolves to a plain send/recv."""
+    k = mult_kind(bi["mult"])
+    if k not in ("send", "recv") and aiv:
+        ek = solve._kind_assuming_is_valid(bi["mult"])
+        if ek is not None:
+            return ek
+    return k
 
 
-def _vtime_key(bi: dict, soff: dict) -> Any:
+def _canon_key(bi: dict, aiv: bool) -> Any:
+    """(cell, kind, canonical timestamp) — exact representation, à la `lens diff`,
+    with the multiplicity is_valid-normalized so the final APC matches."""
+    return (_mem_cell(bi), _eff_kind(bi, aiv), _mem_order(bi)[1])
+
+
+def _vtime_key(bi: dict, soff: dict, aiv: bool) -> Any:
     """(cell, 'send', VIRTUAL TIME) for a send whose ts resolves, else None.
 
     Only sends need this: `inlining` rewrites send timestamps (`from_state_K` ->
@@ -94,7 +107,7 @@ def _vtime_key(bi: dict, soff: dict) -> Any:
     alone. Virtual time (from `send_offsets`) is representation-independent, so an
     inlined send still matches its pre-inline self.
     """
-    if mult_kind(bi["mult"]) != "send":
+    if _eff_kind(bi, aiv) != "send":
         return None
     ts = bi["args"][6]
     col = order.ts_col(ts)
@@ -115,7 +128,7 @@ def _index(rows_idx, keyfn, side: str) -> dict[Any, int]:
     return idx
 
 
-def _cross_match(B, soff_b, A, soff_a):
+def _cross_match(B, soff_b, A, soff_a, aiv):
     """Match before<->after interactions. Returns (kept: before_ord->after_ord,
     removed: set[before_ord], added: list[after_ord]).
 
@@ -124,12 +137,12 @@ def _cross_match(B, soff_b, A, soff_a):
     which rewrites send timestamps). Two tiers keep removals base-independent (they
     match at tier 1) and only use vtime where the representation actually changed.
     """
-    a_canon = _index(A, _canon_key, "after")
+    a_canon = _index(A, lambda bi: _canon_key(bi, aiv), "after")
     matched_a: set[int] = set()
     kept: dict[int, int] = {}
     b_left = []
     for ordn, bi in B:
-        aid = a_canon.get(_canon_key(bi))
+        aid = a_canon.get(_canon_key(bi, aiv))
         if aid is not None:
             kept[ordn] = aid
             matched_a.add(aid)
@@ -137,10 +150,10 @@ def _cross_match(B, soff_b, A, soff_a):
             b_left.append((ordn, bi))
 
     a_left = [(o, bi) for o, bi in A if o not in matched_a]
-    a_vt = _index(a_left, lambda bi: _vtime_key(bi, soff_a), "after")
+    a_vt = _index(a_left, lambda bi: _vtime_key(bi, soff_a, aiv), "after")
     removed: set[int] = set()
     for ordn, bi in b_left:
-        aid = a_vt.get(_vtime_key(bi, soff_b))
+        aid = a_vt.get(_vtime_key(bi, soff_b, aiv))
         if aid is not None:
             kept[ordn] = aid
             matched_a.add(aid)
@@ -158,10 +171,17 @@ def compute(before: Any, after: Any, mem_id: int = 1, addr_space: int = 1,
     if addr_space != 1:
         raise ValueError(f"align: only address space 1 is supported (got {addr_space})")
 
-    # solved AS form (shared with solve): a symbolic AS could BE addr_space, and the
-    # `== addr_space` filter would silently drop it. Refuse rather than under-count.
+    # solved form (both sides): explicit address spaces (a symbolic AS could BE
+    # addr_space and would be silently dropped by the `== addr_space` filter) AND
+    # resolved multiplicities (a symbolic mult — pre-solver, `is_valid_K·opcode` —
+    # can't be committed to a send/recv). Refuse rather than guess.
     require_explicit_address_spaces(before, mem_id, "align (before)")
     require_explicit_address_spaces(after, mem_id, "align (after)")
+    for label, data in (("align (before)", before), ("align (after)", after)):
+        for i, b in enumerate(memory_bis(data, mem_id)):
+            if keys.address_space_of(b) == addr_space and _eff_kind(b, assume_is_valid) == "sym":
+                raise ValueError(f"{label}: interaction #{i} has a symbolic multiplicity "
+                                 f"— requires solved form (resolved send/recv)")
 
     B = [(i, b) for i, b in enumerate(memory_bis(before, mem_id))
          if keys.address_space_of(b) == addr_space]
@@ -174,7 +194,8 @@ def compute(before: Any, after: Any, mem_id: int = 1, addr_space: int = 1,
     # (so it survives inlining's send-timestamp rewrite). `send_offsets` gives the
     # vtime on each side — no need to fully solve `after`.
     kept, removed, added = _cross_match(B, order.send_offsets(machine_of(before)),
-                                        A, order.send_offsets(machine_of(after)))
+                                        A, order.send_offsets(machine_of(after)),
+                                        assume_is_valid)
     if added:
         raise ValueError(
             f"align: after has {len(added)} interaction(s) not present in before "

@@ -142,6 +142,27 @@ def test_matches_across_send_timestamp_rewrite():
     assert al.n_kept == 2 and al.n_removed == 0 and al.unique   # matched despite rewrite
 
 
+def test_matches_final_apc_is_valid_gating():
+    # the final exported APC gates every mult by ±is_valid; align matches it to the
+    # ±1 predecessor by normalizing the kind (assume is_valid==1), same as solve.
+    b = _before()
+    iv = "is_valid@99"
+    after = {"bus_interactions": [{"id": 1, "mult": iv if x["mult"] == 1 else ["-", iv],
+                                   "args": x["args"]} for x in b["bus_interactions"]],
+             "constraints": b["constraints"]}
+    al = align.compute(b, after, 1, 1)                      # default assume_is_valid=True
+    assert al.n_kept == 6 and al.n_removed == 0 and al.unique
+
+
+def test_abort_symbolic_multiplicity():
+    # a genuinely symbolic mult (not ±is_valid) — pre-solver — is not solved form
+    b = _before()
+    b["bus_interactions"].append(
+        {"id": 1, "mult": ["opcode@5", "*", "is_valid@6"], "args": [1, 8, 0, 0, 0, 0, FS0]})
+    with pytest.raises(ValueError, match="symbolic multiplicity"):
+        align.compute(b, _after([1, 2, 4, 5]), 1, 1)
+
+
 def test_abort_symbolic_address_space():
     # a memory interaction with a symbolic AS could be AS1 -> must not be silently dropped
     before = _before()
