@@ -53,18 +53,32 @@ def render_stats(stats: MemStats, target: Target, mode: str) -> str:
     return _stats_plain(stats, target)
 
 
+def _symbolic_warn(n: int) -> str | None:
+    """Warning shown by the exploratory tools (stats/info) when the circuit is not
+    in solved AS form — such interactions bucket under 'sym' and are dropped by
+    --as filters, so any per-AS reading may be incomplete."""
+    if not n:
+        return None
+    return (f"WARNING: {n} interaction(s) have a SYMBOLIC address space — not solved "
+            f"AS form; results may be unreliable (shown as address space 'sym', "
+            f"excluded by --as filters)")
+
+
 def _precond(stats: MemStats) -> str:
     return (f"sends_ordered={'yes' if stats.sends_ordered else 'NO'} "
             f"recvs_bounded={'yes' if stats.recvs_bounded else 'NO'} "
-            f"duplicates={stats.duplicates}")
+            f"duplicates={stats.duplicates} symbolic_as={stats.symbolic_as}")
 
 
 def _stats_plain(s: MemStats, t: Target) -> str:
-    out = [f"# {t.group}/{t.block} {t.label}  ({t.path})",
-           f"memory_bus_id\t{s.mem_id}",
-           f"n_memory\t{s.n_memory}",
-           f"preconditions\t{_precond(s)}",
-           "as\tcount\tsend\trecv\tbal\tsymKey\tdistinct\talias\treason"]
+    out = [f"# {t.group}/{t.block} {t.label}  ({t.path})"]
+    w = _symbolic_warn(s.symbolic_as)
+    if w:
+        out.append(f"# {w}")
+    out += [f"memory_bus_id\t{s.mem_id}",
+            f"n_memory\t{s.n_memory}",
+            f"preconditions\t{_precond(s)}",
+            "as\tcount\tsend\trecv\tbal\tsymKey\tdistinct\talias\treason"]
     for a in s.address_spaces:
         out.append(f"{a.addr_space}\t{a.count}\t{a.send}\t{a.recv}\t"
                    f"{'ok' if a.balanced else 'NO'}\t{a.sym_key}\t{a.distinct_keys}\t"
@@ -89,21 +103,26 @@ def _stats_rich(s: MemStats, t: Target) -> str:
     with con.capture() as cap:
         con.print(table)
         con.print(f"n_memory={s.n_memory}  preconditions: {_precond(s)}")
+        w = _symbolic_warn(s.symbolic_as)
+        if w:
+            con.print(f"[yellow]{w}[/]")
     return cap.get().rstrip("\n")
 
 
 # --------------------------------------------------------------------------- #
 # info
 # --------------------------------------------------------------------------- #
-def render_info(rows: list[InfoRow], target: Target, mode: str, total: int | None = None) -> str:
+def render_info(rows: list[InfoRow], target: Target, mode: str, total: int | None = None,
+                symbolic_as: int = 0) -> str:
     if total is None:
         total = len(rows)
     if mode == JSON:
         return json.dumps({"target": vars(target), "total": total, "shown": len(rows),
+                           "symbolic_as": symbolic_as, "solved_as_form": symbolic_as == 0,
                            "interactions": [r.as_dict() for r in rows]}, indent=2)
     if mode == RICH:
-        return _info_rich(rows, target, total)
-    return _info_plain(rows, target, total)
+        return _info_rich(rows, target, total, symbolic_as)
+    return _info_plain(rows, target, total, symbolic_as)
 
 
 def _count_note(shown: int, total: int) -> str:
@@ -112,17 +131,20 @@ def _count_note(shown: int, total: int) -> str:
     return f"{total} memory interactions"
 
 
-def _info_plain(rows: list[InfoRow], t: Target, total: int) -> str:
+def _info_plain(rows: list[InfoRow], t: Target, total: int, symbolic_as: int = 0) -> str:
     out = [f"# {t.group}/{t.block} {t.label}  ({t.path})",
-           f"# {_count_note(len(rows), total)}",
-           "ord\tkind\tas\tclass\tkey\ttime\tacc\tts_col"]
+           f"# {_count_note(len(rows), total)}"]
+    w = _symbolic_warn(symbolic_as)
+    if w:
+        out.append(f"# {w}")
+    out.append("ord\tkind\tas\tclass\tkey\ttime\tacc\tts_col")
     for r in rows:
         out.append(f"{r.ordinal}\t{r.kind}\t{r.addr_space}\t{r.alias_class}\t{r.key}\t"
                    f"{r.time}\t{'' if r.access is None else r.access}\t{r.ts_col}")
     return "\n".join(out)
 
 
-def _info_rich(rows: list[InfoRow], t: Target, total: int) -> str:
+def _info_rich(rows: list[InfoRow], t: Target, total: int, symbolic_as: int = 0) -> str:
     from rich.console import Console
     from rich.table import Table
 
@@ -138,6 +160,9 @@ def _info_rich(rows: list[InfoRow], t: Target, total: int) -> str:
     con = Console()
     with con.capture() as cap:
         con.print(table)
+        w = _symbolic_warn(symbolic_as)
+        if w:
+            con.print(f"[yellow]{w}[/]")
     return cap.get().rstrip("\n")
 
 

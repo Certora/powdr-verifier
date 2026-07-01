@@ -14,7 +14,7 @@ from pathlib import Path
 from src.lens import loader, resolve
 
 from . import align, extract, meminfo, memstats, render, solve
-from .busfmt import memory_bus_id
+from .busfmt import memory_bus_id, symbolic_as_ordinals
 from .render import JSON, PLAIN, Target, default_mode
 
 
@@ -137,11 +137,13 @@ def _run_stats(args, mode):
 def _run_info(args, mode):
     data, labels, t = _load_circuit(args.group, args.block, args.step,
                                     getattr(args, "file_a", None), args.root)
-    rows = meminfo.compute(data, memory_bus_id(labels), args.addr_space)
+    mem_id = memory_bus_id(labels)
+    rows = meminfo.compute(data, mem_id, args.addr_space)
     total = len(rows)
     if args.limit and total > args.limit:
         rows = rows[:args.limit]
-    print(render.render_info(rows, t, mode, total))
+    symbolic_as = len(symbolic_as_ordinals(data, mem_id))
+    print(render.render_info(rows, t, mode, total, symbolic_as))
 
 
 def _run_solve(args, mode):

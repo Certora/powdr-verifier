@@ -31,7 +31,7 @@ from src.lens.metrics import _eval_const, mult_kind
 from src.lens.normalize import BABYBEAR_PRIME
 
 from . import keys, order
-from .busfmt import find_duplicates, memory_bis
+from .busfmt import find_duplicates, memory_bis, require_explicit_address_spaces
 
 
 def _is_valid_col(name: str) -> bool:
@@ -151,6 +151,7 @@ def compute(data: Any, mem_id: int = 1, addr_space: int = 1,
     machine = machine_of(data)
     if "constraints" not in machine or "bus_interactions" not in machine:
         raise ValueError("solve: dump has no constraints / bus_interactions to solve")
+    require_explicit_address_spaces(data, mem_id, "solve")
 
     all_bis = memory_bis(data, mem_id)
     rows_idx = [(i, b) for i, b in enumerate(all_bis)

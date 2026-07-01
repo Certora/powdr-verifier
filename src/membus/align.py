@@ -28,7 +28,7 @@ from typing import Any
 from src.lens.diff import _mem_cell, _mem_order
 
 from . import keys, solve
-from .busfmt import memory_bis
+from .busfmt import memory_bis, require_explicit_address_spaces
 
 
 @dataclass
@@ -104,18 +104,10 @@ def compute(before: Any, after: Any, mem_id: int = 1, addr_space: int = 1,
     if addr_space != 1:
         raise ValueError(f"align: only address space 1 is supported (got {addr_space})")
 
-    # High confidence: every memory interaction's address space must be EXPLICIT.
-    # A symbolic AS (e.g. `is_load ? mem_as : 1`, before the solver resolves the
-    # instruction variant) could BE addr_space; filtering it out by `== addr_space`
-    # would silently miss it. Refuse rather than under-count.
-    for label, data in (("before", before), ("after", after)):
-        syms = [i for i, b in enumerate(memory_bis(data, mem_id))
-                if keys.address_space_of(b) is None]
-        if syms:
-            raise ValueError(
-                f"align: {label} has {len(syms)} memory interaction(s) with a symbolic "
-                f"address space (e.g. #{syms[0]}); align requires all address spaces "
-                f"explicit — a symbolic AS could be AS{addr_space}")
+    # solved AS form (shared with solve): a symbolic AS could BE addr_space, and the
+    # `== addr_space` filter would silently drop it. Refuse rather than under-count.
+    require_explicit_address_spaces(before, mem_id, "align (before)")
+    require_explicit_address_spaces(after, mem_id, "align (after)")
 
     B = [(i, b) for i, b in enumerate(memory_bis(before, mem_id))
          if keys.address_space_of(b) == addr_space]
