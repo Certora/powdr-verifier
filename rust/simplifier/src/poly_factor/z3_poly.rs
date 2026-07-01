@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::str::FromStr;
+
+use smt2::ast_hash_int;
 
 use z3::ast::{Ast, AstKind, Dynamic, Int};
 use z3::{FuncDecl, SortKind};
@@ -25,7 +26,7 @@ impl GeneratorMap {
     }
 
     fn register(&mut self, ast: &Int) -> usize {
-        let id = ast_hash(ast);
+        let id = ast_hash_int(ast);
         if let Some(&i) = self.key.get(&id) {
             if self.gens[i].ast_eq(ast) {
                 return i;
@@ -36,12 +37,6 @@ impl GeneratorMap {
         self.key.insert(id, i);
         i
     }
-}
-
-fn ast_hash(ast: &Int) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    ast.hash(&mut hasher);
-    hasher.finish()
 }
 
 pub fn factor(expr: &Int) -> Result<Factorization, FactorError> {

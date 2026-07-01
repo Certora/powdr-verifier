@@ -197,7 +197,7 @@ fn walk_assert_dyn(
 }
 
 fn walk_forall(
-    script: &Script,
+    _script: &Script,
     term: &Dynamic,
     declared: &HashMap<String, String>,
     sorts: &HashMap<String, SortKind>,
@@ -213,7 +213,7 @@ fn walk_forall(
     };
     qvar_sets.push(qvars.iter().map(|(n, _)| n.clone()).collect());
 
-    let body = crate::passes::lift::name_debruijn_bool(&body, term, script)
+    let body = crate::passes::lift::name_debruijn_bool(&body, term)
         .unwrap_or_else(|_| body.clone());
 
     let mut skolem = SkolemMap::new(&qvars);

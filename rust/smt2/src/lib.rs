@@ -14,10 +14,12 @@ pub use ast_build::{
     substitute_bool, substitute_dyn, substitute_int, symbol_name_dyn, wrap_mod_expr_int,
 };
 pub use ast_util::{
-    and_parts, bool_children, bool_decl_name, decl_name, flatten_and, flatten_or, free_int_symbols,
+    and_parts, ast_hash_bool, ast_hash_dyn, ast_hash_int, bool_children, bool_decl_name, decl_name,
+    flatten_and, flatten_or, free_int_symbols,
     free_uf_function_symbols, has_quantifier, int_const_name, int_from_i128, int_value, int_value_dyn,
+    IntTermSet,
     is_exists, is_forall,
-    is_implies, is_int_const, is_int_literal_string, is_ite, is_not, map_bool_children,
+    is_implies, is_int_const, is_int_literal_string, is_int_numeral, is_ite, is_not, map_bool_children,
     mod_int_literal_string, or_body_parts, or_parts, parse_int_literal, smtlib_decl_name, z3_if_to_ite,
     quantifier_body, quantifier_body_bool, quantifier_body_deps, quantifier_bound_names,
     quantifier_bounds, quantifier_bounds_de_bruijn,

@@ -1,10 +1,9 @@
 //! Grounded lemmas for ``uf_xor`` / ``uf_and`` / ``uf_or``.
 
-use std::collections::{hash_map::DefaultHasher, BTreeMap, HashSet};
-use std::hash::{Hash, Hasher};
+use std::collections::HashSet;
 
-use smt2::ast_util::{decl_name, int_from_i128, int_value_dyn};
-use smt2::{map_asserts, Script};
+use smt2::ast_util::{ast_hash_bool, decl_name, int_from_i128, int_value_dyn};
+use smt2::{map_asserts, IntTermSet, Script};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
 use crate::expr_util::AssertBuildCtx;
@@ -15,9 +14,9 @@ const UF_OR: &str = "uf_or";
 
 #[derive(Default, Clone)]
 struct BitwiseTerms {
-    xors: BTreeMap<String, Int>,
-    ands: BTreeMap<String, Int>,
-    ors: BTreeMap<String, Int>,
+    xors: IntTermSet,
+    ands: IntTermSet,
+    ors: IntTermSet,
 }
 
 #[derive(Default)]
@@ -31,12 +30,6 @@ struct BitwiseStats {
     emitted_link: usize,
 }
 
-fn bool_ast_hash(b: &Bool) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    b.hash(&mut hasher);
-    hasher.finish()
-}
-
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut stats = BitwiseStats::default();
     let mut seen_axioms: HashSet<u64> = HashSet::new();
@@ -48,7 +41,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         stats.seen_and += terms.ands.len();
         stats.seen_or += terms.ors.len();
         for axiom in emit_axioms(&terms, &mut stats) {
-            if seen_axioms.insert(bool_ast_hash(&axiom)) {
+            if seen_axioms.insert(ast_hash_bool(&axiom)) {
                 top_axioms.push(axiom);
             }
         }
@@ -112,13 +105,13 @@ fn collect_bitwise_terms(formula: &Bool) -> BitwiseTerms {
             if let Some(i) = node.as_int() {
                 match name.as_str() {
                     UF_XOR => {
-                        out.xors.insert(i.to_string(), i);
+                        out.xors.insert(i);
                     }
                     UF_AND => {
-                        out.ands.insert(i.to_string(), i);
+                        out.ands.insert(i);
                     }
                     UF_OR => {
-                        out.ors.insert(i.to_string(), i);
+                        out.ors.insert(i);
                     }
                     _ => {}
                 }
@@ -216,7 +209,7 @@ fn apply_uf(name: &str, x: Int, y: Int) -> Int {
 
 fn emit_axioms(terms: &BitwiseTerms, stats: &mut BitwiseStats) -> Vec<Bool> {
     let mut out = Vec::new();
-    for term in terms.xors.values() {
+    for term in terms.xors.terms() {
         if let Some((_, x, y)) = uf_binary_dyn(&Dynamic::from_ast(term)) {
             if x.ast_eq(&y) {
                 continue;
@@ -236,14 +229,14 @@ fn emit_axioms(terms: &BitwiseTerms, stats: &mut BitwiseStats) -> Vec<Bool> {
             stats.emitted_xor += 1;
         }
     }
-    for term in terms.ands.values() {
+    for term in terms.ands.terms() {
         if let Some((_, x, y)) = uf_binary_dyn(&Dynamic::from_ast(term)) {
             out.push(x.eq(&int_from_i128(0)).eq(&term.eq(&int_from_i128(0))));
             out.push(y.eq(&int_from_i128(0)).eq(&term.eq(&int_from_i128(0))));
             stats.emitted_and += 2;
         }
     }
-    for term in terms.ors.values() {
+    for term in terms.ors.terms() {
         if let Some((_, x, y)) = uf_binary_dyn(&Dynamic::from_ast(term)) {
             out.push(x.eq(&int_from_i128(0)).eq(&term.eq(&y)));
             out.push(y.eq(&int_from_i128(0)).eq(&term.eq(&x)));

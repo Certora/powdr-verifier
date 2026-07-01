@@ -1,16 +1,15 @@
 //! Hoist ``Not(= q expr)`` skolem disjuncts from ``forall`` bodies to top-level asserts.
 
-use std::collections::{hash_map::DefaultHasher, BTreeMap, HashMap, HashSet};
-use std::hash::{Hash, Hasher};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use smt2::ast_util::{
-    bound_var_index, decl_name, flatten_or, is_forall, or_body_parts, quantifier_body_bool,
-    quantifier_body_deps, quantifier_bound_names, quantifier_bounds_de_bruijn, rebuild_forall_dyn,
-    resolve_bound_or_free_name, substitute_bound_vars_dyn, contains_bound_var_dyn,
-    de_bruijn_bound_name,
+    ast_hash_bool, bound_var_index, decl_name, flatten_or, is_forall, or_body_parts,
+    quantifier_body_bool, quantifier_body_deps, quantifier_bound_names, quantifier_bounds_de_bruijn,
+    rebuild_forall_dyn, resolve_bound_or_free_name, substitute_bound_vars_dyn,
+    contains_bound_var_dyn, de_bruijn_bound_name,
 };
-use smt2::ast_build::{free_variables_bool, iter_nodes_dyn, parse_bool_formula, symbol_name_dyn};
-use smt2::{declare_fun_name_cmd, map_bool_children, parse_single_command, seed_parser_context, ParseCtx, Script, SmtCommand};
+use smt2::ast_build::{free_variables_bool, iter_nodes_dyn, symbol_name_dyn};
+use smt2::{declare_fun_name_cmd, map_bool_children, parse_single_command, Script, SmtCommand};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
 use crate::expr_util::AssertBuildCtx;
@@ -38,12 +37,6 @@ fn sort_from_decl(raw: &str) -> DeclSort {
     } else {
         DeclSort::Int
     }
-}
-
-fn bool_ast_hash(b: &Bool) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    b.hash(&mut hasher);
-    hasher.finish()
 }
 
 fn collect_symbol_sorts(script: &Script) -> HashMap<String, DeclSort> {
@@ -92,15 +85,13 @@ fn infer_symbol_sort(
 }
 
 struct LiftWalker {
-    script: Script,
     lifted: BTreeMap<String, Bool>,
     sorts: HashMap<String, DeclSort>,
 }
 
 impl LiftWalker {
-    fn new(script: Script, sorts: HashMap<String, DeclSort>) -> Self {
+    fn new(sorts: HashMap<String, DeclSort>) -> Self {
         Self {
-            script,
             lifted: BTreeMap::new(),
             sorts,
         }
@@ -158,12 +149,12 @@ impl LiftWalker {
         let mut progressed = true;
         while progressed {
             progressed = false;
-            candidates.sort_by_key(|a| bool_ast_hash(a));
+            candidates.sort_by_key(|a| ast_hash_bool(a));
             let mut next = Vec::new();
             for d in candidates {
-                if let Some((lifted_name, expr)) = match_lift_pair(&d, &bound_order, &qvars, &self.script) {
+                if let Some((lifted_name, expr)) = match_lift_pair(&d, &bound_order, &qvars) {
                     if !self.lifted.contains_key(&lifted_name) {
-                        let Ok(named_expr) = name_debruijn_dyn(&expr, &ast, &self.script) else {
+                        let Ok(named_expr) = name_debruijn_dyn(&expr, &ast) else {
                             next.push(d);
                             continue;
                         };
@@ -210,7 +201,7 @@ impl LiftWalker {
         } else {
             flatten_or(remaining)
         };
-        let named_body = match name_debruijn_bool(&body_out, &ast, &self.script) {
+        let named_body = match name_debruijn_bool(&body_out, &ast) {
             Ok(b) => b,
             Err(_) => return b.clone(),
         };
@@ -238,7 +229,7 @@ impl LiftWalker {
 
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let sorts = collect_symbol_sorts(script);
-    let mut walker = LiftWalker::new(script.clone(), sorts);
+    let mut walker = LiftWalker::new(sorts);
 
     let mut prefix = Vec::new();
     let mut suffix = Vec::new();
@@ -312,63 +303,20 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     Ok((Script::from_commands(&script.source, commands), stats))
 }
 
-fn refresh_bool_from_text(b: &Bool, script: &Script) -> Result<Bool, String> {
-    let mut ctx = ParseCtx::new();
-    seed_parser_context(&mut ctx, script)?;
-    parse_bool_formula(&mut ctx, &b.to_string())
-}
-
-fn parse_named_dyn(raw: &str, hint: &Dynamic, script: &Script) -> Result<Dynamic, String> {
-    let mut ctx = ParseCtx::new();
-    seed_parser_context(&mut ctx, script)?;
-    if hint.as_bool().is_some() {
-        return parse_bool_formula(&mut ctx, raw).map(|b| Dynamic::from_ast(&b));
-    }
-    let eq = format!("(= __lift_parse_tmp__ {raw})");
-    let parsed = parse_bool_formula(&mut ctx, &eq)?;
-    Dynamic::from_ast(&parsed)
-        .nth_child(1)
-        .ok_or_else(|| "expected rhs in parsed pin expr".into())
-}
-
-fn refresh_dyn_from_text(d: &Dynamic, script: &Script) -> Dynamic {
-    parse_named_dyn(&d.to_string(), d, script).unwrap_or_else(|_| d.clone())
-}
-
-fn name_debruijn_dyn(d: &Dynamic, quant: &Dynamic, script: &Script) -> Result<Dynamic, String> {
+fn name_debruijn_dyn(d: &Dynamic, quant: &Dynamic) -> Result<Dynamic, String> {
     if !contains_bound_var_dyn(d) {
         return Ok(d.clone());
     }
     let replacements = quantifier_bounds_de_bruijn(quant);
-    if let Ok(out) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        substitute_bound_vars_dyn(d, &replacements)
-    })) {
-        return Ok(out);
+    let out = substitute_bound_vars_dyn(d, &replacements);
+    if contains_bound_var_dyn(&out) {
+        return Err("substitute_bound_vars_dyn left bound variables".into());
     }
-    let d = refresh_dyn_from_text(d, script);
-    if !contains_bound_var_dyn(&d) {
-        return Ok(d);
-    }
-    let bound_order = quantifier_bound_names(quant);
-    let mut raw = d.to_string();
-    if raw.contains("(:var ") {
-        for i in (0..bound_order.len()).rev() {
-            if let Some(name) = de_bruijn_bound_name(&bound_order, i) {
-                raw = raw.replace(&format!("(:var {i})"), &name);
-            }
-        }
-    }
-    if let Ok(out) = parse_named_dyn(&raw, &d, script) {
-        return Ok(out);
-    }
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        substitute_bound_vars_dyn(&d, &replacements)
-    }))
-    .map_err(|_| "substitute_bound_vars_dyn panicked".into())
+    Ok(out)
 }
 
-pub(crate) fn name_debruijn_bool(b: &Bool, quant: &Dynamic, script: &Script) -> Result<Bool, String> {
-    name_debruijn_dyn(&Dynamic::from_ast(b), quant, script)?
+pub(crate) fn name_debruijn_bool(b: &Bool, quant: &Dynamic) -> Result<Bool, String> {
+    name_debruijn_dyn(&Dynamic::from_ast(b), quant)?
         .as_bool()
         .ok_or_else(|| "expected bool after de Bruijn naming".into())
 }
@@ -389,15 +337,10 @@ fn is_not_eq(d: &Bool) -> Option<Bool> {
     inner.as_bool()
 }
 
-fn disjunct_from_text(d: &Bool, script: &Script) -> Bool {
-    refresh_bool_from_text(d, script).unwrap_or_else(|_| d.clone())
-}
-
 fn match_lift_pair(
     d: &Bool,
     bound_order: &[String],
     qvars: &HashSet<String>,
-    _script: &Script,
 ) -> Option<(String, Dynamic)> {
     let eq = is_not_eq(d)?;
     let ast = Dynamic::from_ast(&eq);
@@ -444,7 +387,7 @@ mod tests {
         let body = quantifier_body_bool(&ast).unwrap();
         let disjuncts = or_body_parts(&body).unwrap();
         let qvars: HashSet<String> = bound_order.iter().cloned().collect();
-        assert!(match_lift_pair(&disjuncts[0], &bound_order, &qvars, &script).is_some());
+        assert!(match_lift_pair(&disjuncts[0], &bound_order, &qvars).is_some());
     }
 
     #[test]
