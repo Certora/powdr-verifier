@@ -10,6 +10,7 @@ import json
 
 from src.lens.render import JSON, PLAIN, RICH, Target, default_mode  # noqa: F401 (re-exported)
 
+from .align import Alignment
 from .meminfo import InfoRow
 from .memstats import MemStats
 from .solve import Solution
@@ -188,6 +189,68 @@ def _solve_rich(s: "Solution", t: Target) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# align
+# --------------------------------------------------------------------------- #
+def render_align(al: "Alignment", tgt_before: Target, tgt_after: Target, mode: str) -> str:
+    if mode == JSON:
+        return json.dumps({"before": vars(tgt_before), "after": vars(tgt_after),
+                           **al.as_dict()}, indent=2)
+    if mode == RICH:
+        return _align_rich(al, tgt_before, tgt_after)
+    return _align_plain(al, tgt_before, tgt_after)
+
+
+def _align_summary(al: "Alignment") -> str:
+    iv = "  [assumed is_valid=1]" if al.assumed_is_valid else ""
+    return (f"as={al.addr_space} before={al.n_before} after={al.n_after} "
+            f"kept={al.n_kept} removed={al.n_removed} local_pairs={al.n_local_pairs} "
+            f"inert={al.n_inert} unique={'yes' if al.unique else 'no'}{iv}")
+
+
+def _align_after(r) -> str:
+    return f"=after#{r.after_id}" if r.after_id is not None else "—"
+
+
+def _align_local(r) -> str:
+    if r.local_role == "input":
+        return "entry"
+    if r.local_role == "output":
+        return "exit"
+    if r.local_role == "inert":
+        return "—"
+    return " ".join(f"#{p}" for p in r.local_partners)          # interior
+
+
+def _align_plain(al: "Alignment", tb: Target, ta: Target) -> str:
+    out = [f"# before {tb.group}/{tb.block} {tb.label}  ({tb.path})",
+           f"# after  {ta.group}/{ta.block} {ta.label}  ({ta.path})",
+           f"# {_align_summary(al)}",
+           "id\tkind\tkey\tstatus\t→after\t↔local"]
+    for r in al.rows:
+        out.append(f"{r.before_id}\t{r.kind}\t{r.key}\t{r.status}\t"
+                   f"{_align_after(r)}\t{_align_local(r)}")
+    return "\n".join(out)
+
+
+def _align_rich(al: "Alignment", tb: Target, ta: Target) -> str:
+    from rich.console import Console
+    from rich.table import Table
+
+    table = Table(title=f"{tb.group}/{tb.block} {tb.label} → {ta.label} — align "
+                        f"{_align_summary(al)}")
+    for col in ("id", "kind", "key", "status", "→after", "↔local"):
+        table.add_column(col)
+    for r in al.rows:
+        status = "[green]kept[/]" if r.status == "kept" else "[yellow]removed[/]"
+        table.add_row(str(r.before_id), _kind_markup(r.kind), r.key, status,
+                      _align_after(r), _align_local(r))
+    con = Console()
+    with con.capture() as cap:
+        con.print(table)
+    return cap.get().rstrip("\n")
+
+
+# --------------------------------------------------------------------------- #
 # agent guide
 # --------------------------------------------------------------------------- #
 def agent_guide() -> str:
@@ -209,7 +272,7 @@ DECIDE (goal -> command)
   per-interaction key/timestamp/alias    -> info   <group> <block> <step> [--as N]
   solve matching: inputs/outputs/flow    -> solve  <group> <block> <step> [--as N]
   emit busat .bus (abstract ts order)    -> extract <group> <block> <stepA> [stepB]
-  (align two circuits' memory busses     -> align   ... [v2, not yet implemented])
+  align before/after (removal) -> mapping-> align  <group> <block> <before> <after> [--as N]
 
 INPUT
   Auto-discovered the lens way: <group> <block> <step> (e.g. keccak 2100224 022),
@@ -243,6 +306,18 @@ SOLVE (v1: AS1, constant keys, graph solver; fails gracefully otherwise)
   vtime is virtual time relative to ts_entry (T+0); ts_exit = last clock. Any
   complete mapping is a solution; `unique` reports whether it is forced. Row id
   is the membus ordinal, stable across --as so solutions can be merged.
+
+ALIGN (v1: AS1; before has >= after, i.e. a removal pass) — HIGH CONFIDENCE
+  Maps every BEFORE interaction (robust ids) either to an equivalent kept
+  interaction in AFTER (`=after#j`), and/or to a local partner within before
+  (recv<->send). Cross-match reuses `lens diff`'s membus matching: by
+  (address_space, pointer) cell + (mult_kind, canonical timestamp) — semantic,
+  primarily by timestamp, data-free. Local partners come from `solve(before)`,
+  which MUST be globally unique. mult==0 interactions are inert (removed, matched
+  to nothing). ABORTS (exit 2) rather than emit an unjustifiable mapping: after
+  must be a subset of before, the removed set must self-balance (no boundary
+  removed, no partner kept), and matches must be unambiguous. JSON is the primary
+  artifact (before->after / local mapping); the table is for humans.
 
 LIMITATIONS (v1)
   Symbolic base+offset recovery is calibrated to the keccak (2100224) dumps
