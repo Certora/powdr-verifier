@@ -1040,12 +1040,13 @@ class PermutationCheckMixin:
             for j in range(n):
                 if mem_keys_statically_disjoint(i, j):
                     continue
+                mke = mem_key_eq(i, j)
                 if not is_disabled(j).is_true():
-                    is_actives.append(And(Not(is_disabled(j)), *mem_key_eq(i, j)))
+                    is_actives.append(And(Not(is_disabled(j)), *mke))
                 if not is_input(j).is_false():
-                    has_inputs.append(And(is_input(j), *mem_key_eq(i, j)))
+                    has_inputs.append(And(is_input(j), *mke))
                 if not is_output(j).is_false():
-                    has_outputs.append(And(is_output(j), *mem_key_eq(i, j)))
+                    has_outputs.append(And(is_output(j), *mke))
             is_active = Or(*is_actives)
             has_input = Or(*has_inputs)
             has_output = Or(*has_outputs)
@@ -1063,10 +1064,14 @@ class PermutationCheckMixin:
             )
 
         for i in range(n):
+            if is_disabled(i).is_true():
+                continue
             for j in range(n):
                 if i == j or m(i, j).is_false():
                     continue
                 if mem_keys_statically_disjoint(i, j):
+                    continue
+                if is_disabled(j).is_true():
                     continue
                 conjuncts.append(
                     with_comment(
