@@ -1,10 +1,11 @@
 use std::env;
 use std::io::{self, Read, Write, stdin, stdout};
+use std::path::PathBuf;
 use std::process;
 
 use smt2::{dump_string, load_path, load_reader, pretty_print_script};
 use simplifier::budget::Budget;
-use simplifier::{run_pipeline, write_step_stats};
+use simplifier::{run_pipeline, write_step_stats, DumpStepsConfig};
 
 fn main() {
     if let Err(e) = run() {
@@ -17,6 +18,9 @@ fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().skip(1).collect();
     let mut timeout: Option<f64> = None;
     let mut pretty = false;
+    let mut dump_steps = false;
+    let mut dump_step_offset = 0usize;
+    let mut dump_steps_output: Option<PathBuf> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -31,6 +35,26 @@ fn run() -> Result<(), String> {
                 pretty = true;
                 i += 1;
             }
+            "--dump-steps" => {
+                dump_steps = true;
+                i += 1;
+            }
+            "--dump-step-offset" => {
+                i += 1;
+                let v = args
+                    .get(i)
+                    .ok_or("missing value for --dump-step-offset")?;
+                dump_step_offset = v.parse().map_err(|_| "invalid --dump-step-offset")?;
+                i += 1;
+            }
+            "--dump-steps-output" => {
+                i += 1;
+                let v = args
+                    .get(i)
+                    .ok_or("missing value for --dump-steps-output")?;
+                dump_steps_output = Some(PathBuf::from(v));
+                i += 1;
+            }
             opt if opt.starts_with("--") => return Err(format!("unknown option: {opt}")),
             _ => break,
         }
@@ -43,7 +67,7 @@ fn run() -> Result<(), String> {
     let positional: Vec<String> = args[i..].to_vec();
     if positional.len() != 3 {
         return Err(
-            "usage: simplifier [--timeout SEC] [--pretty] <input> <tactic> <output>".into(),
+            "usage: simplifier [--timeout SEC] [--pretty] [--dump-steps] [--dump-step-offset N] [--dump-steps-output PATH] <input> <tactic> <output>".into(),
         );
     }
     let input = &positional[0];
@@ -61,7 +85,25 @@ fn run() -> Result<(), String> {
     };
 
     let tactics: Vec<String> = tactic_pipeline.split(':').map(|s| s.to_string()).collect();
-    let (out_script, steps) = run_pipeline(&script, &tactics, budget)?;
+    let dump_cfg = if dump_steps {
+        let dump_output = dump_steps_output
+            .or_else(|| {
+                if output == "-" {
+                    None
+                } else {
+                    Some(PathBuf::from(output))
+                }
+            })
+            .ok_or("--dump-steps requires a file output path")?;
+        Some(DumpStepsConfig {
+            output: dump_output,
+            pretty,
+            step_offset: dump_step_offset,
+        })
+    } else {
+        None
+    };
+    let (out_script, steps) = run_pipeline(&script, &tactics, budget, dump_cfg.as_ref())?;
     let out_script = if pretty {
         pretty_print_script(&out_script)?
     } else {

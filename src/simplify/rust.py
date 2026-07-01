@@ -104,12 +104,21 @@ def _build_simplifier_cmd(
     timeout: float | None,
     input_path: str = "-",
     output_path: str = "-",
+    dump_steps: bool = False,
+    dump_step_offset: int = 0,
+    dump_steps_output: Path | None = None,
 ) -> list[str]:
     cmd = [str(bin_path)]
     if timeout is not None:
         cmd.extend(["--timeout", str(timeout)])
     if getattr(ARGS(), "pretty", False):
         cmd.append("--pretty")
+    if dump_steps:
+        cmd.append("--dump-steps")
+        if dump_step_offset:
+            cmd.extend(["--dump-step-offset", str(dump_step_offset)])
+        if dump_steps_output is not None:
+            cmd.extend(["--dump-steps-output", str(dump_steps_output)])
     cmd.extend([input_path, rust_pipeline, output_path])
     return cmd
 
@@ -315,6 +324,8 @@ def run_rust_pipeline(
     profile_output: Path | None = None,
     input_path: Path | None = None,
     output_path: Path | None = None,
+    dump_steps_output: Path | None = None,
+    dump_step_offset: int = 0,
     parse_output: bool = True,
 ) -> tuple[script.SmtLibScript | None, list[dict]]:
     global _last_rust_profile_path
@@ -331,12 +342,18 @@ def run_rust_pipeline(
     smt_in: str | None = None
     if not use_file_input:
         smt_in = _script_to_string(smt_script)
+    dump_steps_enabled = getattr(ARGS(), "dump_steps", False) and (
+        dump_steps_output or output_path
+    ) is not None
     cmd = _build_simplifier_cmd(
         bin_path,
         rust_pipeline,
         timeout=timeout,
         input_path=str(input_path) if use_file_input else "-",
         output_path=str(output_path) if use_file_output else "-",
+        dump_steps=dump_steps_enabled,
+        dump_step_offset=dump_step_offset,
+        dump_steps_output=dump_steps_output,
     )
     profile_path: Path | None = None
     if getattr(ARGS(), "cprofile", False):

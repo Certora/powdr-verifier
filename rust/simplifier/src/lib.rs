@@ -8,11 +8,12 @@ pub mod poly_factor;
 pub mod tactic;
 
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use smt2::{ensure_declarations_for_asserts, Script};
+use smt2::{dump_string, ensure_declarations_for_asserts, pretty_print_script, Script};
 
 use crate::budget::Budget;
 use crate::passes::{bitwise, bounds, demod, domain_probe, evaluator, isqf, lift, mod_inv, nnf, normalize, pretty, rewrite, skolem, witness, z3};
@@ -22,6 +23,42 @@ use crate::tactic::split_tactic;
 pub struct StepResult {
     pub pass: String,
     pub stats: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct DumpStepsConfig {
+    pub output: PathBuf,
+    pub pretty: bool,
+    pub step_offset: usize,
+}
+
+fn dump_step_path(output: &Path, step_index: usize, tactic: &str) -> PathBuf {
+    let stem = output
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("out");
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    parent.join(format!("{stem}.{step_index:02}.{tactic}.smt2"))
+}
+
+fn write_script_to_path(script: &Script, path: &Path, pretty: bool) -> Result<(), String> {
+    let out_script = if pretty {
+        pretty_print_script(script)?
+    } else {
+        script.clone()
+    };
+    std::fs::write(path, dump_string(&out_script).as_bytes()).map_err(|e| e.to_string())
+}
+
+pub fn dump_step_script(
+    script: &Script,
+    config: &DumpStepsConfig,
+    step_index: usize,
+    tactic: &str,
+) -> Result<(), String> {
+    let path = dump_step_path(&config.output, step_index, tactic);
+    eprintln!("dumping intermediate formula to {}", path.display());
+    write_script_to_path(script, &path, config.pretty)
 }
 
 enum PassWait {
@@ -151,27 +188,31 @@ pub fn run_pipeline(
     script: &Script,
     tactics: &[String],
     budget: Budget,
+    dump_steps: Option<&DumpStepsConfig>,
 ) -> Result<(Script, Vec<StepResult>), String> {
     let mut cur = script.clone();
     let mut steps = Vec::new();
-    for raw in tactics {
+    for (i, raw) in tactics.iter().enumerate() {
         if !budget.has_budget() {
             steps.push(skipped_step(raw, "no-budget"));
-            continue;
+        } else {
+            let backup = cur.clone();
+            let t0 = Instant::now();
+            match run_timed_pass(raw, &cur, budget.remaining_for_pass()) {
+                TimedPassResult::Ok((next, step)) => {
+                    cur = ensure_declarations_for_asserts(&next)?;
+                    steps.push(step_with_time(step, t0.elapsed().as_secs_f64()));
+                }
+                TimedPassResult::Timeout => {
+                    cur = backup;
+                    steps.push(timed_out_step(raw, t0.elapsed().as_secs_f64()));
+                }
+                TimedPassResult::Err(e) => return Err(e),
+            }
         }
 
-        let backup = cur.clone();
-        let t0 = Instant::now();
-        match run_timed_pass(raw, &cur, budget.remaining_for_pass()) {
-            TimedPassResult::Ok((next, step)) => {
-                cur = ensure_declarations_for_asserts(&next)?;
-                steps.push(step_with_time(step, t0.elapsed().as_secs_f64()));
-            }
-            TimedPassResult::Timeout => {
-                cur = backup;
-                steps.push(timed_out_step(raw, t0.elapsed().as_secs_f64()));
-            }
-            TimedPassResult::Err(e) => return Err(e),
+        if let Some(cfg) = dump_steps {
+            dump_step_script(&cur, cfg, cfg.step_offset + i + 1, raw)?;
         }
     }
     Ok((cur, steps))
@@ -229,11 +270,33 @@ mod tests {
         .unwrap();
         let tactics = vec!["evaluator".to_string(), "nnf".to_string()];
         let budget = Budget::from_timeout_secs(0.0);
-        let (out, steps) = run_pipeline(&script, &tactics, budget).unwrap();
+        let (out, steps) = run_pipeline(&script, &tactics, budget, None).unwrap();
         assert_eq!(smt2::dump_string(&out), smt2::dump_string(&script));
         assert_eq!(steps.len(), 2);
         assert_eq!(steps[0].stats["result"], "skipped");
         assert_eq!(steps[0].stats["reason"], "no-budget");
         assert_eq!(steps[1].stats["result"], "skipped");
+    }
+
+    #[test]
+    fn dump_steps_writes_per_pass_files() {
+        let dir = std::env::temp_dir().join(format!("simplifier-dump-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let output = dir.join("out.smt2");
+        let script = Script::parse(
+            "(declare-fun x () Int)\n(assert (= x 1))\n(check-sat)\n",
+        )
+        .unwrap();
+        let tactics = vec!["evaluator".to_string()];
+        let cfg = DumpStepsConfig {
+            output: output.clone(),
+            pretty: false,
+            step_offset: 2,
+        };
+        let (_, steps) = run_pipeline(&script, &tactics, Budget::unlimited(), Some(&cfg)).unwrap();
+        assert_eq!(steps.len(), 1);
+        let dump = dir.join("out.03.evaluator.smt2");
+        assert!(dump.is_file(), "missing {}", dump.display());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -295,6 +295,8 @@ def _run_rust_tactics(
     profile_output: Path | None = None,
     input_path: Path | None = None,
     rust_output_path: Path | None = None,
+    dump_steps_output: Path | None = None,
+    dump_step_offset: int = 0,
     parse_output: bool = True,
 ) -> script.SmtLibScript | None:
     pipeline = ":".join(raw_tactics)
@@ -307,6 +309,8 @@ def _run_rust_tactics(
             profile_output=profile_output,
             input_path=input_path,
             output_path=rust_output_path,
+            dump_steps_output=dump_steps_output,
+            dump_step_offset=dump_step_offset,
             parse_output=parse_output,
         )
     except (FileNotFoundError, RuntimeError) as exc:
@@ -318,10 +322,17 @@ def _run_rust_tactics(
         if smt_script is None:
             assert input_path is not None
             smt_script = _load_script(input_path)
+        deadline = (
+            time.monotonic() + float(timeout) if timeout is not None else None
+        )
         smt_script, _ = _run_python_passes(
             parent,
             smt_script,
             raw_tactics,
+            deadline=deadline,
+            output=dump_steps_output,
+            step_index=dump_step_offset,
+            dump_steps=getattr(ARGS(), "dump_steps", False),
             rust_fallback_batch=pipeline,
         )
         return smt_script
@@ -467,11 +478,9 @@ def simplify_smt_script(
                     dump_steps=getattr(ARGS(), "dump_steps", False),
                 )
             case "r":
-                step_start = step_index + 1
                 step_end = step_index + len(raw_list)
                 remaining = deadline - time.monotonic() - 2
                 batch_label = ":".join(raw_list)
-                dump_label = "_".join(raw_list)
 
                 if remaining <= 0:
                     for raw_tactic in raw_list:
@@ -511,6 +520,8 @@ def simplify_smt_script(
                         profile_output=output,
                         input_path=batch_input_path,
                         rust_output_path=rust_out,
+                        dump_steps_output=output,
+                        dump_step_offset=step_index,
                         parse_output=parse_output,
                     )
                 finally:
@@ -520,21 +531,6 @@ def simplify_smt_script(
                 if smt_script is not None:
                     _ensure_declarations_for_asserts(smt_script)
                 step_index = step_end
-
-                if getattr(ARGS(), "dump_steps", False) and output is not None:
-                    stem = (
-                        output.name[: -len(output.suffix)] if output.suffix else output.name
-                    )
-                    dump_file = output.with_name(
-                        f"{stem}.{step_start:02d}-{step_end:02d}.{dump_label}.smt2"
-                    )
-                    with open_file(dump_file, "w") as out:
-                        logging.info("dumping intermediate formula to %s", out.name)
-                        if smt_script is not None:
-                            write_smtlib_script(smt_script, out)
-                        elif rust_out is not None and rust_out.is_file():
-                            with open(rust_out, encoding="utf-8") as src:
-                                out.write(src.read())
 
     if smt_script is not None:
         _ensure_declarations_for_asserts(smt_script)
