@@ -13,7 +13,7 @@ from .memory_plain_utils import (
     plain_memory_presolve_incremental,
     plain_memory_presolve_individual,
 )
-from .membus_subprocess import fetch_extract_json
+from .membus_subprocess import fetch_extract_json, fetch_solve_json
 from ..smt.utils import *
 from ..utils.args import ARGS
 from ..utils.enums import MemoryPresolve
@@ -101,27 +101,56 @@ def _membus_ordered_ts_pairs(order_edges: list[dict]) -> set[frozenset[str]]:
     }
 
 
-def _membus_match_presets(
+def _preset_force_self(presets: dict[tuple[int, int], bool], n: int, i: int) -> None:
+    presets[(i, i)] = True
+    for j in range(i):
+        presets[(j, i)] = False
+    for j in range(i + 1, n):
+        presets[(i, j)] = False
+
+
+def _membus_solve_presets(
+    presets: dict[tuple[int, int], bool],
+    solve: dict,
+    n: int,
+    *,
+    log_prefix: str | None = None,
+) -> set[int]:
+    """Seed ``presets`` from ``membus solve``: each listed interaction self-matches."""
+    covered: set[int] = set()
+
+    prefix = f"{log_prefix} " if log_prefix else ""
+    for row in solve.get("interactions") or []:
+        ordn = row.get("ordinal")
+        if ordn is None or ordn >= n:
+            continue
+        _preset_force_self(presets, n, ordn)
+        covered.add(ordn)
+        logging.info("%smembus solve self-match: interaction %d", prefix, ordn)
+
+    return covered
+
+
+def _membus_extract_refine_presets(
+    presets: dict[tuple[int, int], bool],
+    extract: dict,
     n: int,
     mult_const: list[int | None],
     const_args: list[tuple[int | None, ...] | None],
     p: int,
     *,
-    source_path: Path | None = None,
+    solve_covered: set[int] | None = None,
     log_prefix: str | None = None,
-) -> dict[tuple[int, int], bool]:
-    """Membus-derived presets for match vars: off-diagonal ``(i, j)`` with ``i < j``, diagonal ``(i, i)``."""
-    membus_extract = fetch_extract_json(source_path)
-    if membus_extract is None:
-        return {}
-    rows = membus_extract.get("interactions") or []
+) -> None:
+    """Refine ``presets`` with timestamp order and alias structure from extract."""
+    rows = extract.get("interactions") or []
     assert n == len(rows)
     if n == 0:
-        return {}
+        return
 
     prefix = f"{log_prefix} " if log_prefix else ""
-    ordered_ts = _membus_ordered_ts_pairs(membus_extract.get("order_edges") or [])
-    presets: dict[tuple[int, int], bool] = {}
+    solve_covered = solve_covered or set()
+    ordered_ts = _membus_ordered_ts_pairs(extract.get("order_edges") or [])
 
     def ts_blocks_cross(i: int, j: int) -> bool:
         ts_i = rows[i].get("abstract_ts")
@@ -132,11 +161,7 @@ def _membus_match_presets(
 
     for i in range(n):
         if mult_const[i] == 0:
-            presets[(i, i)] = True
-            for j in range(i):
-                presets[(j, i)] = False
-            for j in range(i + 1, n):
-                presets[(i, j)] = False
+            _preset_force_self(presets, n, i)
             continue
 
         for j in range(i + 1, n):
@@ -144,7 +169,7 @@ def _membus_match_presets(
                 presets[(i, j)] = False
 
     if any(not rows[i].get("alias_determined") for i in range(n)):
-        return presets
+        return
 
     for i in range(n):
         for j in range(i + 1, n):
@@ -153,13 +178,17 @@ def _membus_match_presets(
 
     groups: dict[int, set[int]] = collections.defaultdict(set)
     for i in range(n):
-        if mult_const[i] != 0:
+        if mult_const[i] != 0 and i not in solve_covered:
             groups[rows[i]["alias_class"]].add(i)
 
-    candidates: dict[int, set[int]] = {i: set() for i in range(n)}
+    candidates: dict[int, set[int]] = {
+        i: set() for members in groups.values() for i in members
+    }
     for members in groups.values():
         for i in members:
             for j in members:
+                if i == j:
+                    continue
                 if presets.get((i, j), None) is False:
                     continue
                 if presets.get((j, i), None) is False:
@@ -230,6 +259,41 @@ def _membus_match_presets(
                 )
                 changed = True
 
+
+def _membus_match_presets(
+    n: int,
+    mult_const: list[int | None],
+    const_args: list[tuple[int | None, ...] | None],
+    p: int,
+    *,
+    source_path: Path | None = None,
+    log_prefix: str | None = None,
+) -> dict[tuple[int, int], bool]:
+    """Membus-derived presets for match vars: off-diagonal ``(i, j)`` with ``i < j``, diagonal ``(i, i)``."""
+    if n == 0 or source_path is None:
+        return {}
+
+    presets: dict[tuple[int, int], bool] = {}
+    solve_covered: set[int] = set()
+
+    solve = fetch_solve_json(source_path)
+    if solve is not None:
+        solve_covered = _membus_solve_presets(
+            presets, solve, n, log_prefix=log_prefix
+        )
+
+    extract = fetch_extract_json(source_path)
+    if extract is not None:
+        _membus_extract_refine_presets(
+            presets,
+            extract,
+            n,
+            mult_const,
+            const_args,
+            p,
+            solve_covered=solve_covered,
+            log_prefix=log_prefix,
+        )
     return presets
 
 
