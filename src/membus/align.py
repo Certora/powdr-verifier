@@ -26,8 +26,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.lens.diff import _mem_cell, _mem_order
+from src.lens.loader import machine_of
+from src.lens.metrics import mult_kind
 
-from . import keys, solve
+from . import keys, order, solve
 from .busfmt import memory_bis, require_explicit_address_spaces
 
 
@@ -79,22 +81,74 @@ class Alignment:
         }
 
 
-def _semantic_index(rows_idx: list[tuple[int, dict]], side: str) -> dict[Any, int]:
-    """Map each interaction's semantic key -> its membus ordinal, one side.
+def _canon_key(bi: dict) -> Any:
+    """(cell, kind, canonical timestamp) — exact representation, à la `lens diff`."""
+    return (_mem_cell(bi), *_mem_order(bi))
 
-    Semantic key = (mem cell (address_space, pointer), mult_kind, canonical
-    timestamp) — reuses lens's `_mem_cell` / `_mem_order`. Non-unique on a side
-    ⟹ ABORT (an ambiguous cell/timestamp collision would make the match a guess).
+
+def _vtime_key(bi: dict, soff: dict) -> Any:
+    """(cell, 'send', VIRTUAL TIME) for a send whose ts resolves, else None.
+
+    Only sends need this: `inlining` rewrites send timestamps (`from_state_K` ->
+    `from_state_0 + offset`) but leaves recvs (a `prev_timestamp` free witness)
+    alone. Virtual time (from `send_offsets`) is representation-independent, so an
+    inlined send still matches its pre-inline self.
     """
+    if mult_kind(bi["mult"]) != "send":
+        return None
+    ts = bi["args"][6]
+    col = order.ts_col(ts)
+    vt = soff.get(col) if col else None
+    return None if vt is None else (_mem_cell(bi), "send", vt + order.intra_offset(ts))
+
+
+def _index(rows_idx, keyfn, side: str) -> dict[Any, int]:
     idx: dict[Any, int] = {}
     for ordn, bi in rows_idx:
-        k = (_mem_cell(bi), _mem_order(bi))
+        k = keyfn(bi)
+        if k is None:
+            continue
         if k in idx:
-            raise ValueError(
-                f"align: ambiguous {side} interactions #{idx[k]} and #{ordn} share "
-                f"the same (cell, kind, timestamp) — cannot match unambiguously")
+            raise ValueError(f"align: ambiguous {side} interactions #{idx[k]} and #{ordn} "
+                             f"share the same (cell, kind, timestamp)")
         idx[k] = ordn
     return idx
+
+
+def _cross_match(B, soff_b, A, soff_a):
+    """Match before<->after interactions. Returns (kept: before_ord->after_ord,
+    removed: set[before_ord], added: list[after_ord]).
+
+    Tier 1: exact canonical timestamp (handles same-representation removals and
+    recvs). Tier 2: virtual time for the still-unmatched SENDS (handles `inlining`,
+    which rewrites send timestamps). Two tiers keep removals base-independent (they
+    match at tier 1) and only use vtime where the representation actually changed.
+    """
+    a_canon = _index(A, _canon_key, "after")
+    matched_a: set[int] = set()
+    kept: dict[int, int] = {}
+    b_left = []
+    for ordn, bi in B:
+        aid = a_canon.get(_canon_key(bi))
+        if aid is not None:
+            kept[ordn] = aid
+            matched_a.add(aid)
+        else:
+            b_left.append((ordn, bi))
+
+    a_left = [(o, bi) for o, bi in A if o not in matched_a]
+    a_vt = _index(a_left, lambda bi: _vtime_key(bi, soff_a), "after")
+    removed: set[int] = set()
+    for ordn, bi in b_left:
+        aid = a_vt.get(_vtime_key(bi, soff_b))
+        if aid is not None:
+            kept[ordn] = aid
+            matched_a.add(aid)
+        else:
+            removed.add(ordn)
+
+    added = [o for o, _ in A if o not in matched_a]
+    return kept, removed, added
 
 
 def compute(before: Any, after: Any, mem_id: int = 1, addr_space: int = 1,
@@ -116,12 +170,11 @@ def compute(before: Any, after: Any, mem_id: int = 1, addr_space: int = 1,
     if not B:
         raise ValueError(f"align: before has no memory interactions (id={mem_id}, as={addr_space})")
 
-    # cross-match by semantic key (kept), leftovers = removed (before) / added (after)
-    bkey = _semantic_index(B, "before")
-    akey = _semantic_index(A, "after")
-    kept = {bkey[k]: akey[k] for k in bkey if k in akey}      # before_ord -> after_ord
-    removed = {o for o in bkey.values() if o not in kept}
-    added = [akey[k] for k in akey if k not in bkey]
+    # cross-match: canonical timestamp first, then virtual time for leftover sends
+    # (so it survives inlining's send-timestamp rewrite). `send_offsets` gives the
+    # vtime on each side — no need to fully solve `after`.
+    kept, removed, added = _cross_match(B, order.send_offsets(machine_of(before)),
+                                        A, order.send_offsets(machine_of(after)))
     if added:
         raise ValueError(
             f"align: after has {len(added)} interaction(s) not present in before "

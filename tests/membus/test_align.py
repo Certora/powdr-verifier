@@ -48,9 +48,11 @@ def _before():
 
 
 def _after(keep):
-    """after = the before interactions at ordinals in `keep`, plus optional extras."""
-    b = _before()["bus_interactions"]
-    return {"bus_interactions": [b[i] for i in keep], "constraints": []}
+    """after = the before interactions at ordinals in `keep` (keeps the R1/R2
+    constraints so send_offsets(after) resolves, as in real dumps)."""
+    b = _before()
+    return {"bus_interactions": [b["bus_interactions"][i] for i in keep],
+            "constraints": b["constraints"]}
 
 
 def _row(al, before_id):
@@ -124,6 +126,20 @@ def test_abort_not_globally_unique():
     before["bus_interactions"].append(_send(8, [FS1, "+", 1]))
     with pytest.raises(ValueError, match="not globally unique"):
         align.compute(before, before, 1, 1)
+
+
+def test_matches_across_send_timestamp_rewrite():
+    # inlining rewrites a send's ts (`fs1` -> `fs0 + 3`, same virtual time) but not the
+    # recv's prev_timestamp. align must still match via the vtime tier (no solve on after).
+    fs0, fs1 = "from_state__timestamp_0@1", "from_state__timestamp_1@2"
+    pv = "aux__base__prev_timestamp_0@7"
+    r1 = _add(fs1, _m(-1, fs0), -3)          # fs1 = fs0 + 3
+    r2 = _add(fs0, _m(-1, pv), -1)           # recv bound
+    before = {"bus_interactions": [_recv(8, pv), _send(8, fs1)], "constraints": [r1, r2]}
+    after = {"bus_interactions": [_recv(8, pv), _send(8, [fs0, "+", 3])],  # send ts rewritten
+             "constraints": [r2]}            # no R1 (inlined single base)
+    al = align.compute(before, after, 1, 1)
+    assert al.n_kept == 2 and al.n_removed == 0 and al.unique   # matched despite rewrite
 
 
 def test_abort_symbolic_address_space():
