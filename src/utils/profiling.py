@@ -49,7 +49,7 @@ def dump_cprofile(profiler, path: str = "cprofile.prof", print_stats: int = 40) 
         rust_path = last_rust_profile_path()
         if rust_path is not None:
             logging.warning(
-                "Rust profile data at %s (render: verifier/flamegraph.py %s)",
+                "Rust profile data at %s (view: verifier/flamegraph.py %s)",
                 rust_path,
                 rust_path,
             )

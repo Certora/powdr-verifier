@@ -381,7 +381,7 @@ def run_rust_pipeline(
     if profile_path is not None and profile_path.is_file():
         _last_rust_profile_path = profile_path
         logging.warning(
-            "Rust profile data written to %s (render: verifier/flamegraph.py %s)",
+            "Rust profile data written to %s (view: verifier/flamegraph.py %s)",
             profile_path,
             profile_path,
         )
