@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use z3::ast::Bool;
+use z3::ast::{Ast, Bool};
 
 use crate::ast_util::{free_int_symbols, free_uf_function_symbols};
 use crate::command::{declare_fun_name_cmd, parse_single_command, SmtCommand};
@@ -272,7 +272,7 @@ pub fn map_asserts(
             SmtCommand::Assert { bool: b, span, .. } => {
                 let new_b = f(b)?;
                 ensure_free_symbols_declared(&new_b, &mut ctx, &mut declared)?;
-                if new_b.to_string() != b.to_string() {
+                if !new_b.ast_eq(b) {
                     commands.push(SmtCommand::Assert {
                         bool: new_b,
                         span: *span,
