@@ -336,6 +336,15 @@ fn refresh_dyn_from_text(d: &Dynamic, script: &Script) -> Dynamic {
 }
 
 fn name_debruijn_dyn(d: &Dynamic, quant: &Dynamic, script: &Script) -> Result<Dynamic, String> {
+    if !contains_bound_var_dyn(d) {
+        return Ok(d.clone());
+    }
+    let replacements = quantifier_bounds_de_bruijn(quant);
+    if let Ok(out) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        substitute_bound_vars_dyn(d, &replacements)
+    })) {
+        return Ok(out);
+    }
     let d = refresh_dyn_from_text(d, script);
     if !contains_bound_var_dyn(&d) {
         return Ok(d);
@@ -352,7 +361,6 @@ fn name_debruijn_dyn(d: &Dynamic, quant: &Dynamic, script: &Script) -> Result<Dy
     if let Ok(out) = parse_named_dyn(&raw, &d, script) {
         return Ok(out);
     }
-    let replacements = quantifier_bounds_de_bruijn(quant);
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         substitute_bound_vars_dyn(&d, &replacements)
     }))
@@ -389,10 +397,9 @@ fn match_lift_pair(
     d: &Bool,
     bound_order: &[String],
     qvars: &HashSet<String>,
-    script: &Script,
+    _script: &Script,
 ) -> Option<(String, Dynamic)> {
-    let d = disjunct_from_text(d, script);
-    let eq = is_not_eq(&d)?;
+    let eq = is_not_eq(d)?;
     let ast = Dynamic::from_ast(&eq);
     let lhs = ast.nth_child(0)?;
     let rhs = ast.nth_child(1)?;

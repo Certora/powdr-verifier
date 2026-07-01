@@ -9,8 +9,6 @@ pub mod tactic;
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use smt2::{dump_string, ensure_declarations_for_asserts, pretty_print_script, Script};
@@ -59,10 +57,6 @@ pub fn dump_step_script(
     let path = dump_step_path(&config.output, step_index, tactic);
     eprintln!("dumping intermediate formula to {}", path.display());
     write_script_to_path(script, &path, config.pretty)
-}
-
-enum PassWait {
-    Timeout,
 }
 
 pub fn apply_pass(raw_tactic: &str, script: &Script) -> Result<(Script, StepResult), String> {
@@ -128,41 +122,6 @@ fn step_with_time(step: StepResult, running_time: f64) -> StepResult {
     }
 }
 
-enum ThreadPassResult {
-    Ok(String, StepResult),
-    Err(String),
-}
-
-fn run_pass_with_timeout(
-    raw: &str,
-    script: &Script,
-    limit: Duration,
-) -> Result<Result<(Script, StepResult), String>, PassWait> {
-    let raw = raw.to_string();
-    let smt = smt2::dump_string(script);
-    let (tx, rx) = mpsc::sync_channel(1);
-    thread::spawn(move || {
-        let msg = match Script::parse(&smt) {
-            Ok(script) => match apply_pass(&raw, &script) {
-                Ok((out, step)) => ThreadPassResult::Ok(smt2::dump_string(&out), step),
-                Err(e) => ThreadPassResult::Err(e),
-            },
-            Err(e) => ThreadPassResult::Err(e.to_string()),
-        };
-        let _ = tx.send(msg);
-    });
-    match rx.recv_timeout(limit) {
-        Ok(ThreadPassResult::Ok(out, step)) => match Script::parse(&out) {
-            Ok(script) => Ok(Ok((script, step))),
-            Err(e) => Ok(Err(e.to_string())),
-        },
-        Ok(ThreadPassResult::Err(e)) => Ok(Err(e)),
-        Err(mpsc::RecvTimeoutError::Timeout) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-            Err(PassWait::Timeout)
-        }
-    }
-}
-
 enum TimedPassResult {
     Ok((Script, StepResult)),
     Timeout,
@@ -170,17 +129,19 @@ enum TimedPassResult {
 }
 
 fn run_timed_pass(raw: &str, cur: &Script, limit: Option<Duration>) -> TimedPassResult {
-    match limit {
-        None => match apply_pass(raw, cur) {
-            Ok(v) => TimedPassResult::Ok(v),
-            Err(e) => TimedPassResult::Err(e),
-        },
-        Some(limit) if limit.is_zero() => TimedPassResult::Timeout,
-        Some(limit) => match run_pass_with_timeout(raw, cur, limit) {
-            Ok(Ok(v)) => TimedPassResult::Ok(v),
-            Ok(Err(e)) => TimedPassResult::Err(e),
-            Err(PassWait::Timeout) => TimedPassResult::Timeout,
-        },
+    if matches!(limit, Some(limit) if limit.is_zero()) {
+        return TimedPassResult::Timeout;
+    }
+    let t0 = Instant::now();
+    match apply_pass(raw, cur) {
+        Ok(v) => {
+            if limit.is_some_and(|limit| t0.elapsed() > limit) {
+                TimedPassResult::Timeout
+            } else {
+                TimedPassResult::Ok(v)
+            }
+        }
+        Err(e) => TimedPassResult::Err(e),
     }
 }
 
