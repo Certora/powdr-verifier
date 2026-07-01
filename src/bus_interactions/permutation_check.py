@@ -162,11 +162,14 @@ def _membus_match_presets(
                     continue
                 if presets.get((j, i), None) is False:
                     continue
-                if (mult_const[i] + mult_const[j]) % p != 0:
+                mi, mj = mult_const[i], mult_const[j]
+                if mi is not None and mj is not None and (mi + mj) % p != 0:
                     continue
                 candidates[i].add(j)
 
     def remove_candidate(i: int) -> None:
+        if i not in candidates:
+            return
         for partners in candidates.values():
             partners.discard(i)
         del candidates[i]
