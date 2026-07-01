@@ -1,10 +1,13 @@
 //! Grounded lemmas for ``uf_xor`` / ``uf_and`` / ``uf_or``.
 
-use std::collections::BTreeMap;
+use std::collections::{hash_map::DefaultHasher, BTreeMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 use smt2::ast_util::{decl_name, int_from_i128, int_value_dyn};
 use smt2::{map_asserts, Script};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
+
+use crate::expr_util::AssertBuildCtx;
 
 const UF_XOR: &str = "uf_xor";
 const UF_AND: &str = "uf_and";
@@ -28,42 +31,77 @@ struct BitwiseStats {
     emitted_link: usize,
 }
 
+fn bool_ast_hash(b: &Bool) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    b.hash(&mut hasher);
+    hasher.finish()
+}
+
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut stats = BitwiseStats::default();
-    let out = map_asserts(script, |b| {
+    let mut seen_axioms: HashSet<u64> = HashSet::new();
+    let mut top_axioms: Vec<Bool> = Vec::new();
+    let folded = map_asserts(script, |b| {
         let folded = fold_bitwise_bool(b);
         let terms = collect_bitwise_terms(&folded);
         stats.seen_xor += terms.xors.len();
         stats.seen_and += terms.ands.len();
         stats.seen_or += terms.ors.len();
-        let axioms = emit_axioms(&terms, &mut stats);
-        if axioms.is_empty() {
-            return Ok(folded);
+        for axiom in emit_axioms(&terms, &mut stats) {
+            if seen_axioms.insert(bool_ast_hash(&axiom)) {
+                top_axioms.push(axiom);
+            }
         }
-        let mut parts = vec![folded];
-        parts.extend(axioms);
-        Ok(Bool::and(&parts.iter().collect::<Vec<_>>()))
+        Ok(folded)
     })?;
 
+    if top_axioms.is_empty() {
+        return Ok((
+            folded,
+            serde_json::json!({
+                "top_level_bitwise_axiom_asserts": 0,
+                "bitwise_stats": stats_payload(&stats),
+            }),
+        ));
+    }
+
+    let insert_idx = folded
+        .commands
+        .iter()
+        .position(|c| c.name() == "check-sat")
+        .unwrap_or(folded.commands.len());
+    let mut commands = Vec::with_capacity(folded.commands.len() + top_axioms.len());
+    let mut build = AssertBuildCtx::from_script(&folded)?;
+    commands.extend(folded.commands[..insert_idx].iter().cloned());
+    for axiom in top_axioms.iter() {
+        build.push_assert(&mut commands, axiom)?;
+    }
+    commands.extend(folded.commands[insert_idx..].iter().cloned());
+
+    let top_level = top_axioms.len();
     Ok((
-        out,
+        Script::from_commands(&folded.source, commands),
         serde_json::json!({
-            "top_level_bitwise_axiom_asserts": 0,
-            "bitwise_stats": {
-                "seen": {
-                    "xor": stats.seen_xor,
-                    "and": stats.seen_and,
-                    "or": stats.seen_or,
-                },
-                "emitted": {
-                    "xor": stats.emitted_xor,
-                    "and": stats.emitted_and,
-                    "or": stats.emitted_or,
-                    "link": stats.emitted_link,
-                },
-            },
+            "top_level_bitwise_axiom_asserts": top_level,
+            "bitwise_stats": stats_payload(&stats),
         }),
     ))
+}
+
+fn stats_payload(stats: &BitwiseStats) -> serde_json::Value {
+    serde_json::json!({
+        "seen": {
+            "xor": stats.seen_xor,
+            "and": stats.seen_and,
+            "or": stats.seen_or,
+        },
+        "emitted": {
+            "xor": stats.emitted_xor,
+            "and": stats.emitted_and,
+            "or": stats.emitted_or,
+            "link": stats.emitted_link,
+        },
+    })
 }
 
 fn collect_bitwise_terms(formula: &Bool) -> BitwiseTerms {
