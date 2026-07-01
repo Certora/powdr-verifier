@@ -126,6 +126,15 @@ def test_abort_not_globally_unique():
         align.compute(before, before, 1, 1)
 
 
+def test_abort_symbolic_address_space():
+    # a memory interaction with a symbolic AS could be AS1 -> must not be silently dropped
+    before = _before()
+    before["bus_interactions"].append(
+        {"id": 1, "mult": 1, "args": ["mem_as@5", 8, 0, 0, 0, 0, FS0]})
+    with pytest.raises(ValueError, match="symbolic address space"):
+        align.compute(before, _after([1, 2, 4, 5]), 1, 1)
+
+
 def test_abort_address_space_not_1():
     with pytest.raises(ValueError, match="only address space 1"):
         align.compute(_before(), _after([1, 2, 4, 5]), 1, 2)
