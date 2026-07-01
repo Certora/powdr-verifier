@@ -999,14 +999,13 @@ class PermutationCheckMixin:
                 )
 
         # every interaction has exactly one match
-        if not skip_matches:
-            for i in range(n):
-                conjuncts.append(
-                    with_comment(
-                        ExactlyOne(*[m(i, j) for j in range(n)]),
-                        f"interaction {i} has exactly one match"
-                    )
+        for i in range(n):
+            conjuncts.append(
+                with_comment(
+                    ExactlyOne(*[m(i, j) for j in range(n)]).simplify(),
+                    f"interaction {i} has exactly one match"
                 )
+            )
 
         # no two inputs or two outputs have the same address space and pointer
         for i in range(n):
