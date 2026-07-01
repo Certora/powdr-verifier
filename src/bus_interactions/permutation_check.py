@@ -352,9 +352,9 @@ def keyed_io_relation(
 
     xmatch_vars: dict[tuple[int, int], FNode] = {}
     for i in range(n):
+        mapped = pairs.get(i)
         for j in range(m):
-            mapped = pairs.get(i)
-            if mapped == j:
+            if j == mapped:
                 xmatch_vars[(i, j)] = TRUE()
                 parts.append(
                     with_comment(
@@ -363,7 +363,10 @@ def keyed_io_relation(
                     )
                 )
                 continue
-            if mapped is not None or j in aligned_after:
+            if mapped is not None and j != mapped:
+                xmatch_vars[(i, j)] = FALSE()
+                continue
+            if j in aligned_after:
                 xmatch_vars[(i, j)] = FALSE()
                 continue
 
@@ -383,6 +386,8 @@ def keyed_io_relation(
 
     for i in range(n):
         for j in range(m):
+            if xmatch_vars[(i, j)].is_false():
+                continue
             for k in range(j + 1, m):
                 parts.append(
                     with_comment(
@@ -393,6 +398,8 @@ def keyed_io_relation(
 
     for j in range(m):
         for i in range(n):
+            if xmatch_vars[(i, j)].is_false():
+                continue
             for k in range(i + 1, n):
                 parts.append(
                     with_comment(
