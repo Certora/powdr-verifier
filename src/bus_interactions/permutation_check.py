@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from itertools import batched, pairwise
 import itertools
 import logging
+from pathlib import Path
 from typing import Any, Callable
 
 from .memory_plain_utils import (
@@ -101,15 +102,16 @@ def _membus_ordered_ts_pairs(order_edges: list[dict]) -> set[frozenset[str]]:
 
 
 def _membus_match_presets(
-    membus_extract: dict | None,
     n: int,
     mult_const: list[int | None],
     const_args: list[tuple[int | None, ...] | None],
     p: int,
     *,
+    source_path: Path | None = None,
     log_prefix: str | None = None,
 ) -> dict[tuple[int, int], bool]:
     """Membus-derived presets for match vars: off-diagonal ``(i, j)`` with ``i < j``, diagonal ``(i, i)``."""
+    membus_extract = fetch_extract_json(source_path)
     if membus_extract is None:
         return {}
     rows = membus_extract.get("interactions") or []
@@ -236,18 +238,18 @@ def _plain_build_match_vars(
     symbol: Callable[[int, int], FNode],
     *,
     log_prefix: str | None = None,
-    membus_extract: dict | None = None,
+    source_path: Path | None = None,
 ) -> dict[tuple[int, int], FNode]:
     """Build ``memory_match_i_j`` variables for all ``i <= j``, using ``FALSE`` when static."""
     p = ARGS().field_type.value
     n = len(interactions)
     mult_const, const_args = _plain_static_profile(interactions, p)
     membus_presets = _membus_match_presets(
-        membus_extract,
         n,
         mult_const,
         const_args,
         p,
+        source_path=source_path,
         log_prefix=log_prefix,
     )
     match_vars: dict[tuple[int, int], FNode] = {}
@@ -849,9 +851,7 @@ class PermutationCheckMixin:
             interactions,
             lambda i, j: self._symbol(f"{self.NAME}_match_{i}_{j}", BOOL),
             log_prefix=self.NAME,
-            membus_extract=fetch_extract_json(self._cur_state.source_path)
-            if self.NAME == "memory"
-            else None,
+            source_path=self._cur_state.source_path if self.NAME == "memory" else None,
         )
 
         def m(i: int, j: int) -> FNode:
