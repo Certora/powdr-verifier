@@ -346,6 +346,23 @@ def _membus_kill_distinct_key_pairs(
     return killed
 
 
+def _plain_exactly_one_match(literals: list[FNode]) -> FNode:
+    """Exactly-one over match literals, skipping entries already fixed to false."""
+    live = [lit for lit in literals if not lit.is_false()]
+    if not live:
+        return FALSE()
+    if len(live) == 1:
+        return live[0]
+    forced = [lit for lit in live if lit.is_true()]
+    if len(forced) > 1:
+        return FALSE()
+    if len(forced) == 1:
+        chosen = forced[0]
+        others = [Not(lit) for lit in live if lit is not chosen]
+        return And(chosen, *others) if others else TRUE()
+    return bool_simplify(ExactlyOne(*live))
+
+
 def _membus_refine_with_info(
     presets: dict[tuple[int, int], bool],
     extract: dict,
@@ -1190,7 +1207,7 @@ class PermutationCheckMixin:
         for i in range(n):
             conjuncts.append(
                 with_comment(
-                    ExactlyOne(*[m(i, j) for j in range(n)]).simplify(),
+                    _plain_exactly_one_match([m(i, j) for j in range(n)]),
                     f"interaction {i} has exactly one match"
                 )
             )
