@@ -78,3 +78,15 @@ def test_bogus_fact_certificate_is_sat():
     wrong = Gap(FS1, FS0, 4, sources=(Src("constraint", 0),))   # real gap is 3
     cert = certify.certificate(an, wrong)
     assert certify.run_z3(cert.smt2, certify.find_z3()) == "sat"
+
+
+def test_z3_path_override():
+    with pytest.raises(ValueError, match="z3 binary not found"):
+        certify.certify_dump(_dump(), run=True, z3_path="/nonexistent/z3")
+
+
+@pytest.mark.skipif(certify.find_z3() is None, reason="no z3 on PATH")
+def test_z3_path_explicit_binary():
+    import shutil
+    res = certify.certify_dump(_dump(), run=True, z3_path=shutil.which("z3"))
+    assert res and all(r["result"] == "unsat" for r in res)

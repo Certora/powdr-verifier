@@ -316,12 +316,25 @@ def run_z3(smt2: str, z3: str, timeout_s: int = 30) -> str:
 
 
 def certify_dump(data: Any, mem_id: int = 1, assume_is_valid: bool = True,
-                 run: bool = False, out_dir: Path | None = None) -> list[dict]:
-    """Certificates for every fact of one dump; optionally write + run them."""
+                 run: bool = False, out_dir: Path | None = None,
+                 z3_path: str | None = None) -> list[dict]:
+    """Certificates for every fact of one dump; optionally write + run them.
+
+    ``z3_path`` overrides the binary used for ``run`` (default: ``z3`` on
+    PATH)."""
     an = Analysis(data, mem_id, assume_is_valid)
-    z3 = find_z3() if run else None
-    if run and z3 is None:
-        raise ValueError("certify: --run requested but no z3 binary found on PATH")
+    z3 = None
+    if run:
+        if z3_path is not None:
+            if not (Path(z3_path).is_file() or shutil.which(z3_path)):
+                raise ValueError(f"certify: z3 binary not found: {z3_path}")
+            z3 = z3_path
+        else:
+            z3 = find_z3()
+            if z3 is None:
+                raise ValueError(
+                    "certify: --run requested but no z3 binary found on PATH "
+                    "(use --z3-path)")
     results: list[dict] = []
     for i, fact in enumerate(all_facts(an)):
         cert = certificate(an, fact)

@@ -106,6 +106,8 @@ def _build_parser() -> argparse.ArgumentParser:
     _circuit_a_args(sp_cert)
     sp_cert.add_argument("--run", action="store_true",
                          help="run each certificate through z3 (expect unsat)")
+    sp_cert.add_argument("--z3-path", dest="z3_path",
+                         help="z3 binary to use with --run (default: z3 on PATH)")
     sp_cert.add_argument("-o", "--output-dir", dest="output_dir",
                          help="write cert_*.smt2 files into this directory")
     sp_cert.add_argument("--assume-is-valid", dest="assume_is_valid",
@@ -216,7 +218,7 @@ def _run_certify(args, mode):
         out_dir = Path(args.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
     results = certify.certify_dump(data, memory_bus_id(labels), args.assume_is_valid,
-                                   run=args.run, out_dir=out_dir)
+                                   run=args.run, out_dir=out_dir, z3_path=args.z3_path)
     if mode == JSON:
         print(json.dumps({"target": t.path, "certificates": results}, indent=2))
         return
