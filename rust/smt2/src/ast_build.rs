@@ -240,5 +240,5 @@ pub fn parse_bool_formula(ctx: &mut crate::ParseCtx, raw: &str) -> Result<Bool, 
         return Ok(b);
     }
     let (form, _) = crate::sexpr::SExpr::read_form(&cmd)?;
-    crate::command::parse_assert(&form, &cmd, ctx)
+    crate::command::parse_assert(&cmd, form.span, ctx)
 }

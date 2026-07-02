@@ -42,6 +42,22 @@ impl SExpr {
         Ok((Spanned::new(node, Span { start, end }), rest))
     }
 
+    /// Top-level command spans without building an ``SExpr`` tree.
+    pub fn read_command_spans(input: &str) -> Result<Vec<Span>, String> {
+        let mut spans = Vec::new();
+        let mut pos = 0usize;
+        loop {
+            let (start, p) = skip_ws_comments(input, pos)?;
+            if p >= input.len() {
+                break;
+            }
+            let end = scan_form_end(input, p)?;
+            spans.push(Span { start, end });
+            pos = end;
+        }
+        Ok(spans)
+    }
+
     /// Parse all top-level forms from `input`.
     pub fn read_all(input: &str) -> Result<Vec<Spanned<SExpr>>, String> {
         let mut forms = Vec::new();
@@ -192,6 +208,60 @@ fn parse_form(input: &str, start: usize) -> Result<(SExpr, usize), String> {
     }
 }
 
+/// Head atom of a parenthesized command, e.g. ``assert`` from ``(assert ...)``.
+pub fn command_head(slice: &str) -> Option<&str> {
+    let bytes = slice.as_bytes();
+    let mut pos = 0usize;
+    while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+        pos += 1;
+    }
+    if pos >= bytes.len() || bytes[pos] != b'(' {
+        return None;
+    }
+    pos += 1;
+    let (_, p) = skip_ws_comments(slice, pos).ok()?;
+    let atom_start = p;
+    let atom_end = scan_atom_end(slice, p).ok()?;
+    Some(&slice[atom_start..atom_end])
+}
+
+fn scan_form_end(input: &str, start: usize) -> Result<usize, String> {
+    let bytes = input.as_bytes();
+    if start >= bytes.len() {
+        return Err("unexpected end of input".into());
+    }
+    if bytes[start] == b'(' {
+        let mut depth = 1usize;
+        let mut pos = start + 1;
+        while pos < bytes.len() {
+            let (_, p) = skip_ws_comments(input, pos)?;
+            pos = p;
+            if pos >= bytes.len() {
+                return Err("unbalanced parentheses".into());
+            }
+            match bytes[pos] {
+                b')' => {
+                    depth -= 1;
+                    pos += 1;
+                    if depth == 0 {
+                        return Ok(pos);
+                    }
+                }
+                b'(' => {
+                    let end = scan_form_end(input, pos)?;
+                    pos = end;
+                }
+                _ => {
+                    pos = scan_atom_end(input, pos)?;
+                }
+            }
+        }
+        Err("unbalanced parentheses".into())
+    } else {
+        scan_atom_end(input, start)
+    }
+}
+
 fn scan_atom_end(input: &str, start: usize) -> Result<usize, String> {
     let bytes = input.as_bytes();
     let mut pos = start;
@@ -237,6 +307,18 @@ fn scan_atom_end(input: &str, start: usize) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_spans_match_read_all() {
+        let input = "(declare-fun x () Int)\n; comment\n(assert (= x 0))\n(check-sat)\n";
+        let spans = SExpr::read_command_spans(input).unwrap();
+        assert_eq!(spans.len(), 3);
+        assert_eq!(&input[spans[0].start..spans[0].end], "(declare-fun x () Int)");
+        assert_eq!(&input[spans[1].start..spans[1].end], "(assert (= x 0))");
+        assert_eq!(&input[spans[2].start..spans[2].end], "(check-sat)");
+        assert_eq!(command_head(&input[spans[0].start..spans[0].end]), Some("declare-fun"));
+        assert_eq!(command_head(&input[spans[1].start..spans[1].end]), Some("assert"));
+    }
 
     #[test]
     fn reads_multiple_forms() {

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use z3::ast::Bool;
 
 use crate::ast_util::z3_if_to_ite;
-use crate::sexpr::{SExpr, Span, Spanned};
+use crate::sexpr::{command_head, SExpr, Span, Spanned};
 use crate::z3_parse::ParseCtx;
 
 const Z3_CMDS: &[&str] = &[
@@ -36,6 +36,84 @@ pub enum SmtCommand {
 }
 
 impl SmtCommand {
+    pub fn from_slice(span: Span, slice: &str, ctx: &mut ParseCtx) -> Result<Self, String> {
+        let head = command_head(slice).ok_or("empty command")?;
+        match head {
+            "set-info" => {
+                let (form, rest) = SExpr::read_form(slice)?;
+                if !rest.trim().is_empty() {
+                    return Err(format!("trailing input after command: `{slice}`"));
+                }
+                Ok(SmtCommand::SetInfo(form))
+            }
+            "set-logic" => {
+                ctx.ingest_command(slice)?;
+                let (form, rest) = SExpr::read_form(slice)?;
+                if !rest.trim().is_empty() {
+                    return Err(format!("trailing input after command: `{slice}`"));
+                }
+                Ok(SmtCommand::SetLogic(form))
+            }
+            "set-option" => {
+                ctx.ingest_command(slice)?;
+                let (form, rest) = SExpr::read_form(slice)?;
+                if !rest.trim().is_empty() {
+                    return Err(format!("trailing input after command: `{slice}`"));
+                }
+                Ok(SmtCommand::SetOption(form))
+            }
+            "declare-fun" => {
+                ctx.ingest_command(slice)?;
+                let (form, rest) = SExpr::read_form(slice)?;
+                if !rest.trim().is_empty() {
+                    return Err(format!("trailing input after command: `{slice}`"));
+                }
+                Ok(SmtCommand::DeclareFun(form))
+            }
+            "assert" => {
+                let b = parse_assert(slice, span, ctx)?;
+                Ok(SmtCommand::Assert {
+                    bool: b,
+                    span: Some(span),
+                    term_text: None,
+                })
+            }
+            "check-sat" => Ok(SmtCommand::CheckSat),
+            "get-model" => Ok(SmtCommand::GetModel),
+            "get-unsat-core" => Ok(SmtCommand::GetUnsatCore),
+            "echo" => {
+                let (form, rest) = SExpr::read_form(slice)?;
+                if !rest.trim().is_empty() {
+                    return Err(format!("trailing input after command: `{slice}`"));
+                }
+                Ok(SmtCommand::Echo(form))
+            }
+            "declare-sort" | "define-fun" => {
+                ctx.ingest_command(slice)?;
+                let (form, rest) = SExpr::read_form(slice)?;
+                if !rest.trim().is_empty() {
+                    return Err(format!("trailing input after command: `{slice}`"));
+                }
+                Ok(SmtCommand::Raw(form))
+            }
+            other if Z3_CMDS.contains(&other) => {
+                ctx.ingest_command(slice)?;
+                let (form, rest) = SExpr::read_form(slice)?;
+                if !rest.trim().is_empty() {
+                    return Err(format!("trailing input after command: `{slice}`"));
+                }
+                Ok(SmtCommand::Raw(form))
+            }
+            _ => {
+                let (form, rest) = SExpr::read_form(slice)?;
+                if !rest.trim().is_empty() {
+                    return Err(format!("trailing input after command: `{slice}`"));
+                }
+                Ok(SmtCommand::Raw(form))
+            }
+        }
+    }
+
     pub fn from_spanned(
         form: Spanned<SExpr>,
         input: &str,
@@ -58,7 +136,7 @@ impl SmtCommand {
                 Ok(SmtCommand::DeclareFun(form))
             }
             "assert" => {
-                let b = parse_assert(&form, slice, ctx)?;
+                let b = parse_assert(slice, form.span, ctx)?;
                 Ok(SmtCommand::Assert {
                     bool: b,
                     span: Some(form.span),
@@ -221,9 +299,13 @@ pub fn command_text<'a>(cmd: &SmtCommand, source: &'a str) -> &'a str {
     }
 }
 
-pub(crate) fn parse_assert(form: &Spanned<SExpr>, slice: &str, ctx: &mut ParseCtx) -> Result<Bool, String> {
+pub(crate) fn parse_assert(slice: &str, _span: Span, ctx: &mut ParseCtx) -> Result<Bool, String> {
     if let Some(b) = ctx.ingest_command(slice)? {
         return Ok(b);
+    }
+    let (form, rest) = SExpr::read_form(slice)?;
+    if !rest.trim().is_empty() {
+        return Err(format!("trailing input after assert: `{slice}`"));
     }
     let body = form
         .node
