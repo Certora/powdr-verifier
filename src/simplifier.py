@@ -52,7 +52,7 @@ _T = TypeVar("_T")
 TACTIC_QEPREFIX = "nnf:skolem:lift:witness:demod:z3-propagate-values:isqf"
 
 DEFAULT_TACTIC = (
-    TACTIC_QEPREFIX + ":bounds:demod:normalize:rewrite:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod:pretty"
+    TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:rewrite:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod:pretty"
 )
 
 # Custom colon-separated pipelines keyed by powdr optimization pass name (e.g. ``remove_free``).
