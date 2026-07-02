@@ -3,10 +3,12 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
+use smt2::command::SmtCommand;
 use smt2::{
-    assert_commands, ast_hash_int, contains_bound_var_dyn, debug_assert_direct_int_operand,
-    declare_fun_name_cmd, int_from_i128, int_value, int_value_dyn, map_asserts, map_bool_children,
-    IntTermSet, Script,
+    assert_commands, ast_hash_dyn, ast_hash_int, contains_bound_var_dyn, debug_assert_direct_int_operand,
+    declare_fun_name_cmd, declared_symbol_names, ensure_free_symbols_declared, int_from_i128,
+    int_value, int_value_dyn, map_bool_children, seed_parser_context, IntTermSet, ParseCtx,
+    Script,
 };
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 use z3::SortKind;
@@ -83,13 +85,30 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
 
     let total = assert_commands(script).len();
     let mut changed = 0usize;
-    let out = map_asserts(script, |b| {
-        let new = normalize_term(b, &ctx);
-        if !new.ast_eq(b) {
-            changed += 1;
+    let mut parse_ctx = ParseCtx::new();
+    seed_parser_context(&mut parse_ctx, script)?;
+    let mut declared: HashSet<String> = declared_symbol_names(&script.commands).into_iter().collect();
+    let mut commands = Vec::with_capacity(script.commands.len());
+    for cmd in &script.commands {
+        match cmd {
+            SmtCommand::Assert { bool: b, span, .. } => {
+                let new_b = normalize_term(b, &ctx);
+                if !new_b.ast_eq(b) {
+                    ensure_free_symbols_declared(&new_b, &mut parse_ctx, &mut declared)?;
+                    changed += 1;
+                    commands.push(SmtCommand::Assert {
+                        bool: new_b,
+                        span: *span,
+                        term_text: None,
+                    });
+                } else {
+                    commands.push(cmd.clone());
+                }
+            }
+            _ => commands.push(cmd.clone()),
         }
-        Ok(new)
-    })?;
+    }
+    let out = Script::from_commands(&script.source, commands);
 
     let stats = serde_json::json!({
         "asserts": total,
@@ -127,19 +146,18 @@ fn collect_variables(
     bool_symbols: &HashSet<String>,
 ) -> IntTermSet {
     let mut terms = IntTermSet::new();
-    let mut seen: Vec<Dynamic> = Vec::new();
+    let mut seen: HashSet<u64> = HashSet::new();
 
     fn visit(
         n: &Dynamic,
         field_mod: Option<i128>,
         bool_symbols: &HashSet<String>,
         terms: &mut IntTermSet,
-        seen: &mut Vec<Dynamic>,
+        seen: &mut HashSet<u64>,
     ) {
-        if seen.iter().any(|d| d.ast_eq(n)) {
+        if !seen.insert(ast_hash_dyn(n)) {
             return;
         }
-        seen.push(n.clone());
 
         if int_value_dyn(n).is_some() {
             return;
@@ -246,13 +264,13 @@ fn term_sort_key(t: &Int) -> (u8, String) {
 }
 
 fn sort_terms(terms: IntTermSet) -> IntTermSet {
-    let mut ordered: Vec<Int> = terms.terms().to_vec();
-    ordered.sort_by(|a, b| term_sort_key(a).cmp(&term_sort_key(b)));
-    let mut sorted = IntTermSet::new();
-    for t in ordered {
-        sorted.insert(t);
-    }
-    sorted
+    let mut keyed: Vec<((u8, String), Int)> = terms
+        .terms()
+        .iter()
+        .map(|t| (term_sort_key(t), t.clone()))
+        .collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0));
+    IntTermSet::from_sorted_unique(keyed.into_iter().map(|(_, t)| t).collect())
 }
 
 fn is_combinator(head: &str) -> bool {
@@ -787,6 +805,20 @@ mod tests {
         let (out, _) = apply(&script).unwrap();
         let s = smt2::dump_string(&out);
         assert!(s.contains("(= (mod (+ x y)"));
+    }
+
+    #[test]
+    fn collects_vars_under_bool_connectives() {
+        let script = Script::parse(
+            "(declare-fun x () Int)\n\
+             (declare-fun y () Int)\n\
+             (declare-fun a () Bool)\n\
+             (assert (and a (= (+ x y) 0)))\n\
+             (check-sat)\n",
+        )
+        .unwrap();
+        let (_out, stats) = apply(&script).unwrap();
+        assert_eq!(stats["int_vars"], 2);
     }
 
     #[test]
