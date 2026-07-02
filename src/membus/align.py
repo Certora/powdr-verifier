@@ -275,7 +275,7 @@ def _align_without_solve(an_b: Analysis, B: list[MemRow], A: list[MemRow],
     for row in B:
         kf = an_b.kinds[row.ordinal]                      # resolved (checked above)
         kind = kf.kind
-        if Assumption.IS_VALID_BOOLEAN in kf.assumptions:
+        if Assumption.ACTIVE_SELECTOR in kf.assumptions:
             used_is_valid = True
         status = "kept" if row.ordinal in kept else "removed"
         if status == "removed" and kind != "disabled":

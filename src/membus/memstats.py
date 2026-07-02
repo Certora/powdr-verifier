@@ -14,7 +14,7 @@ from typing import Any
 
 from src.lens.metrics import mem_key_symbolic, mult_kind
 
-from . import keys, naming, order
+from . import keys, order
 from .busmodel import find_duplicates, symbolic_as_ordinals
 from .rules import Analysis
 
@@ -75,7 +75,7 @@ class MemStats:
 def compute(data: Any, mem_id: int = 1) -> MemStats:
     an = Analysis(data, mem_id)
     have_machine = "constraints" in an.machine and "bus_interactions" in an.machine
-    chain = set(order.total_send_order(an) or []) if have_machine else set()
+    chain = set(order.send_order(an) or []) if have_machine else set()
 
     groups: dict[str, list] = collections.defaultdict(list)
     for r in an.mem:
@@ -101,10 +101,10 @@ def compute(data: Any, mem_id: int = 1) -> MemStats:
         mk = mult_kind(r.mult)
         tscol = order.ts_col(r.ts)
         if mk == "send":
-            if not (tscol and naming.is_fs(tscol) and tscol in chain):
+            if not (tscol and tscol in chain):
                 sends_ordered = False
         elif mk == "recv":
-            if not (tscol and naming.is_prev(tscol) and tscol in an.recv_uppers):
+            if not (tscol and tscol in an.recv_uppers):
                 recvs_bounded = False
     duplicates = sum(c - 1 for _, c in find_duplicates(an.mem))
     return MemStats(mem_id, len(an.mem), as_list, sends_ordered, recvs_bounded,

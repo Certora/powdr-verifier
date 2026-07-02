@@ -142,10 +142,17 @@ def test_rejects_symbolic_address_space():
 
 
 def test_rejects_symbolic_mult():
-    d = {"bus_interactions": [{"id": 1, "mult": "sel@5", "args": [1, 8, 0, 0, 0, 0, FS0]}],
+    # a flag-mux product is never a selector; a bare gating column is refused
+    # when the assumption is opted out
+    d = {"bus_interactions": [{"id": 1, "mult": ["opc@4", "*", "sel@5"],
+                               "args": [1, 8, 0, 0, 0, 0, FS0]}],
          "constraints": []}
     with pytest.raises(ValueError, match="unsupported multiplicity"):
         solve.compute(d, 1, 1)
+    d2 = {"bus_interactions": [{"id": 1, "mult": "sel@5", "args": [1, 8, 0, 0, 0, 0, FS0]}],
+          "constraints": []}
+    with pytest.raises(ValueError, match="unsupported multiplicity"):
+        solve.compute(d2, 1, 1, assume_is_valid=False)
 
 
 def test_handles_subtraction_in_gap_constraint():
@@ -206,20 +213,29 @@ def test_assume_is_valid_resolves_selector_gated_mult():
         solve.compute(d, 1, 1, assume_is_valid=False)   # opt out -> refuse
 
 
-def test_per_instruction_is_valid_not_assumed():
-    # is_valid_<K> (per-instruction, early passes) is NOT the global selector
+def test_activation_selector_is_structural():
+    # the selector is the ONE column gating EVERY active mult — recognized by
+    # structure, not by name
     from src.membus.rules import Analysis
 
-    def kind_of(mult):
-        d = {"bus_interactions": [{"id": 1, "mult": mult, "args": [1, 8, 0, 0, 0, 0, FS0]}],
+    def kinds_of(*mults):
+        d = {"bus_interactions": [{"id": 1, "mult": m, "args": [1, 8, 0, 0, 0, 0, FS0]}
+                                  for m in mults],
              "constraints": []}
-        k = Analysis(d).kinds[0]
-        return k.kind if k is not None else None
+        an = Analysis(d)
+        return [k.kind if k is not None else None for k in an.kinds.values()]
 
-    assert kind_of("is_valid@99") == "send"
-    assert kind_of(["-", "is_valid@99"]) == "recv"
-    assert kind_of("is_valid_0@27") is None                             # per-instruction
-    assert kind_of(["opcode_add_flag_0@31", "+", "is_valid@99"]) is None
+    # all rows gated by one column -> resolved (whatever the column is called)
+    assert kinds_of("gate@99", ["-", "gate@99"]) == ["send", "recv"]
+    # a constant ±1 row alongside a gated row: the gate is NOT the block
+    # selector (it would be a per-instruction variant flag) -> unresolved
+    assert kinds_of(1, "is_valid_0@27") == ["send", None]
+    # two different gating columns -> ambiguous -> both unresolved
+    assert kinds_of("is_valid_0@27", ["-", "is_valid_1@28"]) == [None, None]
+    # non-±g shapes are never a selector
+    assert kinds_of(["opcode_add_flag_0@31", "+", "is_valid@99"]) == [None]
+    # disabled rows are compatible with a selector
+    assert kinds_of(0, "gate@99") == ["disabled", "send"]
 
 
 def test_rejects_unresolved_ts_base():

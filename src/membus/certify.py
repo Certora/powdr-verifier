@@ -9,10 +9,11 @@ SMT-LIB query:
   ``G ≡ 0 ∨ H ≡ 0``), a range-check bus row as ``E mod p ∈ [0, 2^bits)``;
 - each **premise fact** is asserted as its integer claim (its own certificate
   justifies it — certificates compose along the fact DAG);
-- each named **assumption** is asserted explicitly (TS_BOUND as ``col < 2^29``
-  on the timestamp columns, IS_VALID_BOOLEAN as ``iv = 1``, MEMBUS_BYTE as the
-  byte bounds it grants) — so a certificate that needs an assumption *shows*
-  it;
+- each named **assumption** is asserted explicitly where it attaches:
+  TS_BOUND and MEMBUS_BYTE *grant* the slot-derived Bound facts (those
+  certificates are visibly trivial — the fact rests on the assumption);
+  ACTIVE_SELECTOR asserts ``selector = 1`` for the structurally recognized
+  gating column. Nothing is asserted by column name;
 - the fact's claim is asserted **negated**.
 
 ``(check-sat)`` must return ``unsat``. A ``sat`` result means the rule
@@ -29,8 +30,7 @@ from typing import Any
 
 from src.lens.normalize import BABYBEAR_PRIME
 
-from . import naming
-from .facts import TS_BITS, AffineDef, Assumption, Bound, EffKind, Fact, Gap, RecvUpper
+from .facts import AffineDef, Assumption, Bound, EffKind, Fact, Gap, RecvUpper
 from .linform import linform, names
 from .rules import Analysis
 
@@ -197,12 +197,17 @@ class _Query:
 
     def add_assumption_for(self, f: Fact, a: Assumption) -> None:
         self.comment(f"named assumption: {a.name} — {a.value}")
-        # TS_BOUND / IS_VALID_BOOLEAN materialize on the fact's columns in
-        # finish(). MEMBUS_BYTE *grants* byte bounds outright: the granted
-        # claim is asserted so the certificate is (visibly) trivial — the fact
-        # rests on the assumption, and this line is where that shows.
-        if a is Assumption.MEMBUS_BYTE and isinstance(f, Bound):
+        # MEMBUS_BYTE and TS_BOUND *grant* their slot-derived Bound facts
+        # outright: the granted claim is asserted so the certificate is
+        # (visibly) trivial — the fact rests on the assumption, and this line
+        # is where that shows. ACTIVE_SELECTOR fixes the structurally
+        # recognized gating column to 1.
+        if a in (Assumption.MEMBUS_BYTE, Assumption.TS_BOUND) and isinstance(f, Bound):
             self.assert_(self.claim(f))
+        if a is Assumption.ACTIVE_SELECTOR and self.an.active_selector is not None:
+            sel = self.an.active_selector
+            self.declare(sel)
+            self.assert_(f"(= {_smt_sym(sel)} 1)")
 
     def claim(self, f: Fact) -> str:
         if isinstance(f, Bound):
@@ -240,12 +245,6 @@ class _Query:
         for c in sorted(self.cols):
             decls.append(f"(declare-const {_smt_sym(c)} Int)")
             decls.append(f"(assert (and (<= 0 {_smt_sym(c)}) (< {_smt_sym(c)} {P})))")
-            if naming.is_ts(c):
-                decls.append(f"(assert (< {_smt_sym(c)} {1 << TS_BITS})) "
-                             f"; assumption TS_BOUND")
-            if naming.is_valid_col(c):
-                decls.append(f"(assert (= {_smt_sym(c)} 1)) "
-                             f"; assumption IS_VALID_BOOLEAN (taken as 1)")
         body = self.lines
         return "\n".join([
             "(set-logic ALL)",

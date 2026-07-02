@@ -32,7 +32,7 @@ import collections
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import keys, naming, order
+from . import keys, order
 from .busmodel import MemRow, find_duplicates, require_explicit_address_spaces
 from .facts import Assumption
 from .rules import Analysis
@@ -187,10 +187,10 @@ def compute(data: Any, mem_id: int = 1, addr_space: int = 1,
         key_of[row.ordinal] = k.value
 
     soff = order.send_offsets(an)
-    if not soff or any(v is None for v in soff.values()):
+    if not soff or all(v is None for v in soff.values()):
         raise ValueError(
             "solve: timestamps are not all offsets from a fixed base "
-            "(no verified total send order)")
+            "(send clocks not in one conflict-free gap component)")
     ts_entry = 0
     max_send_vtime: int | None = None
 
@@ -214,8 +214,9 @@ def compute(data: Any, mem_id: int = 1, addr_space: int = 1,
             kind = an.kinds[row.ordinal].kind
             tscol = order.ts_col(row.ts)
             if kind == "send":
-                if tscol is None or not naming.is_fs(tscol):
-                    raise ValueError(f"solve: send #{row.ordinal} has no from_state timestamp")
+                if tscol is None:
+                    raise ValueError(
+                        f"solve: send #{row.ordinal} has no single-column timestamp slot")
                 base = soff.get(tscol)
                 if base is None:
                     raise ValueError(
@@ -233,6 +234,11 @@ def compute(data: Any, mem_id: int = 1, addr_space: int = 1,
                 recvs.append((threshold, row.ordinal))
                 for f in an.recv_uppers.get(tscol, []):
                     used.update(f.all_assumptions())
+
+        if len({vt for vt, _ in sends}) != len(sends):
+            raise ValueError(
+                f"solve: cell {keyval} has two writes at the same virtual time — "
+                f"the write order is not determined")
 
         k = len(sends)
         if k != len(recvs):
@@ -303,7 +309,7 @@ def compute(data: Any, mem_id: int = 1, addr_space: int = 1,
     for g in an.gaps:
         used |= g.all_assumptions()
     assumed_iv = any((k := an.kinds.get(r.ordinal)) is not None
-                     and Assumption.IS_VALID_BOOLEAN in k.assumptions for r in scope)
+                     and Assumption.ACTIVE_SELECTOR in k.assumptions for r in scope)
     rows = _build_rows(an, scope, key_of, meta, str(addr_space), ts_entry, disabled)
     return Solution(mem_id, addr_space, ts_entry, max_send_vtime, rows, cells,
                     all_unique, n_inputs, n_outputs, assumed_iv, frozenset(used))

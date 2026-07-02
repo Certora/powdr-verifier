@@ -48,7 +48,7 @@ def _display_kind(an: Analysis, ordinal: int, mult: Any) -> str:
 def compute(data: Any, mem_id: int = 1, addr_space: int | None = None) -> list[InfoRow]:
     an = Analysis(data, mem_id)
     have_machine = "constraints" in an.machine and "bus_interactions" in an.machine
-    chain = (order.total_send_order(an) or []) if have_machine else []
+    chain = (order.send_order(an) or []) if have_machine else []
     soff = order.send_offsets(an) if have_machine else {}
     pos = {col: i for i, col in enumerate(chain)}
 
@@ -64,7 +64,7 @@ def compute(data: Any, mem_id: int = 1, addr_space: int | None = None) -> list[I
         kind = _display_kind(an, r.ordinal, r.mult)
         key = keys.recover_key(an, r)
         tscol = order.ts_col(r.ts) or ""
-        if naming.is_fs(tscol):                      # a send: occurs AT T + (chain offset + intra)
+        if kind == "send" and tscol:                 # occurs AT T + (chain offset + intra)
             order_pos = pos.get(tscol)
             base = soff.get(tscol)
             time = _t(base + order.intra_offset(r.ts)) if base is not None else tscol
@@ -86,5 +86,5 @@ def compute(data: Any, mem_id: int = 1, addr_space: int | None = None) -> list[I
             order_pos, time = None, tscol
         cid = class_id.setdefault((asv, str(key)), len(class_id))
         rows.append(InfoRow(r.ordinal, kind, asv, str(key), time, tscol, order_pos,
-                            order.access_index(tscol) if tscol else None, cid))
+                            naming.access_index(tscol) if tscol else None, cid))
     return rows

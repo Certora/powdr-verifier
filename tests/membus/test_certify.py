@@ -23,12 +23,14 @@ LIMB = "aux__lower_decomp__0_0@8"
 
 
 def _dump():
+    # final-APC shape: every interaction gated by the activation selector
+    iv = "is_valid@99"
     arg = [_add(_m(15360, PV), _m(15360, LIMB), 15360), "-", _m(15360, FS1)]
     return {
         "bus_interactions": [
-            {"id": 1, "mult": 1, "args": [1, 8, "d0@11", 0, 0, 0, FS0]},
-            {"id": 1, "mult": -1, "args": [1, 8, "d0@11", 0, 0, 0, PV]},
-            {"id": 1, "mult": ["-", "is_valid@99"], "args": [1, 12, 0, 0, 0, 0, PV]},
+            {"id": 1, "mult": iv, "args": [1, 8, "d0@11", 0, 0, 0, FS0]},
+            {"id": 1, "mult": ["-", iv], "args": [1, 8, "d0@11", 0, 0, 0, PV]},
+            {"id": 1, "mult": [iv, "*", 1], "args": [1, 12, 0, 0, 0, 0, FS1]},
             {"id": 3, "mult": 1, "args": [arg, 12]},       # bus-form R2
             {"id": 3, "mult": 1, "args": [LIMB, 17]},
         ],
@@ -58,7 +60,7 @@ def test_certificate_names_assumptions():
     assert "TS_BOUND" in cert.smt2
     kinds = [f for f in facts if type(f).__name__ == "EffKind"]
     iv = [f for f in kinds if f.assumptions]
-    assert iv and any("IS_VALID_BOOLEAN" in certify.certificate(an, f).smt2 for f in iv)
+    assert iv and any("ACTIVE_SELECTOR" in certify.certificate(an, f).smt2 for f in iv)
 
 
 @pytest.mark.skipif(certify.find_z3() is None, reason="no z3 on PATH")

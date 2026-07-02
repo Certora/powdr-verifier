@@ -17,9 +17,16 @@ Rules (names follow the R0/R1/R2 scheme of the busat prototype):
   multi-column args bound **no** column (marking their columns nonneg was
   review finding 5). Memory-bus **recv** data args are bytes by
   ``Assumption.MEMBUS_BYTE`` (recv only — writes are the circuit's burden).
-- **R1 → Gap.** A constraint ``a − b + c = 0`` over two from_state columns
-  reads as the integer gap ``a = b − c`` under ``TS_BOUND`` (window < p holds
-  for any canonical constant).
+- **Timestamp domain (positional).** A column is a **clock** because it is
+  the single column in the timestamp slot (``args[6]``) of a send, a **recv
+  witness** because it sits in a recv's slot — never because of its name.
+  Slot columns get ``Bound(col, 0, 2^29)`` by ``TS_BOUND``; columns *linked*
+  to a clock by a two-column ±1 constraint (the clocks of instructions with
+  no memory access) join the clock domain with a **derived** bound
+  (linked bound + |gap|), premised on the constraint — no fresh assumption.
+- **R1 → Gap.** A constraint ``a − b + c = 0`` over two clock-domain columns
+  reads as the integer gap ``a = b − c``, premised on both columns' bounds
+  (window < p).
 - **R2 → RecvUpper,** constraint form. ``fs − pv − Σ m_i·l_i + c = 0`` with
   ``m_i > 0`` and every limb bounded: window check, then ``pv ≤ fs + c``.
 - **R2 → RecvUpper,** range-check form (post-`inlining`). The LessThan
@@ -37,8 +44,10 @@ Rules (names follow the R0/R1/R2 scheme of the busat prototype):
   gadget has two roots and the code must prove the witness cannot sit on the
   other one).
 - **Kind → EffKind.** Multiplicity ↦ send/recv/disabled: constant ±1/0, or —
-  under ``--assume-is-valid`` — a linear combination of ``is_valid`` columns
-  evaluated at ``is_valid = 1`` (``IS_VALID_BOOLEAN``).
+  under ``--assume-is-valid`` — ``±g`` where ``g`` is the **structurally
+  recognized activation selector**: the one column that gates every
+  non-constant memory multiplicity in the dump (``ACTIVE_SELECTOR``). Two
+  different gating columns ⟹ no selector, those rows stay unresolved.
 """
 from __future__ import annotations
 
@@ -49,7 +58,6 @@ from typing import Any
 from src.lens.loader import machine_of
 from src.lens.normalize import BABYBEAR_PRIME
 
-from . import naming
 from .busmodel import (
     BITWISE,
     MEMORY,
@@ -92,7 +100,38 @@ class Analysis:
     def mem_src(self, row: MemRow) -> Src:
         return Src("bus", self._mem_bus_ordinal[row.ordinal])
 
-    # -- Kind ---------------------------------------------------------------
+    # -- Kind + activation selector (structural) ------------------------------
+
+    @functools.cached_property
+    def active_selector(self) -> str | None:
+        """The one column gating **every active** memory multiplicity
+        (``mult = ±g``, coefficient ±1, no constant part) — the final APC's
+        activation selector, recognized by structure.
+
+        Block activation means ALL of the block's interactions are gated: a
+        dump that mixes constant ±1 multiplicities with gated ones has no
+        block selector (the gate would be a per-instruction variant flag,
+        which ``--assume-is-valid`` does not license). None also when two
+        different gating columns appear, or a symbolic mult isn't ``±g``.
+        """
+        sel: str | None = None
+        has_const_active = False
+        for row in self.mem:
+            lf = linform(row.mult)
+            if lf is None:
+                continue                        # flag-mux products stay unresolved
+            if lf.is_const:
+                if lf.const % P != 0:
+                    has_const_active = True     # a ±1 row not behind any gate
+                continue
+            if len(lf.coeffs) != 1 or lf.const != 0 or lf.coeffs[0][1] not in (1, -1):
+                return None                     # a non-±g symbolic mult ⟹ no selector
+            g = lf.coeffs[0][0]
+            if sel is None:
+                sel = g
+            elif sel != g:
+                return None                     # two gating columns ⟹ ambiguous
+        return None if has_const_active else sel
 
     @functools.cached_property
     def kinds(self) -> dict[int, EffKind | None]:
@@ -112,14 +151,125 @@ class Analysis:
             v = lf.const % P
             kind = {1: "send", P - 1: "recv", 0: "disabled"}.get(v)
             return EffKind(row.ordinal, kind, sources=src) if kind else None
-        if self.assume_is_valid and all(naming.is_valid_col(c) for c in lf.columns):
-            v = (lf.const + sum(v for _, v in lf.items())) % P   # is_valid := 1
-            kind = {1: "send", P - 1: "recv", 0: "disabled"}.get(v)
-            if kind:
-                return EffKind(row.ordinal, kind, sources=src,
-                               assumptions=frozenset({Assumption.IS_VALID_BOOLEAN,
-                                                      Assumption.NAMING}))
+        if (self.assume_is_valid and self.active_selector is not None
+                and lf.coeffs == ((self.active_selector, lf.coeffs[0][1]),)):
+            kind = "send" if lf.coeffs[0][1] == 1 else "recv"   # g := 1
+            return EffKind(row.ordinal, kind, sources=src,
+                           assumptions=frozenset({Assumption.ACTIVE_SELECTOR}))
         return None
+
+    # -- Timestamp domain (positional) ----------------------------------------
+
+    @staticmethod
+    def _slot(ts_arg) -> tuple[str, int] | None:
+        """A timestamp-slot arg parsed as ``(col, offset)`` — the arg is
+        ``col + offset`` with coefficient 1 — or None."""
+        lf = linform(ts_arg)
+        if lf is not None and len(lf.coeffs) == 1 and lf.coeffs[0][1] == 1:
+            return lf.coeffs[0][0], lf.const
+        return None
+
+    @classmethod
+    def _slot_col(cls, ts_arg) -> str | None:
+        s = cls._slot(ts_arg)
+        return s[0] if s is not None else None
+
+    @functools.cached_property
+    def _two_col_gaps(self) -> list[tuple[int, str, str, int]]:
+        """Two-column ±1 linear constraints as ``(idx, pos, neg, const)`` —
+        i.e. ``pos − neg + const = 0``. Shared by the domain closure and R1."""
+        out = []
+        for idx, con in enumerate(self.machine.get("constraints", [])):
+            lf = linform(con)
+            if lf is None or len(lf.coeffs) != 2:
+                continue
+            (a, ca), (b, cb) = lf.coeffs
+            if {ca, cb} != {1, -1}:
+                continue
+            pos, neg = (a, b) if ca == 1 else (b, a)
+            out.append((idx, pos, neg, lf.const))
+        return out
+
+    @functools.cached_property
+    def ts_domain(self) -> tuple[set[str], set[str], dict[str, Bound]]:
+        """``(clock_cols, witness_cols, ts_bounds)``, all positional.
+
+        Seed: the slot column of every resolved send is a clock, of every
+        resolved recv a witness — each gets ``Bound(col, 0, 2^29)`` granted by
+        ``TS_BOUND`` (a statement about columns occurring in the SLOT, so it
+        covers post-`inlining` dumps where every occurrence is ``base + off``
+        with a positive offset).
+
+        Closure: a two-column ±1 constraint extends the clock domain — the
+        clocks of instructions that touch no memory, needed to chain the send
+        order (in particular the chain base, which cross-circuit alignment
+        relies on). Forward links (``new = known + d``, ``d ≥ 0``) get a
+        **derived** bound (``[0, hi_known + d)`` is residue-unique); backward
+        links admit the ``+p`` wrap branch, so their bound is **granted by
+        TS_BOUND** (the linked column is a clock of the same block) rather
+        than derived.
+
+        A column claimed as both clock and witness is dropped from both
+        (ambiguous ⟹ no facts about it).
+        """
+        clocks: set[str] = set()
+        witnesses: set[str] = set()
+        bounds: dict[str, Bound] = {}
+        for row in self.mem:
+            k = self.kinds.get(row.ordinal)
+            if k is None or k.kind == "disabled":
+                continue
+            col = self._slot_col(row.ts)
+            if col is None:
+                continue
+            (clocks if k.kind == "send" else witnesses).add(col)
+            if col not in bounds:
+                bounds[col] = Bound(col, 0, TS_MAX, sources=(self.mem_src(row),),
+                                    premises=(k,) if k.assumptions else (),
+                                    assumptions=frozenset({Assumption.TS_BOUND}))
+        both = clocks & witnesses
+        clocks -= both
+        witnesses -= both
+        for col in both:
+            bounds.pop(col, None)
+
+        # closure: forward links derive a bound, backward links get TS_BOUND
+        changed = True
+        while changed:
+            changed = False
+            for idx, pos, neg, const in self._two_col_gaps:
+                # pos - neg + const = 0  =>  pos = neg - const ; neg = pos + const
+                for known, new, d in ((neg, pos, -const), (pos, neg, const)):
+                    if known not in bounds or known not in clocks:
+                        continue
+                    if new in witnesses:
+                        continue
+                    if d >= 0:
+                        kb = bounds[known]
+                        hi = kb.hi + d
+                        if hi >= P:
+                            continue
+                        if new not in bounds or bounds[new].hi > hi:
+                            bounds[new] = Bound(new, 0, hi,
+                                                sources=(Src("constraint", idx),),
+                                                premises=(kb,))
+                            clocks.add(new)
+                            changed = True
+                    elif new not in clocks:
+                        bounds.setdefault(new, Bound(
+                            new, 0, TS_MAX, sources=(Src("constraint", idx),),
+                            assumptions=frozenset({Assumption.TS_BOUND})))
+                        clocks.add(new)
+                        changed = True
+        return clocks, witnesses, bounds
+
+    @property
+    def clock_cols(self) -> set[str]:
+        return self.ts_domain[0]
+
+    @property
+    def witness_cols(self) -> set[str]:
+        return self.ts_domain[1]
 
     # -- R0: bounds ---------------------------------------------------------
 
@@ -170,28 +320,24 @@ class Analysis:
                     put(Bound(a, 0, 1 << 8, sources=(self.mem_src(row),),
                               premises=(k,) if k.assumptions else (),
                               assumptions=frozenset({Assumption.MEMBUS_BYTE})))
+        for fact in self.ts_domain[2].values():  # positional timestamp bounds
+            put(fact)
         return out
 
-    def _hi(self, col: str) -> int | None:
-        b = self.bounds.get(col)
-        return b.hi if b is not None else None
-
-    def _ts_window(self, terms: list[tuple[str, int]], const: int,
-                   ) -> tuple[int, int, tuple[Fact, ...]] | None:
-        """Integer window ``[lo, hi]`` of ``Σ coeff·col + const`` where ts
-        columns use TS_BOUND and every other column needs a Bound with a
-        known width. None if some column is unbounded."""
+    def _window(self, terms: list[tuple[str, int]], const: int,
+                ) -> tuple[int, int, tuple[Fact, ...]] | None:
+        """Integer window ``[lo, hi]`` of ``Σ coeff·col + const``; every
+        column needs a Bound fact with a known width (timestamp columns get
+        theirs from the positional TS_BOUND facts like everything else).
+        None if some column is unbounded."""
         lo = hi = const
         prem: list[Fact] = []
         for col, c in terms:
-            if naming.is_ts(col):
-                top = TS_MAX - 1
-            else:
-                b = self.bounds.get(col)
-                if b is None or b.hi is None or b.lo < 0:
-                    return None
-                top = b.hi - 1
-                prem.append(b)
+            b = self.bounds.get(col)
+            if b is None or b.hi is None or b.lo < 0:
+                return None
+            top = b.hi - 1
+            prem.append(b)
             lo += min(0, c * top)
             hi += max(0, c * top)
         return lo, hi, tuple(prem)
@@ -200,21 +346,23 @@ class Analysis:
 
     @functools.cached_property
     def gaps(self) -> list[Gap]:
+        clocks = self.clock_cols
         out = []
-        for idx, con in enumerate(self.machine.get("constraints", [])):
-            lf = linform(con)
-            if lf is None or len(lf.coeffs) != 2:
+        for idx, pos, neg, const in self._two_col_gaps:
+            if pos not in clocks or neg not in clocks:
                 continue
-            (a, ca), (b, cb) = lf.coeffs
-            if not (naming.is_fs(a) and naming.is_fs(b)) or {ca, cb} != {1, -1}:
+            bp, bn = self.bounds.get(pos), self.bounds.get(neg)
+            if bp is None or bp.hi is None or bn is None or bn.hi is None:
                 continue
-            pos, neg = (a, b) if ca == 1 else (b, a)
-            gap = -lf.const                        # pos = neg + gap
-            if gap == 0 or abs(gap) >= TS_MAX:     # window/usability guard
+            # window: pos − neg + const ∈ (const − hi_neg, const + hi_pos) ⊂ (−p, p)
+            if not (const - bn.hi > -P and const + bp.hi < P):
+                continue
+            gap = -const                           # pos = neg + gap
+            if gap == 0 or abs(gap) >= TS_MAX:     # usability guard
                 continue
             later, earlier = (pos, neg) if gap > 0 else (neg, pos)
             out.append(Gap(later, earlier, abs(gap), sources=(Src("constraint", idx),),
-                           assumptions=frozenset({Assumption.TS_BOUND, Assumption.NAMING})))
+                           premises=(bp, bn)))
         return out
 
     # -- R2: recv bounds ----------------------------------------------------
@@ -229,9 +377,10 @@ class Analysis:
         return out
 
     def _split_ts(self, lf: LinForm) -> tuple[list, list, list]:
-        fs = [(c, v) for c, v in lf.items() if naming.is_fs(c)]
-        pv = [(c, v) for c, v in lf.items() if naming.is_prev(c)]
-        rest = [(c, v) for c, v in lf.items() if not naming.is_ts(c)]
+        clocks, witnesses, _ = self.ts_domain
+        fs = [(c, v) for c, v in lf.items() if c in clocks]
+        pv = [(c, v) for c, v in lf.items() if c in witnesses]
+        rest = [(c, v) for c, v in lf.items() if c not in clocks and c not in witnesses]
         return fs, pv, rest
 
     def _recv_upper_constraints(self) -> list[RecvUpper]:
@@ -245,7 +394,7 @@ class Analysis:
                 continue
             if any(v >= 0 for _, v in rest):
                 continue
-            win = self._ts_window(list(lf.coeffs), lf.const)
+            win = self._window(list(lf.coeffs), lf.const)
             if win is None:
                 continue
             lo, hi, prem = win
@@ -253,8 +402,7 @@ class Analysis:
                 continue
             out.append(RecvUpper(
                 pv[0][0], fs[0][0], lf.const,
-                sources=(Src("constraint", idx),), premises=prem,
-                assumptions=frozenset({Assumption.TS_BOUND, Assumption.NAMING})))
+                sources=(Src("constraint", idx),), premises=prem))
         return out
 
     def _recv_upper_range_checks(self) -> list[RecvUpper]:
@@ -281,7 +429,7 @@ class Analysis:
             if any(v >= 0 for _, v in nrest):
                 continue
             # window of k = fs − pv + Σ v·col + nconst
-            win = self._ts_window([(fs[0][0], 1), (pv[0][0], -1), *nrest], nconst)
+            win = self._window([(fs[0][0], 1), (pv[0][0], -1), *nrest], nconst)
             if win is None:
                 continue
             lo, hi, prem = win
@@ -304,8 +452,7 @@ class Analysis:
                 continue
             out.append(RecvUpper(
                 pv[0][0], fs[0][0], nconst,
-                sources=(Src("bus", idx),), premises=prem,
-                assumptions=frozenset({Assumption.TS_BOUND, Assumption.NAMING})))
+                sources=(Src("bus", idx),), premises=prem))
         return out
 
     # -- Affine byte-decomposition gadget ------------------------------------

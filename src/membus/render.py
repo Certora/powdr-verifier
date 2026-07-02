@@ -374,12 +374,16 @@ ALIGN (AS1 + AS2; before has >= after, i.e. a removal pass) — HIGH CONFIDENCE
 CERTIFY (the audit trail)
   Everything above is computed from typed FACTS (column bounds, timestamp
   gaps, recv LessThan bounds, affine pointer decompositions, resolved
-  multiplicities), each carrying its sources and named assumptions
-  (TS_BOUND: timestamps < 2^29; MEMBUS_BYTE: recv data are bytes;
-  IS_VALID_BOOLEAN; NAMING). `certify` emits one SMT query per fact —
-  sources + premises + assumptions with the claim NEGATED — and `--run`
-  checks each is unsat with z3. A sat result is a concrete witness that an
-  extraction rule overclaimed; report it, do not work around it.
+  multiplicities), each carrying its sources and named assumptions.
+  Assumptions are POSITIONAL/STRUCTURAL, never name-based: TS_BOUND (the
+  clock web — columns in membus timestamp slots and columns gap-linked to
+  them — lies in [0, 2^29)); MEMBUS_BYTE (recv data are bytes);
+  ACTIVE_SELECTOR (the one column structurally gating EVERY memory mult is
+  taken as 1 under --assume-is-valid). Column names appear only in display
+  labels. `certify` emits one SMT query per fact — sources + premises +
+  assumptions with the claim NEGATED — and `--run` checks each is unsat
+  with z3. A sat result is a concrete witness that an extraction rule
+  overclaimed; report it, do not work around it.
 
 LIMITATIONS (v1)
   Symbolic base+offset recovery requires the byte-decomposition gadget and

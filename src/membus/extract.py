@@ -29,7 +29,7 @@ from __future__ import annotations
 import collections
 from typing import Any
 
-from . import keys, naming, order
+from . import keys, order
 from .busfmt import Emitter
 from .busmodel import MemRow, find_duplicates, memory_rows, removed_rows
 from .rules import Analysis
@@ -107,7 +107,7 @@ def build_dict(pre: dict, mem_id: int, addr_space: int | None, post: dict | None
         if kf.kind == "send" and sym not in seen_send_syms:
             seen_send_syms.add(sym)
             off = order.intra_offset(row.ts)
-            if tscol is not None and naming.is_fs(tscol):
+            if tscol is not None:
                 base = soff.get(tscol)
                 if base is not None:
                     send_vt.append((base + off, sym))

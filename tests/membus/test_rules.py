@@ -71,7 +71,7 @@ def test_r2_bus_sound_sign_accepted():
     an = _r2_bus(-15360)
     ups = an.recv_uppers.get(PV, [])
     assert len(ups) == 1 and ups[0].const == -1
-    assert Assumption.TS_BOUND in ups[0].assumptions
+    assert Assumption.TS_BOUND in ups[0].all_assumptions()   # via the slot Bound premises
 
 
 def test_r2_bus_mirrored_sign_rejected():
@@ -91,18 +91,50 @@ def test_r2_bus_unbounded_limb_rejected():
 
 # -- R2 constraint form -------------------------------------------------------
 
+_MEM_ROWS = [  # seed the positional ts domain: FS is a send clock, PV a recv witness
+    {"id": 1, "mult": 1, "args": [1, 8, 0, 0, 0, 0, FS]},
+    {"id": 1, "mult": -1, "args": [1, 8, 0, 0, 0, 0, PV]},
+]
+
+
 def test_r2_constraint_requires_bounded_limbs():
     con = _add(FS, _m(-1, PV), -1, _m(-1, LIMB))
-    assert PV not in _an([con]).recv_uppers                    # limb unbounded
-    an = _an([con], bis=[{"id": 3, "mult": 1, "args": [LIMB, 17]}])
+    assert PV not in _an([con], bis=_MEM_ROWS).recv_uppers     # limb unbounded
+    an = _an([con], bis=[*_MEM_ROWS, {"id": 3, "mult": 1, "args": [LIMB, 17]}])
     assert [u.const for u in an.recv_uppers[PV]] == [-1]
 
 
 def test_r2_multiple_bounds_all_kept():
     c1 = _add(FS, _m(-1, PV), -1)
     c2 = _add(FS, _m(-1, PV), -4)
-    an = _an([c1, c2])
+    an = _an([c1, c2], bis=_MEM_ROWS)
     assert sorted(u.const for u in an.recv_uppers[PV]) == [-4, -1]
+
+
+def test_ts_domain_is_positional_not_named():
+    # a slot column with a non-timestamp name is a clock; a from_state-named
+    # column NOT in any slot (nor gap-linked) is not
+    con = _add("weird@1", _m(-1, "odd@2"), -1)
+    an = _an([con], bis=[
+        {"id": 1, "mult": 1, "args": [1, 8, 0, 0, 0, 0, "weird@1"]},
+        {"id": 1, "mult": -1, "args": [1, 8, 0, 0, 0, 0, "odd@2"]},
+    ])
+    assert "weird@1" in an.clock_cols and "odd@2" in an.witness_cols
+    assert [u.const for u in an.recv_uppers["odd@2"]] == [-1]
+    an2 = _an([], bis=[{"id": 1, "mult": 1, "args": [1, 8, 0, 0, 0, 0, FS]}])
+    assert "from_state__timestamp_9@99" not in an2.clock_cols
+
+
+def test_clock_web_closure_covers_chain_base():
+    # fs0 (the chain base) has no memory op of its own; it joins the clock web
+    # through the backward gap link and carries the TS_BOUND assumption
+    fs0 = "base@1"
+    con = _add(FS, _m(-1, fs0), -3)            # FS = fs0 + 3
+    an = _an([con], bis=_MEM_ROWS)
+    assert fs0 in an.clock_cols
+    b = an.bounds[fs0]
+    assert Assumption.TS_BOUND in b.assumptions
+    assert [(g.later, g.earlier, g.gap) for g in an.gaps] == [(FS, fs0, 3)]
 
 
 # -- Affine gadget: root refutation / modular identity ------------------------
