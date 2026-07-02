@@ -160,10 +160,6 @@ def _plain_exactly_one_match(literals: list[FNode]) -> FNode:
     return bool_simplify(ExactlyOne(*live))
 
 
-def _parse_membus_key(key: str | None):
-    return parse_membus_key(key)
-
-
 def _membus_presets_from_rows(
     presets: dict[tuple[int, int], bool],
     rows: dict[int, AlignRowInfo],
