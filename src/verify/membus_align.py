@@ -28,6 +28,27 @@ def _memory_interaction_count(data: dict) -> int:
     )
 
 
+def _memory_address_spaces(data: dict) -> set[int] | None:
+    """Constant address spaces present among memory interactions.
+
+    Returns ``None`` if we cannot determine the set (symbolic address space or
+    unresolved memory bus), signalling that no space should be skipped.
+    """
+    mem_id = _memory_bus_id(data)
+    if mem_id is None:
+        return None
+    spaces: set[int] = set()
+    for bi in data["machine"]["bus_interactions"]:
+        if bi["id"] != mem_id:
+            continue
+        a = bi["args"][0]
+        if isinstance(a, int):
+            spaces.add(a)
+        else:
+            return None
+    return spaces
+
+
 def _heuristic_before_to_after(before: dict, after: dict) -> dict[int, int]:
     mem_id = _memory_bus_id(before)
     assert mem_id is not None
@@ -230,7 +251,10 @@ def run_membus_alignment(
     before_to_after: dict[int, int] = {}
     align_ok = False
 
+    present = _memory_address_spaces(before)
     for addr_space in (1, 2):
+        if present is not None and addr_space not in present:
+            continue
         al = fetch_align_json(before_path, after_path, addr_space=addr_space)
         if al is None:
             continue
