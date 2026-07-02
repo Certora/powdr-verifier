@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use z3::ast::{Ast, Bool};
+use z3::ast::Bool;
 
 use crate::ast_util::{free_int_symbols, free_uf_function_symbols};
 use crate::command::{declare_fun_name_cmd, parse_single_command, SmtCommand};
@@ -93,18 +93,14 @@ pub struct ScriptParts {
 }
 
 impl ScriptParts {
-    /// Build the SMT-LIB fragment fed to Z3: prefix `declare-fun` + all `assert`s.
-    pub fn z3_input_string(&self, source: &str) -> String {
+    /// Prefix `declare-fun` commands as SMT-LIB (for Z3 `from_string`).
+    pub fn z3_declarations_string(&self, source: &str) -> String {
         let mut out = String::new();
         for cmd in &self.prefix {
             if cmd.name() == "declare-fun" {
                 out.push_str(&cmd.to_smtlib(source));
                 out.push('\n');
             }
-        }
-        for cmd in &self.z3_feed {
-            out.push_str(&cmd.to_smtlib(source));
-            out.push('\n');
         }
         out
     }

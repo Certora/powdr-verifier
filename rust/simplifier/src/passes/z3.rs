@@ -1,8 +1,8 @@
 //! Z3 tactic simplification over SMT-LIB scripts.
 
 use smt2::{
-    asserts_excluding_true, declared_symbol_names, extra_declarations, splice_z3_result,
-    strip_annotations_deep, Script,
+    declared_symbol_names, ensure_declarations_for_asserts, strip_annotations_deep, Script,
+    SmtCommand,
 };
 use z3::{SatResult, Tactic};
 
@@ -47,23 +47,48 @@ fn sat_result_str(r: SatResult) -> &'static str {
     }
 }
 
+fn processed_asserts(solver: &z3::Solver) -> Vec<SmtCommand> {
+    solver
+        .get_assertions()
+        .into_iter()
+        .map(|b| strip_annotations_deep(&b))
+        .filter(|b| b.as_bool() != Some(true))
+        .map(SmtCommand::new_assert)
+        .collect()
+}
+
+fn assemble_output(
+    parts: &smt2::ScriptParts,
+    new_asserts: Vec<SmtCommand>,
+    source: &str,
+) -> Result<Script, String> {
+    let mut commands = parts.prefix.clone();
+    commands.extend(new_asserts);
+    commands.push(parts.check_sat.clone());
+    commands.extend(parts.suffix.iter().cloned());
+    ensure_declarations_for_asserts(&Script::from_commands(source, commands))
+}
+
 pub fn apply(script: &Script, tactic_args: &[String]) -> Result<(Script, serde_json::Value), String> {
     let parts = script.split_at_check_sat()?;
     let asserts_in = parts.asserts_in();
-    let z3_input = parts.z3_input_string(&script.source);
 
     let tactic = build_tactic(tactic_args);
     let solver = tactic.solver();
-    solver.from_string(z3_input.as_bytes());
+
+    let decls = parts.z3_declarations_string(&script.source);
+    if !decls.is_empty() {
+        solver.from_string(decls.as_bytes());
+    }
+    for cmd in &parts.z3_feed {
+        if let Some(b) = cmd.assert_bool() {
+            solver.assert(b);
+        }
+    }
+
     let z3_check = solver.check();
-
-    let processed_str = solver.to_string();
-    let processed = Script::parse(&processed_str)?;
-    let processed = smt2::map_asserts(&processed, |b| Ok(strip_annotations_deep(b)))?;
-
+    let new_asserts = processed_asserts(&solver);
     let prefix_names = declared_symbol_names(&parts.prefix);
-    let extra = extra_declarations(&processed.commands, &prefix_names);
-    let new_asserts = asserts_excluding_true(&processed.commands);
 
     let out = if new_asserts.is_empty() && asserts_in > 0 && z3_check == SatResult::Sat {
         // Z3 reported SAT after reducing every assert to true — keep the input
@@ -74,15 +99,34 @@ pub fn apply(script: &Script, tactic_args: &[String]) -> Result<(Script, serde_j
         commands.extend(parts.suffix.iter().cloned());
         Script::from_commands(&script.source, commands)
     } else {
-        splice_z3_result(&parts, &processed.commands, &script.source)
+        assemble_output(&parts, new_asserts, &script.source)?
     };
+
+    let extra_declarations = out
+        .commands
+        .iter()
+        .filter(|c| c.name() == "declare-fun")
+        .filter(|c| {
+            smt2::declare_fun_name_cmd(c)
+                .map(|sym| !prefix_names.contains(&sym))
+                .unwrap_or(false)
+        })
+        .count();
+
+    let asserts_out = out
+        .commands
+        .iter()
+        .take_while(|c| c.name() != "check-sat")
+        .filter(|c| c.name() == "assert")
+        .count();
+
     let stats = serde_json::json!({
         "backend": "rust",
         "z3_version": z3::full_version(),
         "z3_check": sat_result_str(z3_check),
         "asserts_in": asserts_in,
-        "asserts_out": new_asserts.len(),
-        "extra_declarations": extra.len(),
+        "asserts_out": asserts_out,
+        "extra_declarations": extra_declarations,
         "ensured_declarations": 0,
         "tactic_args": if tactic_args.is_empty() { serde_json::Value::Null } else { serde_json::json!(tactic_args) },
     });
