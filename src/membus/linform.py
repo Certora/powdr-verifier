@@ -128,12 +128,20 @@ def product(e: Any) -> Product | None:
     return None
 
 
+_OPS = ("+", "-", "*")
+
+
 def names(e: Any, acc: set[str] | None = None) -> set[str]:
-    """All column names referenced anywhere in a dump expression."""
+    """All column names referenced anywhere in a dump expression.
+
+    Operator tokens (the middle string of ``[a, op, b]`` / the head of
+    ``["-", e]``) are not columns and are skipped.
+    """
     if acc is None:
         acc = set()
     if isinstance(e, str):
-        acc.add(e)
+        if e not in _OPS:
+            acc.add(e)
     elif isinstance(e, list):
         for x in e:
             names(x, acc)

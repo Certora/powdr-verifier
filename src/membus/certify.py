@@ -305,14 +305,29 @@ def find_z3() -> str | None:
 
 
 def run_z3(smt2: str, z3: str, timeout_s: int = 30) -> str:
-    """Run one certificate; returns 'unsat' | 'sat' | 'unknown' | 'error:…'."""
-    try:
-        proc = subprocess.run([z3, "-in", f"-T:{timeout_s}"], input=smt2,
-                              capture_output=True, text=True, timeout=timeout_s + 5)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return f"error: {e}"
-    res = (proc.stdout.strip().splitlines() or ["?"])[-1]
-    return res if res in ("sat", "unsat", "unknown") else f"error: {res[:80]}"
+    """Run one certificate; returns 'unsat' | 'sat' | 'unknown' | 'error:…'.
+
+    Two phases. Phase 1 runs with ``tactic.default_tactic=smt`` under a short
+    cap: z3's default tactic burns ~7-10 s in a pre-solver on the
+    quotient-encoded queries before falling through to `smt`, which closes
+    them instantly on recent z3 (see the z3-hard-certificate-queries note in
+    the research notebook). On z3 4.16.0 the direct smt tactic instead TIMES
+    OUT on those queries (fixed somewhere before 4.17-dev 316d249b), so a
+    non-answer falls back to the default tactic with the full budget."""
+
+    def once(args: list[str], cap: int) -> str:
+        try:
+            proc = subprocess.run([z3, "-in", f"-T:{cap}", *args], input=smt2,
+                                  capture_output=True, text=True, timeout=cap + 5)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return f"error: {e}"
+        res = (proc.stdout.strip().splitlines() or ["?"])[-1]
+        return res if res in ("sat", "unsat", "unknown") else f"error: {res[:80]}"
+
+    quick = once(["tactic.default_tactic=smt"], min(5, timeout_s))
+    if quick in ("sat", "unsat"):
+        return quick
+    return once([], timeout_s)
 
 
 def certify_dump(data: Any, mem_id: int = 1, assume_is_valid: bool = True,
