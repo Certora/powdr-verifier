@@ -111,6 +111,15 @@ impl IntTermSet {
             .position(|t| t.ast_eq(term))
     }
 
+    /// Build from an already-sorted, duplicate-free term list (no ``ast_eq`` re-checks).
+    pub fn from_sorted_unique(terms: Vec<Int>) -> Self {
+        let mut hash_to_idx = HashMap::with_capacity(terms.len());
+        for (i, t) in terms.iter().enumerate() {
+            hash_to_idx.insert(ast_hash_int(t), i);
+        }
+        Self { terms, hash_to_idx }
+    }
+
     /// Returns the index of ``term`` (existing or newly inserted).
     pub fn insert(&mut self, term: Int) -> usize {
         if let Some(i) = self.index_of(&term) {

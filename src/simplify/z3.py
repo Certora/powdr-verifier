@@ -7,6 +7,7 @@ import z3
 from ..utils.stats import stats_dump
 from .utils import _string_to_script
 
+
 def _declared_symbol_names(commands: list) -> set[str]:
     names: set[str] = set()
     for cmd in commands:
