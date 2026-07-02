@@ -16,7 +16,7 @@ from src.lens.loader import machine_of
 from src.lens.metrics import mem_key_symbolic, mult_kind
 
 from . import keys, order
-from .busfmt import find_duplicates, memory_bis
+from .busfmt import find_duplicates, memory_bis, symbolic_as_ordinals
 
 
 @dataclass
@@ -55,6 +55,7 @@ class MemStats:
     sends_ordered: bool
     recvs_bounded: bool
     duplicates: int        # interactions identical in every field (should be 0)
+    symbolic_as: int       # interactions with a non-constant address space (should be 0)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -65,6 +66,8 @@ class MemStats:
                 "recvs_bounded": self.recvs_bounded,
                 "no_duplicates": self.duplicates == 0,
                 "duplicates": self.duplicates,
+                "solved_as_form": self.symbolic_as == 0,
+                "symbolic_as": self.symbolic_as,
             },
         }
 
@@ -109,4 +112,6 @@ def compute(data: Any, mem_id: int = 1) -> MemStats:
             if not (tscol and order.is_prev(tscol) and tscol in recv_bound):
                 recvs_bounded = False
     duplicates = sum(c - 1 for _, c in find_duplicates(bis))
-    return MemStats(mem_id, len(bis), as_list, sends_ordered, recvs_bounded, duplicates)
+    symbolic_as = len(symbolic_as_ordinals(data, mem_id))
+    return MemStats(mem_id, len(bis), as_list, sends_ordered, recvs_bounded,
+                    duplicates, symbolic_as)

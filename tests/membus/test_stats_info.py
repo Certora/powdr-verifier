@@ -70,3 +70,22 @@ def test_info_keys_and_classes():
     assert rows[0].alias_class == rows[1].alias_class != rows[2].alias_class
     out = json.loads(render.render_info(rows, Target("g", "b", "s", "p"), JSON))
     assert len(out["interactions"]) == 3
+
+
+def test_stats_warns_on_symbolic_as():
+    d = _dump()
+    d["bus_interactions"].append({"id": 1, "mult": 1, "args": ["mem_as@9", 8, 0, 0, 0, 0, FS0]})
+    st = memstats.compute(d, 1)
+    assert st.symbolic_as == 1
+    assert "WARNING" in render.render_stats(st, Target("g", "b", "s", "p"), render.PLAIN)
+    j = json.loads(render.render_stats(st, Target("g", "b", "s", "p"), JSON))
+    assert j["preconditions"]["solved_as_form"] is False
+    assert j["preconditions"]["symbolic_as"] == 1
+
+
+def test_info_warns_on_symbolic_as():
+    rows = meminfo.compute(_dump(), 1)
+    out = render.render_info(rows, Target("g", "b", "s", "p"), render.PLAIN, symbolic_as=2)
+    assert "WARNING" in out
+    j = json.loads(render.render_info(rows, Target("g", "b", "s", "p"), JSON, symbolic_as=2))
+    assert j["symbolic_as"] == 2 and j["solved_as_form"] is False

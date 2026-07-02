@@ -110,8 +110,8 @@ def deduce(dump: dict) -> tuple[set[tuple[str, str]], dict[str, tuple[str, bool,
     - ``recv_bound``: ``prev_ts col -> (from_state col, strict?, const)`` (R2).
     - ``nonneg``: range-checked ``>= 0`` columns (R0).
     """
-    cons = dump["constraints"]
-    bis = dump["bus_interactions"]
+    cons = dump.get("constraints", [])
+    bis = dump.get("bus_interactions", [])
     nonneg: set[str] = set()
     for b in bis:
         if b.get("id") in (3, 6, 7):
@@ -199,7 +199,7 @@ def _fs_all(dump: dict) -> set[str]:
     into a single base), so scanning constraints alone misses them.
     """
     s: set[str] = set()
-    for c in dump["constraints"]:
+    for c in dump.get("constraints", []):
         names(c, s)
     for b in dump.get("bus_interactions", []):
         names(b.get("args", []), s)
@@ -248,7 +248,7 @@ def _r1_gaps(dump: dict) -> tuple[set[tuple[str, str]], dict[tuple[str, str], in
     """R1 edges plus the concrete gap of each (``pos = neg + gap``)."""
     edges: set[tuple[str, str]] = set()
     gaps: dict[tuple[str, str], int] = {}
-    for con in dump["constraints"]:
+    for con in dump.get("constraints", []):
         lt = linterms(con)
         if lt is None:
             continue

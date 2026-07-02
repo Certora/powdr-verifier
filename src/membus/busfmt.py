@@ -38,6 +38,28 @@ def _bi_key(bi: dict) -> str:
     return json.dumps([bi["id"], bi["mult"], bi["args"]], sort_keys=True)
 
 
+def symbolic_as_ordinals(data: Any, mem_id: int = 1) -> list[int]:
+    """Membus ordinals whose address space (args[0]) is NOT a constant int.
+
+    "Solved AS form" = every memory interaction has an explicit constant address
+    space. Before the `solver` pass resolves the instruction variant, an
+    interaction's AS can be a flag-multiplex (symbolic) and could be any address
+    space — so it must not be silently dropped by an ``as == N`` filter.
+    """
+    return [i for i, b in enumerate(memory_bis(data, mem_id))
+            if not isinstance(b["args"][0], int)]
+
+
+def require_explicit_address_spaces(data: Any, mem_id: int, subject: str) -> None:
+    """Shared precondition for `solve` / `align`: raise unless in solved AS form."""
+    syms = symbolic_as_ordinals(data, mem_id)
+    if syms:
+        raise ValueError(
+            f"{subject}: {len(syms)} memory interaction(s) have a symbolic address "
+            f"space (e.g. #{syms[0]}) — requires solved AS form (all address spaces "
+            f"explicit)")
+
+
 def find_duplicates(bis: list[dict]) -> list[tuple[str, int]]:
     """Identical interactions (same mult + args) in ``bis``, as ``(key, count)``.
 

@@ -133,6 +133,14 @@ def test_disabled_via_constant_expression_mult():
     assert _row(sol, 6).kind == "disabled"
 
 
+def test_rejects_symbolic_address_space():
+    # a symbolic AS could be AS1 -> solve must hard-fail (solved AS form), not drop it
+    d = {"bus_interactions": [{"id": 1, "mult": 1, "args": ["mem_as@5", 8, 0, 0, 0, 0, FS0]}],
+         "constraints": []}
+    with pytest.raises(ValueError, match="solved AS form"):
+        solve.compute(d, 1, 1)
+
+
 def test_rejects_symbolic_mult():
     d = {"bus_interactions": [{"id": 1, "mult": "sel@5", "args": [1, 8, 0, 0, 0, 0, FS0]}],
          "constraints": []}
