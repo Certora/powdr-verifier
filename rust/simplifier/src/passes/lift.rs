@@ -9,7 +9,7 @@ use smt2::ast_util::{
     contains_bound_var_dyn, de_bruijn_bound_name,
 };
 use smt2::ast_build::{free_variables_bool, iter_nodes_dyn, symbol_name_dyn};
-use smt2::{declare_fun_name_cmd, map_bool_children, parse_single_command, Script, SmtCommand};
+use smt2::{declare_fun_name_cmd, map_bool_children, parse_single_command, Script, SExpr, SmtCommand};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
 use crate::expr_util::AssertBuildCtx;
@@ -29,22 +29,31 @@ fn sort_kind_to_smt(sort: DeclSort) -> &'static str {
     }
 }
 
-fn sort_from_decl(raw: &str) -> DeclSort {
-    if raw.contains("(Array") || raw.contains(" Array ") {
-        DeclSort::Array
-    } else if raw.contains("Bool") {
-        DeclSort::Bool
-    } else {
-        DeclSort::Int
+/// Classify a declared sort by inspecting the s-expression, not its rendered
+/// text: ``Bool`` / ``(Array …)`` / everything else as ``Int``.
+fn sort_from_sexpr(sort: &SExpr) -> DeclSort {
+    match sort {
+        SExpr::Atom(a) if a == "Bool" => DeclSort::Bool,
+        SExpr::List(_) if sort.head() == Some("Array") => DeclSort::Array,
+        _ => DeclSort::Int,
     }
+}
+
+/// Sort of a ``(declare-fun name () Sort)`` command from its s-expression args
+/// (``[name, params, sort]``); defaults to ``Int`` if the shape is unexpected.
+fn declare_fun_sort(cmd: &SmtCommand) -> DeclSort {
+    cmd.spanned_form()
+        .and_then(|form| form.node.args())
+        .and_then(|args| args.get(2))
+        .map(|sort| sort_from_sexpr(&sort.node))
+        .unwrap_or(DeclSort::Int)
 }
 
 fn collect_symbol_sorts(script: &Script) -> HashMap<String, DeclSort> {
     let mut out = HashMap::new();
     for cmd in &script.commands {
         if let Some(name) = declare_fun_name_cmd(cmd) {
-            let raw = cmd.to_smtlib(&script.source);
-            out.insert(name, sort_from_decl(&raw));
+            out.insert(name, declare_fun_sort(cmd));
         }
     }
     out
@@ -132,7 +141,8 @@ impl LiftWalker {
             }
         }
 
-        let mut qvars: HashSet<String> = bound_order.iter().cloned().collect();
+        let n_bounds = bound_order.len();
+        let mut qvar_live = vec![true; n_bounds];
         let body = match quantifier_body_bool(&ast) {
             Some(body) => body,
             None => return b.clone(),
@@ -141,15 +151,14 @@ impl LiftWalker {
             return b.clone();
         };
 
-        // Single-pass dependency-driven lift: precompute each candidate's lift
-        // targets and its qvar dependencies once, then hoist with a worklist. A
-        // candidate is (re)examined only when a qvar it references is lifted (via
-        // ``rev``), so each is touched O(degree) times instead of the old
-        // iterate-to-fixpoint rescan (which also recomputed ``quantifier_body_deps``
-        // per check). The old lift order was incidental; we only require a
-        // deterministic result and prefer hoisting smaller expressions, so the
-        // ready set is keyed by ``(expr_size, hash, idx)``.
-        let full_qvars: HashSet<String> = bound_order.iter().cloned().collect();
+        // Single-pass dependency-driven lift. Bound variables are identified by
+        // their de Bruijn index (``0..n_bounds``) rather than by name: a qvar
+        // reference in a body is a ``Var`` node, so liveness, per-side targets and
+        // dependencies are all tracked as indices and a name is materialized only
+        // at the moment of hoisting. Each candidate is (re)examined via ``rev``
+        // when a qvar it references lifts, so it is touched O(degree) times. The
+        // lift order is incidental; we only require determinism and prefer smaller
+        // expressions, so the ready set is keyed by ``(expr_size, hash, cand_idx)``.
         let mut cands: Vec<LiftCand> = Vec::new();
         for d in &disjuncts {
             let Some(eq) = is_not_eq(d) else { continue };
@@ -157,13 +166,13 @@ impl LiftWalker {
             let (Some(lhs), Some(rhs)) = (eq_ast.nth_child(0), eq_ast.nth_child(1)) else {
                 continue;
             };
-            let ln = resolve_bound_or_free_name(&lhs, &bound_order);
-            let rn = resolve_bound_or_free_name(&rhs, &bound_order);
-            let deps_rhs = quantifier_body_deps(&rhs, &bound_order, &full_qvars);
-            let deps_lhs = quantifier_body_deps(&lhs, &bound_order, &full_qvars);
-            // Size of the expression most likely hoisted (the non-name side);
-            // used only as a soft "prefer smaller" preference, not for correctness.
-            let expr_size = if ln.is_some() {
+            let (l_idx, l_resolvable) = side_qvar(&lhs, n_bounds);
+            let (r_idx, r_resolvable) = side_qvar(&rhs, n_bounds);
+            let deps_rhs = body_bound_refs(&rhs, n_bounds);
+            let deps_lhs = body_bound_refs(&lhs, n_bounds);
+            // Size of the side most likely hoisted (the non-target side); a soft
+            // "prefer smaller" preference only, never affecting correctness.
+            let expr_size = if l_resolvable {
                 iter_nodes_dyn(&rhs).len()
             } else {
                 iter_nodes_dyn(&lhs).len()
@@ -172,8 +181,10 @@ impl LiftWalker {
                 d: d.clone(),
                 hash: ast_hash_bool(d),
                 expr_size,
-                ln,
-                rn,
+                l_idx,
+                r_idx,
+                l_resolvable,
+                r_resolvable,
                 lhs_expr: lhs,
                 rhs_expr: rhs,
                 deps_rhs,
@@ -181,28 +192,30 @@ impl LiftWalker {
             });
         }
 
-        // ``unlifted_*[i] == |deps ∩ qvars|``; decremented as dependency qvars lift.
+        // ``unlifted_*[i] == |deps ∩ live qvars|``; decremented as deps lift.
         let mut unlifted_rhs: Vec<usize> = cands.iter().map(|c| c.deps_rhs.len()).collect();
         let mut unlifted_lhs: Vec<usize> = cands.iter().map(|c| c.deps_lhs.len()).collect();
-        let mut rev: HashMap<String, Vec<usize>> = HashMap::new();
+        // ``rev[q]`` lists candidates to re-check when bound var ``q`` lifts.
+        let mut rev: Vec<Vec<usize>> = vec![Vec::new(); n_bounds];
         for (i, c) in cands.iter().enumerate() {
-            for n in c
+            for &q in c
                 .deps_rhs
                 .iter()
                 .chain(c.deps_lhs.iter())
-                .chain(c.ln.iter())
-                .chain(c.rn.iter())
+                .chain(c.l_idx.iter())
+                .chain(c.r_idx.iter())
             {
-                rev.entry(n.clone()).or_default().push(i);
+                rev[q].push(i);
             }
         }
-        for js in rev.values_mut() {
+        for js in rev.iter_mut() {
             js.sort_unstable();
             js.dedup();
         }
 
-        // Ready set ordered by ``(expr_size, hash, idx)``: prefer hoisting smaller
-        // expressions, with ``hash``/``idx`` making the total order deterministic.
+        // Ready set ordered by ``(expr_size, hash, cand_idx)``: prefer hoisting
+        // smaller expressions, with ``hash``/``cand_idx`` giving a deterministic
+        // total order.
         let mut ready: BTreeSet<(usize, u64, usize)> = cands
             .iter()
             .enumerate()
@@ -211,17 +224,20 @@ impl LiftWalker {
         let mut resolved = vec![false; cands.len()];
         let mut lifted_flags = vec![false; cands.len()];
 
-        while let Some((_, _, idx)) = ready.pop_first() {
-            if resolved[idx] {
+        while let Some((_, _, ci)) = ready.pop_first() {
+            if resolved[ci] {
                 continue;
             }
-            let Some((name, expr)) =
-                try_lift_cand(&cands[idx], &qvars, unlifted_rhs[idx], unlifted_lhs[idx])
+            let Some((q_idx, expr)) =
+                try_lift_cand(&cands[ci], &qvar_live, unlifted_rhs[ci], unlifted_lhs[ci])
             else {
                 // Blocked for now; re-added via ``rev`` when a referenced qvar lifts.
                 continue;
             };
-            resolved[idx] = true;
+            resolved[ci] = true;
+            let Some(name) = de_bruijn_bound_name(&bound_order, q_idx) else {
+                continue;
+            };
             if self.lifted.contains_key(&name) {
                 continue;
             }
@@ -239,24 +255,22 @@ impl LiftWalker {
                     None => continue,
                 },
             };
-            self.lifted.insert(name.clone(), hoisted);
-            qvars.remove(&name);
-            lifted_flags[idx] = true;
-            // Lifting ``name`` clears it from qvars: refresh dependents' counters
-            // and requeue them for another readiness check.
-            if let Some(js) = rev.get(&name) {
-                for &j in js {
-                    if resolved[j] {
-                        continue;
-                    }
-                    if cands[j].deps_rhs.contains(&name) {
-                        unlifted_rhs[j] -= 1;
-                    }
-                    if cands[j].deps_lhs.contains(&name) {
-                        unlifted_lhs[j] -= 1;
-                    }
-                    ready.insert((cands[j].expr_size, cands[j].hash, j));
+            self.lifted.insert(name, hoisted);
+            qvar_live[q_idx] = false;
+            lifted_flags[ci] = true;
+            // Lifting ``q_idx`` removes it from the live qvars: refresh dependents'
+            // counters and requeue them for another readiness check.
+            for &j in &rev[q_idx] {
+                if resolved[j] {
+                    continue;
                 }
+                if cands[j].deps_rhs.contains(&q_idx) {
+                    unlifted_rhs[j] -= 1;
+                }
+                if cands[j].deps_lhs.contains(&q_idx) {
+                    unlifted_lhs[j] -= 1;
+                }
+                ready.insert((cands[j].expr_size, cands[j].hash, j));
             }
         }
 
@@ -301,22 +315,26 @@ impl LiftWalker {
             None => return b.clone(),
         };
 
+        // After de Bruijn naming the still-live qvars are free named symbols in
+        // ``named_body``. Iterate ``bound_order`` (declaration order) so the
+        // rebuilt quantifier keeps that order; map position to de Bruijn index.
         let body_fv = free_variables_bool(&named_body);
-        self.unused_qvars_dropped += bound_order
-            .iter()
-            .filter(|name| qvars.contains(*name) && !body_fv.contains(*name))
-            .count();
-        let qvars_remaining: Vec<Dynamic> = bound_order
-            .iter()
-            .filter(|name| qvars.contains(*name) && body_fv.contains(*name))
-            .map(|name| {
-                let sort = self.sorts.get(name).copied().unwrap_or(DeclSort::Int);
-                match sort {
-                    DeclSort::Bool => Dynamic::from_ast(&Bool::new_const(name.as_str())),
-                    _ => Dynamic::from_ast(&Int::new_const(name.as_str())),
-                }
-            })
-            .collect();
+        let mut qvars_remaining: Vec<Dynamic> = Vec::new();
+        for (pos, name) in bound_order.iter().enumerate() {
+            let q_idx = n_bounds - 1 - pos;
+            if !qvar_live[q_idx] {
+                continue;
+            }
+            if !body_fv.contains(name) {
+                self.unused_qvars_dropped += 1;
+                continue;
+            }
+            let sort = self.sorts.get(name).copied().unwrap_or(DeclSort::Int);
+            qvars_remaining.push(match sort {
+                DeclSort::Bool => Dynamic::from_ast(&Bool::new_const(name.as_str())),
+                _ => Dynamic::from_ast(&Int::new_const(name.as_str())),
+            });
+        }
 
         if qvars_remaining.is_empty() {
             self.walk_bool(&named_body)
@@ -432,38 +450,88 @@ pub(crate) fn name_debruijn_bool(b: &Bool, quant: &Dynamic) -> Result<Bool, Stri
         .ok_or_else(|| "expected bool after de Bruijn naming".into())
 }
 
-/// Precomputed lift metadata for one `(not (= lhs rhs))` disjunct.
+/// Precomputed lift metadata for one `(not (= lhs rhs))` disjunct. Bound vars are
+/// referred to by de Bruijn index; ``*_resolvable`` records whether a side is a
+/// bound var or named symbol (i.e. a possible lift target at all).
 struct LiftCand {
     d: Bool,
     hash: u64,
     expr_size: usize,
-    ln: Option<String>,
-    rn: Option<String>,
+    l_idx: Option<usize>,
+    r_idx: Option<usize>,
+    l_resolvable: bool,
+    r_resolvable: bool,
     lhs_expr: Dynamic,
     rhs_expr: Dynamic,
-    deps_rhs: HashSet<String>,
-    deps_lhs: HashSet<String>,
+    deps_rhs: Vec<usize>,
+    deps_lhs: Vec<usize>,
 }
 
-/// Readiness check mirroring [`match_lift_pair`], using precomputed names and
+/// Readiness check mirroring [`match_lift_pair`] with precomputed indices and
 /// remaining-dependency counters (``unlifted_rhs``/``unlifted_lhs`` track
-/// ``|deps ∩ qvars|``). Prefers the lhs side, falling back to rhs, and matches
-/// the ``?`` short-circuit of the original (unresolvable var side ⇒ no lift).
+/// ``|deps ∩ live qvars|``). Returns the de Bruijn index to lift and the opposite
+/// side to hoist. Prefers the lhs side, falling back to rhs; an unresolvable side
+/// short-circuits to ``None``, matching the original ``?`` behavior.
 fn try_lift_cand(
     c: &LiftCand,
-    qvars: &HashSet<String>,
+    qvar_live: &[bool],
     unlifted_rhs: usize,
     unlifted_lhs: usize,
-) -> Option<(String, Dynamic)> {
-    let ln = c.ln.as_ref()?;
-    if qvars.contains(ln) && unlifted_rhs == 0 {
-        return Some((ln.clone(), c.rhs_expr.clone()));
+) -> Option<(usize, Dynamic)> {
+    if !c.l_resolvable {
+        return None;
     }
-    let rn = c.rn.as_ref()?;
-    if qvars.contains(rn) && unlifted_lhs == 0 {
-        return Some((rn.clone(), c.lhs_expr.clone()));
+    if let Some(i) = c.l_idx {
+        if qvar_live[i] && unlifted_rhs == 0 {
+            return Some((i, c.rhs_expr.clone()));
+        }
+    }
+    if !c.r_resolvable {
+        return None;
+    }
+    if let Some(i) = c.r_idx {
+        if qvar_live[i] && unlifted_lhs == 0 {
+            return Some((i, c.lhs_expr.clone()));
+        }
     }
     None
+}
+
+/// Classify one equality side: ``(our-bound de Bruijn index, resolvable)``.
+/// ``resolvable`` mirrors ``resolve_bound_or_free_name(..).is_some()`` (a bound
+/// var of any depth or a named symbol); the index is ``Some`` only when the side
+/// is one of this quantifier's ``n_bounds`` variables.
+fn side_qvar(side: &Dynamic, n_bounds: usize) -> (Option<usize>, bool) {
+    if let Some(i) = bound_var_index(side) {
+        let ours = i < n_bounds;
+        return (ours.then_some(i), ours);
+    }
+    (None, symbol_name_dyn(side).is_some())
+}
+
+/// Sorted, deduplicated de Bruijn indices of this quantifier's bound vars that
+/// occur free in ``expr`` (nested quantifiers are opaque, as in
+/// ``quantifier_body_deps``).
+fn body_bound_refs(expr: &Dynamic, n_bounds: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut stack = vec![expr.clone()];
+    while let Some(node) = stack.pop() {
+        if node.kind() == AstKind::Quantifier {
+            continue;
+        }
+        if let Some(idx) = bound_var_index(&node) {
+            if idx < n_bounds {
+                out.push(idx);
+            }
+            continue;
+        }
+        for ch in node.children() {
+            stack.push(ch);
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 fn is_not_eq(d: &Bool) -> Option<Bool> {
