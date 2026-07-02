@@ -82,9 +82,42 @@ fn rewrite_once(term: &Bool, p: i128, stats: &mut RewriteStats) -> Bool {
 
 fn try_rewrite_equality(term: &Bool, p: i128, stats: &mut RewriteStats) -> Option<Bool> {
     let expr = unwrap_zero_mod_eq(term, p)?;
+    if total_degree(&expr) < 2 {
+        return None;
+    }
     let rewritten = rewrite_choice(&expr, p, stats)?;
     stats.rewrites += 1;
     Some(rewritten)
+}
+
+fn total_degree(e: &Int) -> usize {
+    let dyn_ = Dynamic::from_ast(e);
+    if is_int_numeral(&dyn_) {
+        return 0;
+    }
+    match arithmetic_op(&dyn_) {
+        Some(ArithOp::Add) | Some(ArithOp::Sub) => dyn_
+            .children()
+            .into_iter()
+            .filter_map(|c| c.as_int())
+            .map(|c| total_degree(&c))
+            .max()
+            .unwrap_or(0),
+        Some(ArithOp::Neg) => dyn_
+            .children()
+            .into_iter()
+            .next()
+            .and_then(|c| c.as_int())
+            .map(|c| total_degree(&c))
+            .unwrap_or(0),
+        Some(ArithOp::Mul) => dyn_
+            .children()
+            .into_iter()
+            .filter_map(|c| c.as_int())
+            .map(|c| total_degree(&c))
+            .sum(),
+        None => 1,
+    }
 }
 
 fn rewrite_choice(expr: &Int, p: i128, stats: &mut RewriteStats) -> Option<Bool> {
