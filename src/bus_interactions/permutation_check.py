@@ -222,19 +222,6 @@ def _membus_presets_from_rows(
     for entries in by_base.values():
         killed += _membus_kill_distinct_key_pairs(presets, entries)
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            ri, rj = rows.get(i), rows.get(j)
-            if (
-                ri is not None
-                and rj is not None
-                and ri.alias_class is not None
-                and rj.alias_class is not None
-                and ri.alias_class != rj.alias_class
-            ):
-                presets[(i, j)] = False
-                killed += 1
-
     if killed:
         logging.info("%smembus row refine: killed %d off-diagonal pairs", prefix, killed)
 
