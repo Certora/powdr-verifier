@@ -89,7 +89,8 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="the AFTER pass of the same block (before has >= after)")
     sp_al.add_argument("--file-b", dest="file_b", help="explicit JSON for the after circuit")
     sp_al.add_argument("--as", dest="addr_space", type=int, default=1,
-                       help="address space to align (default 1; v1 supports AS1 only)")
+                       help="address space to align (default 1; AS2 = cross-match "
+                            "only, aborts on an actual AS2 removal)")
     sp_al.add_argument("--assume-is-valid", dest="assume_is_valid",
                        action=argparse.BooleanOptionalAction, default=True,
                        help="assume the openvm activation selector is_valid==1 (default on)")

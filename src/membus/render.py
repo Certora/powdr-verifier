@@ -332,17 +332,21 @@ SOLVE (v1: AS1, constant keys, graph solver; fails gracefully otherwise)
   complete mapping is a solution; `unique` reports whether it is forced. Row id
   is the membus ordinal, stable across --as so solutions can be merged.
 
-ALIGN (v1: AS1; before has >= after, i.e. a removal pass) — HIGH CONFIDENCE
+ALIGN (AS1 + AS2; before has >= after, i.e. a removal pass) — HIGH CONFIDENCE
   Maps every BEFORE interaction (robust ids) either to an equivalent kept
   interaction in AFTER (`=after#j`), and/or to a local partner within before
-  (recv<->send). Cross-match reuses `lens diff`'s membus matching: by
-  (address_space, pointer) cell + (mult_kind, canonical timestamp) — semantic,
-  primarily by timestamp, data-free. Local partners come from `solve(before)`,
-  which MUST be globally unique. mult==0 interactions are inert (removed, matched
-  to nothing). ABORTS (exit 2) rather than emit an unjustifiable mapping: after
-  must be a subset of before, the removed set must self-balance (no boundary
-  removed, no partner kept), and matches must be unambiguous. JSON is the primary
-  artifact (before->after / local mapping); the table is for humans.
+  (recv<->send). Cross-match is PURELY timestamp-based: (mult_kind, canonical
+  timestamp), vtime fallback for inlined sends — the pointer is NOT matched
+  (passes rewrite pointer expressions of kept interactions, never timestamps;
+  the match is a guess whose failure costs completeness, not soundness).
+  Local partners come from `solve(before)`, which MUST be globally unique —
+  AS1 only: with --as 2 the mapping is cross-match only (no local columns) and
+  an actual AS2 removal ABORTS (solve does not support AS2 yet). mult==0
+  interactions are inert (removed, matched to nothing). ABORTS (exit 2) rather
+  than emit an unjustifiable mapping: after must be a subset of before, the
+  removed set must self-balance (no boundary removed, no partner kept), and
+  matches must be unambiguous. JSON is the primary artifact (before->after /
+  local mapping); the table is for humans.
 
 LIMITATIONS (v1)
   Symbolic base+offset recovery is calibrated to the keccak (2100224) dumps

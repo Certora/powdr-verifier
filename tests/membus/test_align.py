@@ -31,12 +31,13 @@ def _recv(ptr, ts):
 
 
 # before: cell 8 = [send_a@T0(0), recv_a input(1), send_b@T3 out(2), recv_b<-send_a(3)];
-#         cell 12 = [send_c@T3 out(4), recv_c input(5)]
+#         cell 12 = [send_c@T+4 out(4), recv_c input(5)]
+# (every op has its own timestamp, as in real dumps — the match is ts-based)
 def _before():
     return {
         "bus_interactions": [
             _send(8, FS0), _recv(8, PVA), _send(8, FS1), _recv(8, PVB),
-            _send(12, FS1), _recv(12, PVC),
+            _send(12, [FS1, "+", 1]), _recv(12, PVC),
         ],
         "constraints": [
             _add(FS0, _m(-1, PVA), -1),
@@ -103,7 +104,8 @@ def test_mult0_removed_is_inert():
 
 def test_abort_after_not_subset():
     after = _after([1, 2, 4, 5])
-    after["bus_interactions"].append(_send(99, FS0))   # after-only interaction
+    # an after-only interaction at a timestamp before never used
+    after["bus_interactions"].append(_send(99, [FS1, "+", 7]))
     with pytest.raises(ValueError, match="not present in before"):
         align.compute(_before(), after, 1, 1)
 
@@ -123,7 +125,7 @@ def test_abort_partner_kept():
 def test_abort_not_globally_unique():
     # add a 3rd send to cell 8 -> unbalanced cell -> solve not unique -> abort
     before = _before()
-    before["bus_interactions"].append(_send(8, [FS1, "+", 1]))
+    before["bus_interactions"].append(_send(8, [FS1, "+", 2]))
     with pytest.raises(ValueError, match="not globally unique"):
         align.compute(before, before, 1, 1)
 
@@ -172,9 +174,71 @@ def test_abort_symbolic_address_space():
         align.compute(before, _after([1, 2, 4, 5]), 1, 1)
 
 
-def test_abort_address_space_not_1():
-    with pytest.raises(ValueError, match="only address space 1"):
-        align.compute(_before(), _after([1, 2, 4, 5]), 1, 2)
+def test_abort_unsupported_address_space():
+    with pytest.raises(ValueError, match="unsupported address space"):
+        align.compute(_before(), _after([1, 2, 4, 5]), 1, 3)
+
+
+# --------------------------------------------------------------------------- #
+# AS2: cross-match only (purely ts-based; no solve, no local connections)
+# --------------------------------------------------------------------------- #
+
+LIM0 = "mem_ptr_limbs__0_0@20"
+LIM1 = "mem_ptr_limbs__1_0@21"
+PV2 = "write_base_aux__prev_timestamp_0@22"
+
+
+def _as2(mult, ptr, ts):
+    return {"id": 1, "mult": mult, "args": [2, ptr, 0, 0, 0, 0, ts]}
+
+
+def _before_as2():
+    ptr = _add(LIM0, _m(65536, LIM1))
+    return {
+        "bus_interactions": [_as2(-1, ptr, PV2), _as2(1, ptr, [FS0, "+", 1])],
+        "constraints": [_add(FS0, _m(-1, PV2), -1)],
+    }
+
+
+def test_as2_pure_kept_matches_despite_pointer_rewrite():
+    # a pass re-associates / substitutes the pointer expression but keeps the ts:
+    # the match is purely ts-based, so the pair still aligns as fully kept.
+    before = _before_as2()
+    rewritten = _add(_m(65536, LIM1), "mem_ptr_limbs__0_9@77")   # reassoc + limb subst
+    after = {"bus_interactions": [_as2(-1, rewritten, PV2),
+                                  _as2(1, rewritten, [FS0, "+", 1])],
+             "constraints": before["constraints"]}
+    al = align.compute(before, after, 1, 2)
+    assert al.n_kept == 2 and al.n_removed == 0 and al.unique
+    assert _row(al, 0).after_id == 0 and _row(al, 1).after_id == 1
+    assert _row(al, 0).local_role == "" and _row(al, 0).local_partners == []
+
+
+def test_as2_removal_aborts_without_solve():
+    before = _before_as2()
+    after = {"bus_interactions": [before["bus_interactions"][0]],
+             "constraints": before["constraints"]}
+    with pytest.raises(ValueError, match="requires solve"):
+        align.compute(before, after, 1, 2)
+
+
+def test_as2_removed_mult0_is_inert():
+    before = _before_as2()
+    before["bus_interactions"].append(_as2(0, _add(LIM0, _m(65536, LIM1)), FS1))
+    after = {"bus_interactions": before["bus_interactions"][:2],
+             "constraints": before["constraints"]}
+    al = align.compute(before, after, 1, 2)
+    assert al.n_kept == 2 and al.n_removed == 1 and al.n_inert == 1
+    assert _row(al, 2).local_role == "inert"
+
+
+def test_as2_ambiguous_timestamp_aborts():
+    # two before interactions sharing (kind, ts) cannot be told apart
+    before = _before_as2()
+    other_ptr = _add("mem_ptr_limbs__0_5@50", _m(65536, "mem_ptr_limbs__1_5@51"))
+    before["bus_interactions"].append(_as2(1, other_ptr, [FS0, "+", 1]))  # same ts as #1
+    with pytest.raises(ValueError, match="ambiguous before"):
+        align.compute(before, before, 1, 2)
 
 
 def test_json_schema_stable():
