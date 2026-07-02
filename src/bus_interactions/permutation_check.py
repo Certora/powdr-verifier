@@ -855,16 +855,37 @@ class PermutationCheckMixin:
         )
         if skip_matches:
             logging.info("skipping matches for %s", self.NAME)
-        # provide match variables for all pairs i <= j
-        is_inputs = [
-            self._symbol(f"{self.NAME}_isinput_{i}", BOOL) for i in range(n)
-        ]
-        is_outputs = [
-            self._symbol(f"{self.NAME}_isoutput_{i}", BOOL) for i in range(n)
-        ]
-        is_disableds = [
-            self._symbol(f"{self.NAME}_isdisabled_{i}", BOOL) for i in range(n)
-        ]
+
+        membus_rows = {}
+        al = self._cur_state.memory_bus_alignment
+        if self.NAME == "memory" and al is not None and self._cur_state.source_path is not None:
+            sp = self._cur_state.source_path.resolve()
+            if sp == al.before_path.resolve():
+                membus_rows = al.before_rows
+            elif sp == al.after_path.resolve():
+                membus_rows = al.after_rows
+
+        # Fix input/output/disabled flags from the membus role, only creating a
+        # symbol for the flags a known role does not already pin to a constant.
+        is_inputs, is_outputs, is_disableds = [], [], []
+        for i in range(n):
+            row = membus_rows.get(i)
+            match row.local_role if row else None:
+                case "input":
+                    isin, isout, isdis = TRUE(), FALSE(), FALSE()
+                case "output":
+                    isin, isout, isdis = FALSE(), TRUE(), FALSE()
+                case "inert":
+                    isin, isout, isdis = FALSE(), FALSE(), TRUE()
+                case "interior":
+                    isin, isout, isdis = FALSE(), FALSE(), FALSE()
+                case _:
+                    isin = self._symbol(f"{self.NAME}_isinput_{i}", BOOL)
+                    isout = self._symbol(f"{self.NAME}_isoutput_{i}", BOOL)
+                    isdis = self._symbol(f"{self.NAME}_isdisabled_{i}", BOOL)
+            is_inputs.append(isin)
+            is_outputs.append(isout)
+            is_disableds.append(isdis)
 
         mem_key_const: list[tuple[int | None, int | None]] = []
         for inter in interactions:
@@ -927,35 +948,6 @@ class PermutationCheckMixin:
                 field_eq(args(ii)[1], args(jj)[1]),
             )
         
-        membus_rows = {}
-        al = self._cur_state.memory_bus_alignment
-        if self.NAME == "memory" and al is not None and self._cur_state.source_path is not None:
-            sp = self._cur_state.source_path.resolve()
-            if sp == al.before_path.resolve():
-                membus_rows = al.before_rows
-            elif sp == al.after_path.resolve():
-                membus_rows = al.after_rows
-
-        # kill some is_inputs, is_outputs, and is_disableds
-        for i in range(n):
-            mul = mult(i)
-            if mul.is_int_constant():
-                mul = mul.constant_value()
-                is_disableds[i] = TRUE() if mul == 0 else FALSE()
-                if mul % p != p - 1:
-                    is_inputs[i] = FALSE()
-                if mul % p != 1:
-                    is_outputs[i] = FALSE()
-            match (membus_rows.get(i).local_role if membus_rows.get(i) else None):
-                case "input":
-                    is_inputs[i], is_outputs[i], is_disableds[i] = TRUE(), FALSE(), FALSE()
-                case "output":
-                    is_inputs[i], is_outputs[i], is_disableds[i] = FALSE(), TRUE(), FALSE()
-                case "inert":
-                    is_inputs[i], is_outputs[i], is_disableds[i] = FALSE(), FALSE(), TRUE()
-                case "interior":
-                    is_inputs[i], is_outputs[i], is_disableds[i] = FALSE(), FALSE(), FALSE()
-
         # multiplicity range constraints
         for i in range(n):
             conjuncts.append(
