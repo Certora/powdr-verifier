@@ -477,13 +477,100 @@ class SMTPrettyPrinter(script.SmtPrinter):
             yield assign[k]
             self.write(")")
 
+_PREFIX_OP = {
+    operators.AND: "and",
+    operators.OR: "or",
+    operators.NOT: "not",
+    operators.IMPLIES: "=>",
+    operators.IFF: "=",
+    operators.PLUS: "+",
+    operators.MINUS: "-",
+    operators.TIMES: "*",
+    operators.EQUALS: "=",
+    operators.LE: "<=",
+    operators.LT: "<",
+    operators.ITE: "ite",
+    operators.DIV: "/",
+    operators.TOREAL: "to_real",
+    operators.POW: "pow",
+    operators.MOD: "mod",
+    operators.ARRAY_SELECT: "select",
+    operators.ARRAY_STORE: "store",
+}
+
+
+def _fast_serialize_assert(f: FNode, write, stream: TextIO) -> None:
+    # Iterative, non-generator serializer for the tree (non-daggified) printing
+    # ``serialize_smtlib`` needs. ``SmtPrinter``'s ``TreeWalker`` builds two
+    # generators per node (the walk method plus the ``@write_annotations``
+    # wrapper) and drives them via the ``next()`` protocol -- with millions of
+    # nodes that machinery dominates. Since asserts are printed with
+    # ``annotations=None``, this produces byte-identical output. Any node type we
+    # don't special-case is delegated to the stock ``SmtPrinter`` for its whole
+    # subtree, so correctness never depends on this covering every operator.
+    prefix = _PREFIX_OP
+    SYMBOL = operators.SYMBOL
+    INT_CONSTANT = operators.INT_CONSTANT
+    BOOL_CONSTANT = operators.BOOL_CONSTANT
+    FUNCTION = operators.FUNCTION
+    FORALL = operators.FORALL
+    EXISTS = operators.EXISTS
+    fallback = None
+    stack = [f]
+    while stack:
+        item = stack.pop()
+        if type(item) is str:
+            write(item)
+            continue
+        nt = item.node_type()
+        op = prefix.get(nt)
+        if op is not None:
+            write("(" + op)
+            stack.append(")")
+            for a in reversed(item.args()):
+                stack.append(a)
+                stack.append(" ")
+        elif nt == SYMBOL:
+            write(quote(item.symbol_name()))
+        elif nt == INT_CONSTANT:
+            v = item.constant_value()
+            write("(- " + str(-v) + ")" if v < 0 else str(v))
+        elif nt == BOOL_CONSTANT:
+            write("true" if item.constant_value() else "false")
+        elif nt == FUNCTION:
+            write("(" + quote(item.function_name().symbol_name()))
+            stack.append(")")
+            for a in reversed(item.args()):
+                stack.append(a)
+                stack.append(" ")
+        elif nt == FORALL or nt == EXISTS:
+            write("(forall (" if nt == FORALL else "(exists (")
+            for v in item.quantifier_vars():
+                write("(" + quote(v.symbol_name()) + " "
+                      + v.symbol_type().as_smtlib(False) + ")")
+            write(") ")
+            stack.append(")")
+            stack.append(item.arg(0))
+        else:
+            if fallback is None:
+                fallback = printers.SmtPrinter(stream)
+            fallback.printer(item)
+
+
 def serialize_smtlib(smtlib: script.SmtLibScript, file: TextIO):
+    # Asserts dominate the script; serialize them with the fast iterative walker
+    # (byte-identical to ``SmtPrinter`` with ``annotations=None``). Non-assert
+    # commands keep the daggified per-command path: a DAG printer shares let
+    # binders (``.def_N``) which the tree walker must not reuse across asserts.
+    write = file.write
     for cmd in smtlib.commands:
-        # Do not DAG-share subexpressions across top-level asserts: the printer
-        # reuses let binders (``.def_N``) and can emit equalities that reference
-        # the wrong binder when read back (e.g. skolem pin asserts).
-        cmd.serialize(file, printer=None, daggify=cmd.name != "assert")
-        file.write("\n")
+        if cmd.name == "assert":
+            write("(assert ")
+            _fast_serialize_assert(cmd.args[0], write, file)
+            write(")")
+        else:
+            cmd.serialize(file, printer=None, daggify=True)
+        write("\n")
 
 
 def pretty_print_smtlib(smtlib: script.SmtLibScript, file: TextIO):
