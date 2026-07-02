@@ -1,6 +1,6 @@
 //! Hoist ``Not(= q expr)`` skolem disjuncts from ``forall`` bodies to top-level asserts.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use smt2::ast_util::{
     ast_hash_bool, bound_var_index, decl_name, flatten_or, is_forall, or_body_parts,
@@ -141,61 +141,151 @@ impl LiftWalker {
             return b.clone();
         };
 
-        let mut candidates: Vec<Bool> = disjuncts
-            .iter()
-            .filter(|d| is_potential_lift_pair(d))
-            .cloned()
-            .collect();
-        let mut lifted_disjuncts: Vec<Bool> = Vec::new();
+        // Single-pass dependency-driven lift: precompute each candidate's lift
+        // targets and its qvar dependencies once, then hoist with a worklist. A
+        // candidate is (re)examined only when a qvar it references is lifted (via
+        // ``rev``), so each is touched O(degree) times instead of the old
+        // iterate-to-fixpoint rescan (which also recomputed ``quantifier_body_deps``
+        // per check). The old lift order was incidental; we only require a
+        // deterministic result and prefer hoisting smaller expressions, so the
+        // ready set is keyed by ``(expr_size, hash, idx)``.
+        let full_qvars: HashSet<String> = bound_order.iter().cloned().collect();
+        let mut cands: Vec<LiftCand> = Vec::new();
+        for d in &disjuncts {
+            let Some(eq) = is_not_eq(d) else { continue };
+            let eq_ast = Dynamic::from_ast(&eq);
+            let (Some(lhs), Some(rhs)) = (eq_ast.nth_child(0), eq_ast.nth_child(1)) else {
+                continue;
+            };
+            let ln = resolve_bound_or_free_name(&lhs, &bound_order);
+            let rn = resolve_bound_or_free_name(&rhs, &bound_order);
+            let deps_rhs = quantifier_body_deps(&rhs, &bound_order, &full_qvars);
+            let deps_lhs = quantifier_body_deps(&lhs, &bound_order, &full_qvars);
+            // Size of the expression most likely hoisted (the non-name side);
+            // used only as a soft "prefer smaller" preference, not for correctness.
+            let expr_size = if ln.is_some() {
+                iter_nodes_dyn(&rhs).len()
+            } else {
+                iter_nodes_dyn(&lhs).len()
+            };
+            cands.push(LiftCand {
+                d: d.clone(),
+                hash: ast_hash_bool(d),
+                expr_size,
+                ln,
+                rn,
+                lhs_expr: lhs,
+                rhs_expr: rhs,
+                deps_rhs,
+                deps_lhs,
+            });
+        }
 
-        let mut progressed = true;
-        while progressed {
-            progressed = false;
-            candidates.sort_by_key(|a| ast_hash_bool(a));
-            let mut next = Vec::new();
-            for d in candidates {
-                if let Some((lifted_name, expr)) = match_lift_pair(&d, &bound_order, &qvars) {
-                    if !self.lifted.contains_key(&lifted_name) {
-                        let Ok(named_expr) = name_debruijn_dyn(&expr, &ast) else {
-                            next.push(d);
-                            continue;
-                        };
-                        let sort = self.sorts.get(&lifted_name).copied().unwrap_or(DeclSort::Int);
-                        let hoisted = match sort {
-                            DeclSort::Bool => {
-                                let Some(rhs) = named_expr.as_bool() else {
-                                    next.push(d);
-                                    continue;
-                                };
-                                Bool::new_const(lifted_name.as_str()).eq(&rhs)
-                            }
-                            _ => {
-                                let Some(rhs) = named_expr.as_int() else {
-                                    next.push(d);
-                                    continue;
-                                };
-                                Int::new_const(lifted_name.as_str()).eq(&rhs)
-                            }
-                        };
-                        self.lifted.insert(lifted_name.clone(), hoisted);
-                        qvars.remove(&lifted_name);
-                        lifted_disjuncts.push(d.clone());
-                        progressed = true;
+        // ``unlifted_*[i] == |deps ∩ qvars|``; decremented as dependency qvars lift.
+        let mut unlifted_rhs: Vec<usize> = cands.iter().map(|c| c.deps_rhs.len()).collect();
+        let mut unlifted_lhs: Vec<usize> = cands.iter().map(|c| c.deps_lhs.len()).collect();
+        let mut rev: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, c) in cands.iter().enumerate() {
+            for n in c
+                .deps_rhs
+                .iter()
+                .chain(c.deps_lhs.iter())
+                .chain(c.ln.iter())
+                .chain(c.rn.iter())
+            {
+                rev.entry(n.clone()).or_default().push(i);
+            }
+        }
+        for js in rev.values_mut() {
+            js.sort_unstable();
+            js.dedup();
+        }
+
+        // Ready set ordered by ``(expr_size, hash, idx)``: prefer hoisting smaller
+        // expressions, with ``hash``/``idx`` making the total order deterministic.
+        let mut ready: BTreeSet<(usize, u64, usize)> = cands
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.expr_size, c.hash, i))
+            .collect();
+        let mut resolved = vec![false; cands.len()];
+        let mut lifted_flags = vec![false; cands.len()];
+
+        while let Some((_, _, idx)) = ready.pop_first() {
+            if resolved[idx] {
+                continue;
+            }
+            let Some((name, expr)) =
+                try_lift_cand(&cands[idx], &qvars, unlifted_rhs[idx], unlifted_lhs[idx])
+            else {
+                // Blocked for now; re-added via ``rev`` when a referenced qvar lifts.
+                continue;
+            };
+            resolved[idx] = true;
+            if self.lifted.contains_key(&name) {
+                continue;
+            }
+            let Ok(named_expr) = name_debruijn_dyn_with(&expr, &all_bounds) else {
+                continue;
+            };
+            let sort = self.sorts.get(&name).copied().unwrap_or(DeclSort::Int);
+            let hoisted = match sort {
+                DeclSort::Bool => match named_expr.as_bool() {
+                    Some(rhs) => Bool::new_const(name.as_str()).eq(&rhs),
+                    None => continue,
+                },
+                _ => match named_expr.as_int() {
+                    Some(rhs) => Int::new_const(name.as_str()).eq(&rhs),
+                    None => continue,
+                },
+            };
+            self.lifted.insert(name.clone(), hoisted);
+            qvars.remove(&name);
+            lifted_flags[idx] = true;
+            // Lifting ``name`` clears it from qvars: refresh dependents' counters
+            // and requeue them for another readiness check.
+            if let Some(js) = rev.get(&name) {
+                for &j in js {
+                    if resolved[j] {
+                        continue;
                     }
-                } else {
-                    next.push(d);
+                    if cands[j].deps_rhs.contains(&name) {
+                        unlifted_rhs[j] -= 1;
+                    }
+                    if cands[j].deps_lhs.contains(&name) {
+                        unlifted_lhs[j] -= 1;
+                    }
+                    ready.insert((cands[j].expr_size, cands[j].hash, j));
                 }
             }
-            candidates = next;
         }
+
+        let lifted_disjuncts: Vec<Bool> = cands
+            .iter()
+            .zip(&lifted_flags)
+            .filter(|(_, &lifted)| lifted)
+            .map(|(c, _)| c.d.clone())
+            .collect();
 
         if lifted_disjuncts.is_empty() {
             return b.clone();
         }
 
+        // Hash-bucket the lifted disjuncts so dropping them from the body is
+        // ``O(disjuncts)`` instead of ``O(disjuncts * lifted)`` ``ast_eq`` calls.
+        let mut lifted_by_hash: HashMap<u64, Vec<Bool>> = HashMap::new();
+        for lifted in &lifted_disjuncts {
+            lifted_by_hash
+                .entry(ast_hash_bool(lifted))
+                .or_default()
+                .push(lifted.clone());
+        }
         let remaining: Vec<Bool> = disjuncts
             .iter()
-            .filter(|d| !lifted_disjuncts.iter().any(|lifted| d.ast_eq(lifted)))
+            .filter(|d| match lifted_by_hash.get(&ast_hash_bool(d)) {
+                Some(bucket) => !bucket.iter().any(|lifted| d.ast_eq(lifted)),
+                None => true,
+            })
             .cloned()
             .collect();
         let body_out = if remaining.is_empty() {
@@ -203,9 +293,12 @@ impl LiftWalker {
         } else {
             flatten_or(remaining)
         };
-        let named_body = match name_debruijn_bool(&body_out, &ast) {
-            Ok(b) => b,
-            Err(_) => return b.clone(),
+        let named_body = match name_debruijn_dyn_with(&Dynamic::from_ast(&body_out), &all_bounds)
+            .ok()
+            .and_then(|d| d.as_bool())
+        {
+            Some(b) => b,
+            None => return b.clone(),
         };
 
         let body_fv = free_variables_bool(&named_body);
@@ -316,7 +409,17 @@ fn name_debruijn_dyn(d: &Dynamic, quant: &Dynamic) -> Result<Dynamic, String> {
         return Ok(d.clone());
     }
     let replacements = quantifier_bounds_de_bruijn(quant);
-    let out = substitute_bound_vars_dyn(d, &replacements);
+    name_debruijn_dyn_with(d, &replacements)
+}
+
+/// De Bruijn naming with a precomputed replacement vector. Callers naming many
+/// terms against the same quantifier should compute the vector once (it is
+/// ``O(bound vars)``) rather than per term via [`name_debruijn_dyn`].
+fn name_debruijn_dyn_with(d: &Dynamic, replacements: &[Dynamic]) -> Result<Dynamic, String> {
+    if !contains_bound_var_dyn(d) {
+        return Ok(d.clone());
+    }
+    let out = substitute_bound_vars_dyn(d, replacements);
     if contains_bound_var_dyn(&out) {
         return Err("substitute_bound_vars_dyn left bound variables".into());
     }
@@ -329,8 +432,38 @@ pub(crate) fn name_debruijn_bool(b: &Bool, quant: &Dynamic) -> Result<Bool, Stri
         .ok_or_else(|| "expected bool after de Bruijn naming".into())
 }
 
-fn is_potential_lift_pair(d: &Bool) -> bool {
-    is_not_eq(d).is_some()
+/// Precomputed lift metadata for one `(not (= lhs rhs))` disjunct.
+struct LiftCand {
+    d: Bool,
+    hash: u64,
+    expr_size: usize,
+    ln: Option<String>,
+    rn: Option<String>,
+    lhs_expr: Dynamic,
+    rhs_expr: Dynamic,
+    deps_rhs: HashSet<String>,
+    deps_lhs: HashSet<String>,
+}
+
+/// Readiness check mirroring [`match_lift_pair`], using precomputed names and
+/// remaining-dependency counters (``unlifted_rhs``/``unlifted_lhs`` track
+/// ``|deps ∩ qvars|``). Prefers the lhs side, falling back to rhs, and matches
+/// the ``?`` short-circuit of the original (unresolvable var side ⇒ no lift).
+fn try_lift_cand(
+    c: &LiftCand,
+    qvars: &HashSet<String>,
+    unlifted_rhs: usize,
+    unlifted_lhs: usize,
+) -> Option<(String, Dynamic)> {
+    let ln = c.ln.as_ref()?;
+    if qvars.contains(ln) && unlifted_rhs == 0 {
+        return Some((ln.clone(), c.rhs_expr.clone()));
+    }
+    let rn = c.rn.as_ref()?;
+    if qvars.contains(rn) && unlifted_lhs == 0 {
+        return Some((rn.clone(), c.lhs_expr.clone()));
+    }
+    None
 }
 
 fn is_not_eq(d: &Bool) -> Option<Bool> {
@@ -345,6 +478,9 @@ fn is_not_eq(d: &Bool) -> Option<Bool> {
     inner.as_bool()
 }
 
+/// Reference implementation of the per-disjunct lift check, retained for tests;
+/// the hot path uses [`try_lift_cand`] with precomputed dependency counters.
+#[allow(dead_code)]
 fn match_lift_pair(
     d: &Bool,
     bound_order: &[String],
