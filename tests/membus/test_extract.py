@@ -2,7 +2,7 @@
 import pytest
 
 from src.membus import extract
-from src.membus.busfmt import find_duplicates, removed_memory_bis
+from src.membus.busmodel import find_duplicates, memory_rows, removed_rows
 
 
 def _m(c, col):
@@ -47,6 +47,29 @@ def test_build_dict_json_shape():
     assert pub["interactions"][0]["alias_determined"] is True
     assert pub["interactions"][0]["address_space"] == "1"
     assert pub["interactions"][0]["key"] == "const 8"
+    assert pub["unordered"] == []            # everything justified
+
+
+def test_edges_are_justified():
+    # send@T+0, send@T+4 (fs1+1), recv pv <= fs1-1 = T+2 -> recv < send@T+4 only.
+    model = extract.build_dict(_chain_dump(), 1, 1, None)
+    sym = {r["ordinal"]: r["abstract_ts"] for r in model["interactions"]}
+    edges = {(e["lhs"], e["rhs"]) for e in model["order_edges"]}
+    assert (sym[0], sym[2]) in edges                       # send chain T+0 < T+4
+    assert (sym[1], sym[2]) in edges                       # recv (<=T+2) < send @T+4
+    assert (sym[1], sym[0]) not in edges                   # NOT before send @T+0
+    assert all("(" not in lhs for lhs, _ in edges)
+
+
+def test_unbounded_recv_gets_no_edge_and_is_reported():
+    d = _chain_dump()
+    d["constraints"] = [_add(FS1, _m(-1, FS0), -3)]        # drop the R2 bound
+    model = extract.build_dict(d, 1, 1, None)
+    sym = {r["ordinal"]: r["abstract_ts"] for r in model["interactions"]}
+    assert all(e["lhs"] != sym[1] for e in model["order_edges"])
+    assert [u["abstract_ts"] for u in model["unordered"]] == [sym[1]]
+    txt = extract.format_bus(model)
+    assert "UNORDERED" in txt
 
 
 def test_extract_unary_minus_mult():
@@ -84,14 +107,18 @@ def test_extract_rejects_duplicate_interactions():
 def test_find_duplicates():
     a = {"id": 1, "mult": 1, "args": [1, 8, 0, 0, 0, 0, "t@1"]}
     b = {"id": 1, "mult": -1, "args": [1, 8, 0, 0, 0, 0, "t@1"]}   # differs by mult
-    assert find_duplicates([a, b]) == []                          # distinct
-    assert find_duplicates([a, dict(a)]) and find_duplicates([a, dict(a)])[0][1] == 2
+    rows = memory_rows({"bus_interactions": [a, b], "constraints": []})
+    assert find_duplicates(rows) == []                             # distinct
+    rows2 = memory_rows({"bus_interactions": [a, dict(a)], "constraints": []})
+    dups = find_duplicates(rows2)
+    assert dups and dups[0][1] == 2
 
 
 def test_removed_set_is_multiset_diff():
     a = {"id": 1, "mult": 1, "args": [1, 8, 0, 0, 0, 0, "t@1"]}
     b = {"id": 1, "mult": -1, "args": [1, 8, 0, 0, 0, 0, "t@2"]}
-    pre = {"bus_interactions": [a, b], "constraints": []}
-    post = {"bus_interactions": [a], "constraints": []}
-    removed = removed_memory_bis(pre, post, 1)
-    assert removed == [b]
+    pre_rows = memory_rows({"bus_interactions": [a, b], "constraints": []})
+    post_rows = memory_rows({"bus_interactions": [a], "constraints": []})
+    removed = removed_rows(pre_rows, post_rows)
+    assert [r.ordinal for r in removed] == [1]
+    assert removed[0].mult == -1

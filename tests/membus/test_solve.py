@@ -171,6 +171,7 @@ def test_recv_bound_from_range_check_arg():
             {"id": 1, "mult": 1, "args": [1, 8, 0, 0, 0, 0, [fs, "+", 5]]},   # send @ T+5
             {"id": 1, "mult": -1, "args": [1, 8, 0, 0, 0, 0, pv]},            # recv (input)
             {"id": 3, "mult": 1, "args": [arg, 12]},                          # relocated R2
+            {"id": 3, "mult": 1, "args": [limb, 17]},                         # limb width
         ],
         "constraints": [],
     }
@@ -193,6 +194,7 @@ def test_assume_is_valid_resolves_selector_gated_mult():
             {"id": 1, "mult": iv, "args": [1, 8, 0, 0, 0, 0, [fs, "+", 5]]},   # send = is_valid
             {"id": 1, "mult": ["-", iv], "args": [1, 8, 0, 0, 0, 0, pv]},      # recv = -is_valid
             {"id": 3, "mult": 1, "args": [arg, 12]},
+            {"id": 3, "mult": 1, "args": [limb, 17]},                          # limb width
         ],
         "constraints": [],
     }
@@ -206,11 +208,18 @@ def test_assume_is_valid_resolves_selector_gated_mult():
 
 def test_per_instruction_is_valid_not_assumed():
     # is_valid_<K> (per-instruction, early passes) is NOT the global selector
-    from src.membus import solve as _s
-    assert _s._kind_assuming_is_valid("is_valid@99") == "send"
-    assert _s._kind_assuming_is_valid(["-", "is_valid@99"]) == "recv"
-    assert _s._kind_assuming_is_valid("is_valid_0@27") is None          # per-instruction
-    assert _s._kind_assuming_is_valid(["opcode_add_flag_0@31", "+", "is_valid@99"]) is None
+    from src.membus.rules import Analysis
+
+    def kind_of(mult):
+        d = {"bus_interactions": [{"id": 1, "mult": mult, "args": [1, 8, 0, 0, 0, 0, FS0]}],
+             "constraints": []}
+        k = Analysis(d).kinds[0]
+        return k.kind if k is not None else None
+
+    assert kind_of("is_valid@99") == "send"
+    assert kind_of(["-", "is_valid@99"]) == "recv"
+    assert kind_of("is_valid_0@27") is None                             # per-instruction
+    assert kind_of(["opcode_add_flag_0@31", "+", "is_valid@99"]) is None
 
 
 def test_rejects_unresolved_ts_base():

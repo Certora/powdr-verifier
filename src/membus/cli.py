@@ -13,8 +13,9 @@ from pathlib import Path
 
 from src.lens import loader, resolve
 
-from . import align, extract, meminfo, memstats, render, solve
-from .busfmt import memory_bus_id, symbolic_as_ordinals
+from . import align, certify, extract, meminfo, memstats, render, solve
+from .busfmt import memory_bus_id
+from .busmodel import memory_rows, symbolic_as_ordinals
 from .render import JSON, PLAIN, Target, default_mode
 
 
@@ -81,6 +82,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_ex.add_argument("--as", dest="addr_space", type=int,
                        help="restrict to this address space")
     sp_ex.add_argument("-o", "--output", help="write .bus here (default stdout)")
+    sp_ex.add_argument("--assume-is-valid", dest="assume_is_valid",
+                       action=argparse.BooleanOptionalAction, default=True,
+                       help="assume the openvm activation selector is_valid==1 "
+                            "(default on; only affects the final exported APC)")
 
     sp_al = sub.add_parser("align", parents=[common],
                            help="map before->after memory busses (removal); high confidence")
@@ -94,6 +99,18 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_al.add_argument("--assume-is-valid", dest="assume_is_valid",
                        action=argparse.BooleanOptionalAction, default=True,
                        help="assume the openvm activation selector is_valid==1 (default on)")
+
+    sp_cert = sub.add_parser(
+        "certify", parents=[common],
+        help="emit (and optionally run) an SMT certificate per extracted fact")
+    _circuit_a_args(sp_cert)
+    sp_cert.add_argument("--run", action="store_true",
+                         help="run each certificate through z3 (expect unsat)")
+    sp_cert.add_argument("-o", "--output-dir", dest="output_dir",
+                         help="write cert_*.smt2 files into this directory")
+    sp_cert.add_argument("--assume-is-valid", dest="assume_is_valid",
+                         action=argparse.BooleanOptionalAction, default=True,
+                         help="assume the openvm activation selector is_valid==1 (default on)")
 
     return p
 
@@ -143,7 +160,7 @@ def _run_info(args, mode):
     total = len(rows)
     if args.limit and total > args.limit:
         rows = rows[:args.limit]
-    symbolic_as = len(symbolic_as_ordinals(data, mem_id))
+    symbolic_as = len(symbolic_as_ordinals(memory_rows(data, mem_id)))
     print(render.render_info(rows, t, mode, total, symbolic_as))
 
 
@@ -163,7 +180,8 @@ def _run_extract(args):
     elif args.step_b:
         data_b, _, _ = _load_circuit(args.group, args.block, args.step_b, None, args.root)
     mem_id = memory_bus_id(labels)
-    model = extract.build_dict(data_a, mem_id, args.addr_space, data_b)
+    model = extract.build_dict(data_a, mem_id, args.addr_space, data_b,
+                               args.assume_is_valid)
     if args.json:
         print(json.dumps(extract.extract_json(model), indent=2))
         return
@@ -190,6 +208,23 @@ def _run_align(args, mode):
     print(render.render_align(al, tgt_a, tgt_b, mode))
 
 
+def _run_certify(args, mode):
+    data, labels, t = _load_circuit(args.group, args.block, args.step,
+                                    getattr(args, "file_a", None), args.root)
+    out_dir = None
+    if args.output_dir:
+        out_dir = Path(args.output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+    results = certify.certify_dump(data, memory_bus_id(labels), args.assume_is_valid,
+                                   run=args.run, out_dir=out_dir)
+    if mode == JSON:
+        print(json.dumps({"target": t.path, "certificates": results}, indent=2))
+        return
+    print(render.render_certify(results, t, run=args.run))
+    if args.run and any(r.get("result") != "unsat" for r in results):
+        raise ValueError("certify: some certificates did not come back unsat")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.agent:
@@ -210,6 +245,8 @@ def main(argv: list[str] | None = None) -> int:
             _run_extract(args)
         elif args.command == "align":
             _run_align(args, mode)
+        elif args.command == "certify":
+            _run_certify(args, mode)
     except resolve.ResolveError as e:
         print(f"membus: {e}", file=sys.stderr)
         return 2
