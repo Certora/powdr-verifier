@@ -865,24 +865,48 @@ class PermutationCheckMixin:
             elif sp == al.after_path.resolve():
                 membus_rows = al.after_rows
 
-        # Fix input/output/disabled flags from the membus role, only creating a
-        # symbol for the flags a known role does not already pin to a constant.
+        def mult(i: int) -> FNode:
+            return interactions[i].mult
+
+        def args(i: int) -> list[FNode]:
+            return interactions[i].args
+
+        def ts(ii: int) -> FNode:
+            return args(ii)[-1]
+
+        # Determine which IO/disabled flags are pinned to a constant by the
+        # multiplicity and/or membus role. Only allocate a Boolean symbol for
+        # flags that stay free, otherwise we re-introduce not-qf variables.
         is_inputs, is_outputs, is_disableds = [], [], []
         for i in range(n):
+            isin: FNode | None = None
+            isout: FNode | None = None
+            isdis: FNode | None = None
+            mul = mult(i)
+            if mul.is_int_constant():
+                mul_val = mul.constant_value() % p
+                isdis = TRUE() if mul_val == 0 else FALSE()
+                if mul_val != p - 1:
+                    isin = FALSE()
+                if mul_val != 1:
+                    isout = FALSE()
             row = membus_rows.get(i)
-            match row.local_role if row else None:
+            role = row.local_role if row else None
+            match role:
                 case "input":
-                    isin, isout, isdis = TRUE(), FALSE(), FALSE()
+                    isout = FALSE()
                 case "output":
-                    isin, isout, isdis = FALSE(), TRUE(), FALSE()
+                    isin = FALSE()
                 case "inert":
                     isin, isout, isdis = FALSE(), FALSE(), TRUE()
                 case "interior":
-                    isin, isout, isdis = FALSE(), FALSE(), FALSE()
-                case _:
-                    isin = self._symbol(f"{self.NAME}_isinput_{i}", BOOL)
-                    isout = self._symbol(f"{self.NAME}_isoutput_{i}", BOOL)
-                    isdis = self._symbol(f"{self.NAME}_isdisabled_{i}", BOOL)
+                    isin, isout = FALSE(), FALSE()
+            if isin is None:
+                isin = self._symbol(f"{self.NAME}_isinput_{i}", BOOL)
+            if isout is None:
+                isout = self._symbol(f"{self.NAME}_isoutput_{i}", BOOL)
+            if isdis is None:
+                isdis = self._symbol(f"{self.NAME}_isdisabled_{i}", BOOL)
             is_inputs.append(isin)
             is_outputs.append(isout)
             is_disableds.append(isdis)
@@ -922,14 +946,6 @@ class PermutationCheckMixin:
                 i, j = j, i
             return match_vars[(i, j)]
 
-        def mult(i: int) -> FNode:
-            return interactions[i].mult
-
-        def args(i: int) -> list[FNode]:
-            return interactions[i].args
-
-        def ts(ii: int) -> FNode:
-            return args(ii)[-1]
 
         def is_input(i: int) -> FNode:
             return is_inputs[i]
