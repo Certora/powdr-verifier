@@ -927,6 +927,15 @@ class PermutationCheckMixin:
                 field_eq(args(ii)[1], args(jj)[1]),
             )
         
+        membus_rows = {}
+        al = self._cur_state.memory_bus_alignment
+        if self.NAME == "memory" and al is not None and self._cur_state.source_path is not None:
+            sp = self._cur_state.source_path.resolve()
+            if sp == al.before_path.resolve():
+                membus_rows = al.before_rows
+            elif sp == al.after_path.resolve():
+                membus_rows = al.after_rows
+
         # kill some is_inputs, is_outputs, and is_disableds
         for i in range(n):
             mul = mult(i)
@@ -937,6 +946,15 @@ class PermutationCheckMixin:
                     is_inputs[i] = FALSE()
                 if mul % p != 1:
                     is_outputs[i] = FALSE()
+            match (membus_rows.get(i).local_role if membus_rows.get(i) else None):
+                case "input":
+                    is_inputs[i], is_outputs[i], is_disableds[i] = TRUE(), FALSE(), FALSE()
+                case "output":
+                    is_inputs[i], is_outputs[i], is_disableds[i] = FALSE(), TRUE(), FALSE()
+                case "inert":
+                    is_inputs[i], is_outputs[i], is_disableds[i] = FALSE(), FALSE(), TRUE()
+                case "interior":
+                    is_inputs[i], is_outputs[i], is_disableds[i] = FALSE(), FALSE(), FALSE()
 
         # multiplicity range constraints
         for i in range(n):
