@@ -10,6 +10,7 @@ import json
 
 from src.lens.render import JSON, PLAIN, RICH, Target, default_mode  # noqa: F401 (re-exported)
 
+from .align import Alignment
 from .meminfo import InfoRow
 from .memstats import MemStats
 from .solve import Solution
@@ -52,18 +53,32 @@ def render_stats(stats: MemStats, target: Target, mode: str) -> str:
     return _stats_plain(stats, target)
 
 
+def _symbolic_warn(n: int) -> str | None:
+    """Warning shown by the exploratory tools (stats/info) when the circuit is not
+    in solved AS form — such interactions bucket under 'sym' and are dropped by
+    --as filters, so any per-AS reading may be incomplete."""
+    if not n:
+        return None
+    return (f"WARNING: {n} interaction(s) have a SYMBOLIC address space — not solved "
+            f"AS form; results may be unreliable (shown as address space 'sym', "
+            f"excluded by --as filters)")
+
+
 def _precond(stats: MemStats) -> str:
     return (f"sends_ordered={'yes' if stats.sends_ordered else 'NO'} "
             f"recvs_bounded={'yes' if stats.recvs_bounded else 'NO'} "
-            f"duplicates={stats.duplicates}")
+            f"duplicates={stats.duplicates} symbolic_as={stats.symbolic_as}")
 
 
 def _stats_plain(s: MemStats, t: Target) -> str:
-    out = [f"# {t.group}/{t.block} {t.label}  ({t.path})",
-           f"memory_bus_id\t{s.mem_id}",
-           f"n_memory\t{s.n_memory}",
-           f"preconditions\t{_precond(s)}",
-           "as\tcount\tsend\trecv\tbal\tsymKey\tdistinct\talias\treason"]
+    out = [f"# {t.group}/{t.block} {t.label}  ({t.path})"]
+    w = _symbolic_warn(s.symbolic_as)
+    if w:
+        out.append(f"# {w}")
+    out += [f"memory_bus_id\t{s.mem_id}",
+            f"n_memory\t{s.n_memory}",
+            f"preconditions\t{_precond(s)}",
+            "as\tcount\tsend\trecv\tbal\tsymKey\tdistinct\talias\treason"]
     for a in s.address_spaces:
         out.append(f"{a.addr_space}\t{a.count}\t{a.send}\t{a.recv}\t"
                    f"{'ok' if a.balanced else 'NO'}\t{a.sym_key}\t{a.distinct_keys}\t"
@@ -88,21 +103,26 @@ def _stats_rich(s: MemStats, t: Target) -> str:
     with con.capture() as cap:
         con.print(table)
         con.print(f"n_memory={s.n_memory}  preconditions: {_precond(s)}")
+        w = _symbolic_warn(s.symbolic_as)
+        if w:
+            con.print(f"[yellow]{w}[/]")
     return cap.get().rstrip("\n")
 
 
 # --------------------------------------------------------------------------- #
 # info
 # --------------------------------------------------------------------------- #
-def render_info(rows: list[InfoRow], target: Target, mode: str, total: int | None = None) -> str:
+def render_info(rows: list[InfoRow], target: Target, mode: str, total: int | None = None,
+                symbolic_as: int = 0) -> str:
     if total is None:
         total = len(rows)
     if mode == JSON:
         return json.dumps({"target": vars(target), "total": total, "shown": len(rows),
+                           "symbolic_as": symbolic_as, "solved_as_form": symbolic_as == 0,
                            "interactions": [r.as_dict() for r in rows]}, indent=2)
     if mode == RICH:
-        return _info_rich(rows, target, total)
-    return _info_plain(rows, target, total)
+        return _info_rich(rows, target, total, symbolic_as)
+    return _info_plain(rows, target, total, symbolic_as)
 
 
 def _count_note(shown: int, total: int) -> str:
@@ -111,17 +131,20 @@ def _count_note(shown: int, total: int) -> str:
     return f"{total} memory interactions"
 
 
-def _info_plain(rows: list[InfoRow], t: Target, total: int) -> str:
+def _info_plain(rows: list[InfoRow], t: Target, total: int, symbolic_as: int = 0) -> str:
     out = [f"# {t.group}/{t.block} {t.label}  ({t.path})",
-           f"# {_count_note(len(rows), total)}",
-           "ord\tkind\tas\tclass\tkey\ttime\tacc\tts_col"]
+           f"# {_count_note(len(rows), total)}"]
+    w = _symbolic_warn(symbolic_as)
+    if w:
+        out.append(f"# {w}")
+    out.append("ord\tkind\tas\tclass\tkey\ttime\tacc\tts_col")
     for r in rows:
         out.append(f"{r.ordinal}\t{r.kind}\t{r.addr_space}\t{r.alias_class}\t{r.key}\t"
                    f"{r.time}\t{'' if r.access is None else r.access}\t{r.ts_col}")
     return "\n".join(out)
 
 
-def _info_rich(rows: list[InfoRow], t: Target, total: int) -> str:
+def _info_rich(rows: list[InfoRow], t: Target, total: int, symbolic_as: int = 0) -> str:
     from rich.console import Console
     from rich.table import Table
 
@@ -137,6 +160,9 @@ def _info_rich(rows: list[InfoRow], t: Target, total: int) -> str:
     con = Console()
     with con.capture() as cap:
         con.print(table)
+        w = _symbolic_warn(symbolic_as)
+        if w:
+            con.print(f"[yellow]{w}[/]")
     return cap.get().rstrip("\n")
 
 
@@ -188,6 +214,68 @@ def _solve_rich(s: "Solution", t: Target) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# align
+# --------------------------------------------------------------------------- #
+def render_align(al: "Alignment", tgt_before: Target, tgt_after: Target, mode: str) -> str:
+    if mode == JSON:
+        return json.dumps({"before": vars(tgt_before), "after": vars(tgt_after),
+                           **al.as_dict()}, indent=2)
+    if mode == RICH:
+        return _align_rich(al, tgt_before, tgt_after)
+    return _align_plain(al, tgt_before, tgt_after)
+
+
+def _align_summary(al: "Alignment") -> str:
+    iv = "  [assumed is_valid=1]" if al.assumed_is_valid else ""
+    return (f"as={al.addr_space} before={al.n_before} after={al.n_after} "
+            f"kept={al.n_kept} removed={al.n_removed} local_pairs={al.n_local_pairs} "
+            f"inert={al.n_inert} unique={'yes' if al.unique else 'no'}{iv}")
+
+
+def _align_after(r) -> str:
+    return f"=after#{r.after_id}" if r.after_id is not None else "—"
+
+
+def _align_local(r) -> str:
+    if r.local_role == "input":
+        return "entry"
+    if r.local_role == "output":
+        return "exit"
+    if r.local_role == "inert":
+        return "—"
+    return " ".join(f"#{p}" for p in r.local_partners)          # interior
+
+
+def _align_plain(al: "Alignment", tb: Target, ta: Target) -> str:
+    out = [f"# before {tb.group}/{tb.block} {tb.label}  ({tb.path})",
+           f"# after  {ta.group}/{ta.block} {ta.label}  ({ta.path})",
+           f"# {_align_summary(al)}",
+           "id\tkind\tkey\tstatus\t→after\t↔local"]
+    for r in al.rows:
+        out.append(f"{r.before_id}\t{r.kind}\t{r.key}\t{r.status}\t"
+                   f"{_align_after(r)}\t{_align_local(r)}")
+    return "\n".join(out)
+
+
+def _align_rich(al: "Alignment", tb: Target, ta: Target) -> str:
+    from rich.console import Console
+    from rich.table import Table
+
+    table = Table(title=f"{tb.group}/{tb.block} {tb.label} → {ta.label} — align "
+                        f"{_align_summary(al)}")
+    for col in ("id", "kind", "key", "status", "→after", "↔local"):
+        table.add_column(col)
+    for r in al.rows:
+        status = "[green]kept[/]" if r.status == "kept" else "[yellow]removed[/]"
+        table.add_row(str(r.before_id), _kind_markup(r.kind), r.key, status,
+                      _align_after(r), _align_local(r))
+    con = Console()
+    with con.capture() as cap:
+        con.print(table)
+    return cap.get().rstrip("\n")
+
+
+# --------------------------------------------------------------------------- #
 # agent guide
 # --------------------------------------------------------------------------- #
 def agent_guide() -> str:
@@ -209,7 +297,7 @@ DECIDE (goal -> command)
   per-interaction key/timestamp/alias    -> info   <group> <block> <step> [--as N]
   solve matching: inputs/outputs/flow    -> solve  <group> <block> <step> [--as N]
   emit busat .bus (abstract ts order)    -> extract <group> <block> <stepA> [stepB]
-  (align two circuits' memory busses     -> align   ... [v2, not yet implemented])
+  align before/after (removal) -> mapping-> align  <group> <block> <before> <after> [--as N]
 
 INPUT
   Auto-discovered the lens way: <group> <block> <step> (e.g. keccak 2100224 022),
@@ -243,6 +331,22 @@ SOLVE (v1: AS1, constant keys, graph solver; fails gracefully otherwise)
   vtime is virtual time relative to ts_entry (T+0); ts_exit = last clock. Any
   complete mapping is a solution; `unique` reports whether it is forced. Row id
   is the membus ordinal, stable across --as so solutions can be merged.
+
+ALIGN (AS1 + AS2; before has >= after, i.e. a removal pass) — HIGH CONFIDENCE
+  Maps every BEFORE interaction (robust ids) either to an equivalent kept
+  interaction in AFTER (`=after#j`), and/or to a local partner within before
+  (recv<->send). Cross-match is PURELY timestamp-based: (mult_kind, canonical
+  timestamp), vtime fallback for inlined sends — the pointer is NOT matched
+  (passes rewrite pointer expressions of kept interactions, never timestamps;
+  the match is a guess whose failure costs completeness, not soundness).
+  Local partners come from `solve(before)`, which MUST be globally unique —
+  AS1 only: with --as 2 the mapping is cross-match only (no local columns) and
+  an actual AS2 removal ABORTS (solve does not support AS2 yet). mult==0
+  interactions are inert (removed, matched to nothing). ABORTS (exit 2) rather
+  than emit an unjustifiable mapping: after must be a subset of before, the
+  removed set must self-balance (no boundary removed, no partner kept), and
+  matches must be unambiguous. JSON is the primary artifact (before->after /
+  local mapping); the table is for humans.
 
 LIMITATIONS (v1)
   Symbolic base+offset recovery is calibrated to the keccak (2100224) dumps

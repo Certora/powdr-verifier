@@ -35,6 +35,36 @@ def test_resolve_error_exit_2(capsys):
     assert "membus:" in capsys.readouterr().err
 
 
-def test_align_stub_exit_2(capsys):
-    assert main(["align", "keccak", "1", "2", "3"]) == 2
-    assert "not yet implemented" in capsys.readouterr().err
+def _mem(ptr, mult, ts):
+    return {"id": 1, "mult": mult, "args": [1, ptr, 0, 0, 0, 0, ts]}
+
+
+def _align_pair(tmp_path):
+    fs0, fs1 = "from_state__timestamp_0@1", "from_state__timestamp_1@2"
+    pva, pvb = "aux__base__prev_timestamp_0@7", "aux__base__prev_timestamp_1@8"
+    before = {
+        "bus_interactions": [
+            _mem(8, 1, fs0), _mem(8, -1, pva), _mem(8, 1, fs1), _mem(8, -1, pvb)],
+        "constraints": [
+            [[fs0, "+", [-1, "*", pva]], "+", -1],
+            [[fs1, "+", [-1, "*", pvb]], "+", -1],
+            [[fs1, "+", [-1, "*", fs0]], "+", -3]],
+    }
+    after = {"bus_interactions": [_mem(8, -1, pva), _mem(8, 1, fs1)], "constraints": []}
+    b = tmp_path / "before.json"; b.write_text(json.dumps(before))
+    a = tmp_path / "after.json"; a.write_text(json.dumps(after))
+    return b, a
+
+
+def test_align_via_files(tmp_path, capsys):
+    b, a = _align_pair(tmp_path)
+    rc = main(["align", "--file-a", str(b), "--file-b", str(a), "--as", "1", "--json"])
+    assert rc == 0
+    d = json.loads(capsys.readouterr().out)
+    assert d["counts"]["kept"] == 2 and d["counts"]["removed"] == 2 and d["unique"] is True
+
+
+def test_align_needs_two_circuits_exit_2(tmp_path, capsys):
+    b, _ = _align_pair(tmp_path)
+    assert main(["align", "--file-a", str(b), "-p"]) == 2
+    assert "two circuits" in capsys.readouterr().err

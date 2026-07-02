@@ -13,8 +13,8 @@ from pathlib import Path
 
 from src.lens import loader, resolve
 
-from . import extract, meminfo, memstats, render, solve
-from .busfmt import memory_bus_id
+from . import align, extract, meminfo, memstats, render, solve
+from .busfmt import memory_bus_id, symbolic_as_ordinals
 from .render import JSON, PLAIN, Target, default_mode
 
 
@@ -83,10 +83,17 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_ex.add_argument("-o", "--output", help="write .bus here (default stdout)")
 
     sp_al = sub.add_parser("align", parents=[common],
-                           help="(v2) align two circuits' memory busses")
+                           help="map before->after memory busses (removal); high confidence")
     _circuit_a_args(sp_al)
-    sp_al.add_argument("step_b", nargs="?")
-    sp_al.add_argument("--file-b", dest="file_b")
+    sp_al.add_argument("step_b", nargs="?",
+                       help="the AFTER pass of the same block (before has >= after)")
+    sp_al.add_argument("--file-b", dest="file_b", help="explicit JSON for the after circuit")
+    sp_al.add_argument("--as", dest="addr_space", type=int, default=1,
+                       help="address space to align (default 1; AS2 = cross-match "
+                            "only, aborts on an actual AS2 removal)")
+    sp_al.add_argument("--assume-is-valid", dest="assume_is_valid",
+                       action=argparse.BooleanOptionalAction, default=True,
+                       help="assume the openvm activation selector is_valid==1 (default on)")
 
     return p
 
@@ -131,11 +138,13 @@ def _run_stats(args, mode):
 def _run_info(args, mode):
     data, labels, t = _load_circuit(args.group, args.block, args.step,
                                     getattr(args, "file_a", None), args.root)
-    rows = meminfo.compute(data, memory_bus_id(labels), args.addr_space)
+    mem_id = memory_bus_id(labels)
+    rows = meminfo.compute(data, mem_id, args.addr_space)
     total = len(rows)
     if args.limit and total > args.limit:
         rows = rows[:args.limit]
-    print(render.render_info(rows, t, mode, total))
+    symbolic_as = len(symbolic_as_ordinals(data, mem_id))
+    print(render.render_info(rows, t, mode, total, symbolic_as))
 
 
 def _run_solve(args, mode):
@@ -166,6 +175,21 @@ def _run_extract(args):
         print(text)
 
 
+def _run_align(args, mode):
+    data_a, labels, tgt_a = _load_circuit(args.group, args.block, args.step,
+                                          getattr(args, "file_a", None), args.root)
+    if args.file_b:
+        data_b, _, tgt_b = _load_circuit(None, None, None, args.file_b, args.root)
+    elif args.step_b:
+        data_b, _, tgt_b = _load_circuit(args.group, args.block, args.step_b, None, args.root)
+    else:
+        raise ValueError("align needs two circuits: <group> <block> <before> <after> "
+                         "or --file-a / --file-b")
+    al = align.compute(data_a, data_b, memory_bus_id(labels), args.addr_space,
+                       args.assume_is_valid)
+    print(render.render_align(al, tgt_a, tgt_b, mode))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.agent:
@@ -185,8 +209,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "extract":
             _run_extract(args)
         elif args.command == "align":
-            print("membus: align is not yet implemented (v2)", file=sys.stderr)
-            return 2
+            _run_align(args, mode)
     except resolve.ResolveError as e:
         print(f"membus: {e}", file=sys.stderr)
         return 2
