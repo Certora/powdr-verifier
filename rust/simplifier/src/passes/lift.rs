@@ -87,6 +87,7 @@ fn infer_symbol_sort(
 struct LiftWalker {
     lifted: BTreeMap<String, Bool>,
     sorts: HashMap<String, DeclSort>,
+    unused_qvars_dropped: usize,
 }
 
 impl LiftWalker {
@@ -94,6 +95,7 @@ impl LiftWalker {
         Self {
             lifted: BTreeMap::new(),
             sorts,
+            unused_qvars_dropped: 0,
         }
     }
 
@@ -206,9 +208,14 @@ impl LiftWalker {
             Err(_) => return b.clone(),
         };
 
+        let body_fv = free_variables_bool(&named_body);
+        self.unused_qvars_dropped += bound_order
+            .iter()
+            .filter(|name| qvars.contains(*name) && !body_fv.contains(*name))
+            .count();
         let qvars_remaining: Vec<Dynamic> = bound_order
             .iter()
-            .filter(|name| qvars.contains(*name))
+            .filter(|name| qvars.contains(*name) && body_fv.contains(*name))
             .map(|name| {
                 let sort = self.sorts.get(name).copied().unwrap_or(DeclSort::Int);
                 match sort {
@@ -299,6 +306,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         "new_declarations": hoisted_decls,
         "hoisted_pin_asserts": hoisted_asserts,
         "candidates_seen": walker.lifted.len(),
+        "unused_qvars_dropped": walker.unused_qvars_dropped,
     });
     Ok((Script::from_commands(&script.source, commands), stats))
 }
@@ -432,6 +440,18 @@ mod tests {
         assert!(asserts.iter().any(|a| a == "(= x 7)"));
         assert!(asserts.iter().any(|a| a == "(< x 0)"));
         assert!(!asserts.iter().any(|a| a.contains("forall")));
+    }
+
+    #[test]
+    fn drops_unused_qvar_after_lift() {
+        let script = script_assert(
+            "(forall ((x Int) (y Int)) (or (not (= x 7)) (< x 0)))",
+        );
+        let (out, stats) = apply(&script).unwrap();
+        assert_eq!(stats["pins_lifted"], 1);
+        assert_eq!(stats["unused_qvars_dropped"], 1);
+        let asserts = top_asserts(&out);
+        assert!(!asserts.iter().any(|a| a.contains("forall")), "{asserts:?}");
     }
 
     #[test]
