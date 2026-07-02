@@ -34,11 +34,12 @@ impl Script {
     }
 
     pub fn parse(input: &str) -> Result<Self, String> {
-        let forms = SExpr::read_all(input)?;
+        let spans = SExpr::read_command_spans(input)?;
         let mut ctx = ParseCtx::new();
-        let mut commands = Vec::with_capacity(forms.len());
-        for form in forms {
-            commands.push(SmtCommand::from_spanned(form, input, &mut ctx)?);
+        let mut commands = Vec::with_capacity(spans.len());
+        for span in spans {
+            let slice = &input[span.start..span.end];
+            commands.push(SmtCommand::from_slice(span, slice, &mut ctx)?);
         }
         Ok(Self::from_commands(input, commands))
     }
