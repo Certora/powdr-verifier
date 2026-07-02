@@ -499,7 +499,7 @@ _PREFIX_OP = {
 }
 
 
-def _fast_serialize_assert(f: FNode, write, stream: TextIO) -> None:
+def _fast_serialize_assert(f: FNode, write, stream: TextIO, qcache: dict) -> None:
     # Iterative, non-generator serializer for the tree (non-daggified) printing
     # ``serialize_smtlib`` needs. ``SmtPrinter``'s ``TreeWalker`` builds two
     # generators per node (the walk method plus the ``@write_annotations``
@@ -508,6 +508,10 @@ def _fast_serialize_assert(f: FNode, write, stream: TextIO) -> None:
     # ``annotations=None``, this produces byte-identical output. Any node type we
     # don't special-case is delegated to the stock ``SmtPrinter`` for its whole
     # subtree, so correctness never depends on this covering every operator.
+    #
+    # ``quote`` is pure in the symbol name, and symbols are declared once but
+    # referenced millions of times, so we memoize quoted names in ``qcache``
+    # (shared across all asserts of a script) -- worth ~20% of serialization.
     prefix = _PREFIX_OP
     SYMBOL = operators.SYMBOL
     INT_CONSTANT = operators.INT_CONSTANT
@@ -531,14 +535,22 @@ def _fast_serialize_assert(f: FNode, write, stream: TextIO) -> None:
                 stack.append(a)
                 stack.append(" ")
         elif nt == SYMBOL:
-            write(quote(item.symbol_name()))
+            n = item.symbol_name()
+            s = qcache.get(n)
+            if s is None:
+                s = qcache[n] = quote(n)
+            write(s)
         elif nt == INT_CONSTANT:
             v = item.constant_value()
-            write("(- " + str(-v) + ")" if v < 0 else str(v))
+            write(f"(- {-v})" if v < 0 else str(v))
         elif nt == BOOL_CONSTANT:
             write("true" if item.constant_value() else "false")
         elif nt == FUNCTION:
-            write("(" + quote(item.function_name().symbol_name()))
+            n = item.function_name().symbol_name()
+            s = qcache.get(n)
+            if s is None:
+                s = qcache[n] = quote(n)
+            write("(" + s)
             stack.append(")")
             for a in reversed(item.args()):
                 stack.append(a)
@@ -546,8 +558,11 @@ def _fast_serialize_assert(f: FNode, write, stream: TextIO) -> None:
         elif nt == FORALL or nt == EXISTS:
             write("(forall (" if nt == FORALL else "(exists (")
             for v in item.quantifier_vars():
-                write("(" + quote(v.symbol_name()) + " "
-                      + v.symbol_type().as_smtlib(False) + ")")
+                n = v.symbol_name()
+                s = qcache.get(n)
+                if s is None:
+                    s = qcache[n] = quote(n)
+                write("(" + s + " " + v.symbol_type().as_smtlib(False) + ")")
             write(") ")
             stack.append(")")
             stack.append(item.arg(0))
@@ -563,10 +578,11 @@ def serialize_smtlib(smtlib: script.SmtLibScript, file: TextIO):
     # commands keep the daggified per-command path: a DAG printer shares let
     # binders (``.def_N``) which the tree walker must not reuse across asserts.
     write = file.write
+    qcache: dict = {}
     for cmd in smtlib.commands:
         if cmd.name == "assert":
             write("(assert ")
-            _fast_serialize_assert(cmd.args[0], write, file)
+            _fast_serialize_assert(cmd.args[0], write, file, qcache)
             write(")")
         else:
             cmd.serialize(file, printer=None, daggify=True)
