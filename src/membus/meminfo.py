@@ -78,10 +78,10 @@ def compute(data: Any, mem_id: int = 1, addr_space: int | None = None) -> list[I
                 if best_t is None or t < best_t:
                     best_fs, best_t = f.fs, t
             if best_t is not None:
-                order_pos, time = pos.get(best_fs), f"≤{_t(best_t)}"
+                order_pos, time = pos.get(best_fs), f"<={_t(best_t)}"
             else:
                 f0 = an.recv_uppers[tscol][0]
-                order_pos, time = pos.get(f0.fs), f"≤{f0.fs}"
+                order_pos, time = pos.get(f0.fs), f"<={f0.fs}"
         else:
             order_pos, time = None, tscol
         cid = class_id.setdefault((asv, str(key)), len(class_id))

@@ -171,8 +171,8 @@ def compute(data: Any, mem_id: int = 1, addr_space: int = 1,
     dups = find_duplicates(active)
     if dups:
         raise ValueError(
-            f"solve: {len(dups)} duplicated memory interaction(s) — a sound memory bus "
-            f"has none; the matching would be ill-defined. First: {dups[0][1]}× {dups[0][0]}")
+            f"solve: {len(dups)} duplicated memory interaction(s) -- a sound memory bus "
+            f"has none; the matching would be ill-defined. First: {dups[0][1]}x {dups[0][0]}")
 
     key_of: dict[int, int | None] = {}
     for row in scope:
@@ -237,7 +237,7 @@ def compute(data: Any, mem_id: int = 1, addr_space: int = 1,
 
         if len({vt for vt, _ in sends}) != len(sends):
             raise ValueError(
-                f"solve: cell {keyval} has two writes at the same virtual time — "
+                f"solve: cell {keyval} has two writes at the same virtual time -- "
                 f"the write order is not determined")
 
         k = len(sends)
@@ -323,7 +323,7 @@ def _build_rows(an: Analysis, scope: list[MemRow], key_of, meta, asv,
         keyval = key_of[ordn]
         keystr = f"const {keyval}" if keyval is not None else "?"
         if ordn in disabled:
-            out.append(SolveRow(ordn, "disabled", asv, keystr, "", "·", "disabled",
+            out.append(SolveRow(ordn, "disabled", asv, keystr, "", ".", "disabled",
                                 keyval, None, None, []))
             continue
         kind = an.kinds[ordn].kind
@@ -337,14 +337,14 @@ def _build_rows(an: Analysis, scope: list[MemRow], key_of, meta, asv,
             vtime, flow = "?", f"(unsolved: {note})"
         elif kind == "send":
             vtime = _t(vint) if vint is not None else "?"
-            flow = "→ exit" if io == "out" else ("→ " + ", ".join(f"#{r}" for r in read_by)
-                                                 if read_by else "→ ·")
+            flow = "-> exit" if io == "out" else ("-> " + ", ".join(f"#{r}" for r in read_by)
+                                                  if read_by else "-> .")
         else:  # recv
             if io == "in":
-                vtime, flow = f"<{_t(ts_entry)}", "← entry"
+                vtime, flow = f"<{_t(ts_entry)}", "<- entry"
             else:
                 vtime = _t(vint) if vint is not None else "?"
-                flow = f"← #{reads_from}" if reads_from is not None else "← ?"
+                flow = f"<- #{reads_from}" if reads_from is not None else "<- ?"
         out.append(SolveRow(ordn, kind, asv, keystr, io, vtime, flow,
                             keyval, vint, reads_from, list(read_by)))
     return out

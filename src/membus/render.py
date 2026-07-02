@@ -59,7 +59,7 @@ def _symbolic_warn(n: int) -> str | None:
     --as filters, so any per-AS reading may be incomplete."""
     if not n:
         return None
-    return (f"WARNING: {n} interaction(s) have a SYMBOLIC address space — not solved "
+    return (f"WARNING: {n} interaction(s) have a SYMBOLIC address space -- not solved "
             f"AS form; results may be unreliable (shown as address space 'sym', "
             f"excluded by --as filters)")
 
@@ -90,7 +90,7 @@ def _stats_rich(s: MemStats, t: Target) -> str:
     from rich.console import Console
     from rich.table import Table
 
-    table = Table(title=f"{t.group}/{t.block} {t.label} — memory bus (id {s.mem_id})")
+    table = Table(title=f"{t.group}/{t.block} {t.label} -- memory bus (id {s.mem_id})")
     for col in ("as", "count", "send", "recv", "bal", "symKey", "distinct", "alias", "reason"):
         table.add_column(col)
     for a in s.address_spaces:
@@ -148,7 +148,7 @@ def _info_rich(rows: list[InfoRow], t: Target, total: int, symbolic_as: int = 0)
     from rich.console import Console
     from rich.table import Table
 
-    table = Table(title=f"{t.group}/{t.block} {t.label} — {_count_note(len(rows), total)}")
+    table = Table(title=f"{t.group}/{t.block} {t.label} -- {_count_note(len(rows), total)}")
     for col in ("ord", "kind", "as", "class", "key", "time", "acc"):
         table.add_column(col)
     for r in rows:
@@ -200,7 +200,7 @@ def _solve_rich(s: "Solution", t: Target) -> str:
     from rich.console import Console
     from rich.table import Table
 
-    table = Table(title=f"{t.group}/{t.block} {t.label} — solve {_solve_summary(s)}")
+    table = Table(title=f"{t.group}/{t.block} {t.label} -- solve {_solve_summary(s)}")
     for col in ("id", "io", "kind", "key", "vtime", "flow"):
         table.add_column(col)
     for r in s.rows:
@@ -242,7 +242,7 @@ def _align_local(r) -> str:
     if r.local_role == "output":
         return "exit"
     if r.local_role == "inert":
-        return "—"
+        return "-"
     return " ".join(f"#{p}" for p in r.local_partners)          # interior
 
 
@@ -250,7 +250,7 @@ def _align_plain(al: "Alignment", tb: Target, ta: Target) -> str:
     out = [f"# before {tb.group}/{tb.block} {tb.label}  ({tb.path})",
            f"# after  {ta.group}/{ta.block} {ta.label}  ({ta.path})",
            f"# {_align_summary(al)}",
-           "id\tkind\tkey\tstatus\t→after\t↔local"]
+           "id\tkind\tkey\tstatus\t->after\t<->local"]
     for r in al.rows:
         out.append(f"{r.before_id}\t{r.kind}\t{r.key}\t{r.status}\t"
                    f"{_align_after(r)}\t{_align_local(r)}")
@@ -261,9 +261,9 @@ def _align_rich(al: "Alignment", tb: Target, ta: Target) -> str:
     from rich.console import Console
     from rich.table import Table
 
-    table = Table(title=f"{tb.group}/{tb.block} {tb.label} → {ta.label} — align "
+    table = Table(title=f"{tb.group}/{tb.block} {tb.label} -> {ta.label} -- align "
                         f"{_align_summary(al)}")
-    for col in ("id", "kind", "key", "status", "→after", "↔local"):
+    for col in ("id", "kind", "key", "status", "->after", "<->local"):
         table.add_column(col)
     for r in al.rows:
         status = "[green]kept[/]" if r.status == "kept" else "[yellow]removed[/]"
@@ -296,7 +296,7 @@ def render_certify(results: list[dict], target: Target, run: bool) -> str:
             lines.append(f"NOT CERTIFIED: {len(bad)} certificate(s) failed:")
             lines += [f"  {r['type']}: {r['fact']}  -> {r.get('result')}" for r in bad]
         else:
-            lines.append("all certificates unsat — every extracted fact is justified")
+            lines.append("all certificates unsat -- every extracted fact is justified")
     return "\n".join(lines)
 
 

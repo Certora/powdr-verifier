@@ -196,7 +196,7 @@ class _Query:
             self.add_assumption_for(f, a)
 
     def add_assumption_for(self, f: Fact, a: Assumption) -> None:
-        self.comment(f"named assumption: {a.name} — {a.value}")
+        self.comment(f"named assumption: {a.name} -- {a.value}")
         # MEMBUS_BYTE and TS_BOUND *grant* their slot-derived Bound facts
         # outright: the granted claim is asserted so the certificate is
         # (visibly) trivial — the fact rests on the assumption, and this line
@@ -250,7 +250,7 @@ class _Query:
             "(set-logic ALL)",
             *decls,
             *body,
-            "; negated claim — must be UNSAT",
+            "; negated claim -- must be UNSAT",
             f"(assert (not {negated_claim}))",
             "(check-sat)",
             "",

@@ -61,7 +61,7 @@ class LinForm:
         return not self.coeffs
 
     def __str__(self) -> str:
-        parts = [f"{v}·{k}" for k, v in self.coeffs]
+        parts = [f"{v}*{k}" for k, v in self.coeffs]
         if self.const or not parts:
             parts.append(str(self.const))
         return " + ".join(parts)

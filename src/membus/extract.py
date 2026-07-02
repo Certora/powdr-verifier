@@ -54,9 +54,9 @@ def build_dict(pre: dict, mem_id: int, addr_space: int | None, post: dict | None
     dups = find_duplicates(rows)
     if dups:
         raise ValueError(
-            f"{len(dups)} duplicated memory interaction(s) — a sound memory bus has "
+            f"{len(dups)} duplicated memory interaction(s) -- a sound memory bus has "
             f"none (each access has a unique timestamp); the abstract bus would be "
-            f"ill-defined. First: {dups[0][1]}× {dups[0][0]}")
+            f"ill-defined. First: {dups[0][1]}x {dups[0][0]}")
 
     soff = order.send_offsets(an)
 
@@ -185,7 +185,7 @@ def build_dict(pre: dict, mem_id: int, addr_space: int | None, post: dict | None
             continue
         v, ssym = min(later)
         raw_edges.append((rsym, ssym,
-                          f"RecvUpper: prev_ts ≤ T+{threshold} < T+{v} (earliest later send)"))
+                          f"RecvUpper: prev_ts <= T+{threshold} < T+{v} (earliest later send)"))
         ordered_syms.add(rsym)
 
     order_edges = [{"lhs": a, "rhs": b, "why": why} for a, b, why in raw_edges]

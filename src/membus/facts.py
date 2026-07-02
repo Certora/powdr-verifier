@@ -105,8 +105,8 @@ class Bound(Fact):
     hi: int | None
 
     def __str__(self) -> str:
-        hi = "∞" if self.hi is None else self.hi
-        return f"{self.col} ∈ [{self.lo}, {hi})"
+        hi = "inf" if self.hi is None else self.hi
+        return f"{self.col} in [{self.lo}, {hi})"
 
 
 @dataclass(frozen=True)
@@ -132,7 +132,7 @@ class RecvUpper(Fact):
     const: int
 
     def __str__(self) -> str:
-        return f"{self.pv} ≤ {self.fs} + {self.const}"
+        return f"{self.pv} <= {self.fs} + {self.const}"
 
 
 @dataclass(frozen=True)
@@ -153,7 +153,7 @@ class AffineDef(Fact):
     modulus: int | None
 
     def __str__(self) -> str:
-        ws = " + ".join(f"{w}·{o}" for o, w in self.weights)
+        ws = " + ".join(f"{w}*{o}" for o, w in self.weights)
         mod = "" if self.modulus is None else f" (mod {self.modulus})"
         return f"{self.col} = {ws} + {self.offset}{mod}"
 

@@ -185,7 +185,7 @@ def compute(before: Any, after: Any, mem_id: int = 1, addr_space: int = 1,
             if row.addr_space == addr_space and an.kinds.get(row.ordinal) is None:
                 raise ValueError(
                     f"{label}: interaction #{row.ordinal} has an unresolved multiplicity "
-                    f"{row.mult!r} — requires solved form (send/recv/disabled)")
+                    f"{row.mult!r} -- requires solved form (send/recv/disabled)")
 
     B = [r for r in an_b.mem if r.addr_space == addr_space]
     A = [r for r in an_a.mem if r.addr_space == addr_space]
@@ -196,7 +196,7 @@ def compute(before: Any, after: Any, mem_id: int = 1, addr_space: int = 1,
     if added:
         raise ValueError(
             f"align: after has {len(added)} interaction(s) not present in before "
-            f"(e.g. #{added[0]}) — not a pure removal")
+            f"(e.g. #{added[0]}) -- not a pure removal")
 
     if addr_space != 1:
         # `solve` is AS1-only, so no local connections. A pure-kept mapping is a
@@ -222,13 +222,13 @@ def compute(before: Any, after: Any, mem_id: int = 1, addr_space: int = 1,
             if r.reads_from not in removed:
                 raise ValueError(
                     f"align: removed recv #{o} reads local send #{r.reads_from}, which is "
-                    f"kept — removed set does not self-balance")
+                    f"kept -- removed set does not self-balance")
         elif r.kind == "send":
             if r.io == "out":
                 raise ValueError(f"align: removed a boundary output send #{o} (escapes)")
             if not r.read_by or any(x not in removed for x in r.read_by):
                 raise ValueError(
-                    f"align: removed send #{o} is read by a kept recv — removed set does "
+                    f"align: removed send #{o} is read by a kept recv -- removed set does "
                     f"not self-balance")
 
     rows: list[AlignRow] = []
@@ -280,7 +280,7 @@ def _align_without_solve(an_b: Analysis, B: list[MemRow], A: list[MemRow],
         status = "kept" if row.ordinal in kept else "removed"
         if status == "removed" and kind != "disabled":
             raise ValueError(
-                f"align: interaction #{row.ordinal} was removed — removal in address "
+                f"align: interaction #{row.ordinal} was removed -- removal in address "
                 f"space {addr_space} requires solve, which does not support it yet")
         if kind == "disabled" and status == "removed":
             n_inert += 1
