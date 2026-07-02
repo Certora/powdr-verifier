@@ -15,7 +15,7 @@ from .utils.basic_block import BasicBlock
 from .utils.io import load_apc_dump, load_json
 from .utils.stats import init_stats_run, set_stats_tag, stats_enabled
 from .verify.bug_injection import apply_injection
-from .verify.preanalysis import analyze_verify_preanalysis, apply_skip_trivial
+from .verify.preanalysis import analyze_memory_bus_alignment, apply_skip_trivial
 from .verify.memory_bus_alignment import BEFORE_PREFIX, AFTER_PREFIX, emit_memory_equalities
 from .verify import SetInfos, SkolemPinKind
 from .verify.skolem_pins import derived_columns_skolem_setinfo, drop_mirrored_derived
@@ -87,7 +87,7 @@ def verify():
     after = load_apc_dump(ARGS().input_after)
 
     apply_skip_trivial(before, after)
-    verify_preanalysis = analyze_verify_preanalysis(before, after)
+    memory_bus_alignment = analyze_memory_bus_alignment(before, after)
 
     if ARGS().inject is not None:
         old_before = copy.deepcopy(before)
@@ -104,12 +104,12 @@ def verify():
         Action("verify-encode") as action,
         SmtConverter(
             BEFORE_PREFIX, block,
-            verify_preanalysis=verify_preanalysis,
+            memory_bus_alignment=memory_bus_alignment,
             source_path=ARGS().input_before,
         ) as before_conv,
         SmtConverter(
             AFTER_PREFIX, block,
-            verify_preanalysis=verify_preanalysis,
+            memory_bus_alignment=memory_bus_alignment,
             source_path=ARGS().input_after,
         ) as after_conv,
     ):
@@ -161,17 +161,10 @@ def verify():
                 )
             info += derived_columns_skolem_setinfo(derived, kind=SkolemPinKind.DERIVED)
             info += emit_memory_equalities(
-                before,
-                after,
+                memory_bus_alignment,
                 before_conv,
                 after_conv,
-                before_constraints=list(before_smt.derived.values())
-                + list(substitutions.values()),
-                after_constraints=list(after_smt.derived.values()),
                 reverse=reverse,
-                smt_dump_base=smt_outfile,
-                parent_action=action,
-                initial_alignment=verify_preanalysis.memory_bus_alignment,
             )
             return info
 

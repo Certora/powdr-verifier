@@ -463,7 +463,7 @@ class OpenVMMemoryEncoder(
         if ARGS().memory_encoding == "none":
             return (TRUE(), frozenset())
         if ARGS().memory_encoding == "plain":
-            alignment = self._cur_state.verify_preanalysis.memory_bus_alignment
+            alignment = self._cur_state.memory_bus_alignment
             return keyed_io_relation(
                 f"IO RELATION for {self.NAME}",
                 self._bus_interactions(),

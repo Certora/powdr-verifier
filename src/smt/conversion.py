@@ -10,7 +10,7 @@ from typing import Any, Iterable, Optional
 from .. import bus_interactions
 from ..utils.basic_block import BasicBlock
 from ..utils.args import ARGS, BusInteractionHandlers
-from ..verify.preanalysis import DEFAULT_VERIFY_PREANALYSIS, VerifyPreanalysis
+from ..verify.membus_types import MembusAlignment
 from .utils import *
 
 FormulaWithAxioms = collections.namedtuple(
@@ -43,7 +43,7 @@ class SmtConverter:
         name: Optional[str],
         basic_block: BasicBlock,
         *,
-        verify_preanalysis: VerifyPreanalysis = DEFAULT_VERIFY_PREANALYSIS,
+        memory_bus_alignment: MembusAlignment | None = None,
         source_path: Path | None = None,
     ):
         """Create a converter that turns JSON-like dumps into SMT, namespacing symbols by `name`."""
@@ -51,7 +51,7 @@ class SmtConverter:
         self.constraints = []
         self.derived_columns = {}
         self.name = name
-        self.verify_preanalysis = verify_preanalysis
+        self.memory_bus_alignment = memory_bus_alignment
         self.source_path = source_path
         self.symbols: set[FNode] = set()
         self.constraint_solver = Solver(solver_options={":timeout": 2000})

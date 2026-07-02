@@ -1,41 +1,35 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 from ..utils.args import ARGS
-
-if TYPE_CHECKING:
-    from .memory_bus_alignment import MemoryBusPartialAlignment
+from .membus_align import run_membus_alignment
+from .membus_types import MembusAlignment
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class VerifyPreanalysis:
-    memory_bus_alignment: MemoryBusPartialAlignment | None = None
-
-
-DEFAULT_VERIFY_PREANALYSIS = VerifyPreanalysis()
-
-
-def analyze_verify_preanalysis(
+def analyze_memory_bus_alignment(
     before: dict[str, Any], after: dict[str, Any]
-) -> VerifyPreanalysis:
+) -> MembusAlignment | None:
     if ARGS().memory_encoding != "plain":
-        return DEFAULT_VERIFY_PREANALYSIS
-    from .memory_bus_alignment import analyze_memory_bus_partial_alignment_first
+        return None
 
-    alignment = analyze_memory_bus_partial_alignment_first(before, after)
-    if alignment is not None:
-        logger.info(
-            "memory bus prealignment: n_before=%d n_after=%d aligned_pairs=%d",
-            alignment.n_before,
-            alignment.n_after,
-            len(alignment.before_to_after),
-        )
-    return VerifyPreanalysis(memory_bus_alignment=alignment)
+    alignment = run_membus_alignment(
+        before,
+        after,
+        Path(ARGS().input_before),
+        Path(ARGS().input_after),
+    )
+    logger.info(
+        "memory bus prealignment: n_before=%d n_after=%d aligned_pairs=%d",
+        alignment.n_before,
+        alignment.n_after,
+        len(alignment.before_to_after),
+    )
+    return alignment
 
 
 def apply_skip_trivial(before: dict[str, Any], after: dict[str, Any]) -> None:
