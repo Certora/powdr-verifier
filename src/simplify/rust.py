@@ -420,6 +420,8 @@ def run_rust_pipeline(
         elif base == "domain_probe":
             stats_dump("domain_probe", data)
         elif base == "isqf":
+            if data.get("result") == "not-qf":
+                logging.warning("formula is not quantifier-free")
             stats_dump("isqf", data)
         else:
             stats_dump(base, data)
