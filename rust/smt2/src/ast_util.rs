@@ -135,6 +135,11 @@ impl IntTermSet {
     pub fn get(&self, index: usize) -> Option<&Int> {
         self.terms.get(index)
     }
+
+    /// Consume the set, yielding the owned term vector without cloning.
+    pub fn into_terms(self) -> Vec<Int> {
+        self.terms
+    }
 }
 
 impl Default for IntTermSet {

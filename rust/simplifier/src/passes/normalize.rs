@@ -249,9 +249,9 @@ fn term_sort_key(t: &Int) -> (u8, String) {
 
 fn sort_terms(terms: IntTermSet) -> IntTermSet {
     let mut keyed: Vec<((u8, String), Int)> = terms
-        .terms()
-        .iter()
-        .map(|t| (term_sort_key(t), t.clone()))
+        .into_terms()
+        .into_iter()
+        .map(|t| (term_sort_key(&t), t))
         .collect();
     keyed.sort_by(|a, b| a.0.cmp(&b.0));
     IntTermSet::from_sorted_unique(keyed.into_iter().map(|(_, t)| t).collect())
@@ -344,36 +344,25 @@ fn mono_mul(e1: &Monomial, e2: &Monomial) -> Monomial {
     out
 }
 
-fn lead_exp(poly: &Poly) -> Monomial {
-    poly.keys()
-        .max_by(|a, b| compare_monomials(a, b))
-        .cloned()
-        .unwrap_or_default()
+fn lead_exp(poly: &Poly) -> Option<&Monomial> {
+    poly.keys().max_by(|a, b| compare_monomials(a, b))
 }
 
 fn coeff_mod(v: i128, m: i128) -> i128 {
     v.rem_euclid(m)
 }
 
-fn poly_add(a: &Poly, b: &Poly, scale_b: i128, modulo: Option<i128>) -> Poly {
-    let mut keys: HashSet<&Monomial> = HashSet::new();
-    for k in a.keys() {
-        keys.insert(k);
+fn poly_add(mut a: Poly, b: &Poly, scale_b: i128, modulo: Option<i128>) -> Poly {
+    for (e, &cb) in b {
+        *a.entry(e.clone()).or_insert(0) += scale_b * cb;
     }
-    for k in b.keys() {
-        keys.insert(k);
-    }
-    let mut out = Poly::new();
-    for e in keys {
-        let mut v = a.get(e).copied().unwrap_or(0) + scale_b * b.get(e).copied().unwrap_or(0);
-        if let Some(m) = modulo {
-            v = coeff_mod(v, m);
-        }
-        if v != 0 {
-            out.insert(e.clone(), v);
+    if let Some(m) = modulo {
+        for v in a.values_mut() {
+            *v = coeff_mod(*v, m);
         }
     }
-    out
+    a.retain(|_, v| *v != 0);
+    a
 }
 
 fn poly_mul(a: &Poly, b: &Poly, modulo: Option<i128>) -> Poly {
@@ -433,7 +422,7 @@ fn expr_to_poly(n: &Int, var_terms: &IntTermSet, modulo: Option<i128>) -> Option
             let mut acc = Poly::new();
             for ch in dyn_.children() {
                 let q = expr_to_poly(&ch.as_int()?, var_terms, modulo)?;
-                acc = poly_add(&acc, &q, 1, modulo);
+                acc = poly_add(acc, &q, 1, modulo);
             }
             Some(acc)
         }
@@ -453,7 +442,7 @@ fn expr_to_poly(n: &Int, var_terms: &IntTermSet, modulo: Option<i128>) -> Option
         "-" if dyn_.num_children() == 2 => {
             let pa = expr_to_poly(&dyn_.nth_child(0)?.as_int()?, var_terms, modulo)?;
             let pb = expr_to_poly(&dyn_.nth_child(1)?.as_int()?, var_terms, modulo)?;
-            Some(poly_add(&pa, &pb, -1, modulo))
+            Some(poly_add(pa, &pb, -1, modulo))
         }
         "*" => {
             let mut acc = Poly::from([(Vec::new(), 1i128)]);
@@ -470,30 +459,26 @@ fn expr_to_poly(n: &Int, var_terms: &IntTermSet, modulo: Option<i128>) -> Option
     }
 }
 
-fn int_mul(args: &[Int]) -> Int {
+fn int_mul(args: &[&Int]) -> Int {
     for a in args {
         debug_assert_direct_int_operand(a);
     }
-    if args.is_empty() {
-        return int_from_i128(1);
+    match args {
+        [] => int_from_i128(1),
+        [a] => (*a).clone(),
+        _ => Int::mul(args),
     }
-    if args.len() == 1 {
-        return args[0].clone();
-    }
-    Int::mul(&args.iter().collect::<Vec<_>>())
 }
 
 fn int_add(args: &[Int]) -> Int {
     for a in args {
         debug_assert_direct_int_operand(a);
     }
-    if args.is_empty() {
-        return int_from_i128(0);
+    match args {
+        [] => int_from_i128(0),
+        [a] => a.clone(),
+        _ => Int::add(args),
     }
-    if args.len() == 1 {
-        return args[0].clone();
-    }
-    Int::add(&args.iter().collect::<Vec<_>>())
 }
 
 fn poly_to_expr(poly: &Poly, var_terms: &IntTermSet) -> Int {
@@ -508,9 +493,9 @@ fn poly_to_expr(poly: &Poly, var_terms: &IntTermSet) -> Int {
         if c == 0 {
             continue;
         }
-        let mono_factors: Vec<Int> = e
+        let mono_factors: Vec<&Int> = e
             .iter()
-            .map(|&idx| var_terms.get(idx as usize).cloned().unwrap())
+            .map(|&idx| var_terms.get(idx as usize).unwrap())
             .collect();
         let term = if e.is_empty() {
             int_from_i128(c)
@@ -519,8 +504,10 @@ fn poly_to_expr(poly: &Poly, var_terms: &IntTermSet) -> Int {
         } else if c == -1 {
             Int::unary_minus(&int_mul(&mono_factors))
         } else {
-            let mut factors = vec![int_from_i128(c)];
-            factors.extend(mono_factors);
+            let coeff = int_from_i128(c);
+            let mut factors: Vec<&Int> = Vec::with_capacity(mono_factors.len() + 1);
+            factors.push(&coeff);
+            factors.extend_from_slice(&mono_factors);
             int_mul(&factors)
         };
         terms.push(term);
@@ -541,7 +528,7 @@ fn poly_diff_poly(
 ) -> Option<Poly> {
     let pla = expr_to_poly(la, var_terms, modulo)?;
     let plb = expr_to_poly(lb, var_terms, modulo)?;
-    Some(poly_add(&pla, &plb, -1, modulo))
+    Some(poly_add(pla, &plb, -1, modulo))
 }
 
 fn gcd_i128(mut a: i128, mut b: i128) -> i128 {
@@ -571,18 +558,18 @@ fn mod_inverse(a: i128, m: i128) -> Option<i128> {
     Some(coeff_mod(t, m))
 }
 
-fn rescale_monic(poly: Poly, modulo: i128) -> Option<Poly> {
-    let lead = lead_exp(&poly);
-    let lc = coeff_mod(poly[&lead], modulo);
+fn rescale_monic(poly: &Poly, modulo: i128) -> Option<Poly> {
+    let lead = lead_exp(poly)?;
+    let lc = coeff_mod(poly[lead], modulo);
     if lc == 0 {
         return Some(Poly::new());
     }
     let inv = mod_inverse(lc, modulo)?;
     Some(
-        poly.into_iter()
-            .filter_map(|(e, c)| {
+        poly.iter()
+            .filter_map(|(e, &c)| {
                 let v = coeff_mod(c * inv, modulo);
-                if v != 0 { Some((e, v)) } else { None }
+                if v != 0 { Some((e.clone(), v)) } else { None }
             })
             .collect(),
     )
@@ -599,7 +586,7 @@ fn rescale_gcd(poly: Poly) -> Poly {
     if g == 0 {
         return Poly::new();
     }
-    let lc = poly[&lead_exp(&poly)];
+    let lc = lead_exp(&poly).map(|l| poly[l]).unwrap_or(0);
     if lc < 0 {
         g = -g;
     }
@@ -616,24 +603,19 @@ fn relation_poly_diff_plain(
     rhs: &Int,
     ctx: &NormalizeCtx<'_>,
 ) -> Option<(Poly, bool)> {
-    if let Some(p) = ctx.field_mod {
-        let modular = relation_modular(lhs, rhs, p)?;
-        let modulo = if modular { Some(p) } else { None };
-        let la = if modular {
-            unwrap_field_mod_body(lhs, p)
-        } else {
-            lhs.clone()
-        };
-        let lb = if modular {
-            unwrap_field_mod_body(rhs, p)
-        } else {
-            rhs.clone()
-        };
-        let diff = poly_diff_poly(&la, &lb, ctx.var_terms, modulo)?;
-        return Some((diff, modular));
+    let Some(p) = ctx.field_mod else {
+        let diff = poly_diff_poly(lhs, rhs, ctx.var_terms, None)?;
+        return Some((diff, false));
+    };
+    if relation_modular(lhs, rhs, p)? {
+        let la = unwrap_field_mod_body(lhs, p);
+        let lb = unwrap_field_mod_body(rhs, p);
+        let diff = poly_diff_poly(&la, &lb, ctx.var_terms, Some(p))?;
+        Some((diff, true))
+    } else {
+        let diff = poly_diff_poly(lhs, rhs, ctx.var_terms, None)?;
+        Some((diff, false))
     }
-    let diff = poly_diff_poly(lhs, rhs, ctx.var_terms, None)?;
-    Some((diff, false))
 }
 
 fn wrap_mod_expr(rep: Int, p: i128) -> Int {
@@ -652,8 +634,6 @@ fn normalize_int_rel_gcd(
     let (diff, modular) = relation_poly_diff_plain(lhs, rhs, ctx)?;
     let rep = if diff.is_empty() {
         int_from_i128(0)
-    } else if modular {
-        poly_to_expr(&rescale_gcd(diff), ctx.var_terms)
     } else {
         poly_to_expr(&rescale_gcd(diff), ctx.var_terms)
     };
@@ -674,7 +654,7 @@ fn normalize_equals(
         int_from_i128(0)
     } else if modular {
         let p = ctx.field_mod?;
-        let scaled = rescale_monic(diff.clone(), p).unwrap_or_else(|| rescale_gcd(diff));
+        let scaled = rescale_monic(&diff, p).unwrap_or_else(|| rescale_gcd(diff));
         poly_to_expr(&scaled, ctx.var_terms)
     } else {
         poly_to_expr(&rescale_gcd(diff), ctx.var_terms)
