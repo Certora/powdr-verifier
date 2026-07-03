@@ -1,9 +1,8 @@
 //! Equality rewrites for modular products via FLINT polynomial factorization.
 
 use std::collections::{BTreeSet, HashMap};
-use std::time::Instant;
 
-use smt2::{int_from_i128, int_value, is_int_numeral, map_asserts, map_bool_children, unwrap_zero_mod_eq, Script};
+use smt2::{int_from_i128, int_value, is_int_numeral, map_asserts, map_bool_children_opt, unwrap_zero_mod_eq, Script};
 use z3::ast::{Ast, AstKind, Dynamic, Int};
 use z3::ast::Bool;
 use z3::{FuncDecl, SortKind};
@@ -17,7 +16,6 @@ const MAX_REWRITE_COUNT: usize = 5;
 struct RewriteStats {
     rewrites: usize,
     factor_calls: usize,
-    slow_asserts: Vec<serde_json::Value>,
 }
 
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
@@ -26,26 +24,18 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut changed = 0usize;
     let mut global = RewriteStats::default();
 
-    let mut assert_index = 0usize;
     let out = map_asserts(script, |b: &Bool| {
-        let t0 = Instant::now();
         let mut stats = RewriteStats::default();
-        let new = rewrite_formula(b, field, &mut stats);
-        let body = b.to_string();
-        let sec = t0.elapsed().as_secs_f64();
-        if sec >= 0.05 {
-            global.slow_asserts.push(serde_json::json!({
-                "index": assert_index,
-                "assert": &body[..body.len().min(240)],
-                "sec": sec,
-            }));
-        }
-        assert_index += 1;
+        let rewritten = rewrite_formula(b, field, &mut stats);
         global.rewrites += stats.rewrites;
         global.factor_calls += stats.factor_calls;
-        if !new.ast_eq(b) {
-            changed += 1;
-        }
+        let new = match rewritten {
+            Some(new) => {
+                changed += 1;
+                new
+            }
+            None => b.clone(),
+        };
         Ok(new)
     })?;
 
@@ -56,28 +46,28 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
             "asserts_changed": changed,
             "rewrites": global.rewrites,
             "factor_calls": global.factor_calls,
-            "slow_asserts": global.slow_asserts,
         }),
     ))
 }
 
-fn rewrite_formula(term: &Bool, p: i128, stats: &mut RewriteStats) -> Bool {
-    let mut cur = term.clone();
+fn rewrite_formula(term: &Bool, p: i128, stats: &mut RewriteStats) -> Option<Bool> {
+    let mut cur: Option<Bool> = None;
     for _ in 0..MAX_REWRITE_COUNT {
-        let next = rewrite_once(&cur, p, stats);
-        if next.ast_eq(&cur) {
-            break;
+        let base = cur.as_ref().unwrap_or(term);
+        match rewrite_once(base, p, stats) {
+            Some(next) => cur = Some(next),
+            None => break,
         }
-        cur = next;
     }
     cur
 }
 
-fn rewrite_once(term: &Bool, p: i128, stats: &mut RewriteStats) -> Bool {
+/// Returns ``Some`` only when a rewrite occurred; ``None`` leaves ``term`` untouched.
+fn rewrite_once(term: &Bool, p: i128, stats: &mut RewriteStats) -> Option<Bool> {
     if let Some(rewritten) = try_rewrite_equality(term, p, stats) {
-        return rewritten;
+        return Some(rewritten);
     }
-    map_bool_children(term, &mut |child| rewrite_once(child, p, stats))
+    map_bool_children_opt(term, &mut |child| rewrite_once(child, p, stats))
 }
 
 fn try_rewrite_equality(term: &Bool, p: i128, stats: &mut RewriteStats) -> Option<Bool> {
@@ -571,7 +561,7 @@ mod tests {
         let script = Script::parse(&format!("(assert {body})\n(check-sat)\n")).unwrap();
         let term = script.commands[0].assert_bool().unwrap().clone();
         let mut stats = RewriteStats::default();
-        rewrite_formula(&term, field(), &mut stats)
+        rewrite_formula(&term, field(), &mut stats).unwrap_or(term)
     }
 
     #[test]

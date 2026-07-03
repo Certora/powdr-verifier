@@ -20,6 +20,7 @@ pub use ast_util::{
     IntTermSet,
     is_exists, is_forall,
     is_implies, is_int_const, is_int_literal_string, is_int_numeral, is_ite, is_not, map_bool_children,
+    map_bool_children_opt,
     mod_int_literal_string, or_body_parts, or_parts, parse_int_literal, smtlib_decl_name, z3_if_to_ite,
     quantifier_body, quantifier_body_bool, quantifier_body_deps, quantifier_bound_names,
     quantifier_bound_symbol_ids, quantifier_bounds, quantifier_bounds_de_bruijn,
