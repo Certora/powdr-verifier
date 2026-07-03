@@ -175,8 +175,8 @@ fn collect_variables(
                     {
                         if let Some(body) = n.nth_child(0) {
                             visit(&body, field_mod, bool_symbols, terms, seen);
-                            return;
                         }
+                        return;
                     }
                 }
                 if is_combinator(&head) {
@@ -225,13 +225,7 @@ fn collect_variables(
 
     for cmd in assert_commands(script) {
         if let Some(b) = cmd.assert_bool() {
-            visit(
-                &Dynamic::from_ast(b),
-                field_mod,
-                bool_symbols,
-                &mut terms,
-                &mut seen,
-            );
+            visit(&Dynamic::from_ast(b), field_mod, bool_symbols, &mut terms, &mut seen);
         }
     }
 
