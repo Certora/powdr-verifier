@@ -11,7 +11,7 @@ mod witness;
 use std::collections::{HashMap, HashSet};
 
 use smt2::ast_util::{is_forall, or_body_parts, rebuild_quantifier_dyn};
-use smt2::{map_asserts, map_bool_children, Script};
+use smt2::{map_asserts, map_bool_children_opt, Script};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
 use crate::expr_util::AssertBuildCtx;
@@ -19,8 +19,7 @@ use self::ast_build::field_mod;
 use self::map::SkolemMap;
 use self::types::SortKind;
 use self::utils::{
-    collect_declared_symbols, collect_symbol_sorts, declare_fun_block, load_skolem_setinfos,
-    parse_forall,
+    collect_declared_symbols, declare_fun_block, parse_forall, prepare_skolem_inputs,
 };
 
 const SKOLEM_SETINFO_PREFIX: &str = ":skolem-";
@@ -28,8 +27,7 @@ const SKOLEM_SETINFO_PREFIX: &str = ":skolem-";
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let field = field_mod();
     let declared = collect_declared_symbols(script);
-    let sorts = collect_symbol_sorts(script);
-    let (pins, pins_dropped_not_live) = load_skolem_setinfos(script);
+    let (sorts, pins, pins_dropped_not_live) = prepare_skolem_inputs(script);
     let candidates = field
         .map(|p| witness::collect_candidates(script, p))
         .unwrap_or_default();
@@ -116,7 +114,35 @@ fn walk_assert(
     applied: &mut HashMap<String, usize>,
     qvar_sets: &mut Vec<HashSet<String>>,
 ) -> Bool {
-    walk_assert_dyn(
+    walk_assert_opt(
+        script,
+        term,
+        declared,
+        sorts,
+        pins,
+        candidates,
+        decl_block,
+        field,
+        applied,
+        qvar_sets,
+    )
+    .unwrap_or_else(|| term.clone())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_assert_opt(
+    script: &Script,
+    term: &Bool,
+    declared: &HashMap<String, String>,
+    sorts: &HashMap<String, SortKind>,
+    pins: &[types::SkolemPin],
+    candidates: &[witness::WitnessCandidate],
+    decl_block: &str,
+    field: Option<i128>,
+    applied: &mut HashMap<String, usize>,
+    qvar_sets: &mut Vec<HashSet<String>>,
+) -> Option<Bool> {
+    walk_assert_dyn_opt(
         script,
         &Dynamic::from_ast(term),
         declared,
@@ -128,11 +154,13 @@ fn walk_assert(
         applied,
         qvar_sets,
     )
-    .as_bool()
-    .unwrap_or_else(|| term.clone())
+    .map(|d| d.as_bool().unwrap_or_else(|| term.clone()))
 }
 
-fn walk_assert_dyn(
+/// Identity-preserving walk: returns ``Some`` only when a subtree changed,
+/// ``None`` when ``term`` is untouched (avoids rebuilding the AST).
+#[allow(clippy::too_many_arguments)]
+fn walk_assert_dyn_opt(
     script: &Script,
     term: &Dynamic,
     declared: &HashMap<String, String>,
@@ -143,10 +171,10 @@ fn walk_assert_dyn(
     field: Option<i128>,
     applied: &mut HashMap<String, usize>,
     qvar_sets: &mut Vec<HashSet<String>>,
-) -> Dynamic {
+) -> Option<Dynamic> {
     if term.kind() == AstKind::Quantifier {
         if is_forall(term) {
-            return Dynamic::from_ast(&walk_forall(
+            return walk_forall_opt(
                 script,
                 term,
                 declared,
@@ -157,13 +185,12 @@ fn walk_assert_dyn(
                 field,
                 applied,
                 qvar_sets,
-            ));
+            )
+            .map(|b| Dynamic::from_ast(&b));
         }
         let bounds = smt2::quantifier_bounds(term);
-        let Some(body) = smt2::quantifier_body_bool(term) else {
-            return term.clone();
-        };
-        let body = walk_assert(
+        let body = smt2::quantifier_body_bool(term)?;
+        let new_body = walk_assert_opt(
             script,
             &body,
             declared,
@@ -174,12 +201,14 @@ fn walk_assert_dyn(
             field,
             applied,
             qvar_sets,
-        );
-        return Dynamic::from_ast(&rebuild_quantifier_dyn(false, &bounds, &body));
+        )?;
+        return Some(Dynamic::from_ast(&rebuild_quantifier_dyn(
+            false, &bounds, &new_body,
+        )));
     }
     if let Some(b) = term.as_bool() {
-        return Dynamic::from_ast(&map_bool_children(&b, &mut |child| {
-            walk_assert(
+        return map_bool_children_opt(&b, &mut |child| {
+            walk_assert_opt(
                 script,
                 child,
                 declared,
@@ -191,12 +220,14 @@ fn walk_assert_dyn(
                 applied,
                 qvar_sets,
             )
-        }));
+        })
+        .map(|nb| Dynamic::from_ast(&nb));
     }
-    term.clone()
+    None
 }
 
-fn walk_forall(
+#[allow(clippy::too_many_arguments)]
+fn walk_forall_opt(
     _script: &Script,
     term: &Dynamic,
     declared: &HashMap<String, String>,
@@ -207,14 +238,11 @@ fn walk_forall(
     field: Option<i128>,
     applied: &mut HashMap<String, usize>,
     qvar_sets: &mut Vec<HashSet<String>>,
-) -> Bool {
-    let Some((qvars, bounds, body)) = parse_forall(term) else {
-        return term.as_bool().unwrap_or_else(|| Bool::from_bool(true));
-    };
+) -> Option<Bool> {
+    let (qvars, bounds, body) = parse_forall(term)?;
     qvar_sets.push(qvars.iter().map(|(n, _)| n.clone()).collect());
 
-    let body = crate::passes::lift::name_debruijn_bool(&body, term)
-        .unwrap_or_else(|_| body.clone());
+    let body = crate::passes::lift::name_debruijn_bool(&body, term).unwrap_or_else(|_| body.clone());
 
     let mut skolem = SkolemMap::new(&qvars);
     names::contribute(&mut skolem, declared, sorts);
@@ -236,7 +264,7 @@ fn walk_forall(
 
     let disjuncts = skolem.emit_disjuncts();
     if disjuncts.is_empty() {
-        return term.as_bool().unwrap_or_else(|| Bool::from_bool(true));
+        return None;
     }
 
     let new_body = if let Some(mut args) = or_body_parts(&body) {
@@ -248,7 +276,7 @@ fn walk_forall(
         Bool::or(&args.iter().collect::<Vec<_>>())
     };
 
-    rebuild_quantifier_dyn(true, &bounds, &new_body)
+    Some(rebuild_quantifier_dyn(true, &bounds, &new_body))
 }
 
 #[cfg(test)]

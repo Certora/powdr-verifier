@@ -20,17 +20,68 @@ pub fn collect_declared_symbols(script: &Script) -> HashMap<String, String> {
     out
 }
 
-pub fn collect_symbol_sorts(script: &Script) -> HashMap<String, SortKind> {
-    let mut out = HashMap::new();
+fn build_symbol_sorts(
+    mut sorts: HashMap<String, SortKind>,
+    qvar_sorts: &[(String, SortKind)],
+) -> HashMap<String, SortKind> {
+    for (name, sort) in qvar_sorts {
+        sorts.entry(name.clone()).or_insert(*sort);
+    }
+    sorts
+}
+
+/// One declare-fun pass yielding both the per-symbol sort map and the set of
+/// non-nullary (function) symbols. Replaces the separate `collect_symbol_sorts`
+/// declare walk and `collect_function_symbols`.
+fn declare_fun_sorts_and_ufs(script: &Script) -> (HashMap<String, SortKind>, HashSet<String>) {
+    let mut sorts = HashMap::new();
+    let mut ufs = HashSet::new();
     for cmd in &script.commands {
-        if let Some(name) = declare_fun_name(cmd, &script.source) {
-            out.insert(name.clone(), sort_from_decl(&cmd.to_smtlib(&script.source)));
+        let Some(name) = declare_fun_name(cmd, &script.source) else {
+            continue;
+        };
+        let raw = cmd.to_smtlib(&script.source);
+        sorts.insert(name.clone(), sort_from_decl(&raw));
+        if !is_nullary_declare_fun(&raw) {
+            ufs.insert(name);
         }
     }
-    for (name, sort) in collect_forall_qvar_sorts(script) {
-        out.entry(name).or_insert(sort);
+    (sorts, ufs)
+}
+
+pub struct AssertScan {
+    pub live_symbols: HashSet<String>,
+    pub qvar_sorts: Vec<(String, SortKind)>,
+}
+
+/// Single walk over all asserts producing (a) live symbol names (including
+/// forall bound-variable names) and (b) forall bound-variable sorts. Replaces
+/// the separate `collect_assert_symbols` and `collect_forall_qvar_sorts` walks.
+pub fn scan_asserts(script: &Script) -> AssertScan {
+    let mut live = HashSet::new();
+    let mut qvar_sorts = Vec::new();
+    for cmd in &script.commands {
+        let Some(body) = cmd.assert_bool() else {
+            continue;
+        };
+        for node in iter_nodes_dyn(&Dynamic::from_ast(body)) {
+            if let Some(name) = symbol_name_dyn(&node) {
+                if name != "true" && name != "false" && int_literal_dyn(&node).is_none() {
+                    live.insert(name);
+                }
+            }
+            if let Some((qvars, _, _)) = parse_forall(&node) {
+                for (n, s) in qvars {
+                    live.insert(n.clone());
+                    qvar_sorts.push((n, s));
+                }
+            }
+        }
     }
-    out
+    AssertScan {
+        live_symbols: live,
+        qvar_sorts,
+    }
 }
 
 pub fn declare_fun_block(script: &Script) -> String {
@@ -54,24 +105,6 @@ pub fn declare_fun_name(cmd: &SmtCommand, source: &str) -> Option<String> {
     let rest = inner.strip_prefix("declare-fun")?.trim();
     let end = rest.find(|c: char| c.is_whitespace())?;
     Some(rest[..end].to_string())
-}
-
-fn collect_forall_qvar_sorts(script: &Script) -> Vec<(String, SortKind)> {
-    let mut out = Vec::new();
-    for cmd in &script.commands {
-        if let Some(body) = cmd.assert_bool() {
-            collect_qvars_from_bool(body, &mut out);
-        }
-    }
-    out
-}
-
-fn collect_qvars_from_bool(term: &Bool, out: &mut Vec<(String, SortKind)>) {
-    for node in iter_nodes_dyn(&Dynamic::from_ast(term)) {
-        if let Some((qvars, _, _body)) = parse_forall(&node) {
-            out.extend(qvars);
-        }
-    }
 }
 
 pub fn parse_forall(term: &Dynamic) -> Option<(Vec<(String, SortKind)>, Vec<Dynamic>, Bool)> {
@@ -168,6 +201,7 @@ fn seed_parser_for_skolem_pins(
     parse: &mut ParseCtx,
     script: &Script,
     declared: &mut HashSet<String>,
+    qvar_sorts: &[(String, SortKind)],
 ) -> Result<(), String> {
     seed_parser_context(parse, script)?;
     for cmd in &script.commands {
@@ -175,14 +209,14 @@ fn seed_parser_for_skolem_pins(
             declared.insert(name);
         }
     }
-    for (name, sort) in collect_forall_qvar_sorts(script) {
+    for (name, sort) in qvar_sorts {
         if !declared.insert(name.clone()) {
             continue;
         }
         parse.ingest_command(&format!(
             "(declare-fun {} () {})",
             name,
-            sort_kind_to_smt(sort)
+            sort_kind_to_smt(*sort)
         ))?;
     }
     Ok(())
@@ -215,51 +249,11 @@ fn is_nullary_declare_fun(raw: &str) -> bool {
     raw.contains("()")
 }
 
-fn collect_function_symbols(script: &Script) -> HashSet<String> {
-    let mut out = HashSet::new();
-    for cmd in &script.commands {
-        if cmd.name() != "declare-fun" {
-            continue;
-        }
-        let raw = cmd.to_smtlib(&script.source);
-        if is_nullary_declare_fun(&raw) {
-            continue;
-        }
-        if let Some(name) = declare_fun_name(cmd, &script.source) {
-            out.insert(name);
-        }
-    }
-    out
-}
-
-pub fn collect_assert_symbols(script: &Script) -> HashSet<String> {
-    let mut out = HashSet::new();
-    for cmd in &script.commands {
-        if let Some(body) = cmd.assert_bool() {
-            collect_symbols_from_bool(body, &mut out);
-        }
-    }
-    out
-}
-
-fn collect_symbols_from_bool(term: &Bool, out: &mut HashSet<String>) {
-    for node in iter_nodes_dyn(&Dynamic::from_ast(term)) {
-        if let Some(name) = symbol_name_dyn(&node) {
-            if name != "true" && name != "false" && int_literal_dyn(&node).is_none() {
-                out.insert(name);
-            }
-        }
-        if let Some((qvars, _, _)) = parse_forall(&node) {
-            for (n, _) in qvars {
-                out.insert(n);
-            }
-        }
-    }
-}
-
-fn filter_live_pins(pins: Vec<SkolemPin>, script: &Script) -> (Vec<SkolemPin>, usize) {
-    let live = collect_assert_symbols(script);
-    let ufs = collect_function_symbols(script);
+fn filter_live_pins(
+    pins: Vec<SkolemPin>,
+    live: &HashSet<String>,
+    ufs: &HashSet<String>,
+) -> (Vec<SkolemPin>, usize) {
     let mut out = Vec::with_capacity(pins.len());
     let mut dropped = 0usize;
     for pin in pins {
@@ -280,12 +274,42 @@ fn filter_live_pins(pins: Vec<SkolemPin>, script: &Script) -> (Vec<SkolemPin>, u
     (out, dropped)
 }
 
+/// Prepare all script-derived skolem inputs with a single shared assert scan and
+/// a single declare-fun pass: symbol sorts, parsed set-info pins, and the count
+/// of pins dropped as not-live.
+pub fn prepare_skolem_inputs(
+    script: &Script,
+) -> (HashMap<String, SortKind>, Vec<SkolemPin>, usize) {
+    let scan = scan_asserts(script);
+    let (decl_sorts, ufs) = declare_fun_sorts_and_ufs(script);
+    let sorts = build_symbol_sorts(decl_sorts, &scan.qvar_sorts);
+    let (pins, dropped) = load_skolem_setinfos_shared(
+        script,
+        &sorts,
+        &scan.qvar_sorts,
+        &scan.live_symbols,
+        &ufs,
+    );
+    (sorts, pins, dropped)
+}
+
+#[cfg(test)]
 pub fn load_skolem_setinfos(script: &Script) -> (Vec<SkolemPin>, usize) {
-    let sorts = collect_symbol_sorts(script);
+    let (_, pins, dropped) = prepare_skolem_inputs(script);
+    (pins, dropped)
+}
+
+fn load_skolem_setinfos_shared(
+    script: &Script,
+    sorts: &HashMap<String, SortKind>,
+    qvar_sorts: &[(String, SortKind)],
+    live: &HashSet<String>,
+    ufs: &HashSet<String>,
+) -> (Vec<SkolemPin>, usize) {
     let mut out = Vec::new();
     let mut parse = ParseCtx::new();
     let mut declared = HashSet::new();
-    if seed_parser_for_skolem_pins(&mut parse, script, &mut declared).is_err() {
+    if seed_parser_for_skolem_pins(&mut parse, script, &mut declared, qvar_sorts).is_err() {
         return (out, 0);
     }
     for cmd in &script.commands {
@@ -305,7 +329,7 @@ pub fn load_skolem_setinfos(script: &Script) -> (Vec<SkolemPin>, usize) {
         };
         let kind_slug = &rest[..dash];
         let kind = kind_slug.replace('-', "_");
-        prebind_pin_identifiers(&mut parse, &value, &sorts, &mut declared);
+        prebind_pin_identifiers(&mut parse, &value, sorts, &mut declared);
         if let Ok(eq) = parse_bool_formula(&mut parse, &value) {
             out.push(SkolemPin {
                 equation: eq,
@@ -313,7 +337,7 @@ pub fn load_skolem_setinfos(script: &Script) -> (Vec<SkolemPin>, usize) {
             });
         }
     }
-    let (filtered, dropped) = filter_live_pins(out, script);
+    let (filtered, dropped) = filter_live_pins(out, live, ufs);
     if dropped > 0 {
         eprintln!(
             "skolem: dropped {dropped} set-info pins (symbols not live in asserts), kept {}",
