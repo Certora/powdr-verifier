@@ -38,7 +38,7 @@ def _plain_static_profile(
     mult_const: list[int | None] = []
     const_args: list[tuple[int | None, ...] | None] = []
     for inter in interactions:
-        m = inter.mult
+        m = inter.mult.simplify()
         mult_const.append(m.constant_value() % p if m.is_int_constant() else None)
         raw = inter.args
         flat: list[FNode] = (
@@ -156,8 +156,8 @@ def _plain_exactly_one_match(literals: list[FNode]) -> FNode:
     if len(forced) == 1:
         chosen = forced[0]
         others = [Not(lit) for lit in live if lit is not chosen]
-        return And(chosen, *others) if others else TRUE()
-    return bool_simplify(ExactlyOne(*live))
+        return And(chosen, *others) if others else chosen
+    return ExactlyOne(*live)
 
 
 def _membus_presets_from_rows(
