@@ -1,6 +1,6 @@
 use crate::command::SmtCommand;
 use crate::script::Script;
-use crate::ast_util::{decl_name, quantifier_body, quantifier_bound_names, smtlib_decl_name, z3_if_to_ite};
+use crate::ast_util::{decl_name, numeral_smtlib_string, quantifier_body, quantifier_bound_names, smtlib_decl_name, z3_if_to_ite};
 use z3::ast::{Ast, AstKind, Bool, Dynamic};
 
 const INDENT: &str = "    ";
@@ -40,15 +40,18 @@ pub fn pretty_print_script(script: &Script) -> Result<Script, String> {
     Ok(Script::from_commands(&script.source, commands))
 }
 
+const COLLAPSE_SIZE: usize = 10;
+
 fn should_collapse(ast: &Dynamic, depth: usize, is_collapsed: bool) -> bool {
     is_collapsed
         || depth > 10
-        || ast_size(ast) < 10
+        || ast_size_lt(ast, COLLAPSE_SIZE)
         || (ast.kind() == AstKind::App
             && ast.num_children() > 0
-            && ast_children_slice(ast)[1..]
-                .iter()
-                .all(|c| c.kind() == AstKind::App && c.is_const()))
+            && (1..ast.num_children()).all(|i| {
+                ast.nth_child(i)
+                    .is_some_and(|c| c.kind() == AstKind::App && c.is_const())
+            }))
 }
 
 fn print_top_level(out: &mut String, ast: &Dynamic, depth: usize, is_collapsed: bool, in_script: bool) {
@@ -73,7 +76,10 @@ fn print_term(out: &mut String, ast: &Dynamic, depth: usize, is_collapsed: bool)
             if !is_collapsed {
                 write_indent(out, depth);
             }
-            out.push_str(&z3_if_to_ite(&ast.to_string()));
+            match numeral_smtlib_string(ast) {
+                Some(s) => out.push_str(&s),
+                None => out.push_str(&ast.to_string()),
+            }
         }
         AstKind::App => print_app(out, ast, depth, is_collapsed),
         AstKind::Quantifier => print_quantifier_node(out, ast, depth, is_collapsed),
@@ -81,7 +87,7 @@ fn print_term(out: &mut String, ast: &Dynamic, depth: usize, is_collapsed: bool)
             if !is_collapsed {
                 write_indent(out, depth);
             }
-            out.push_str(&z3_if_to_ite(&ast.to_string()));
+            out.push_str(&ast.to_string());
         }
     }
 }
@@ -187,19 +193,39 @@ fn write_indent(out: &mut String, depth: usize) {
     }
 }
 
-fn ast_size(ast: &Dynamic) -> usize {
+/// Whether ``ast``'s node count is below ``limit``. Stops walking once the
+/// limit is reached, so this is O(limit) rather than O(subtree).
+fn ast_size_lt(ast: &Dynamic, limit: usize) -> bool {
+    let mut count = 0usize;
+    accumulate_size(ast, limit, &mut count);
+    count < limit
+}
+
+fn accumulate_size(ast: &Dynamic, limit: usize, count: &mut usize) {
+    if *count >= limit {
+        return;
+    }
     if ast.kind() == AstKind::App {
-        let name = decl_name(&ast.decl());
-        if name == "-" && ast.num_children() == 1 {
+        if ast.num_children() == 1 && decl_name(&ast.decl()) == "-" {
             if let Some(ch) = ast.nth_child(0) {
                 if ch.kind() == AstKind::Numeral {
-                    return 1;
+                    *count += 1;
+                    return;
                 }
             }
         }
-        return 1 + ast_children_slice(ast).iter().map(ast_size).sum::<usize>();
+        *count += 1;
+        for i in 0..ast.num_children() {
+            if *count >= limit {
+                return;
+            }
+            if let Some(ch) = ast.nth_child(i) {
+                accumulate_size(&ch, limit, count);
+            }
+        }
+    } else {
+        *count += 1;
     }
-    1
 }
 
 #[cfg(test)]
