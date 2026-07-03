@@ -2,9 +2,10 @@
 
 use std::collections::HashMap;
 
-use smt2::ast_util::{decl_name, int_from_i128, int_value_dyn, rebuild_app};
-use smt2::{assert_commands, map_asserts, Script};
+use smt2::ast_util::{int_from_i128, int_value_dyn, rebuild_app};
+use smt2::{assert_commands, is_int_const, map_asserts, Script};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
+use z3::DeclKind;
 
 #[derive(Default)]
 struct DemodStats {
@@ -25,12 +26,12 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let total = assert_commands(script).len();
     let mut changed = 0usize;
     let mut stats = DemodStats::default();
-    let out = map_asserts(script, |b| {
-        let next = rewrite_bool(b, field_mod, &mut stats);
-        if !next.ast_eq(b) {
+    let out = map_asserts(script, |b| match rewrite_bool(b, field_mod, &mut stats) {
+        Some(next) => {
             changed += 1;
+            Ok(next)
         }
-        Ok(next)
+        None => Ok(b.clone()),
     })?;
     let stats_json = serde_json::json!({
         "asserts_total": total,
@@ -45,129 +46,158 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     Ok((out, stats_json))
 }
 
-fn rewrite_bool(b: &Bool, field_mod: Option<i128>, stats: &mut DemodStats) -> Bool {
+/// Returns ``Some`` only when a rewrite changed the term; ``None`` leaves it
+/// untouched so the original AST node is reused (no rebuild/hashconsing).
+fn rewrite_bool(b: &Bool, field_mod: Option<i128>, stats: &mut DemodStats) -> Option<Bool> {
     let d = Dynamic::from_ast(b);
     if d.kind() == AstKind::Quantifier {
-        return b.clone();
+        return None;
     }
-    if d.kind() == AstKind::App && decl_name(&d.decl()) == "=" && d.num_children() == 2 {
+    if d.kind() == AstKind::App && d.num_children() == 2 && d.decl().kind() == DeclKind::Eq {
         let lhs = d.nth_child(0).and_then(|c| c.as_int());
         let rhs = d.nth_child(1).and_then(|c| c.as_int());
         if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
             if let Some(eq) = demod_rewrite_eqmod_zero_equals(&lhs, &rhs, field_mod) {
                 stats.eqmod_asserts_changed += 1;
-                return eq;
+                return Some(eq);
             }
         }
     }
     if d.kind() != AstKind::App {
-        return b.clone();
+        return None;
     }
-    let args: Vec<Dynamic> = d
-        .children()
-        .into_iter()
-        .map(|ch| {
+    let (args, any) = rewrite_children(&d, field_mod, stats, true);
+    if !any {
+        return None;
+    }
+    let refs: Vec<&dyn Ast> = args.iter().map(|a| a as &dyn Ast).collect();
+    rebuild_app(&d.decl(), &refs).as_bool()
+}
+
+fn rewrite_dynamic(ast: &Dynamic, field_mod: Option<i128>, stats: &mut DemodStats) -> Option<Dynamic> {
+    if ast.kind() == AstKind::Quantifier {
+        return None;
+    }
+    if let Some(i) = ast.as_int() {
+        return rewrite_int(&i, field_mod, stats).map(|x| Dynamic::from_ast(&x));
+    }
+    if ast.kind() != AstKind::App {
+        return None;
+    }
+    let (args, any) = rewrite_children(ast, field_mod, stats, false);
+    if !any {
+        return None;
+    }
+    let refs: Vec<&dyn Ast> = args.iter().map(|a| a as &dyn Ast).collect();
+    Some(rebuild_app(&ast.decl(), &refs))
+}
+
+/// Rewrite all children, returning them (originals reused where unchanged) and
+/// whether any child changed. When ``bool_aware``, Bool children recurse through
+/// [`rewrite_bool`].
+fn rewrite_children(
+    d: &Dynamic,
+    field_mod: Option<i128>,
+    stats: &mut DemodStats,
+    bool_aware: bool,
+) -> (Vec<Dynamic>, bool) {
+    let n = d.num_children();
+    // Defer allocation until the first change: unchanged nodes (the common case)
+    // pay no Vec allocation and no child clones.
+    let mut args: Vec<Dynamic> = Vec::new();
+    for i in 0..n {
+        let Some(ch) = d.nth_child(i) else { continue };
+        let rewritten = if bool_aware {
             if let Some(cb) = ch.as_bool() {
-                Dynamic::from_ast(&rewrite_bool(&cb, field_mod, stats))
+                rewrite_bool(&cb, field_mod, stats).map(|x| Dynamic::from_ast(&x))
             } else {
                 rewrite_dynamic(&ch, field_mod, stats)
             }
-        })
-        .collect();
-    let refs: Vec<&dyn Ast> = args.iter().map(|a| a as &dyn Ast).collect();
-    rebuild_app(&d.decl(), &refs)
-        .as_bool()
-        .unwrap_or_else(|| b.clone())
+        } else {
+            rewrite_dynamic(&ch, field_mod, stats)
+        };
+        match rewritten {
+            Some(x) => {
+                if args.is_empty() {
+                    args.reserve(n);
+                    for j in 0..i {
+                        if let Some(orig) = d.nth_child(j) {
+                            args.push(orig);
+                        }
+                    }
+                }
+                args.push(x);
+            }
+            None if !args.is_empty() => args.push(ch),
+            None => {}
+        }
+    }
+    let any = !args.is_empty();
+    (args, any)
 }
 
-fn rewrite_dynamic(ast: &Dynamic, field_mod: Option<i128>, stats: &mut DemodStats) -> Dynamic {
-    if ast.kind() == AstKind::Quantifier {
-        return ast.clone();
-    }
-    if let Some(i) = ast.as_int() {
-        return Dynamic::from_ast(&rewrite_int(&i, field_mod, stats));
-    }
-    if ast.kind() != AstKind::App {
-        return ast.clone();
-    }
-    let args: Vec<Dynamic> = ast
-        .children()
-        .into_iter()
-        .map(|ch| rewrite_dynamic(&ch, field_mod, stats))
-        .collect();
-    let refs: Vec<&dyn Ast> = args.iter().map(|a| a as &dyn Ast).collect();
-    rebuild_app(&ast.decl(), &refs)
-}
-
-fn rewrite_int(e: &Int, field_mod: Option<i128>, stats: &mut DemodStats) -> Int {
+fn rewrite_int(e: &Int, field_mod: Option<i128>, stats: &mut DemodStats) -> Option<Int> {
     let d = Dynamic::from_ast(e);
     if d.kind() != AstKind::App {
-        return e.clone();
+        return None;
     }
-    let op = decl_name(&d.decl());
-    if op == "mod" && d.num_children() == 2 {
-        let expr = d
-            .nth_child(0)
-            .and_then(|c| c.as_int())
-            .map(|i| rewrite_int(&i, field_mod, stats))
+    if d.decl().kind() == DeclKind::Mod && d.num_children() == 2 {
+        let c0 = d.nth_child(0).and_then(|c| c.as_int());
+        let c1 = d.nth_child(1).and_then(|c| c.as_int());
+        let expr_r = c0.as_ref().and_then(|i| rewrite_int(i, field_mod, stats));
+        let modulus_r = c1.as_ref().and_then(|i| rewrite_int(i, field_mod, stats));
+        let expr = expr_r
+            .clone()
+            .or_else(|| c0.clone())
             .unwrap_or_else(|| e.clone());
-        let modulus = d
-            .nth_child(1)
-            .and_then(|c| c.as_int())
-            .map(|i| rewrite_int(&i, field_mod, stats))
+        let modulus = modulus_r
+            .clone()
+            .or_else(|| c1.clone())
             .unwrap_or_else(|| int_from_i128(1));
         if let Some(m) = int_lit(&Dynamic::from_ast(&modulus)) {
             if m > 0 {
                 if let Some(v) = int_lit(&Dynamic::from_ast(&expr)) {
                     stats.const_eval += 1;
-                    return int_from_i128(v.rem_euclid(m));
+                    return Some(int_from_i128(v.rem_euclid(m)));
                 }
                 let ed = Dynamic::from_ast(&expr);
-                if ed.kind() == AstKind::App && decl_name(&ed.decl()) == "ite" && ed.num_children() == 3 {
+                if ed.kind() == AstKind::App && ed.num_children() == 3 && ed.decl().kind() == DeclKind::Ite {
                     let c = ed.nth_child(0).and_then(|x| x.as_bool());
                     let t = ed.nth_child(1).and_then(|x| x.as_int());
                     let f = ed.nth_child(2).and_then(|x| x.as_int());
                     if let (Some(c), Some(t), Some(f)) = (c, t, f) {
                         stats.into_ite += 1;
-                        return c.ite(&t.modulo(&modulus), &f.modulo(&modulus));
+                        return Some(c.ite(&t.modulo(&modulus), &f.modulo(&modulus)));
                     }
                 }
             }
         }
-        return expr.modulo(&modulus);
+        if expr_r.is_none() && modulus_r.is_none() {
+            return None;
+        }
+        return Some(expr.modulo(&modulus));
     }
-    let args: Vec<Dynamic> = d
-        .children()
-        .into_iter()
-        .map(|ch| rewrite_dynamic(&ch, field_mod, stats))
-        .collect();
+    let (args, any) = rewrite_children(&d, field_mod, stats, false);
+    if !any {
+        return None;
+    }
     let refs: Vec<&dyn Ast> = args.iter().map(|a| a as &dyn Ast).collect();
-    rebuild_app(&d.decl(), &refs).as_int().unwrap_or_else(|| e.clone())
+    rebuild_app(&d.decl(), &refs).as_int()
 }
 
 fn int_lit(ast: &Dynamic) -> Option<i128> {
     if let Some(v) = int_value_dyn(ast) {
         return Some(v);
     }
-    if ast.kind() == AstKind::App && decl_name(&ast.decl()) == "-" && ast.num_children() == 1 {
+    if ast.kind() == AstKind::App && ast.num_children() == 1 && ast.decl().kind() == DeclKind::Uminus {
         return ast.nth_child(0).and_then(|c| int_value_dyn(&c)).map(|v| -v);
-    }
-    None
-}
-
-fn is_symbol_int(ast: &Dynamic) -> Option<String> {
-    if ast.kind() == AstKind::App && ast.is_const() && ast.as_int().is_some() {
-        let name = decl_name(&ast.decl());
-        if name != "true" && name != "false" {
-            return Some(name);
-        }
     }
     None
 }
 
 fn mod_parts_int(t: &Int) -> Option<(Int, i128)> {
     let d = Dynamic::from_ast(t);
-    if d.kind() != AstKind::App || decl_name(&d.decl()) != "mod" || d.num_children() != 2 {
+    if d.kind() != AstKind::App || d.num_children() != 2 || d.decl().kind() != DeclKind::Mod {
         return None;
     }
     let expr = d.nth_child(0)?.as_int()?;
@@ -198,16 +228,16 @@ fn demod_rewrite_eqmod_zero_equals(lhs: &Int, rhs: &Int, field_mod: Option<i128>
     if terms.len() != 1 {
         return None;
     }
-    let (sym, a) = terms.into_iter().next()?;
+    let (var, a) = terms.into_iter().next()?;
     if a == 0 {
         return None;
     }
     let inv = mod_inverse(a, p)?;
     let val = (-const_ * inv).rem_euclid(p);
-    Some(Int::new_const(sym.as_str()).eq(int_from_i128(val)))
+    Some(var.eq(int_from_i128(val)))
 }
 
-fn linear_form(e: &Int) -> Option<(HashMap<String, i128>, i128)> {
+fn linear_form(e: &Int) -> Option<(HashMap<Int, i128>, i128)> {
     let mut terms = HashMap::new();
     let mut const_ = 0i128;
     if linear_add(1, e, &mut terms, &mut const_) {
@@ -217,20 +247,22 @@ fn linear_form(e: &Int) -> Option<(HashMap<String, i128>, i128)> {
     }
 }
 
-fn linear_add(c: i128, e: &Int, terms: &mut HashMap<String, i128>, const_: &mut i128) -> bool {
+fn linear_add(c: i128, e: &Int, terms: &mut HashMap<Int, i128>, const_: &mut i128) -> bool {
     let d = Dynamic::from_ast(e);
     if let Some(v) = int_lit(&d) {
         *const_ += c * v;
         return true;
     }
-    if let Some(name) = is_symbol_int(&d) {
-        *terms.entry(name).or_insert(0) += c;
-        return true;
+    if is_int_const(&d) {
+        if let Some(var) = d.as_int() {
+            *terms.entry(var).or_insert(0) += c;
+            return true;
+        }
     }
     if d.kind() != AstKind::App {
         return false;
     }
-    let head = decl_name(&d.decl());
+    let head = d.decl().name();
     match head.as_str() {
         "+" => d
             .children()

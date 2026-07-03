@@ -1,6 +1,6 @@
 //! Equality rewrites for modular products via FLINT polynomial factorization.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use smt2::{int_from_i128, int_value, is_int_numeral, map_asserts, map_bool_children_opt, unwrap_zero_mod_eq, Script};
 use z3::ast::{Ast, AstKind, Dynamic, Int};
@@ -168,25 +168,24 @@ fn and_terms(mut parts: Vec<Bool>) -> Bool {
     Bool::and(&parts.iter().collect::<Vec<_>>())
 }
 
-fn roots_with_range(var: &str, values: &BTreeSet<i128>, _p: i128) -> Bool {
+fn roots_with_range(var: &Int, values: &BTreeSet<i128>, _p: i128) -> Bool {
     let min_v = *values.iter().next().unwrap();
     let max_v = *values.iter().next_back().unwrap();
-    let sym = Int::new_const(var);
     let disj = or_terms(
         values
             .iter()
-            .map(|v| sym.eq(int_from_i128(*v)))
+            .map(|v| var.eq(int_from_i128(*v)))
             .collect(),
     );
     and_terms(vec![
         disj,
-        int_from_i128(min_v).le(&sym),
-        sym.le(&int_from_i128(max_v)),
+        int_from_i128(min_v).le(var),
+        var.le(&int_from_i128(max_v)),
     ])
 }
 
-fn solved_roots(factors: &[Int], p: i128) -> Option<(String, BTreeSet<i128>)> {
-    let mut var: Option<String> = None;
+fn solved_roots(factors: &[Int], p: i128) -> Option<(Int, BTreeSet<i128>)> {
+    let mut var: Option<Int> = None;
     let mut values = BTreeSet::new();
     for f in factors {
         let (sym, a, b) = linear_form_z3(f, p)?;
@@ -198,7 +197,7 @@ fn solved_roots(factors: &[Int], p: i128) -> Option<(String, BTreeSet<i128>)> {
         }
         if var.is_none() {
             var = Some(sym);
-        } else if var.as_ref() != Some(&sym) {
+        } else if !var.as_ref().unwrap().ast_eq(&sym) {
             return None;
         }
         values.insert((-b * mod_inv(a, p)?).rem_euclid(p));
@@ -210,7 +209,7 @@ fn solved_roots(factors: &[Int], p: i128) -> Option<(String, BTreeSet<i128>)> {
     Some((var, values))
 }
 
-fn solved_quadratic(expr: &Int, p: i128) -> Option<(String, BTreeSet<i128>)> {
+fn solved_quadratic(expr: &Int, p: i128) -> Option<(Int, BTreeSet<i128>)> {
     let syms = free_z3_symbols(expr);
     if syms.len() != 1 {
         return None;
@@ -325,8 +324,8 @@ fn mod_inv(a: i128, p: i128) -> Option<i128> {
     Some(if t < 0 { t + p } else { t })
 }
 
-fn linear_form_z3(e: &Int, p: i128) -> Option<(String, i128, i128)> {
-    let mut terms: HashMap<String, i128> = HashMap::new();
+fn linear_form_z3(e: &Int, p: i128) -> Option<(Int, i128, i128)> {
+    let mut terms: HashMap<Int, i128> = HashMap::new();
     let mut const_ = 0i128;
     if !linear_add(1, e, p, &mut terms, &mut const_) {
         return None;
@@ -336,7 +335,7 @@ fn linear_form_z3(e: &Int, p: i128) -> Option<(String, i128, i128)> {
         return None;
     }
     if terms.is_empty() {
-        return Some((String::new(), 0, const_));
+        return Some((int_from_i128(0), 0, const_));
     }
     let (sym, a) = terms.into_iter().next().unwrap();
     Some((sym, a.rem_euclid(p), const_.rem_euclid(p)))
@@ -346,7 +345,7 @@ fn linear_add(
     c: i128,
     e: &Int,
     p: i128,
-    terms: &mut HashMap<String, i128>,
+    terms: &mut HashMap<Int, i128>,
     const_: &mut i128,
 ) -> bool {
     let dyn_ = Dynamic::from_ast(e);
@@ -355,8 +354,7 @@ fn linear_add(
         return true;
     }
     if is_int_var(&dyn_) {
-        let name = z3_symbol_name(e);
-        *terms.entry(name).or_insert(0) += c;
+        *terms.entry(e.clone()).or_insert(0) += c;
         return true;
     }
     if let Some(op) = arithmetic_op(&dyn_) {
@@ -400,13 +398,13 @@ fn linear_add(
     false
 }
 
-fn poly_in_var_z3(e: &Int, var: &str, p: i128, max_deg: usize) -> Option<Vec<i128>> {
+fn poly_in_var_z3(e: &Int, var: &Int, p: i128, max_deg: usize) -> Option<Vec<i128>> {
     let dyn_ = Dynamic::from_ast(e);
     if is_int_numeral(&dyn_) {
         return Some(vec![int_value(e).unwrap_or(0).rem_euclid(p)]);
     }
     if is_int_var(&dyn_) {
-        return if z3_symbol_name(e) == var {
+        return if e.ast_eq(var) {
             Some(vec![0, 1])
         } else {
             None
@@ -483,16 +481,16 @@ fn poly_mul(a: Vec<i128>, b: Vec<i128>, p: i128, max_deg: usize) -> Option<Vec<i
     Some(out)
 }
 
-fn free_z3_symbols(e: &Int) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
+fn free_z3_symbols(e: &Int) -> HashSet<Int> {
+    let mut out = HashSet::new();
     collect_z3_symbols(e, &mut out);
     out
 }
 
-fn collect_z3_symbols(e: &Int, out: &mut BTreeSet<String>) {
+fn collect_z3_symbols(e: &Int, out: &mut HashSet<Int>) {
     let dyn_ = Dynamic::from_ast(e);
     if is_int_var(&dyn_) {
-        out.insert(z3_symbol_name(e));
+        out.insert(e.clone());
         return;
     }
     if arithmetic_op(&dyn_).is_some() {
@@ -537,10 +535,6 @@ fn is_int_var(ast: &Dynamic) -> bool {
         && ast.is_const()
         && ast.get_sort().kind() == SortKind::Int
         && !is_int_numeral(ast)
-}
-
-fn z3_symbol_name(e: &Int) -> String {
-    Dynamic::from_ast(e).decl().name().as_str().to_string()
 }
 
 #[cfg(test)]
