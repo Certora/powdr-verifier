@@ -343,15 +343,26 @@ def _remove_match(state: SideState, i: int, j: int) -> None:
 
 
 def _restrict_partners(state: SideState) -> None:
+    p = ARGS().field_type.value
     for i, f in enumerate(state.facts):
         if not f.interior_partners:
             continue
+        # The self-match m(i,i) covers the disabled/input/output cases. It is
+        # only truly ruled out when the multiplicity is a non-zero constant:
+        # then the row can never be disabled (is_valid == 0 would still leave
+        # mult != 0), so it is genuinely interior. For an is_valid-gated
+        # multiplicity the row is disabled (and self-matches) when is_valid == 0,
+        # so the self-match must be kept.
+        self_ruled_out = f.mult_const is not None and f.mult_const % p != 0
         allowed = set(f.interior_partners)
+        if not self_ruled_out:
+            allowed.add(i)
         drop = [j for j in state.matches[i] if j not in allowed]
         for j in drop:
             _remove_match(state, i, j)
-        state.matches[i].discard(i)
-        _set_flag(state.status[i], 3, True)
+        if self_ruled_out:
+            state.matches[i].discard(i)
+            _set_flag(state.status[i], 3, True)
 
 
 def _enqueue(work: set[tuple[int, str]], i: int, channel: str) -> None:
@@ -442,22 +453,6 @@ def _run_worklist(state: SideState) -> None:
                             if j in state.matches[k]:
                                 state.matches[k].discard(j)
                                 _enqueue(work, k, "targets")
-
-            elif len(mset) == 2 and i in mset:
-                j = next(x for x in mset if x != i)
-                if _set_flag(state.status[i], 3, True):
-                    _enqueue(work, i, "status")
-                if state.matches[j] != {i, j}:
-                    state.matches[j] = {i, j}
-                    _enqueue(work, j, "targets")
-                for k in range(n):
-                    if k not in (i, j):
-                        if i in state.matches[k]:
-                            state.matches[k].discard(i)
-                            _enqueue(work, k, "targets")
-                        if j in state.matches[k]:
-                            state.matches[k].discard(j)
-                            _enqueue(work, k, "targets")
 
             elif len(mset) == 0:
                 _LOG.warning("membus analysis: interaction %d has empty match set", i)
