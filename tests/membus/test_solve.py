@@ -142,10 +142,17 @@ def test_rejects_symbolic_address_space():
 
 
 def test_rejects_symbolic_mult():
-    d = {"bus_interactions": [{"id": 1, "mult": "sel@5", "args": [1, 8, 0, 0, 0, 0, FS0]}],
+    # a flag-mux product is never a selector; a bare gating column is refused
+    # when the assumption is opted out
+    d = {"bus_interactions": [{"id": 1, "mult": ["opc@4", "*", "sel@5"],
+                               "args": [1, 8, 0, 0, 0, 0, FS0]}],
          "constraints": []}
     with pytest.raises(ValueError, match="unsupported multiplicity"):
         solve.compute(d, 1, 1)
+    d2 = {"bus_interactions": [{"id": 1, "mult": "sel@5", "args": [1, 8, 0, 0, 0, 0, FS0]}],
+          "constraints": []}
+    with pytest.raises(ValueError, match="unsupported multiplicity"):
+        solve.compute(d2, 1, 1, assume_is_valid=False)
 
 
 def test_handles_subtraction_in_gap_constraint():
@@ -171,6 +178,7 @@ def test_recv_bound_from_range_check_arg():
             {"id": 1, "mult": 1, "args": [1, 8, 0, 0, 0, 0, [fs, "+", 5]]},   # send @ T+5
             {"id": 1, "mult": -1, "args": [1, 8, 0, 0, 0, 0, pv]},            # recv (input)
             {"id": 3, "mult": 1, "args": [arg, 12]},                          # relocated R2
+            {"id": 3, "mult": 1, "args": [limb, 17]},                         # limb width
         ],
         "constraints": [],
     }
@@ -193,6 +201,7 @@ def test_assume_is_valid_resolves_selector_gated_mult():
             {"id": 1, "mult": iv, "args": [1, 8, 0, 0, 0, 0, [fs, "+", 5]]},   # send = is_valid
             {"id": 1, "mult": ["-", iv], "args": [1, 8, 0, 0, 0, 0, pv]},      # recv = -is_valid
             {"id": 3, "mult": 1, "args": [arg, 12]},
+            {"id": 3, "mult": 1, "args": [limb, 17]},                          # limb width
         ],
         "constraints": [],
     }
@@ -204,13 +213,29 @@ def test_assume_is_valid_resolves_selector_gated_mult():
         solve.compute(d, 1, 1, assume_is_valid=False)   # opt out -> refuse
 
 
-def test_per_instruction_is_valid_not_assumed():
-    # is_valid_<K> (per-instruction, early passes) is NOT the global selector
-    from src.membus import solve as _s
-    assert _s._kind_assuming_is_valid("is_valid@99") == "send"
-    assert _s._kind_assuming_is_valid(["-", "is_valid@99"]) == "recv"
-    assert _s._kind_assuming_is_valid("is_valid_0@27") is None          # per-instruction
-    assert _s._kind_assuming_is_valid(["opcode_add_flag_0@31", "+", "is_valid@99"]) is None
+def test_activation_selector_is_structural():
+    # the selector is the ONE column gating EVERY active mult — recognized by
+    # structure, not by name
+    from src.membus.rules import Analysis
+
+    def kinds_of(*mults):
+        d = {"bus_interactions": [{"id": 1, "mult": m, "args": [1, 8, 0, 0, 0, 0, FS0]}
+                                  for m in mults],
+             "constraints": []}
+        an = Analysis(d)
+        return [k.kind if k is not None else None for k in an.kinds.values()]
+
+    # all rows gated by one column -> resolved (whatever the column is called)
+    assert kinds_of("gate@99", ["-", "gate@99"]) == ["send", "recv"]
+    # a constant ±1 row alongside a gated row: the gate is NOT the block
+    # selector (it would be a per-instruction variant flag) -> unresolved
+    assert kinds_of(1, "is_valid_0@27") == ["send", None]
+    # two different gating columns -> ambiguous -> both unresolved
+    assert kinds_of("is_valid_0@27", ["-", "is_valid_1@28"]) == [None, None]
+    # non-±g shapes are never a selector
+    assert kinds_of(["opcode_add_flag_0@31", "+", "is_valid@99"]) == [None]
+    # disabled rows are compatible with a selector
+    assert kinds_of(0, "gate@99") == ["disabled", "send"]
 
 
 def test_rejects_unresolved_ts_base():

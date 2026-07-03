@@ -59,7 +59,7 @@ def _symbolic_warn(n: int) -> str | None:
     --as filters, so any per-AS reading may be incomplete."""
     if not n:
         return None
-    return (f"WARNING: {n} interaction(s) have a SYMBOLIC address space — not solved "
+    return (f"WARNING: {n} interaction(s) have a SYMBOLIC address space -- not solved "
             f"AS form; results may be unreliable (shown as address space 'sym', "
             f"excluded by --as filters)")
 
@@ -90,7 +90,7 @@ def _stats_rich(s: MemStats, t: Target) -> str:
     from rich.console import Console
     from rich.table import Table
 
-    table = Table(title=f"{t.group}/{t.block} {t.label} — memory bus (id {s.mem_id})")
+    table = Table(title=f"{t.group}/{t.block} {t.label} -- memory bus (id {s.mem_id})")
     for col in ("as", "count", "send", "recv", "bal", "symKey", "distinct", "alias", "reason"):
         table.add_column(col)
     for a in s.address_spaces:
@@ -148,7 +148,7 @@ def _info_rich(rows: list[InfoRow], t: Target, total: int, symbolic_as: int = 0)
     from rich.console import Console
     from rich.table import Table
 
-    table = Table(title=f"{t.group}/{t.block} {t.label} — {_count_note(len(rows), total)}")
+    table = Table(title=f"{t.group}/{t.block} {t.label} -- {_count_note(len(rows), total)}")
     for col in ("ord", "kind", "as", "class", "key", "time", "acc"):
         table.add_column(col)
     for r in rows:
@@ -200,7 +200,7 @@ def _solve_rich(s: "Solution", t: Target) -> str:
     from rich.console import Console
     from rich.table import Table
 
-    table = Table(title=f"{t.group}/{t.block} {t.label} — solve {_solve_summary(s)}")
+    table = Table(title=f"{t.group}/{t.block} {t.label} -- solve {_solve_summary(s)}")
     for col in ("id", "io", "kind", "key", "vtime", "flow"):
         table.add_column(col)
     for r in s.rows:
@@ -242,7 +242,7 @@ def _align_local(r) -> str:
     if r.local_role == "output":
         return "exit"
     if r.local_role == "inert":
-        return "—"
+        return "-"
     return " ".join(f"#{p}" for p in r.local_partners)          # interior
 
 
@@ -250,7 +250,7 @@ def _align_plain(al: "Alignment", tb: Target, ta: Target) -> str:
     out = [f"# before {tb.group}/{tb.block} {tb.label}  ({tb.path})",
            f"# after  {ta.group}/{ta.block} {ta.label}  ({ta.path})",
            f"# {_align_summary(al)}",
-           "id\tkind\tkey\tstatus\t→after\t↔local"]
+           "id\tkind\tkey\tstatus\t->after\t<->local"]
     for r in al.rows:
         out.append(f"{r.before_id}\t{r.kind}\t{r.key}\t{r.status}\t"
                    f"{_align_after(r)}\t{_align_local(r)}")
@@ -261,9 +261,9 @@ def _align_rich(al: "Alignment", tb: Target, ta: Target) -> str:
     from rich.console import Console
     from rich.table import Table
 
-    table = Table(title=f"{tb.group}/{tb.block} {tb.label} → {ta.label} — align "
+    table = Table(title=f"{tb.group}/{tb.block} {tb.label} -> {ta.label} -- align "
                         f"{_align_summary(al)}")
-    for col in ("id", "kind", "key", "status", "→after", "↔local"):
+    for col in ("id", "kind", "key", "status", "->after", "<->local"):
         table.add_column(col)
     for r in al.rows:
         status = "[green]kept[/]" if r.status == "kept" else "[yellow]removed[/]"
@@ -278,6 +278,28 @@ def _align_rich(al: "Alignment", tb: Target, ta: Target) -> str:
 # --------------------------------------------------------------------------- #
 # agent guide
 # --------------------------------------------------------------------------- #
+def render_certify(results: list[dict], target: Target, run: bool) -> str:
+    n = len(results)
+    by_type: dict[str, int] = {}
+    bad: list[dict] = []
+    for r in results:
+        by_type[r["type"]] = by_type.get(r["type"], 0) + 1
+        if run and r.get("result") != "unsat":
+            bad.append(r)
+    lines = [f"certify {target.path}: {n} facts "
+             f"({', '.join(f'{v} {k}' for k, v in sorted(by_type.items()))})"]
+    assumptions = sorted({a for r in results for a in r["assumptions"]})
+    if assumptions:
+        lines.append(f"named assumptions used: {', '.join(assumptions)}")
+    if run:
+        if bad:
+            lines.append(f"NOT CERTIFIED: {len(bad)} certificate(s) failed:")
+            lines += [f"  {r['type']}: {r['fact']}  -> {r.get('result')}" for r in bad]
+        else:
+            lines.append("all certificates unsat -- every extracted fact is justified")
+    return "\n".join(lines)
+
+
 def agent_guide() -> str:
     return AGENT_GUIDE.strip()
 
@@ -298,6 +320,7 @@ DECIDE (goal -> command)
   solve matching: inputs/outputs/flow    -> solve  <group> <block> <step> [--as N]
   emit busat .bus (abstract ts order)    -> extract <group> <block> <stepA> [stepB]
   align before/after (removal) -> mapping-> align  <group> <block> <before> <after> [--as N]
+  SMT certificate per extracted fact     -> certify <group> <block> <step> [--run] [-o DIR]
 
 INPUT
   Auto-discovered the lens way: <group> <block> <step> (e.g. keccak 2100224 022),
@@ -348,9 +371,25 @@ ALIGN (AS1 + AS2; before has >= after, i.e. a removal pass) — HIGH CONFIDENCE
   matches must be unambiguous. JSON is the primary artifact (before->after /
   local mapping); the table is for humans.
 
+CERTIFY (the audit trail)
+  Everything above is computed from typed FACTS (column bounds, timestamp
+  gaps, recv LessThan bounds, affine pointer decompositions, resolved
+  multiplicities), each carrying its sources and named assumptions.
+  Assumptions are POSITIONAL/STRUCTURAL, never name-based: TS_BOUND (the
+  clock web — columns in membus timestamp slots and columns gap-linked to
+  them — lies in [0, 2^29)); MEMBUS_BYTE (recv data are bytes);
+  ACTIVE_SELECTOR (the one column structurally gating EVERY memory mult is
+  taken as 1 under --assume-is-valid). Column names appear only in display
+  labels. `certify` emits one SMT query per fact — sources + premises +
+  assumptions with the claim NEGATED — and `--run` checks each is unsat
+  with z3. A sat result is a concrete witness that an extraction rule
+  overclaimed; report it, do not work around it.
+
 LIMITATIONS (v1)
-  Symbolic base+offset recovery is calibrated to the keccak (2100224) dumps
-  (ADDR_SCALE=30720); other shapes report `unresolved` (never wrong). Constant
-  keys are fully general. Aliasing across distinct symbolic bases is reported,
-  not asserted.
+  Symbolic base+offset recovery requires the byte-decomposition gadget and
+  certified bounds on every participating column; other shapes report
+  `unresolved` (never wrong). base+offset identity is modular (usually mod
+  2^16 — the carry root of the address add): equal labels = equal low 16
+  bits. Constant keys are fully general. Aliasing across distinct symbolic
+  bases is reported, not asserted.
 """

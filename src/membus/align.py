@@ -4,13 +4,12 @@ Given a `before` and an `after` where after removed some memory-bus interactions
 account for **every** before interaction, in robust ids (membus ordinals):
 
 - **cross-match (a)**: kept interactions map to their equivalent in after
-  (`before_id -> after_id`), matched **purely by timestamp** — `(mult_kind,
+  (`before_id -> after_id`), matched **purely by timestamp** — `(eff_kind,
   canonical timestamp)`. The match is a *guess*: a wrong match costs only
   completeness downstream (an unprovable VC), never soundness, and passes do
   not rewrite the timestamp of an interaction they keep (they DO rewrite
   pointer expressions — re-association, limb substitution — which is why the
-  pointer is not part of the match key). `canon(timestamp)` of a bare column is
-  its name, so this also gives name-equivalence for column timestamps.
+  pointer is not part of the match key).
 - **local connection (b/c)**: from `solve(before)` — a recv to the local send it
   reads, a send to the local recv that reads it. Independent of (a): a kept recv
   can also read a local send. AS1 only for now: `solve` does not support AS2
@@ -22,20 +21,19 @@ account for **every** before interaction, in robust ids (membus ordinals):
 This is a HIGH-CONFIDENCE tool. It commits to a local connection only if
 `solve(before)` is **globally unique**, and it ABORTS (raises ``ValueError`` ->
 CLI exit 2) rather than emit a mapping it cannot justify: after must be a subset
-of before, the removed set must self-balance, and matches must be unambiguous.
+of before, the removed set must self-balance, matches must be unambiguous, and
+every in-scope multiplicity must resolve to send/recv/disabled.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
-from src.lens.diff import _mem_order
-from src.lens.loader import machine_of
-from src.lens.metrics import _eval_const, mult_kind
-from src.lens.normalize import BABYBEAR_PRIME
+from src.lens.diff import canon_constraint
 
 from . import keys, order, solve
-from .busfmt import memory_bis, require_explicit_address_spaces
+from .busmodel import MemRow, require_explicit_address_spaces
+from .rules import Analysis
 
 
 @dataclass
@@ -86,93 +84,83 @@ class Alignment:
         }
 
 
-def _eff_kind(bi: dict, aiv: bool) -> str:
-    """Effective send/recv, normalizing the openvm activation selector like `solve`:
-    the final APC gates every interaction by `±is_valid`, which `assume_is_valid`
-    resolves to a plain send/recv."""
-    k = mult_kind(bi["mult"])
-    if k not in ("send", "recv") and aiv:
-        ek = solve._kind_assuming_is_valid(bi["mult"])
-        if ek is not None:
-            return ek
-    return k
+def _kind(an: Analysis, row: MemRow) -> str:
+    """Effective kind (send/recv/disabled) from the shared EffKind facts."""
+    k = an.kinds.get(row.ordinal)
+    return k.kind if k is not None else "sym"
 
 
-def _ts_key(bi: dict, aiv: bool) -> Any:
-    """(kind, canonical timestamp) — the match identity, with the multiplicity
-    is_valid-normalized so the final APC matches. Purely timestamp-based: the
-    pointer is NOT part of the key (passes rewrite pointer expressions of kept
-    interactions; they don't rewrite timestamps)."""
-    return (_eff_kind(bi, aiv), _mem_order(bi)[1])
+def _ts_key(an: Analysis, row: MemRow) -> Any:
+    """(kind, canonical timestamp) — the match identity. Purely timestamp-based:
+    the pointer is NOT part of the key (passes rewrite pointer expressions of
+    kept interactions; they don't rewrite timestamps)."""
+    return (_kind(an, row), repr(canon_constraint(row.ts)))
 
 
-def _vtime_key(bi: dict, soff: dict, aiv: bool) -> Any:
+def _vtime_key(an: Analysis, row: MemRow, soff: dict) -> Any:
     """('send', VIRTUAL TIME) for a send whose ts resolves, else None.
 
     Only sends need this: `inlining` rewrites send timestamps (`from_state_K` ->
     `from_state_0 + offset`) but leaves recvs (a `prev_timestamp` free witness)
-    alone. Virtual time (from `send_offsets`) is representation-independent, so an
-    inlined send still matches its pre-inline self.
-    """
-    if _eff_kind(bi, aiv) != "send":
+    alone. Virtual time (from `send_offsets`) is representation-independent, so
+    an inlined send still matches its pre-inline self."""
+    if _kind(an, row) != "send":
         return None
-    ts = bi["args"][6]
-    col = order.ts_col(ts)
+    col = order.ts_col(row.ts)
     vt = soff.get(col) if col else None
-    return None if vt is None else ("send", vt + order.intra_offset(ts))
+    return None if vt is None else ("send", vt + order.intra_offset(row.ts))
 
 
-def _index(rows_idx, keyfn, side: str) -> dict[Any, int]:
+def _index(an: Analysis, rows: list[MemRow], keyfn, side: str) -> dict[Any, int]:
     idx: dict[Any, int] = {}
-    for ordn, bi in rows_idx:
-        k = keyfn(bi)
+    for row in rows:
+        k = keyfn(an, row)
         if k is None:
             continue
         if k in idx:
-            raise ValueError(f"align: ambiguous {side} interactions #{idx[k]} and #{ordn} "
-                             f"share the same (kind, timestamp)")
-        idx[k] = ordn
+            raise ValueError(f"align: ambiguous {side} interactions #{idx[k]} and "
+                             f"#{row.ordinal} share the same (kind, timestamp)")
+        idx[k] = row.ordinal
     return idx
 
 
-def _cross_match(B, soff_b, A, soff_a, aiv):
+def _cross_match(an_b: Analysis, B: list[MemRow], an_a: Analysis, A: list[MemRow]):
     """Match before<->after interactions. Returns (kept: before_ord->after_ord,
     removed: set[before_ord], added: list[after_ord]).
 
     Tier 1: exact canonical timestamp (handles same-representation removals and
-    recvs). Tier 2: virtual time for the still-unmatched SENDS (handles `inlining`,
-    which rewrites send timestamps). Two tiers keep removals base-independent (they
-    match at tier 1) and only use vtime where the representation actually changed.
-    """
-    _index(B, lambda bi: _ts_key(bi, aiv), "before")     # before keys must be unique too
-    a_canon = _index(A, lambda bi: _ts_key(bi, aiv), "after")
+    recvs). Tier 2: virtual time for the still-unmatched SENDS (handles
+    `inlining`, which rewrites send timestamps)."""
+    _index(an_b, B, _ts_key, "before")               # before keys must be unique too
+    a_canon = _index(an_a, A, _ts_key, "after")
     matched_a: set[int] = set()
     kept: dict[int, int] = {}
-    b_left = []
-    for ordn, bi in B:
-        aid = a_canon.get(_ts_key(bi, aiv))
+    b_left: list[MemRow] = []
+    for row in B:
+        aid = a_canon.get(_ts_key(an_b, row))
         if aid is not None:
-            kept[ordn] = aid
+            kept[row.ordinal] = aid
             matched_a.add(aid)
         else:
-            b_left.append((ordn, bi))
+            b_left.append(row)
 
-    a_left = [(o, bi) for o, bi in A if o not in matched_a]
-    a_vt = _index(a_left, lambda bi: _vtime_key(bi, soff_a, aiv), "after")
+    soff_b, soff_a = order.send_offsets(an_b), order.send_offsets(an_a)
+    a_left = [r for r in A if r.ordinal not in matched_a]
+    a_vt = _index(an_a, a_left, lambda an, r: _vtime_key(an, r, soff_a), "after")
     removed: set[int] = set()
-    for ordn, bi in b_left:
-        aid = a_vt.get(_vtime_key(bi, soff_b, aiv))
+    for row in b_left:
+        aid = a_vt.get(_vtime_key(an_b, row, soff_b))
         if aid is not None:
             if aid in matched_a:
                 raise ValueError(
                     f"align: two before interactions match after interaction #{aid} "
                     f"(ambiguous virtual-time match)")
-            kept[ordn] = aid
+            kept[row.ordinal] = aid
             matched_a.add(aid)
         else:
-            removed.add(ordn)
+            removed.add(row.ordinal)
 
-    added = [o for o, _ in A if o not in matched_a]
+    added = [r.ordinal for r in A if r.ordinal not in matched_a]
     return kept, removed, added
 
 
@@ -183,53 +171,49 @@ def compute(before: Any, after: Any, mem_id: int = 1, addr_space: int = 1,
     if addr_space not in (1, 2):
         raise ValueError(f"align: unsupported address space {addr_space} (supported: 1, 2)")
 
+    an_b = Analysis(before, mem_id, assume_is_valid)
+    an_a = Analysis(after, mem_id, assume_is_valid)
+
     # solved form (both sides): explicit address spaces (a symbolic AS could BE
     # addr_space and would be silently dropped by the `== addr_space` filter) AND
-    # resolved multiplicities (a symbolic mult — pre-solver, `is_valid_K·opcode` —
-    # can't be committed to a send/recv). Refuse rather than guess.
-    require_explicit_address_spaces(before, mem_id, "align (before)")
-    require_explicit_address_spaces(after, mem_id, "align (after)")
-    for label, data in (("align (before)", before), ("align (after)", after)):
-        for i, b in enumerate(memory_bis(data, mem_id)):
-            if keys.address_space_of(b) == addr_space and _eff_kind(b, assume_is_valid) == "sym":
-                raise ValueError(f"{label}: interaction #{i} has a symbolic multiplicity "
-                                 f"— requires solved form (resolved send/recv)")
+    # resolved multiplicities (a symbolic or otherwise unsupported mult can't be
+    # committed to a send/recv/disabled). Refuse rather than guess.
+    require_explicit_address_spaces(an_b.mem, "align (before)")
+    require_explicit_address_spaces(an_a.mem, "align (after)")
+    for label, an in (("align (before)", an_b), ("align (after)", an_a)):
+        for row in an.mem:
+            if row.addr_space == addr_space and an.kinds.get(row.ordinal) is None:
+                raise ValueError(
+                    f"{label}: interaction #{row.ordinal} has an unresolved multiplicity "
+                    f"{row.mult!r} -- requires solved form (send/recv/disabled)")
 
-    B = [(i, b) for i, b in enumerate(memory_bis(before, mem_id))
-         if keys.address_space_of(b) == addr_space]
-    A = [(i, b) for i, b in enumerate(memory_bis(after, mem_id))
-         if keys.address_space_of(b) == addr_space]
+    B = [r for r in an_b.mem if r.addr_space == addr_space]
+    A = [r for r in an_a.mem if r.addr_space == addr_space]
     if not B:
         raise ValueError(f"align: before has no memory interactions (id={mem_id}, as={addr_space})")
 
-    # cross-match: canonical timestamp first, then virtual time for leftover sends
-    # (so it survives inlining's send-timestamp rewrite). `send_offsets` gives the
-    # vtime on each side — no need to fully solve `after`.
-    kept, removed, added = _cross_match(B, order.send_offsets(machine_of(before)),
-                                        A, order.send_offsets(machine_of(after)),
-                                        assume_is_valid)
+    kept, removed, added = _cross_match(an_b, B, an_a, A)
     if added:
         raise ValueError(
             f"align: after has {len(added)} interaction(s) not present in before "
-            f"(e.g. #{added[0]}) — not a pure removal")
+            f"(e.g. #{added[0]}) -- not a pure removal")
 
     if addr_space != 1:
         # `solve` is AS1-only, so no local connections. A pure-kept mapping is a
         # justified bijection on its own; an actual removal has nothing to
         # justify it -> abort (mult == 0 removals are inert and need none).
-        return _align_without_solve(before, B, A, kept, removed,
-                                    mem_id, addr_space, assume_is_valid)
+        return _align_without_solve(an_b, B, A, kept, removed, mem_id, addr_space)
 
     # local connections for the removed set — require a globally unique solve
     sol = solve.compute(before, mem_id, addr_space, assume_is_valid)   # ValueError -> abort
     if not sol.unique:
         raise ValueError(
             "align: solve(before) is not globally unique; cannot commit to local connections")
-    row = {r.ordinal: r for r in sol.rows}
+    row_of = {r.ordinal: r for r in sol.rows}
 
     # self-balance: every removed non-inert interaction pairs with a removed partner
     for o in removed:
-        r = row[o]
+        r = row_of[o]
         if r.kind == "disabled":
             continue                                          # inert: matched to nothing
         if r.kind == "recv":
@@ -238,21 +222,21 @@ def compute(before: Any, after: Any, mem_id: int = 1, addr_space: int = 1,
             if r.reads_from not in removed:
                 raise ValueError(
                     f"align: removed recv #{o} reads local send #{r.reads_from}, which is "
-                    f"kept — removed set does not self-balance")
+                    f"kept -- removed set does not self-balance")
         elif r.kind == "send":
             if r.io == "out":
                 raise ValueError(f"align: removed a boundary output send #{o} (escapes)")
             if not r.read_by or any(x not in removed for x in r.read_by):
                 raise ValueError(
-                    f"align: removed send #{o} is read by a kept recv — removed set does "
+                    f"align: removed send #{o} is read by a kept recv -- removed set does "
                     f"not self-balance")
 
     rows: list[AlignRow] = []
     n_local_pairs = n_inert = 0
-    for ordn, _bi in B:
-        r = row[ordn]
-        status = "kept" if ordn in kept else "removed"
-        after_id = kept.get(ordn)
+    for mem_row in B:
+        r = row_of[mem_row.ordinal]
+        status = "kept" if mem_row.ordinal in kept else "removed"
+        after_id = kept.get(mem_row.ordinal)
         if r.kind == "disabled":
             role, partners = "inert", []
             if status == "removed":
@@ -269,42 +253,39 @@ def compute(before: Any, after: Any, mem_id: int = 1, addr_space: int = 1,
                 role, partners = "interior", list(r.read_by)
         if status == "removed" and r.kind == "recv" and role == "interior":
             n_local_pairs += 1                                # count each recv<->send pair once
-        rows.append(AlignRow(ordn, r.kind, r.key, status, after_id, role, partners,
-                             r.io, r.vtime))
+        rows.append(AlignRow(mem_row.ordinal, r.kind, r.key, status, after_id,
+                             role, partners, r.io, r.vtime))
 
     return Alignment(mem_id, addr_space, True, sol.assumed_is_valid,
                      len(B), len(A), len(kept), len(removed), n_local_pairs, n_inert, rows)
 
 
-def _align_without_solve(before, B, A, kept, removed, mem_id, addr_space,
-                         assume_is_valid) -> Alignment:
+def _align_without_solve(an_b: Analysis, B: list[MemRow], A: list[MemRow],
+                         kept, removed, mem_id, addr_space) -> Alignment:
     """Alignment rows when `solve` is unavailable (AS2): cross-match only.
 
     Every non-inert before interaction must be kept — a removed send/recv would
     need `solve` to justify its local pairing, so it aborts. Keys are recovered
     for display only (they are not part of the match)."""
-    machine = machine_of(before)
+    from .facts import Assumption
+
     rows: list[AlignRow] = []
     n_inert = 0
     used_is_valid = False
-    for ordn, bi in B:
-        kind = mult_kind(bi["mult"])
-        if kind not in ("send", "recv"):
-            ek = solve._kind_assuming_is_valid(bi["mult"]) if assume_is_valid else None
-            if ek is not None:
-                used_is_valid = True
-                kind = ek
-            elif (cv := _eval_const(bi["mult"])) is not None and cv % BABYBEAR_PRIME == 0:
-                kind = "disabled"
-        status = "kept" if ordn in kept else "removed"
+    for row in B:
+        kf = an_b.kinds[row.ordinal]                      # resolved (checked above)
+        kind = kf.kind
+        if Assumption.ACTIVE_SELECTOR in kf.assumptions:
+            used_is_valid = True
+        status = "kept" if row.ordinal in kept else "removed"
         if status == "removed" and kind != "disabled":
             raise ValueError(
-                f"align: interaction #{ordn} was removed — removal in address space "
-                f"{addr_space} requires solve, which does not support it yet")
+                f"align: interaction #{row.ordinal} was removed -- removal in address "
+                f"space {addr_space} requires solve, which does not support it yet")
         if kind == "disabled" and status == "removed":
             n_inert += 1
         role = "inert" if kind == "disabled" else ""
-        rows.append(AlignRow(ordn, kind, str(keys.recover_key(machine, bi)), status,
-                             kept.get(ordn), role, [], "", ""))
+        rows.append(AlignRow(row.ordinal, kind, str(keys.recover_key(an_b, row)), status,
+                             kept.get(row.ordinal), role, [], "", ""))
     return Alignment(mem_id, addr_space, True, used_is_valid, len(B), len(A),
                      len(kept), len(removed), 0, n_inert, rows)

@@ -161,7 +161,7 @@ def test_abort_symbolic_multiplicity():
     b = _before()
     b["bus_interactions"].append(
         {"id": 1, "mult": ["opcode@5", "*", "is_valid@6"], "args": [1, 8, 0, 0, 0, 0, FS0]})
-    with pytest.raises(ValueError, match="symbolic multiplicity"):
+    with pytest.raises(ValueError, match="unresolved multiplicity"):
         align.compute(b, _after([1, 2, 4, 5]), 1, 1)
 
 
