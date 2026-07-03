@@ -1,289 +1,119 @@
-"""Deduce the memory-timestamp ORDER from a powdr dump (rules R0/R1/R2).
+"""Timestamp offsets over Gap facts: virtual time for every clock column.
 
-The matching of memory sends to recvs is fixed by (key, timestamp), and the
-timestamps reduce to a pure *order* — which is all the extractor/checker needs.
-This module recovers that order from the (timestamp-domain, linear) constraints;
-field/data constraints are nonlinear and self-exclude.
+The memory-bus pairing is fixed by (key, timestamp), and cross-interaction
+reasoning only ever needs the timestamps *relative to one base*. Everything
+here is positional — the clock web comes from `rules.Analysis.ts_domain`
+(membus timestamp slots + gap closure), never from column names.
 
-- **R0 (nonneg).** A range-checked column is ``>= 0``: any arg of a range-check
-  bus (``VariableRangeChecker`` id 3 / ``BitwiseLookup`` 6 / ``TupleRangeChecker``
-  7), and the ``*lower_decomp*`` limbs.
-- **R1 (send chain).** A linear constraint over only ``from_state`` timestamps
-  reduces to ``from_state_b - from_state_a == c`` (or ``>= c``), ``c>0`` ⟹ edge
-  ``a -> b``. Transitive closure ⟹ total order on the send timestamps.
-- **R2 (recv bound, LessThan gadget).** ``from_state_Y - prev_ts_X - d -
-  (nonneg limbs) == 0`` ⟹ (drop the ``>=0`` limbs) ``prev_ts_X <= from_state_Y -
-  d`` ⟹ recv_X is before send_Y (its own access's send).
-
-Ported from ``busat/tools/order_rules.py``.
+The clock web is a graph whose edges are Gap facts (``later = earlier +
+gap``). Offsets are propagated per connected component and **conflict-checked**
+(two gap paths disagreeing on a column's offset poison the whole component —
+no offset is invented). Each component is normalized so its minimum offset is
+0. There is no "total chain" requirement: what `solve`/`align` need is that
+every *send clock* has a resolved offset in one common component — enforced
+by :func:`send_offsets` — and per-cell distinctness of send times, which
+`solve` checks explicitly.
 """
 from __future__ import annotations
 
 import collections
-import re
 from typing import Any
 
-from src.lens.normalize import to_signed
-
-
-def is_fs(c: str) -> bool:
-    """A send timestamp column (the instruction clock ``from_state``)."""
-    return "from_state__timestamp_" in c
-
-
-def is_prev(c: str) -> bool:
-    """A recv timestamp column (a ``prev_timestamp`` aux)."""
-    return "prev_timestamp" in c
-
-
-def is_ts(c: str) -> bool:
-    return is_fs(c) or is_prev(c)
-
-
-def names(e: Any, acc: set[str] | None = None) -> set[str]:
-    """Collect all column names referenced in an expression."""
-    if acc is None:
-        acc = set()
-    if isinstance(e, str):
-        acc.add(e)
-    elif isinstance(e, list):
-        for x in e:
-            names(x, acc)
-    return acc
+from .facts import Gap
+from .linform import linform
+from .rules import Analysis
 
 
 def ts_col(arg: Any) -> str | None:
-    """The single timestamp-domain column in a timestamp arg, or None."""
-    ts = [c for c in names(arg) if is_ts(c)]
-    return ts[0] if len(ts) == 1 else None
-
-
-def access_index(col: str) -> int | None:
-    """Instruction index K from a ``..._<K>@<n>`` timestamp column name."""
-    m = re.search(r"_(\d+)@\d+$", col)
-    return int(m.group(1)) if m else None
-
-
-def linterms(e: Any) -> tuple[dict[str, int], int] | None:
-    """Linear form ``(coeff_by_col, const)``, or None if nonlinear.
-
-    Constants are signed-normalized. Handles ``+``/``-`` (binary and unary) and
-    ``*`` where one side is constant (``col*col`` ⟹ None). powdr emits timestamp
-    gaps both as ``a + (-1)*b`` and as ``a - (b + c)``, so ``-`` must be parsed.
-    """
-    if isinstance(e, int):
-        return ({}, to_signed(e))
-    if isinstance(e, str):
-        return ({e: 1}, 0)
-    if isinstance(e, list) and len(e) == 2 and e[0] == "-":     # unary minus
-        inner = linterms(e[1])
-        if inner is None:
-            return None
-        return ({k: -v for k, v in inner[0].items()}, -inner[1])
-    if isinstance(e, list) and len(e) == 3:
-        a, op, b = e
-        la, lb = linterms(a), linterms(b)
-        if la is None or lb is None:
-            return None
-        if op in ("+", "-"):
-            s = 1 if op == "+" else -1
-            d = dict(la[0])
-            for k, v in lb[0].items():
-                d[k] = d.get(k, 0) + s * v
-            return (d, la[1] + s * lb[1])
-        if op == "*":
-            if not la[0]:
-                s = la[1]
-                return ({k: s * v for k, v in lb[0].items()}, s * lb[1])
-            if not lb[0]:
-                s = lb[1]
-                return ({k: s * v for k, v in la[0].items()}, s * la[1])
-            return None
-        return None
-    return None
-
-
-def deduce(dump: dict) -> tuple[set[tuple[str, str]], dict[str, tuple[str, bool, int]], set[str]]:
-    """Apply R0/R1/R2. Returns ``(edges, recv_bound, nonneg)``.
-
-    - ``edges``: set of ``(a, b)`` from_state columns, ``a`` strictly before ``b`` (R1).
-    - ``recv_bound``: ``prev_ts col -> (from_state col, strict?, const)`` (R2).
-    - ``nonneg``: range-checked ``>= 0`` columns (R0).
-    """
-    cons = dump.get("constraints", [])
-    bis = dump.get("bus_interactions", [])
-    nonneg: set[str] = set()
-    for b in bis:
-        if b.get("id") in (3, 6, 7):
-            for a in b["args"]:
-                names(a, nonneg)
-    nonneg = {c for c in nonneg if isinstance(c, str)}
-    nonneg |= {c for con in cons for c in names(con) if "lower_decomp" in c}
-
-    edges: set[tuple[str, str]] = set()
-    recv_bound: dict[str, tuple[str, bool, int]] = {}
-    for con in cons:
-        lt = linterms(con)
-        if lt is None:
-            continue
-        coeffs = {k: v for k, v in lt[0].items() if v != 0}
-        const = lt[1]
-        tsv = [k for k in coeffs if is_ts(k)]
-        nonts = [k for k in coeffs if not is_ts(k)]
-        if any(k not in nonneg for k in nonts):
-            continue
-        fs = [k for k in tsv if is_fs(k)]
-        pv = [k for k in tsv if is_prev(k)]
-        limb_coeffs = {k: coeffs[k] for k in nonts}
-        # R1: a pure pair of from_state columns
-        if len(tsv) == 2 and len(fs) == 2 and not nonts:
-            (a, ca), (b, cb) = [(k, coeffs[k]) for k in fs]
-            if {ca, cb} == {1, -1}:
-                pos = a if ca == 1 else b
-                neg = b if ca == 1 else a
-                gap = -const
-                if gap > 0:
-                    edges.add((neg, pos))
-                elif gap < 0:
-                    edges.add((pos, neg))
-        # R2: one from_state, one prev_ts, any other vars are nonneg limbs
-        if len(fs) == 1 and len(pv) == 1:
-            f, pv0 = fs[0], pv[0]
-            if coeffs[f] == 1 and coeffs[pv0] == -1:
-                if (not limb_coeffs) or all(v < 0 for v in limb_coeffs.values()):
-                    if pv0 not in recv_bound:
-                        recv_bound[pv0] = (f, const <= -1, const)
-
-    # R2 can also live in a range-check (id 3) ARG once `inlining` removes the
-    # LessThan constraint: an arg ``s·(from_state − prev_ts − Σnonneg_limbs − d)``
-    # range-checked to ``w`` bits with ``s ≥ 2^w`` forces the inner combo to 0
-    # (0 is the only multiple of s whose field residue is < 2^w, for the bounded
-    # timestamp witnesses) ⟹ ``prev_ts ≤ from_state − d`` — the same gadget, just
-    # relocated into the trusted bus data (NOT the substitutions side-file). Same
-    # field-residue basis as the address gadget (`30720`/`15360 · 2^k = p−1`).
-    for b in bis:
-        if b.get("id") != 3 or len(b.get("args", [])) < 2:
-            continue
-        bits = b["args"][1]
-        lt = linterms(b["args"][0])
-        if lt is None or not isinstance(bits, int):
-            continue
-        coeffs = {k: v for k, v in lt[0].items() if v != 0}
-        fs = [k for k in coeffs if is_fs(k)]
-        pv = [k for k in coeffs if is_prev(k)]
-        others = [k for k in coeffs if not is_ts(k)]
-        if len(fs) != 1 or len(pv) != 1:
-            continue
-        cf, cp, s = coeffs[fs[0]], coeffs[pv[0]], abs(coeffs[fs[0]])
-        if cf != -cp or s == 0 or (1 << bits) > s:        # residue must force inner==0
-            continue
-        if any(v % s != 0 for v in coeffs.values()) or lt[1] % s != 0:
-            continue
-        sign = 1 if cf > 0 else -1                         # normalize: from_state coeff +1
-        nc = {k: sign * v // s for k, v in coeffs.items()}
-        nconst = sign * lt[1] // s
-        if nc[fs[0]] != 1 or nc[pv[0]] != -1:
-            continue
-        if any(nc[o] >= 0 for o in others) or any(o not in nonneg for o in others):
-            continue
-        if pv[0] not in recv_bound:
-            recv_bound[pv[0]] = (fs[0], nconst <= -1, nconst)
-    return edges, recv_bound, nonneg
-
-
-def _fs_all(dump: dict) -> set[str]:
-    """All from_state (send) timestamp columns, from constraints AND bus args.
-
-    After `inlining`, the per-instruction from_state columns survive only as
-    ``from_state_0 + offset`` inside bus interaction args (the R1 chain collapses
-    into a single base), so scanning constraints alone misses them.
-    """
-    s: set[str] = set()
-    for c in dump.get("constraints", []):
-        names(c, s)
-    for b in dump.get("bus_interactions", []):
-        names(b.get("args", []), s)
-    return {c for c in s if is_fs(c)}
-
-
-def _chain(nodes: list[str], edges: set[tuple[str, str]]) -> list[str] | None:
-    """Return a linear order if ``edges`` define a total chain over ``nodes``, else None."""
-    succ: dict[str, set[str]] = collections.defaultdict(set)
-    indeg: dict[str, int] = collections.Counter()
-    nodeset = set(nodes)
-    for a, b in edges:
-        if a in nodeset and b in nodeset and b not in succ[a]:
-            succ[a].add(b)
-            indeg[b] += 1
-    indeg = dict(indeg)
-    avail = [n for n in nodes if indeg.get(n, 0) == 0]
-    order: list[str] = []
-    while avail:
-        avail.sort()
-        n = avail.pop(0)
-        order.append(n)
-        for m in succ[n]:
-            indeg[m] = indeg.get(m, 0) - 1
-            if indeg[m] == 0:
-                avail.append(m)
-    return order if len(order) == len(nodes) else None
-
-
-def total_order(dump: dict, edges: set[tuple[str, str]]) -> list[str]:
-    """Linear order of from_state columns if the edges chain them; else ``[]``."""
-    return _chain(sorted(_fs_all(dump)), edges) or []
+    """The column of a timestamp-slot arg ``col + const`` (coefficient 1),
+    or None. Positional: whatever single column sits in the slot IS the
+    timestamp; anything more complex is unresolved."""
+    return Analysis._slot_col(arg)
 
 
 def intra_offset(arg: Any) -> int:
-    """The intra-instruction offset constant in a send ts expr ``from_state_K + off``."""
-    off = 0
-    if isinstance(arg, list) and len(arg) == 3 and arg[1] == "+":
-        for side in (arg[0], arg[2]):
-            if isinstance(side, int):
-                off += to_signed(side)
-    return off
+    """The constant offset in a send timestamp arg ``col + off``."""
+    lf = linform(arg)
+    if lf is not None and len(lf.coeffs) == 1 and lf.coeffs[0][1] == 1:
+        return lf.const
+    return 0
 
 
-def _r1_gaps(dump: dict) -> tuple[set[tuple[str, str]], dict[tuple[str, str], int]]:
-    """R1 edges plus the concrete gap of each (``pos = neg + gap``)."""
-    edges: set[tuple[str, str]] = set()
-    gaps: dict[tuple[str, str], int] = {}
-    for con in dump.get("constraints", []):
-        lt = linterms(con)
-        if lt is None:
+def clock_offsets(an: Analysis) -> tuple[dict[str, int | None], dict[str, int]]:
+    """``(offsets, component)`` over the clock web.
+
+    Offsets are exact integers relative to the column's connected component
+    (normalized: component minimum = 0), or None when the component contains
+    conflicting gap paths. ``component`` maps each clock column to a
+    component id."""
+    adj: dict[str, list[tuple[str, int]]] = collections.defaultdict(list)
+    for g in an.gaps:
+        adj[g.earlier].append((g.later, g.gap))     # later = earlier + gap
+        adj[g.later].append((g.earlier, -g.gap))
+    offsets: dict[str, int | None] = {}
+    component: dict[str, int] = {}
+    comp = 0
+    for root in sorted(an.clock_cols):
+        if root in component:
             continue
-        coeffs = {k: v for k, v in lt[0].items() if v != 0}
-        const = lt[1]
-        tsv = [k for k in coeffs if is_ts(k)]
-        nonts = [k for k in coeffs if not is_ts(k)]
-        fs = [k for k in tsv if is_fs(k)]
-        if len(tsv) == 2 and len(fs) == 2 and not nonts:
-            (a, ca), (b, cb) = [(k, coeffs[k]) for k in fs]
-            if {ca, cb} == {1, -1}:
-                pos = a if ca == 1 else b
-                neg = b if ca == 1 else a
-                gap = -const
-                if gap > 0:
-                    edges.add((neg, pos))
-                    gaps[(neg, pos)] = gap
-    return edges, gaps
+        # BFS this component
+        rel: dict[str, int] = {root: 0}
+        queue = [root]
+        ok = True
+        while queue:
+            cur = queue.pop()
+            for nxt, d in adj[cur]:
+                v = rel[cur] + d
+                if nxt in rel:
+                    if rel[nxt] != v:
+                        ok = False                   # conflicting paths
+                else:
+                    rel[nxt] = v
+                    queue.append(nxt)
+        base = min(rel.values())
+        for col, v in rel.items():
+            component[col] = comp
+            offsets[col] = (v - base) if ok else None
+        comp += 1
+    return offsets, component
 
 
-def send_offsets(dump: dict) -> dict[str, int | None]:
-    """Map each from_state column to its offset from the chain base ``T``.
+def send_offsets(an: Analysis) -> dict[str, int | None]:
+    """Clock column → offset from the common base, or None.
 
-    Accumulates the exact chain gaps along the total order; a column whose gap to
-    its predecessor isn't an exact constant gets ``None`` (offset unknown). With
-    these, a send at ``from_state_K + off`` is ``T + (send_offsets[K] + off)``.
-    """
-    edges, gaps = _r1_gaps(dump)
-    chain = total_order(dump, edges)
-    off: dict[str, int | None] = {}
-    for i, col in enumerate(chain):
-        if i == 0:
-            off[col] = 0
+    Resolved only when every *send clock* (the slot column of a resolved
+    send interaction) lives in one conflict-free component; clock columns
+    outside that component get None. Empty/unresolvable ⟹ all None."""
+    offsets, component = clock_offsets(an)
+    send_comps: set[int] = set()
+    for row in an.mem:
+        k = an.kinds.get(row.ordinal)
+        if k is None or k.kind != "send":
             continue
-        g = gaps.get((chain[i - 1], col))
-        prev = off[chain[i - 1]]
-        off[col] = (prev + g) if (g is not None and prev is not None) else None
-    return off
+        col = Analysis._slot_col(row.ts)
+        if col is None or col not in component or offsets.get(col) is None:
+            return dict.fromkeys(an.clock_cols, None)
+        send_comps.add(component[col])
+    if len(send_comps) != 1:
+        return dict.fromkeys(an.clock_cols, None)
+    main = send_comps.pop()
+    return {col: (offsets[col] if component.get(col) == main else None)
+            for col in an.clock_cols}
+
+
+def send_order(an: Analysis) -> list[str] | None:
+    """Clock columns with resolved offsets, sorted by offset (display /
+    preconditions), or None when nothing resolves."""
+    soff = send_offsets(an)
+    resolved = {c: v for c, v in soff.items() if v is not None}
+    if not resolved:
+        return None
+    return sorted(resolved, key=lambda c: (resolved[c], c))
+
+
+def gap_between(an: Analysis, earlier: str, later: str) -> Gap | None:
+    """The direct Gap fact between two columns, if any (for certificates)."""
+    for g in an.gaps:
+        if g.earlier == earlier and g.later == later:
+            return g
+    return None
