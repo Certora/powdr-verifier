@@ -169,6 +169,33 @@ pub fn int_value_dyn(ast: &Dynamic) -> Option<i128> {
     ast.as_int().and_then(|i| int_value(&i))
 }
 
+/// SMT-LIB rendering of an integer numeral, bypassing Z3's `ast_smt_pp`
+/// (`smt_renaming`) printer. Negatives become `(- k)`; rationals return `None`.
+pub fn numeral_smtlib_string(ast: &Dynamic) -> Option<String> {
+    if ast.kind() != AstKind::Numeral {
+        return None;
+    }
+    unsafe {
+        let ctx = ast.get_ctx().get_z3_context();
+        let a = ast.get_z3_ast();
+        if !Z3_is_numeral_ast(ctx, a) {
+            return None;
+        }
+        let ptr = Z3_get_numeral_string(ctx, a);
+        if ptr.is_null() {
+            return None;
+        }
+        let s = std::ffi::CStr::from_ptr(ptr).to_string_lossy();
+        if s.contains('/') {
+            return None;
+        }
+        match s.strip_prefix('-') {
+            Some(mag) => Some(format!("(- {mag})")),
+            None => Some(s.into_owned()),
+        }
+    }
+}
+
 pub fn parse_int_literal(s: &str) -> Option<i128> {
     if let Some(hex) = s.strip_prefix("#x") {
         return u128::from_str_radix(hex, 16).ok().map(|v| v as i128);
