@@ -926,6 +926,84 @@ pub fn map_bool_children(b: &Bool, f: &mut impl FnMut(&Bool) -> Bool) -> Bool {
     b.clone()
 }
 
+/// Identity-preserving variant of [`map_bool_children`].
+///
+/// ``f`` returns ``None`` for an unchanged child. This function returns ``None``
+/// when no descendant changed, so callers can skip rebuilding (and re-hashing)
+/// large unchanged subtrees entirely.
+pub fn map_bool_children_opt(
+    b: &Bool,
+    f: &mut impl FnMut(&Bool) -> Option<Bool>,
+) -> Option<Bool> {
+    let ast = Dynamic::from_ast(b);
+    if ast.kind() == AstKind::Quantifier {
+        let bounds = quantifier_bounds(&ast);
+        let is_forall = quantifier_is_forall(&ast);
+        let body = quantifier_body_bool(&ast).expect("quantifier body");
+        let new_body = f(&body)?;
+        return Some(rebuild_quantifier_dyn(is_forall, &bounds, &new_body));
+    }
+    if let Some(name) = bool_decl_name(b) {
+        match name.as_str() {
+            "and" | "or" => {
+                let children = bool_children(b);
+                let mut changed = false;
+                let args: Vec<Bool> = children
+                    .iter()
+                    .map(|c| match f(c) {
+                        Some(nc) => {
+                            changed = true;
+                            nc
+                        }
+                        None => c.clone(),
+                    })
+                    .collect();
+                if !changed {
+                    return None;
+                }
+                return Some(if name == "and" {
+                    flatten_and(args)
+                } else {
+                    flatten_or(args)
+                });
+            }
+            "not" if ast.num_children() == 1 => {
+                if let Some(inner) = is_not(b) {
+                    return Some(f(&inner)?.not());
+                }
+            }
+            "=>" | "implies" if ast.num_children() == 2 => {
+                if let Some((a, c)) = is_implies(b) {
+                    let na = f(&a);
+                    let nc = f(&c);
+                    if na.is_none() && nc.is_none() {
+                        return None;
+                    }
+                    let na = na.unwrap_or(a);
+                    let nc = nc.unwrap_or(c);
+                    return Some(na.implies(&nc));
+                }
+            }
+            "ite" if ast.num_children() == 3 => {
+                if let Some((cond, then_b, else_b)) = is_ite(b) {
+                    let nc = f(&cond);
+                    let nt = f(&then_b);
+                    let ne = f(&else_b);
+                    if nc.is_none() && nt.is_none() && ne.is_none() {
+                        return None;
+                    }
+                    let nc = nc.unwrap_or(cond);
+                    let nt = nt.unwrap_or(then_b);
+                    let ne = ne.unwrap_or(else_b);
+                    return Some(nc.ite(&nt, &ne));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 pub fn rebuild_app(decl: &FuncDecl, args: &[&dyn Ast]) -> Dynamic {
     decl.apply(args)
 }
