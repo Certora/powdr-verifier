@@ -418,6 +418,57 @@ pub fn quantifier_bound_names(ast: &Dynamic) -> Vec<String> {
     }
 }
 
+/// Interned Z3 symbol identity. Z3 interns symbol names per manager, so pointer
+/// equality of the underlying ``Z3_symbol`` is name equality — usable for
+/// string-free name comparisons within one context.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct SymbolId(usize);
+
+/// Binder name identities of a quantifier (declaration order), without materializing strings.
+pub fn quantifier_bound_symbol_ids(ast: &Dynamic) -> Vec<SymbolId> {
+    if ast.kind() != AstKind::Quantifier {
+        return Vec::new();
+    }
+    let ctx = ast.get_ctx();
+    unsafe {
+        let z3 = ctx.get_z3_context();
+        let n = Z3_get_quantifier_num_bound(z3, ast.get_z3_ast());
+        let mut out = Vec::with_capacity(n as usize);
+        for i in 0..n {
+            let sym = Z3_get_quantifier_bound_name(z3, ast.get_z3_ast(), i).unwrap();
+            out.push(SymbolId(sym.as_ptr() as usize));
+        }
+        out
+    }
+}
+
+/// Name identity of a free constant/symbol node, without materializing a string.
+/// Mirrors the predicate of [`crate::ast_build::symbol_name_dyn`].
+pub fn symbol_id_dyn(ast: &Dynamic) -> Option<SymbolId> {
+    if !(is_int_const(ast) || (ast.kind() == AstKind::App && ast.is_const())) {
+        return None;
+    }
+    unsafe {
+        let z3 = ast.get_ctx().get_z3_context();
+        let app = Z3_to_app(z3, ast.get_z3_ast())?;
+        let decl = Z3_get_app_decl(z3, app)?;
+        let sym = Z3_get_decl_name(z3, decl)?;
+        Some(SymbolId(sym.as_ptr() as usize))
+    }
+}
+
+/// Intern ``name`` and return its [`SymbolId`]. Z3 interns symbols per manager,
+/// so the result matches [`symbol_id_dyn`] / [`quantifier_bound_symbol_ids`] for
+/// any node carrying the same name in the thread-local context.
+pub fn symbol_id_from_name(name: &str) -> SymbolId {
+    let ctx = Context::thread_local();
+    let cname = std::ffi::CString::new(name).expect("symbol name contains NUL");
+    unsafe {
+        let sym = Z3_mk_string_symbol(ctx.get_z3_context(), cname.as_ptr()).unwrap();
+        SymbolId(sym.as_ptr() as usize)
+    }
+}
+
 pub fn is_forall(ast: &Dynamic) -> bool {
     quantifier_is_forall(ast)
 }
