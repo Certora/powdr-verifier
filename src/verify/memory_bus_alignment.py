@@ -8,7 +8,7 @@ from ..smt.conversion import SmtConverter
 from ..smt.utils import *
 from ..utils.stats import stats_dump
 from ..utils.args import ARGS
-from .membus_types import MembusAlignment
+from .membus_analysis import MembusAnalysis
 
 BEFORE_PREFIX = "before"
 AFTER_PREFIX = "after"
@@ -17,7 +17,7 @@ _LOG = logging.getLogger(__name__)
 
 
 def _array_encoding_symbol_pairs(
-    alignment: MembusAlignment,
+    alignment: MembusAnalysis,
     before_conv: SmtConverter,
     after_conv: SmtConverter,
 ) -> dict[FNode, FNode]:
@@ -55,7 +55,7 @@ def _array_encoding_symbol_pairs(
 
 
 def _plain_encoding_symbol_pairs(
-    alignment: MembusAlignment,
+    alignment: MembusAnalysis,
     before_conv: SmtConverter,
     after_conv: SmtConverter,
 ) -> dict[FNode, FNode]:
@@ -84,7 +84,7 @@ def _plain_encoding_symbol_pairs(
 
 
 def emit_memory_equalities(
-    alignment: MembusAlignment | None,
+    alignment: MembusAnalysis | None,
     before_conv: SmtConverter,
     after_conv: SmtConverter,
     *,

@@ -5,31 +5,29 @@ from pathlib import Path
 from typing import Any
 
 from ..utils.args import ARGS
-from .membus_align import run_membus_alignment
-from .membus_types import MembusAlignment
+from .membus_analysis import MembusAnalysis, run_membus_analysis
 
 logger = logging.getLogger(__name__)
 
 
 def analyze_memory_bus_alignment(
     before: dict[str, Any], after: dict[str, Any]
-) -> MembusAlignment | None:
+) -> MembusAnalysis | None:
     if ARGS().memory_encoding != "plain":
         return None
 
-    alignment = run_membus_alignment(
+    analysis = run_membus_analysis(
         before,
         after,
         Path(ARGS().input_before),
         Path(ARGS().input_after),
     )
-    logger.info(
-        "memory bus prealignment: n_before=%d n_after=%d aligned_pairs=%d",
-        alignment.n_before,
-        alignment.n_after,
-        len(alignment.before_to_after),
+    logger.warning(
+        "membus alignment: %s to %s",
+        analysis.before_path,
+        analysis.after_path,
     )
-    return alignment
+    return analysis
 
 
 def apply_skip_trivial(before: dict[str, Any], after: dict[str, Any]) -> None:
