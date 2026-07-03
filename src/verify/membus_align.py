@@ -127,8 +127,6 @@ def _merge_align_row(rows: dict[int, AlignRowInfo], raw: dict) -> None:
             setattr(row, attr, raw[attr])
     if raw.get("key"):
         row.key = parse_membus_key(raw["key"]) or row.key
-    if raw.get("after_id") is not None:
-        row.after_id = raw["after_id"]
     partners = raw.get("local_partners")
     if partners is not None:
         row.local_partners = list(partners)

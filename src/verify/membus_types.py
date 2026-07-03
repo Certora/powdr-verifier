@@ -12,6 +12,11 @@ class MembusParsedKey:
     base: str | None = None
     offset: int | None = None
 
+    def __repr__(self) -> str:
+        if self.kind == "const":
+            return f"const {self.const_value}"
+        return f"{self.base}+{self.offset}"
+
 
 def parse_membus_key(key: str | None) -> MembusParsedKey | None:
     if not key:
@@ -40,7 +45,6 @@ class AlignRowInfo:
     local_role: str | None = None
     local_partners: list[int] = field(default_factory=list)
     status: str | None = None
-    after_id: int | None = None
 
 
 @dataclass
