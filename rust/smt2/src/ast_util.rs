@@ -68,18 +68,22 @@ pub fn ast_hash_int(i: &Int) -> u64 {
     ast_hash_dyn(&Dynamic::from_ast(i))
 }
 
-/// Deduplicated Int terms with structural lookup via ``ast_hash`` + ``ast_eq``.
+/// Deduplicated Int terms with structural lookup.
+///
+/// ``Int`` implements ``Hash`` (``Z3_get_ast_hash``) and ``Eq`` (``Z3_is_eq_ast``),
+/// so a ``HashMap`` keyed on the term itself gives O(1) structural dedup with
+/// proper collision handling. ``terms`` retains a stable index -> term mapping.
 #[derive(Clone)]
 pub struct IntTermSet {
     terms: Vec<Int>,
-    hash_to_idx: HashMap<u64, usize>,
+    idx: HashMap<Int, usize>,
 }
 
 impl IntTermSet {
     pub fn new() -> Self {
         Self {
             terms: Vec::new(),
-            hash_to_idx: HashMap::new(),
+            idx: HashMap::new(),
         }
     }
 
@@ -96,39 +100,29 @@ impl IntTermSet {
     }
 
     pub fn contains(&self, term: &Int) -> bool {
-        self.index_of(term).is_some()
+        self.idx.contains_key(term)
     }
 
     pub fn index_of(&self, term: &Int) -> Option<usize> {
-        let id = ast_hash_int(term);
-        if let Some(&i) = self.hash_to_idx.get(&id) {
-            if self.terms[i].ast_eq(term) {
-                return Some(i);
-            }
-        }
-        self.terms
-            .iter()
-            .position(|t| t.ast_eq(term))
+        self.idx.get(term).copied()
     }
 
-    /// Build from an already-sorted, duplicate-free term list (no ``ast_eq`` re-checks).
     pub fn from_sorted_unique(terms: Vec<Int>) -> Self {
-        let mut hash_to_idx = HashMap::with_capacity(terms.len());
+        let mut idx = HashMap::with_capacity(terms.len());
         for (i, t) in terms.iter().enumerate() {
-            hash_to_idx.insert(ast_hash_int(t), i);
+            idx.insert(t.clone(), i);
         }
-        Self { terms, hash_to_idx }
+        Self { terms, idx }
     }
 
     /// Returns the index of ``term`` (existing or newly inserted).
     pub fn insert(&mut self, term: Int) -> usize {
-        if let Some(i) = self.index_of(&term) {
+        if let Some(&i) = self.idx.get(&term) {
             return i;
         }
         let i = self.terms.len();
-        let id = ast_hash_int(&term);
+        self.idx.insert(term.clone(), i);
         self.terms.push(term);
-        self.hash_to_idx.insert(id, i);
         i
     }
 
