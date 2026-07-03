@@ -1,5 +1,4 @@
 """Mixins and formulas for multiset permutation invariants and timestamp monotonicity."""
-import collections
 from dataclasses import dataclass
 from itertools import batched, pairwise
 import itertools
@@ -13,7 +12,6 @@ from .memory_plain_utils import (
     plain_memory_presolve_incremental,
     plain_memory_presolve_individual,
 )
-from ..verify.membus_types import AlignRowInfo, MembusAlignment, parse_membus_key
 from ..smt.utils import *
 from ..utils.args import ARGS
 from ..utils.enums import MemoryPresolve
@@ -77,70 +75,77 @@ def _plain_pairwise_match_impossible_static(
     return False
 
 
-def _membus_ordered_ts_pairs(order_edges: list[dict]) -> set[frozenset[str]]:
-    """Pairs of abstract timestamps with a strict order (transitive closure of edges)."""
-    nodes = sorted({e["lhs"] for e in order_edges} | {e["rhs"] for e in order_edges})
-    if not nodes:
-        return set()
-    idx = {n: i for i, n in enumerate(nodes)}
-    n = len(nodes)
-    before = [[False] * n for _ in range(n)]
-    for e in order_edges:
-        before[idx[e["lhs"]]][idx[e["rhs"]]] = True
-    for k in range(n):
-        for i in range(n):
-            if not before[i][k]:
-                continue
-            for j in range(n):
-                before[i][j] = before[i][j] or before[k][j]
-    return {
-        frozenset({nodes[i], nodes[j]})
-        for i in range(n)
-        for j in range(i + 1, n)
-        if before[i][j] or before[j][i]
-    }
+def _match_var_from_analysis(
+    i: int,
+    j: int,
+    matches: list[set[int]],
+) -> FNode | None:
+    """Return TRUE/FALSE if forced, else None for a fresh symbol."""
+    m_i = matches[i]
+    if j not in m_i:
+        return FALSE()
+    if i == j:
+        if i not in m_i:
+            return FALSE()
+        if m_i == {i}:
+            return TRUE()
+        return None
+    m_j = matches[j]
+    if m_i == {i, j} and m_j == {i, j}:
+        return TRUE()
+    if i not in m_i and m_j == {i}:
+        return TRUE()
+    if j not in m_j and m_i == {j}:
+        return TRUE()
+    return None
 
 
-def _preset_force_self(presets: dict[tuple[int, int], bool], n: int, i: int) -> None:
-    presets[(i, i)] = True
-    for j in range(i):
-        presets[(j, i)] = False
-    for j in range(i + 1, n):
-        presets[(i, j)] = False
+def _plain_build_match_vars(
+    interactions: list,
+    symbol: Callable[[int, int], FNode],
+    analysis_matches: list[set[int]],
+    *,
+    log_prefix: str | None = None,
+) -> dict[tuple[int, int], FNode]:
+    """Build ``memory_match_i_j`` variables for all ``i <= j``, using ``FALSE`` when static."""
+    p = ARGS().field_type.value
+    n = len(interactions)
+    mult_const, const_args = _plain_static_profile(interactions, p)
+    match_vars: dict[tuple[int, int], FNode] = {}
+    static_false = 0
+    membus_preset = 0
+    symbols = 0
 
+    for i in range(n):
+        m_i = analysis_matches[i]
+        for j in range(i, n):
+            key = (i, j)
+            forced: FNode | None = None
+            if j not in m_i:
+                forced = FALSE()
+            elif m_i == {j}:
+                forced = TRUE()
+            if forced is not None:
+                match_vars[key] = forced
+                membus_preset += 1
+            elif i != j and _plain_pairwise_match_impossible_static(
+                i, j, mult_const, const_args, p
+            ):
+                match_vars[key] = FALSE()
+                static_false += 1
+            else:
+                match_vars[key] = symbol(i, j)
+                symbols += 1
 
-def _preset_force_pair(
-    presets: dict[tuple[int, int], bool], n: int, i: int, j: int
-) -> None:
-    if i > j:
-        i, j = j, i
-    presets[(i, j)] = True
-    presets[(i, i)] = True
-    presets[(j, j)] = True
-    for k in range(i):
-        presets[(k, j)] = False
-        presets[(k, i)] = False
-    for k in range(i + 1, j):
-        presets[(k, j)] = False
-        presets[(i, k)] = False
-    for k in range(j + 1, n):
-        presets[(j, k)] = False
-        presets[(i, k)] = False
-
-
-def _membus_kill_distinct_key_pairs(
-    presets: dict[tuple[int, int], bool],
-    entries: list[tuple[int, int]],
-) -> int:
-    """Kill ``(id_i, id_j)`` when ``entries`` lists distinct const/offset values."""
-    killed = 0
-    for (id_a, val_a), (id_b, val_b) in itertools.combinations(entries, 2):
-        if val_a == val_b:
-            continue
-        assert id_a < id_b
-        presets[(id_a, id_b)] = False
-        killed += 1
-    return killed
+    prefix = f"{log_prefix} " if log_prefix else ""
+    logging.info(
+        "%splain_build_match_vars: %d symbols / %d static_false / %d membus_preset",
+        prefix,
+        symbols,
+        static_false,
+        membus_preset,
+    )
+    return match_vars
 
 
 def _plain_exactly_one_match(literals: list[FNode]) -> FNode:
@@ -158,149 +163,6 @@ def _plain_exactly_one_match(literals: list[FNode]) -> FNode:
         others = [Not(lit) for lit in live if lit is not chosen]
         return And(chosen, *others) if others else chosen
     return ExactlyOne(*live)
-
-
-def _membus_presets_from_rows(
-    presets: dict[tuple[int, int], bool],
-    rows: dict[int, AlignRowInfo],
-    n: int,
-    mult_const: list[int | None],
-    *,
-    log_prefix: str | None = None,
-) -> None:
-    prefix = f"{log_prefix} " if log_prefix else ""
-
-    for i in range(n):
-        if mult_const[i] == 0:
-            _preset_force_self(presets, n, i)
-
-    for ordn, row in rows.items():
-        if ordn >= n:
-            continue
-        match row.local_role:
-            case "input" | "output" | "inert":
-                _preset_force_self(presets, n, ordn)
-                logging.info(
-                    "%smembus row self-match: interaction %d (%s)",
-                    prefix,
-                    ordn,
-                    row.local_role,
-                )
-            case "interior":
-                for p in row.local_partners:
-                    if p >= n or p == ordn:
-                        continue
-                    i, j = (ordn, p) if ordn < p else (p, ordn)
-                    _preset_force_pair(presets, n, i, j)
-                    logging.info(
-                        "%smembus row pair match: (%d, %d)",
-                        prefix,
-                        i,
-                        j,
-                    )
-
-    by_const: list[tuple[int, int]] = []
-    by_base: dict[str, list[tuple[int, int]]] = collections.defaultdict(list)
-    for i in range(n):
-        row = rows.get(i)
-        if row is None or row.key is None:
-            continue
-        pk = row.key
-        match pk.kind:
-            case "const":
-                if pk.const_value is not None:
-                    by_const.append((i, pk.const_value))
-            case "base_offset":
-                assert pk.base is not None and pk.offset is not None
-                by_base[pk.base].append((i, pk.offset))
-
-    killed = _membus_kill_distinct_key_pairs(presets, by_const)
-    for entries in by_base.values():
-        killed += _membus_kill_distinct_key_pairs(presets, entries)
-
-    if killed:
-        logging.info("%smembus row refine: killed %d off-diagonal pairs", prefix, killed)
-
-
-def _membus_match_presets(
-    n: int,
-    mult_const: list[int | None],
-    const_args: list[tuple[int | None, ...] | None],
-    p: int,
-    *,
-    membus_alignment: MembusAlignment | None = None,
-    source_path: Path | None = None,
-    log_prefix: str | None = None,
-) -> dict[tuple[int, int], bool]:
-    del const_args, p
-    if n == 0 or membus_alignment is None or source_path is None:
-        return {}
-
-    path = source_path.resolve()
-    if path == membus_alignment.before_path.resolve():
-        rows = membus_alignment.before_rows
-    elif path == membus_alignment.after_path.resolve():
-        rows = membus_alignment.after_rows
-    else:
-        return {}
-
-    presets: dict[tuple[int, int], bool] = {}
-    _membus_presets_from_rows(
-        presets, rows, n, mult_const, log_prefix=log_prefix
-    )
-    return presets
-
-
-def _plain_build_match_vars(
-    interactions: list,
-    symbol: Callable[[int, int], FNode],
-    *,
-    log_prefix: str | None = None,
-    source_path: Path | None = None,
-    membus_alignment: MembusAlignment | None = None,
-) -> dict[tuple[int, int], FNode]:
-    """Build ``memory_match_i_j`` variables for all ``i <= j``, using ``FALSE`` when static."""
-    p = ARGS().field_type.value
-    n = len(interactions)
-    mult_const, const_args = _plain_static_profile(interactions, p)
-    membus_presets = _membus_match_presets(
-        n,
-        mult_const,
-        const_args,
-        p,
-        membus_alignment=membus_alignment,
-        source_path=source_path,
-        log_prefix=log_prefix,
-    )
-    match_vars: dict[tuple[int, int], FNode] = {}
-    static_false = 0
-    membus_preset = 0
-    symbols = 0
-
-    for i in range(n):
-        for j in range(i, n):
-            key = (i, j)
-            if i != j and _plain_pairwise_match_impossible_static(
-                i, j, mult_const, const_args, p
-            ):
-                match_vars[key] = FALSE()
-                static_false += 1
-            elif key in membus_presets:
-                match_vars[key] = TRUE() if membus_presets[key] else FALSE()
-                membus_preset += 1
-            else:
-                match_vars[key] = symbol(i, j)
-                symbols += 1
-
-    prefix = f"{log_prefix} " if log_prefix else ""
-    logging.info(
-        "%splain_build_match_vars: %d symbols / %d static_false / %d membus_preset",
-        prefix,
-        symbols,
-        static_false,
-        membus_preset,
-    )
-    return match_vars
 
 
 @profile
@@ -824,6 +686,9 @@ class PermutationCheckMixin:
         interactions: list
     ) -> tuple[list[FNode], list[FNode], list[FNode]]:
         """Encodes a permutation check in the spirit of busat."""
+        assert self.NAME == "memory", (
+            f"plain_permutation_check called for non-memory encoder {self.NAME!r}"
+        )
 
         p = ARGS().field_type.value
         conjuncts = []
@@ -831,59 +696,27 @@ class PermutationCheckMixin:
         if n == 0:
             return [], [], []
         alignment = self._cur_state.memory_bus_alignment
+        source_path = self._cur_state.source_path
+        have_analysis = alignment is not None and source_path is not None
         skip_matches = (
-            alignment is not None
+            have_analysis
             and alignment.n_before == alignment.n_after == n
             and all(alignment.before_to_after.get(i) == i for i in range(n))
         )
         if skip_matches:
             logging.info("skipping matches for %s", self.NAME)
 
-        membus_rows = {}
-        al = self._cur_state.memory_bus_alignment
-        if self.NAME == "memory" and al is not None and self._cur_state.source_path is not None:
-            sp = self._cur_state.source_path.resolve()
-            if sp == al.before_path.resolve():
-                membus_rows = al.before_rows
-            elif sp == al.after_path.resolve():
-                membus_rows = al.after_rows
+        membus_status = alignment.status_for(source_path) if have_analysis else None
+        if membus_status is not None:
+            assert len(membus_status) == n
 
-        def mult(i: int) -> FNode:
-            return interactions[i].mult
-
-        def args(i: int) -> list[FNode]:
-            return interactions[i].args
-
-        def ts(ii: int) -> FNode:
-            return args(ii)[-1]
-
-        # Determine which IO/disabled flags are pinned to a constant by the
-        # multiplicity and/or membus role. Only allocate a Boolean symbol for
-        # flags that stay free, otherwise we re-introduce not-qf variables.
         is_inputs, is_outputs, is_disableds = [], [], []
+        _pinning = {True: TRUE(), False: FALSE(), None: None}
         for i in range(n):
-            isin: FNode | None = None
-            isout: FNode | None = None
-            isdis: FNode | None = None
-            mul = mult(i)
-            if mul.is_int_constant():
-                mul_val = mul.constant_value() % p
-                isdis = TRUE() if mul_val == 0 else FALSE()
-                if mul_val != p - 1:
-                    isin = FALSE()
-                if mul_val != 1:
-                    isout = FALSE()
-            row = membus_rows.get(i)
-            role = row.local_role if row else None
-            match role:
-                case "input":
-                    isout = FALSE()
-                case "output":
-                    isin = FALSE()
-                case "inert":
-                    isin, isout, isdis = FALSE(), FALSE(), TRUE()
-                case "interior":
-                    isin, isout = FALSE(), FALSE()
+            st = membus_status[i] if membus_status is not None else None
+            isin = _pinning[st.input] if st is not None else None
+            isout = _pinning[st.output] if st is not None else None
+            isdis = _pinning[st.disabled] if st is not None else None
             if isin is None:
                 isin = self._symbol(f"{self.NAME}_isinput_{i}", BOOL)
             if isout is None:
@@ -912,17 +745,26 @@ class PermutationCheckMixin:
             return False
 
 
+        analysis_matches = (
+            alignment.matches_for(source_path)
+            if have_analysis
+            else [set(range(n))] * n
+        )
         match_vars = _plain_build_match_vars(
             interactions,
             lambda i, j: self._symbol(f"{self.NAME}_match_{i}_{j}", BOOL),
+            analysis_matches,
             log_prefix=self.NAME,
-            source_path=self._cur_state.source_path if self.NAME == "memory" else None,
-            membus_alignment=(
-                self._cur_state.memory_bus_alignment
-                if self.NAME == "memory"
-                else None
-            ),
         )
+
+        def mult(i: int) -> FNode:
+            return interactions[i].mult
+
+        def args(i: int) -> list[FNode]:
+            return interactions[i].args
+
+        def ts(ii: int) -> FNode:
+            return args(ii)[-1]
 
         def m(i: int, j: int) -> FNode:
             if i > j:
