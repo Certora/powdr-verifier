@@ -79,17 +79,19 @@ class MembusAnalysis:
         path = path.resolve()
         if path == self.before_path.resolve():
             return self.before_matches
-        if path == self.after_path.resolve():
-            return self.after_matches
-        raise KeyError(path)
+        assert path == self.after_path.resolve(), (
+            f"path {path} is neither before {self.before_path} nor after {self.after_path}"
+        )
+        return self.after_matches
 
     def status_for(self, path: Path) -> list[Status]:
         path = path.resolve()
         if path == self.before_path.resolve():
             return self.before_status
-        if path == self.after_path.resolve():
-            return self.after_status
-        raise KeyError(path)
+        assert path == self.after_path.resolve(), (
+            f"path {path} is neither before {self.before_path} nor after {self.after_path}"
+        )
+        return self.after_status
 
 
 def _normalize_dump(data: dict[str, Any]) -> dict[str, Any]:
