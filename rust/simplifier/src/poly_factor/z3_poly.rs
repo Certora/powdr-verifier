@@ -4,7 +4,7 @@ use std::str::FromStr;
 use smt2::ast_hash_int;
 
 use z3::ast::{Ast, AstKind, Dynamic, Int};
-use z3::{FuncDecl, SortKind};
+use z3::{SortKind, DeclKind};
 use z3_sys::{Z3_get_numeral_string, Z3_is_numeral_ast};
 
 use super::flint::{
@@ -244,17 +244,13 @@ fn arithmetic_op(ast: &Dynamic) -> Option<ArithOp> {
     if decl.arity() == 0 {
         return None;
     }
-    match decl_name(&decl).as_str() {
-        "+" => Some(ArithOp::Add),
-        "*" => Some(ArithOp::Mul),
-        "-" if decl.arity() == 1 => Some(ArithOp::Neg),
-        "-" if decl.arity() == 2 => Some(ArithOp::Sub),
+    match decl.kind() {
+        DeclKind::Add => Some(ArithOp::Add),
+        DeclKind::Mul => Some(ArithOp::Mul),
+        DeclKind::Uminus => Some(ArithOp::Neg),
+        DeclKind::Sub => Some(ArithOp::Sub),
         _ => None,
     }
-}
-
-fn decl_name(decl: &FuncDecl) -> String {
-    decl.name().as_str().to_string()
 }
 
 fn is_int_numeral(ast: &Dynamic) -> bool {

@@ -10,7 +10,7 @@ mod witness;
 
 use std::collections::{HashMap, HashSet};
 
-use smt2::ast_util::{is_forall, or_body_parts, rebuild_quantifier_dyn};
+use smt2::ast_util::{is_forall, or_body_parts, rebuild_quantifier_dyn, symbol_id_from_name, SymbolId};
 use smt2::{map_asserts, map_bool_children_opt, Script};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
@@ -34,7 +34,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let decl_block = declare_fun_block(script);
 
     let mut applied: HashMap<String, usize> = HashMap::new();
-    let mut qvar_sets: Vec<HashSet<String>> = Vec::new();
+    let mut qvar_sets: Vec<HashSet<SymbolId>> = Vec::new();
 
     let out = map_asserts(script, |body| {
         Ok(walk_assert(
@@ -51,7 +51,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         ))
     })?;
 
-    let all_qvars: HashSet<String> = qvar_sets.iter().flatten().cloned().collect();
+    let all_qvars: HashSet<SymbolId> = qvar_sets.iter().flatten().copied().collect();
     let free_pins = if let Some(p) = field {
         rules::contribute_free(&out, &all_qvars, p)
     } else {
@@ -112,7 +112,7 @@ fn walk_assert(
     decl_block: &str,
     field: Option<i128>,
     applied: &mut HashMap<String, usize>,
-    qvar_sets: &mut Vec<HashSet<String>>,
+    qvar_sets: &mut Vec<HashSet<SymbolId>>,
 ) -> Bool {
     walk_assert_opt(
         script,
@@ -140,7 +140,7 @@ fn walk_assert_opt(
     decl_block: &str,
     field: Option<i128>,
     applied: &mut HashMap<String, usize>,
-    qvar_sets: &mut Vec<HashSet<String>>,
+    qvar_sets: &mut Vec<HashSet<SymbolId>>,
 ) -> Option<Bool> {
     walk_assert_dyn_opt(
         script,
@@ -170,7 +170,7 @@ fn walk_assert_dyn_opt(
     decl_block: &str,
     field: Option<i128>,
     applied: &mut HashMap<String, usize>,
-    qvar_sets: &mut Vec<HashSet<String>>,
+    qvar_sets: &mut Vec<HashSet<SymbolId>>,
 ) -> Option<Dynamic> {
     if term.kind() == AstKind::Quantifier {
         if is_forall(term) {
@@ -237,10 +237,10 @@ fn walk_forall_opt(
     decl_block: &str,
     field: Option<i128>,
     applied: &mut HashMap<String, usize>,
-    qvar_sets: &mut Vec<HashSet<String>>,
+    qvar_sets: &mut Vec<HashSet<SymbolId>>,
 ) -> Option<Bool> {
     let (qvars, bounds, body) = parse_forall(term)?;
-    qvar_sets.push(qvars.iter().map(|(n, _)| n.clone()).collect());
+    qvar_sets.push(qvars.iter().map(|(n, _)| symbol_id_from_name(n)).collect());
 
     let body = crate::passes::lift::name_debruijn_bool(&body, term).unwrap_or_else(|_| body.clone());
 
@@ -255,7 +255,7 @@ fn walk_forall_opt(
         &body,
         sorts,
         decl_block,
-        &qvars.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+        &qvars.iter().map(|(n, _)| symbol_id_from_name(n)).collect::<Vec<_>>(),
     );
 
     for src in skolem.sources.values() {

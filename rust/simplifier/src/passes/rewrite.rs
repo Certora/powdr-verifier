@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use smt2::{int_from_i128, int_value, is_int_numeral, map_asserts, map_bool_children_opt, unwrap_zero_mod_eq, Script};
 use z3::ast::{Ast, AstKind, Dynamic, Int};
 use z3::ast::Bool;
-use z3::{FuncDecl, SortKind};
+use z3::{SortKind, DeclKind};
 
 use crate::passes::normalize::field_mod;
 use crate::poly_factor::{factor, FactorError};
@@ -517,19 +517,14 @@ fn arithmetic_op(ast: &Dynamic) -> Option<ArithOp> {
     if decl.arity() == 0 {
         return None;
     }
-    match decl_name(&decl).as_str() {
-        "+" => Some(ArithOp::Add),
-        "*" => Some(ArithOp::Mul),
-        "-" if decl.arity() == 1 => Some(ArithOp::Neg),
-        "-" if decl.arity() == 2 => Some(ArithOp::Sub),
+    match decl.kind() {
+        DeclKind::Add => Some(ArithOp::Add),
+        DeclKind::Mul => Some(ArithOp::Mul),
+        DeclKind::Uminus => Some(ArithOp::Neg),
+        DeclKind::Sub => Some(ArithOp::Sub),
         _ => None,
     }
 }
-
-fn decl_name(decl: &FuncDecl) -> String {
-    decl.name().as_str().to_string()
-}
-
 fn is_int_var(ast: &Dynamic) -> bool {
     ast.kind() == AstKind::App
         && ast.is_const()

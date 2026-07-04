@@ -262,18 +262,17 @@ fn linear_add(c: i128, e: &Int, terms: &mut HashMap<Int, i128>, const_: &mut i12
     if d.kind() != AstKind::App {
         return false;
     }
-    let head = d.decl().name();
-    match head.as_str() {
-        "+" => d
+    match d.decl().kind() {
+        DeclKind::Add => d
             .children()
             .into_iter()
             .all(|ch| ch.as_int().map(|i| linear_add(c, &i, terms, const_)).unwrap_or(false)),
-        "-" if d.num_children() == 1 => d
+        DeclKind::Uminus if d.num_children() == 1 => d
             .nth_child(0)
             .and_then(|ch| ch.as_int())
             .map(|i| linear_add(-c, &i, terms, const_))
             .unwrap_or(false),
-        "-" if d.num_children() == 2 => {
+        DeclKind::Sub if d.num_children() == 2 => {
             let a = d.nth_child(0).and_then(|ch| ch.as_int());
             let b = d.nth_child(1).and_then(|ch| ch.as_int());
             match (a, b) {
@@ -283,7 +282,7 @@ fn linear_add(c: i128, e: &Int, terms: &mut HashMap<Int, i128>, const_: &mut i12
                 _ => false,
             }
         }
-        "*" => {
+        DeclKind::Mul => {
             let mut k = 1i128;
             let mut rest: Option<Int> = None;
             for ch in d.children() {

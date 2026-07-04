@@ -15,7 +15,7 @@ pub use ast_build::{
 };
 pub use ast_util::{
     and_parts, ast_hash_bool, ast_hash_dyn, ast_hash_int, bool_children, bool_decl_name, decl_name,
-    flatten_and, flatten_or, free_int_symbols,
+    flatten_and, flatten_or, free_int_nodes, free_int_symbols, free_symbol_ids_bool,
     free_uf_function_symbols, has_quantifier, int_const_name, int_from_i128, int_value, int_value_dyn,
     IntTermSet,
     is_exists, is_forall,
@@ -24,7 +24,7 @@ pub use ast_util::{
     mod_int_literal_string, or_body_parts, or_parts, parse_int_literal, smtlib_decl_name, z3_if_to_ite,
     quantifier_body, quantifier_body_bool, quantifier_body_deps, quantifier_bound_names,
     quantifier_bound_symbol_ids, quantifier_bounds, quantifier_bounds_de_bruijn,
-    symbol_id_dyn, symbol_id_from_name, SymbolId,
+    symbol_id_dyn, symbol_id_from_name, symbol_name_for_id, SymbolId,
     rebuild_app, rebuild_forall_dyn, rebuild_quantifier_dyn, resolve_bound_or_free_name,
     strip_annotations, strip_annotations_deep,
     scoped_free_int_symbols, strip_prefix, substitute_bound_vars_dyn, swap_prefix,

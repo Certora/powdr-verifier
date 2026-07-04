@@ -2,8 +2,8 @@
 
 use std::collections::HashSet;
 
-use smt2::{declare_fun_name_cmd, int_from_i128, map_asserts, Script, SmtCommand};
-use z3::ast::{Bool, Int};
+use smt2::{declare_fun_name_cmd, decl_name, free_int_nodes, int_from_i128, map_asserts, symbol_id_from_name, Script, SmtCommand, SymbolId};
+use z3::ast::{Ast, Bool, Dynamic, Int};
 
 use crate::expr_util::{rebuild_script, AssertBuildCtx};
 use crate::passes::skolem::ast_build::field_mod;
@@ -11,10 +11,10 @@ use crate::passes::skolem::ast_build::field_mod;
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let field = field_mod().ok_or("SIMPLIFIER_FIELD_MOD not set")?;
     let sorts = collect_symbol_sorts(script);
-    let mut bounded: HashSet<String> = HashSet::new();
+    let mut bounded: HashSet<Int> = HashSet::new();
 
     let _ = map_asserts(script, |b| {
-        for sym in smt2::free_int_symbols(b) {
+        for sym in free_int_nodes(b) {
             if is_bounded_int_symbol(&sym, &sorts) {
                 bounded.insert(sym);
             }
@@ -32,14 +32,14 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         ));
     }
 
-    let mut bound_names: Vec<String> = bounded.into_iter().collect();
-    bound_names.sort();
+    let mut bound_syms: Vec<Int> = bounded.into_iter().collect();
+    bound_syms.sort_by_cached_key(|i| decl_name(&Dynamic::from_ast(i).decl()));
 
-    let bound_asserts: Vec<Bool> = bound_names
+    let bound_asserts: Vec<Bool> = bound_syms
         .iter()
-        .map(|name| field_symbol(name, field))
+        .map(|sym| field_symbol(sym, field))
         .collect();
-    let n_bound = bound_names.len();
+    let n_bound = bound_syms.len();
 
     let mut ctx = AssertBuildCtx::from_script(script)?;
     let mut out: Vec<SmtCommand> = Vec::new();
@@ -75,20 +75,22 @@ fn needs_basic_range_axiom(name: &str) -> bool {
     !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
 }
 
-fn is_bounded_int_symbol(name: &str, sorts: &SymbolSorts) -> bool {
-    if !needs_basic_range_axiom(name) {
+fn is_bounded_int_symbol(sym: &Int, sorts: &SymbolSorts) -> bool {
+    let name = decl_name(&Dynamic::from_ast(sym).decl());
+    if !needs_basic_range_axiom(&name) {
         return false;
     }
-    if sorts.non_int.contains(name) {
+    let id = symbol_id_from_name(&name);
+    if sorts.non_int.contains(&id) {
         return false;
     }
-    sorts.int.contains(name) || !sorts.known.contains(name)
+    sorts.int.contains(&id) || !sorts.known.contains(&id)
 }
 
 struct SymbolSorts {
-    int: HashSet<String>,
-    non_int: HashSet<String>,
-    known: HashSet<String>,
+    int: HashSet<SymbolId>,
+    non_int: HashSet<SymbolId>,
+    known: HashSet<SymbolId>,
 }
 
 fn collect_symbol_sorts(script: &Script) -> SymbolSorts {
@@ -102,11 +104,12 @@ fn collect_symbol_sorts(script: &Script) -> SymbolSorts {
         let Some(name) = declare_fun_name_cmd(cmd) else {
             continue;
         };
-        known.insert(name.clone());
+        let id = symbol_id_from_name(&name);
+        known.insert(id);
         if is_int_decl(&cmd.to_smtlib(&script.source)) {
-            int.insert(name);
+            int.insert(id);
         } else {
-            non_int.insert(name);
+            non_int.insert(id);
         }
     }
     SymbolSorts {
@@ -121,9 +124,8 @@ fn is_int_decl(raw: &str) -> bool {
     lower.contains(" int") || lower.ends_with(" int)") || lower.contains("(int ")
 }
 
-fn field_symbol(name: &str, field: i128) -> Bool {
-    let sym = Int::new_const(name);
-    let lo = int_from_i128(0).le(&sym);
+fn field_symbol(sym: &Int, field: i128) -> Bool {
+    let lo = int_from_i128(0).le(sym);
     let hi = sym.lt(&int_from_i128(field));
     Bool::and(&[&lo, &hi])
 }
@@ -131,6 +133,7 @@ fn field_symbol(name: &str, field: i128) -> Bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use smt2::Script;
 
     fn field() -> i128 {
         field_mod().unwrap_or(2013265921)
@@ -140,20 +143,14 @@ mod tests {
     fn adds_top_level_asserts_for_matching_free_vars() {
         let f = field();
         std::env::set_var("SIMPLIFIER_FIELD_MOD", f.to_string());
-        let script = Script::parse(&format!(
-            "(assert (= x@0 y))\n(check-sat)\n"
-        ))
-        .unwrap();
+        let script = Script::parse("(assert (= x@0 y))\n(check-sat)\n").unwrap();
         let (out, stats) = apply(&script).unwrap();
         assert_eq!(stats["bounded_symbols"], 1);
         assert_eq!(stats["range_asserts_added"], 1);
         let s = smt2::dump_string(&out);
         assert!(s.contains("(assert (and (<= 0 x@0) (< x@0"));
         assert!(s.contains("(assert (= x@0 y))"));
-        let first_assert = s
-            .lines()
-            .find(|l| l.starts_with("(assert"))
-            .unwrap();
+        let first_assert = s.lines().find(|l| l.starts_with("(assert")).unwrap();
         assert!(first_assert.contains("x@0"));
         assert!(!first_assert.contains("= x@0 y"));
     }

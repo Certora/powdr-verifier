@@ -6,8 +6,9 @@ use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 use z3::{FuncDecl, Sort};
 
 use crate::ast_util::{
-    ast_children, decl_name, int_from_i128, is_int_const, parse_int_literal, quantifier_body,
-    quantifier_bound_names, rebuild_app, rebuild_quantifier_dyn,
+    ast_children, decl_name, free_symbol_ids_bool, int_from_i128, is_int_const, parse_int_literal,
+    quantifier_body, quantifier_bound_names, rebuild_app, rebuild_quantifier_dyn,
+    scoped_free_symbol_ids, symbol_id_from_name, symbol_name_for_id, SymbolId,
 };
 
 pub fn int_atom(s: &str) -> Int {
@@ -197,29 +198,18 @@ pub fn substitute_bool(b: &Bool, name: &str, replacement: &Bool) -> Bool {
 }
 
 pub fn free_variables_bool(b: &Bool) -> HashSet<String> {
-    scoped_free_variables_dyn(&Dynamic::from_ast(b), &HashSet::new())
+    free_symbol_ids_bool(b)
+        .into_iter()
+        .filter_map(|id| symbol_name_for_id(id))
+        .collect()
 }
 
 pub fn scoped_free_variables_dyn(ast: &Dynamic, bound: &HashSet<String>) -> HashSet<String> {
-    if let Some(name) = symbol_name_dyn(ast) {
-        if !bound.contains(&name) && int_literal_dyn(ast).is_none() {
-            return HashSet::from([name]);
-        }
-        return HashSet::new();
-    }
-    if ast.kind() == AstKind::Quantifier {
-        let mut new_bound = bound.clone();
-        new_bound.extend(quantifier_bound_names(ast));
-        return scoped_free_variables_dyn(
-            &quantifier_body(ast).expect("body"),
-            &new_bound,
-        );
-    }
-    let mut out = HashSet::new();
-    for ch in ast_children(ast) {
-        out.extend(scoped_free_variables_dyn(&ch, bound));
-    }
-    out
+    let bound_ids: HashSet<SymbolId> = bound.iter().map(|n| symbol_id_from_name(n)).collect();
+    scoped_free_symbol_ids(ast, &bound_ids)
+        .into_iter()
+        .filter_map(|id| symbol_name_for_id(id))
+        .collect()
 }
 
 pub fn wrap_mod_expr_int(expr: Int, p: i128) -> Int {

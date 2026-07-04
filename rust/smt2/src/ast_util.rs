@@ -269,9 +269,102 @@ pub fn is_program_variable(name: &str) -> bool {
 }
 
 pub fn free_int_symbols(b: &Bool) -> HashSet<String> {
+    free_int_nodes(b)
+        .into_iter()
+        .map(|i| decl_name(&Dynamic::from_ast(&i).decl()))
+        .collect()
+}
+
+/// Free ``Int`` constant nodes in ``b`` (hash-consed; suitable as map/set keys).
+pub fn free_int_nodes(b: &Bool) -> HashSet<Int> {
     let mut out = HashSet::new();
-    collect_free_int_symbols(&Dynamic::from_ast(b), &HashSet::new(), &mut out);
+    collect_free_int_nodes(&Dynamic::from_ast(b), &HashSet::new(), &mut out);
     out
+}
+
+pub fn scoped_free_int_nodes(ast: &Dynamic, bound: &HashSet<SymbolId>) -> HashSet<Int> {
+    let mut out = HashSet::new();
+    collect_free_int_nodes(ast, bound, &mut out);
+    out
+}
+
+/// Free symbol identities in ``b`` (any sort), excluding literals and binders.
+pub fn free_symbol_ids_bool(b: &Bool) -> HashSet<SymbolId> {
+    let mut out = HashSet::new();
+    collect_free_symbol_ids(&Dynamic::from_ast(b), &HashSet::new(), &mut out);
+    out
+}
+
+pub fn scoped_free_symbol_ids(ast: &Dynamic, bound: &HashSet<SymbolId>) -> HashSet<SymbolId> {
+    let mut out = HashSet::new();
+    collect_free_symbol_ids(ast, bound, &mut out);
+    out
+}
+
+fn is_free_named_symbol(ast: &Dynamic) -> bool {
+    if int_value_dyn(ast).is_some() {
+        return false;
+    }
+    if ast.as_bool().and_then(|b| b.as_bool()).is_some() {
+        return false;
+    }
+    symbol_id_dyn(ast).is_some()
+}
+
+fn collect_free_int_nodes(ast: &Dynamic, bound: &HashSet<SymbolId>, out: &mut HashSet<Int>) {
+    match ast.kind() {
+        AstKind::Var => {}
+        AstKind::Quantifier => {
+            let mut next_bound = bound.clone();
+            next_bound.extend(quantifier_bound_symbol_ids(ast));
+            if let Some(body) = quantifier_body(ast) {
+                collect_free_int_nodes(&body, &next_bound, out);
+            }
+        }
+        AstKind::App if is_int_const(ast) => {
+            if let Some(id) = symbol_id_dyn(ast) {
+                if !bound.contains(&id) {
+                    if let Some(i) = ast.as_int() {
+                        out.insert(i);
+                    }
+                }
+            }
+        }
+        AstKind::App => {
+            for i in 0..ast.num_children() {
+                if let Some(ch) = ast.nth_child(i) {
+                    collect_free_int_nodes(&ch, bound, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_free_symbol_ids(ast: &Dynamic, bound: &HashSet<SymbolId>, out: &mut HashSet<SymbolId>) {
+    if is_free_named_symbol(ast) {
+        if let Some(id) = symbol_id_dyn(ast) {
+            if !bound.contains(&id) {
+                out.insert(id);
+            }
+        }
+        return;
+    }
+    if ast.kind() == AstKind::Quantifier {
+        let mut next_bound = bound.clone();
+        next_bound.extend(quantifier_bound_symbol_ids(ast));
+        if let Some(body) = quantifier_body(ast) {
+            collect_free_symbol_ids(&body, &next_bound, out);
+        }
+        return;
+    }
+    if ast.kind() == AstKind::App {
+        for i in 0..ast.num_children() {
+            if let Some(ch) = ast.nth_child(i) {
+                collect_free_symbol_ids(&ch, bound, out);
+            }
+        }
+    }
 }
 
 /// Uninterpreted ``Int``-returning function symbols used in a formula (e.g. ``uf_and``).
@@ -343,40 +436,11 @@ fn collect_uf_function_symbols(
 }
 
 pub fn scoped_free_int_symbols(ast: &Dynamic, bound: &HashSet<String>) -> HashSet<String> {
-    let mut out = HashSet::new();
-    collect_free_int_symbols(ast, bound, &mut out);
-    out
-}
-
-fn collect_free_int_symbols(ast: &Dynamic, bound: &HashSet<String>, out: &mut HashSet<String>) {
-    match ast.kind() {
-        AstKind::Var => {}
-        AstKind::Quantifier => {
-            let mut next_bound = bound.clone();
-            for name in quantifier_bound_names(ast) {
-                next_bound.insert(name);
-            }
-            if let Some(body) = quantifier_body(ast) {
-                collect_free_int_symbols(&body, &next_bound, out);
-            }
-        }
-        AstKind::App if ast.is_const() => {
-            if ast.get_sort().kind() == SortKind::Int && !is_int_numeral(ast) {
-                let name = decl_name(&ast.decl());
-                if !bound.contains(&name) {
-                    out.insert(name);
-                }
-            }
-        }
-        AstKind::App => {
-            for i in 0..ast.num_children() {
-                if let Some(ch) = ast.nth_child(i) {
-                    collect_free_int_symbols(&ch, bound, out);
-                }
-            }
-        }
-        _ => {}
-    }
+    let bound_ids: HashSet<SymbolId> = bound.iter().map(|n| symbol_id_from_name(n)).collect();
+    scoped_free_int_nodes(ast, &bound_ids)
+        .into_iter()
+        .map(|i| decl_name(&Dynamic::from_ast(&i).decl()))
+        .collect()
 }
 
 pub fn has_quantifier(b: &Bool) -> bool {
@@ -492,6 +556,19 @@ pub fn symbol_id_from_name(name: &str) -> SymbolId {
     unsafe {
         let sym = Z3_mk_string_symbol(ctx.get_z3_context(), cname.as_ptr()).unwrap();
         SymbolId(sym.as_ptr() as usize)
+    }
+}
+
+/// Printable name for an interned symbol (declare/output paths only).
+pub fn symbol_name_for_id(id: SymbolId) -> Option<String> {
+    let ctx = Context::thread_local();
+    unsafe {
+        let sym = std::ptr::NonNull::new_unchecked(id.0 as *mut z3_sys::_Z3_symbol);
+        let ptr = Z3_get_symbol_string(ctx.get_z3_context(), sym);
+        if ptr.is_null() {
+            return None;
+        }
+        Some(std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned())
     }
 }
 

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use smt2::ast_util::int_from_i128;
+use smt2::ast_util::{int_from_i128, symbol_id_from_name, symbol_name_for_id, SymbolId};
 use smt2::wrap_mod_expr_int;
 use z3::ast::{Bool, Dynamic, Int};
 
@@ -8,10 +8,10 @@ use super::ast_build::field_mod;
 use super::types::SortKind;
 
 pub struct SkolemMap {
-    pub qvars: HashSet<String>,
-    qvar_sorts: HashMap<String, SortKind>,
-    pins: HashMap<String, Dynamic>,
-    pub sources: HashMap<String, String>,
+    pub qvars: HashSet<SymbolId>,
+    qvar_sorts: HashMap<SymbolId, SortKind>,
+    pins: HashMap<SymbolId, Dynamic>,
+    pub sources: HashMap<SymbolId, String>,
 }
 
 impl SkolemMap {
@@ -19,8 +19,9 @@ impl SkolemMap {
         let mut qset = HashSet::new();
         let mut sorts = HashMap::new();
         for (name, sort) in qvars {
-            qset.insert(name.clone());
-            sorts.insert(name.clone(), *sort);
+            let id = symbol_id_from_name(name);
+            qset.insert(id);
+            sorts.insert(id, *sort);
         }
         Self {
             qvars: qset,
@@ -30,30 +31,33 @@ impl SkolemMap {
         }
     }
 
-    pub fn pin(&mut self, q: &str, expr: Dynamic, source: &str) -> bool {
-        if !self.qvars.contains(q) || self.pins.contains_key(q) {
+    pub fn pin(&mut self, q: SymbolId, expr: Dynamic, source: &str) -> bool {
+        if !self.qvars.contains(&q) || self.pins.contains_key(&q) {
             return false;
         }
-        self.pins.insert(q.to_string(), expr);
-        self.sources.insert(q.to_string(), source.to_string());
+        self.pins.insert(q, expr);
+        self.sources.insert(q, source.to_string());
         true
     }
 
-    pub fn is_pinned(&self, q: &str) -> bool {
-        self.pins.contains_key(q)
+    pub fn is_pinned(&self, q: SymbolId) -> bool {
+        self.pins.contains_key(&q)
     }
 
     pub fn emit_disjuncts(&self) -> Vec<Bool> {
         let p = field_mod();
         let mut out = Vec::new();
         for (q, expr) in &self.pins {
+            let Some(name) = symbol_name_for_id(*q) else {
+                continue;
+            };
             let sort = self.qvar_sorts.get(q).copied().unwrap_or(SortKind::Other);
             match sort {
                 SortKind::Bool => {
                     let Some(rhs) = expr.as_bool() else {
                         continue;
                     };
-                    out.push(Bool::new_const(q.as_str()).eq(&rhs).not());
+                    out.push(Bool::new_const(name.as_str()).eq(&rhs).not());
                 }
                 _ => {
                     let rhs = if let Some(i) = expr.as_int() {
@@ -72,7 +76,7 @@ impl SkolemMap {
                     } else {
                         rhs
                     };
-                    out.push(Int::new_const(q.as_str()).eq(&rhs).not());
+                    out.push(Int::new_const(name.as_str()).eq(&rhs).not());
                 }
             }
         }
