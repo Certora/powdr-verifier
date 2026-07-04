@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use smt2::ast_util::int_from_i128;
+use smt2::ast_util::{int_from_i128, symbol_id_from_name, symbol_name_for_id, SymbolId};
 use smt2::{iter_nodes_dyn, symbol_name_dyn, Script};
 use z3::ast::{Bool, Dynamic, Int};
 
@@ -10,13 +10,16 @@ use smt2::{strip_prefix, swap_prefix};
 
 pub fn contribute_free(
     script: &Script,
-    qvars: &HashSet<String>,
+    qvars: &HashSet<SymbolId>,
     field: i128,
 ) -> Vec<(String, Dynamic)> {
     let declared = collect_declared(script);
     let free_diff_vals: Vec<String> = declared
         .iter()
-        .filter(|name| strip_prefix(name).starts_with("diff_val") && !qvars.contains(*name))
+        .filter(|name| {
+            strip_prefix(name).starts_with("diff_val")
+                && !qvars.contains(&symbol_id_from_name(name))
+        })
         .cloned()
         .collect();
     if free_diff_vals.is_empty() {
@@ -25,8 +28,8 @@ pub fn contribute_free(
 
     let qvar_diff_vals: Vec<String> = qvars
         .iter()
+        .filter_map(|id| symbol_name_for_id(*id))
         .filter(|name| strip_prefix(name).starts_with("diff_val"))
-        .cloned()
         .collect();
     if qvar_diff_vals.is_empty() {
         return Vec::new();
@@ -53,7 +56,7 @@ pub fn contribute_free(
         let skolem = build_skolem(&free_matches, &free_cmp, field);
         pins.push((free_dv, skolem));
         for (dm_var, dm_skolem) in build_marker_skolems(&free_matches) {
-            if !qvars.contains(&dm_var) {
+            if !qvars.contains(&symbol_id_from_name(&dm_var)) {
                 pins.push((dm_var, dm_skolem));
             }
         }

@@ -1,13 +1,14 @@
 use std::collections::HashSet;
 
 use smt2::ast_build::split_product_int;
-use smt2::ast_util::{decl_name, int_value_dyn, is_not, unwrap_zero_mod_eq};
+use smt2::ast_util::{int_value_dyn, is_not, symbol_id_dyn, symbol_id_from_name, symbol_name_for_id, unwrap_zero_mod_eq, SymbolId};
 use smt2::{iter_nodes_dyn, strip_prefix, symbol_name_dyn, Script};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
+use z3::DeclKind;
 
 use super::map::SkolemMap;
 
-pub type WitnessCandidate = (HashSet<String>, String, Dynamic);
+pub type WitnessCandidate = (HashSet<Int>, Int, Dynamic);
 
 pub fn collect_candidates(script: &Script, field: i128) -> Vec<WitnessCandidate> {
     let mut candidates = Vec::new();
@@ -28,15 +29,15 @@ pub fn collect_candidates(script: &Script, field: i128) -> Vec<WitnessCandidate>
     candidates
 }
 
-fn symbol_key(f: &Dynamic) -> Option<String> {
+fn symbol_key(f: &Dynamic) -> Option<Int> {
     if is_symbol_int(f) {
-        symbol_name_dyn(f).map(|s| strip_prefix(&s).to_string())
+        f.as_int()
     } else {
         None
     }
 }
 
-fn split_symbol_times_sum(parts: &[Int]) -> Option<(Dynamic, HashSet<String>)> {
+fn split_symbol_times_sum(parts: &[Int]) -> Option<(Dynamic, HashSet<Int>)> {
     if parts.len() != 2 {
         return None;
     }
@@ -48,21 +49,20 @@ fn split_symbol_times_sum(parts: &[Int]) -> Option<(Dynamic, HashSet<String>)> {
         if sum_terms.len() < 2 {
             continue;
         }
-        let names: Vec<String> = sum_terms
+        let factors: HashSet<Int> = sum_terms
             .iter()
             .filter_map(|t| symbol_key(&Dynamic::from_ast(t)))
             .collect();
-        if names.len() != sum_terms.len() {
+        if factors.len() != sum_terms.len() {
             continue;
         }
-        let factors: HashSet<String> = names.into_iter().collect();
-        if symbol_key(&Dynamic::from_ast(&parts[sym]))
-            .map(|s| factors.contains(&s))
-            .unwrap_or(false)
-        {
-            continue;
+        let sym_node = Dynamic::from_ast(&parts[sym]);
+        if let Some(s) = symbol_key(&sym_node) {
+            if factors.contains(&s) {
+                continue;
+            }
         }
-        return Some((Dynamic::from_ast(&parts[sym]), factors));
+        return Some((sym_node, factors));
     }
     None
 }
@@ -79,7 +79,7 @@ fn is_uncollapsed_diff_inv_marker_product(term: &Int, field: i128) -> bool {
         if !bname.contains("diff_inv_marker") {
             continue;
         }
-        if decl_name(&Dynamic::from_ast(prod_a).decl()) != "+" {
+        if Dynamic::from_ast(prod_a).decl().kind() != DeclKind::Add {
             continue;
         }
         let sum_terms = flatten_add(prod_a);
@@ -112,11 +112,11 @@ fn match_collapsed(f: &Bool, field: i128) -> Option<WitnessCandidate> {
             continue;
         }
         if (coeff == 1 || coeff == field - 1) && parts.len() == 1 {
-            if let Some(name) = symbol_key(&Dynamic::from_ast(&parts[0])) {
+            if let Some(sym) = symbol_key(&Dynamic::from_ast(&parts[0])) {
                 if cmp.is_some() {
                     return None;
                 }
-                cmp = Some(name);
+                cmp = Some(sym);
                 continue;
             }
         }
@@ -136,7 +136,7 @@ fn match_collapsed(f: &Bool, field: i128) -> Option<WitnessCandidate> {
     let free_var = free_var?;
     let factors = factors?;
     let cmp = cmp?;
-    if symbol_key(&free_var).as_deref() == Some(cmp.as_str()) {
+    if symbol_key(&free_var).is_some_and(|s| s.ast_eq(&cmp)) {
         return None;
     }
     Some((factors, cmp, free_var))
@@ -168,50 +168,62 @@ pub fn contribute(map: &mut SkolemMap, body: &Bool, candidates: &[WitnessCandida
     }
 }
 
-fn bundle_id(stripped: &str) -> Option<String> {
+fn bundle_id(sym: &Int) -> Option<String> {
+    let name = symbol_name_dyn(&Dynamic::from_ast(sym))?;
+    let stripped = strip_prefix(&name);
     let (_, tail) = stripped.rsplit_once('_')?;
     tail.split('@').next().map(str::to_string)
 }
 
 fn contribute_from_candidate_bundles(map: &mut SkolemMap, candidates: &[WitnessCandidate]) {
     for (factors, cmp, free_var) in candidates {
-        let bundle_ids: HashSet<String> = factors.iter().filter_map(|f| bundle_id(f)).collect();
+        let bundle_ids: HashSet<String> = factors.iter().filter_map(bundle_id).collect();
         if bundle_ids.len() != 1 {
             continue;
         }
         let bundle = bundle_ids.into_iter().next().unwrap();
-        let has_cmp = map
-            .qvars
-            .iter()
-            .any(|q| strip_prefix(q) == cmp.as_str());
-        if !has_cmp {
+        let Some(cmp_name) = symbol_name_dyn(&Dynamic::from_ast(cmp))
+            .map(|s| strip_prefix(&s).to_string())
+        else {
+            continue;
+        };
+        let cmp_id = symbol_id_from_name(&cmp_name);
+        if !map.qvars.contains(&cmp_id) {
             continue;
         }
-        let markers: Vec<String> = map
+        let markers: Vec<SymbolId> = map
             .qvars
             .iter()
-            .filter(|q| !map.is_pinned(q))
+            .copied()
+            .filter(|q| !map.is_pinned(*q))
             .filter(|q| {
-                let s = strip_prefix(q);
-                s.contains("diff_inv_marker") && bundle_id(s) == Some(bundle.clone())
+                symbol_name_for_id(*q).is_some_and(|name| {
+                    let s = strip_prefix(&name);
+                    s.contains("diff_inv_marker") && bundle_id_from_name(&name) == Some(bundle.clone())
+                })
             })
-            .cloned()
             .collect();
         if markers.len() < 2 {
             continue;
         }
         for qvar in markers {
-            map.pin(&qvar, free_var.clone(), "witness");
+            map.pin(qvar, free_var.clone(), "witness");
         }
     }
 }
 
+fn bundle_id_from_name(name: &str) -> Option<String> {
+    let stripped = strip_prefix(name);
+    let (_, tail) = stripped.rsplit_once('_')?;
+    tail.split('@').next().map(str::to_string)
+}
+
 fn contribute_from_body(map: &mut SkolemMap, body: &Bool, candidates: &[WitnessCandidate], field: i128) {
-    let unpinned: HashSet<String> = map
+    let unpinned: HashSet<SymbolId> = map
         .qvars
         .iter()
-        .filter(|q| !map.is_pinned(q))
-        .cloned()
+        .copied()
+        .filter(|q| !map.is_pinned(*q))
         .collect();
 
     for node in iter_nodes_dyn(&Dynamic::from_ast(body)) {
@@ -226,8 +238,8 @@ fn contribute_from_body(map: &mut SkolemMap, body: &Bool, candidates: &[WitnessC
             continue;
         };
         let mut cmp = None;
-        let mut factors: HashSet<String> = HashSet::new();
-        let mut matched_qvars: Vec<String> = Vec::new();
+        let mut factors: HashSet<Int> = HashSet::new();
+        let mut matched_qvars: Vec<SymbolId> = Vec::new();
         let mut ok = true;
         for term in flatten_add(&lhs) {
             let (coeff, parts) = split_product_int(&term, field);
@@ -235,12 +247,12 @@ fn contribute_from_body(map: &mut SkolemMap, body: &Bool, candidates: &[WitnessC
                 continue;
             }
             if (coeff == 1 || coeff == field - 1) && parts.len() == 1 {
-                if let Some(name) = symbol_key(&Dynamic::from_ast(&parts[0])) {
+                if let Some(sym) = symbol_key(&Dynamic::from_ast(&parts[0])) {
                     if cmp.is_some() {
                         ok = false;
                         break;
                     }
-                    cmp = Some(name);
+                    cmp = Some(sym);
                     continue;
                 }
             }
@@ -255,26 +267,48 @@ fn contribute_from_body(map: &mut SkolemMap, body: &Bool, candidates: &[WitnessC
             let left_dyn = Dynamic::from_ast(left);
             let right_dyn = Dynamic::from_ast(right);
             let (qvar, fac_sym) = if is_symbol_int(&left_dyn) && is_symbol_int(&right_dyn) {
+                let Some(l_id) = symbol_id_dyn(&left_dyn) else {
+                    ok = false;
+                    break;
+                };
+                let Some(r_id) = symbol_id_dyn(&right_dyn) else {
+                    ok = false;
+                    break;
+                };
                 let ln = symbol_name_dyn(&left_dyn).unwrap_or_default();
                 let rn = symbol_name_dyn(&right_dyn).unwrap_or_default();
                 let mk_l = ln.contains("diff_inv_marker");
                 let mk_r = rn.contains("diff_inv_marker");
-                if mk_r && !mk_l && unpinned.contains(&ln) {
-                    (ln, left_dyn)
-                } else if mk_l && !mk_r && unpinned.contains(&rn) {
-                    (rn, right_dyn)
+                if mk_r && !mk_l && unpinned.contains(&l_id) {
+                    (l_id, left_dyn)
+                } else if mk_l && !mk_r && unpinned.contains(&r_id) {
+                    (r_id, right_dyn)
                 } else {
                     ok = false;
                     break;
                 }
-            } else if is_symbol_int(&left_dyn)
-                && unpinned.contains(&symbol_name_dyn(&left_dyn).unwrap_or_default())
-            {
-                (symbol_name_dyn(&left_dyn).unwrap_or_default(), right_dyn)
-            } else if is_symbol_int(&right_dyn)
-                && unpinned.contains(&symbol_name_dyn(&right_dyn).unwrap_or_default())
-            {
-                (symbol_name_dyn(&right_dyn).unwrap_or_default(), left_dyn)
+            } else if is_symbol_int(&left_dyn) {
+                let Some(l_id) = symbol_id_dyn(&left_dyn) else {
+                    ok = false;
+                    break;
+                };
+                if unpinned.contains(&l_id) {
+                    (l_id, right_dyn)
+                } else {
+                    ok = false;
+                    break;
+                }
+            } else if is_symbol_int(&right_dyn) {
+                let Some(r_id) = symbol_id_dyn(&right_dyn) else {
+                    ok = false;
+                    break;
+                };
+                if unpinned.contains(&r_id) {
+                    (r_id, left_dyn)
+                } else {
+                    ok = false;
+                    break;
+                }
             } else {
                 ok = false;
                 break;
@@ -289,11 +323,11 @@ fn contribute_from_body(map: &mut SkolemMap, body: &Bool, candidates: &[WitnessC
         if !ok || cmp.is_none() || matched_qvars.len() < 2 {
             continue;
         }
-        let cmp = cmp.unwrap_or_default();
+        let cmp = cmp.unwrap();
         for (candidate_factors, candidate_cmp, free_var) in candidates {
-            if cmp == *candidate_cmp && factors == *candidate_factors {
+            if cmp.ast_eq(candidate_cmp) && factors == *candidate_factors {
                 for qvar in matched_qvars {
-                    map.pin(&qvar, free_var.clone(), "witness");
+                    map.pin(qvar, free_var.clone(), "witness");
                 }
                 break;
             }
@@ -310,7 +344,7 @@ fn is_symbol_int(ast: &Dynamic) -> bool {
 
 fn flatten_add(ast: &Int) -> Vec<Int> {
     let d = Dynamic::from_ast(ast);
-    if d.kind() == AstKind::App && decl_name(&d.decl()) == "+" {
+    if d.kind() == AstKind::App && d.decl().kind() == DeclKind::Add {
         let mut out = Vec::new();
         for i in 0..d.num_children() {
             if let Some(ch) = d.nth_child(i).and_then(|c| c.as_int()) {

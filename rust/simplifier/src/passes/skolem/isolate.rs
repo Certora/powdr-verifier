@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use smt2::ast_util::bound_var_index;
-use smt2::{and_parts, free_variables_bool, iter_nodes_dyn};
+use smt2::ast_util::{bound_var_index, free_symbol_ids_bool, symbol_id_dyn, symbol_name_for_id, SymbolId};
+use smt2::{and_parts, iter_nodes_dyn};
 use z3::ast::{Bool, Dynamic, Int as ZInt};
 use z3::{SatResult, Solver};
 
@@ -14,40 +14,43 @@ pub fn contribute(
     body: &Bool,
     sorts: &HashMap<String, SortKind>,
     decl_block: &str,
-    bound_order: &[String],
+    bound_order: &[SymbolId],
 ) {
-    let unpinned: Vec<String> = map
+    let unpinned: Vec<SymbolId> = map
         .qvars
         .iter()
+        .copied()
         .filter(|q| {
-            !map.is_pinned(q)
-                && matches!(symbol_sort(q, sorts), SortKind::Int | SortKind::Bool)
+            !map.is_pinned(*q)
+                && symbol_name_for_id(*q)
+                    .map(|n| symbol_sort(&n, sorts))
+                    .is_some_and(|s| matches!(s, SortKind::Int | SortKind::Bool))
         })
-        .cloned()
         .collect();
     let Some(items) = smt2::or_body_parts(body) else {
         return;
     };
 
-    let cand: HashSet<String> = unpinned.into_iter().collect();
+    let cand: HashSet<SymbolId> = unpinned.into_iter().collect();
     if cand.is_empty() {
         return;
     }
 
-    let mut parent: HashMap<String, String> = cand.iter().map(|q| (q.clone(), q.clone())).collect();
+    let mut parent: HashMap<SymbolId, SymbolId> =
+        cand.iter().map(|q| (*q, *q)).collect();
 
-    fn find(parent: &mut HashMap<String, String>, x: &str) -> String {
-        let parent_x = parent.get(x).cloned().unwrap_or_else(|| x.to_string());
+    fn find(parent: &mut HashMap<SymbolId, SymbolId>, x: SymbolId) -> SymbolId {
+        let parent_x = parent.get(&x).copied().unwrap_or(x);
         if parent_x != x {
-            let root = find(parent, &parent_x);
-            parent.insert(x.to_string(), root.clone());
+            let root = find(parent, parent_x);
+            parent.insert(x, root);
             root
         } else {
-            x.to_string()
+            x
         }
     }
 
-    fn union(parent: &mut HashMap<String, String>, a: &str, b: &str) {
+    fn union(parent: &mut HashMap<SymbolId, SymbolId>, a: SymbolId, b: SymbolId) {
         let ra = find(parent, a);
         let rb = find(parent, b);
         if ra != rb {
@@ -55,19 +58,19 @@ pub fn contribute(
         }
     }
 
-    let mut tainted: HashSet<String> = HashSet::new();
-    let mut disj_cands: Vec<(Vec<String>, Bool)> = Vec::new();
+    let mut tainted: HashSet<SymbolId> = HashSet::new();
+    let mut disj_cands: Vec<(Vec<SymbolId>, Bool)> = Vec::new();
 
     for d in items {
         let mentioned = qvars_mentioned_in(&d, &cand, bound_order);
-        let cset: Vec<String> = mentioned.into_iter().collect();
+        let cset: Vec<SymbolId> = mentioned.into_iter().collect();
         if cset.is_empty() {
             continue;
         }
         let rel_parts = qvar_conjuncts(&d, &cand, bound_order);
-        let rel_fv: HashSet<String> = rel_parts
+        let rel_fv: HashSet<SymbolId> = rel_parts
             .iter()
-            .flat_map(|c| free_variables_bool(c))
+            .flat_map(|c| free_symbol_ids_bool(c))
             .collect();
         let relevant = if rel_parts.len() == 1 {
             rel_parts[0].clone()
@@ -76,7 +79,7 @@ pub fn contribute(
         };
         disj_cands.push((cset.clone(), relevant));
         for other in &cset[1..] {
-            union(&mut parent, &cset[0], other);
+            union(&mut parent, cset[0], *other);
         }
         if !rel_fv.is_subset(&cand) {
             tainted.extend(cset);
@@ -88,17 +91,17 @@ pub fn contribute(
     }
 
     let field = field_mod();
-    let mut members_by_root: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut disjuncts_by_root: HashMap<String, Vec<Bool>> = HashMap::new();
+    let mut members_by_root: HashMap<SymbolId, HashSet<SymbolId>> = HashMap::new();
+    let mut disjuncts_by_root: HashMap<SymbolId, Vec<Bool>> = HashMap::new();
     for q in &cand {
-        let root = find(&mut parent, q);
-        members_by_root.entry(root).or_default().insert(q.clone());
+        let root = find(&mut parent, *q);
+        members_by_root.entry(root).or_default().insert(*q);
     }
     for (cset, d) in disj_cands {
-        let root = find(&mut parent, &cset[0]);
+        let root = find(&mut parent, cset[0]);
         disjuncts_by_root.entry(root).or_default().push(d);
     }
-    let tainted_roots: HashSet<String> = tainted.iter().map(|q| find(&mut parent, q)).collect();
+    let tainted_roots: HashSet<SymbolId> = tainted.iter().map(|q| find(&mut parent, *q)).collect();
 
     for (root, disjuncts) in disjuncts_by_root {
         if tainted_roots.contains(&root) {
@@ -115,22 +118,26 @@ pub fn contribute(
             let Some(val) = model.get(q).cloned() else {
                 continue;
             };
-            map.pin(q, val, "isolate");
+            map.pin(*q, val, "isolate");
         }
     }
 }
 
-fn qvars_mentioned_in(d: &Bool, cand: &HashSet<String>, bound_order: &[String]) -> HashSet<String> {
+fn qvars_mentioned_in(
+    d: &Bool,
+    cand: &HashSet<SymbolId>,
+    bound_order: &[SymbolId],
+) -> HashSet<SymbolId> {
     let mut out = HashSet::new();
     for node in iter_nodes_dyn(&Dynamic::from_ast(d)) {
-        if let Some(name) = smt2::symbol_name_dyn(&node) {
-            if cand.contains(&name) {
-                out.insert(name);
+        if let Some(id) = symbol_id_dyn(&node) {
+            if cand.contains(&id) {
+                out.insert(id);
             }
         } else if let Some(idx) = bound_var_index(&node) {
-            if let Some(name) = bound_order.get(idx) {
-                if cand.contains(name) {
-                    out.insert(name.clone());
+            if let Some(id) = bound_order.get(idx) {
+                if cand.contains(id) {
+                    out.insert(*id);
                 }
             }
         }
@@ -138,7 +145,11 @@ fn qvars_mentioned_in(d: &Bool, cand: &HashSet<String>, bound_order: &[String]) 
     out
 }
 
-fn qvar_conjuncts(d: &Bool, cand: &HashSet<String>, bound_order: &[String]) -> Vec<Bool> {
+fn qvar_conjuncts(
+    d: &Bool,
+    cand: &HashSet<SymbolId>,
+    bound_order: &[SymbolId],
+) -> Vec<Bool> {
     let conjs = and_parts(d).unwrap_or_else(|| vec![d.clone()]);
     conjs
         .into_iter()
@@ -157,21 +168,24 @@ fn sort_kind_to_smt(sort: SortKind) -> &'static str {
 
 fn solve_island(
     falsify: &[Bool],
-    members: &HashSet<String>,
+    members: &HashSet<SymbolId>,
     sorts: &HashMap<String, SortKind>,
     decl_block: &str,
     field: Option<i128>,
-) -> Option<HashMap<String, Dynamic>> {
+) -> Option<HashMap<SymbolId, Dynamic>> {
     let mut input = decl_block.to_string();
     for m in members {
-        let sort = symbol_sort(m, sorts);
+        let Some(name) = symbol_name_for_id(*m) else {
+            continue;
+        };
+        let sort = symbol_sort(&name, sorts);
         input.push_str(&format!(
-            "(declare-fun {m} () {})\n",
+            "(declare-fun {name} () {})\n",
             sort_kind_to_smt(sort)
         ));
         if let Some(p) = field {
             if sort == SortKind::Int {
-                input.push_str(&format!("(assert (and (<= 0 {m}) (< {m} {p})))\n"));
+                input.push_str(&format!("(assert (and (<= 0 {name}) (< {name} {p})))\n"));
             }
         }
     }
@@ -189,17 +203,20 @@ fn solve_island(
     let model = solver.get_model()?;
     let mut out = HashMap::new();
     for m in members {
-        match symbol_sort(m, sorts) {
+        let Some(name) = symbol_name_for_id(*m) else {
+            continue;
+        };
+        match symbol_sort(&name, sorts) {
             SortKind::Int => {
-                let sym = ZInt::new_const(m.as_str());
+                let sym = ZInt::new_const(name.as_str());
                 if let Some(val) = model.get_const_interp(&sym) {
-                    out.insert(m.clone(), Dynamic::from_ast(&val));
+                    out.insert(*m, Dynamic::from_ast(&val));
                 }
             }
             SortKind::Bool => {
-                let sym = Bool::new_const(m.as_str());
+                let sym = Bool::new_const(name.as_str());
                 if let Some(val) = model.get_const_interp(&sym) {
-                    out.insert(m.clone(), Dynamic::from_ast(&val));
+                    out.insert(*m, Dynamic::from_ast(&val));
                 }
             }
             _ => {}

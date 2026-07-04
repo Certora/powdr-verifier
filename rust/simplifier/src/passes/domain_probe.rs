@@ -1,10 +1,11 @@
 //! SMT-backed strengthening for small finite integer domains (choice/or-eq).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{HashMap, HashSet};
 
-use smt2::{and_parts, int_from_i128, or_parts, Script, SmtCommand};
+use smt2::{and_parts, decl_name, free_int_nodes, int_from_i128, is_int_const, or_parts, Script, SmtCommand};
 use z3::SatResult;
-use z3::ast::{Ast, Bool, Dynamic, Int};
+use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
+use z3::DeclKind;
 
 use crate::expr_util::{rebuild_script, AssertBuildCtx};
 
@@ -36,7 +37,8 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     }
 
     let prefix = declare_block(script);
-    let mut remaining: BTreeSet<String> = choices.keys().cloned().collect();
+    let mut remaining: Vec<Int> = choices.keys().cloned().collect();
+    remaining.sort_by_cached_key(|s| decl_name(&Dynamic::from_ast(s).decl()));
     let mut symbols_probed = 0usize;
     let mut clusters_probed = 0usize;
     let mut flag_vars_total = 0usize;
@@ -45,11 +47,11 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut cluster_stats = Vec::new();
 
     while !remaining.is_empty() && symbols_probed < MAX_PAIRS {
-        let seed = remaining.iter().next().cloned().unwrap();
+        let seed = remaining.remove(0);
         let cluster = flag_cluster(&seed, &assertions, &choices);
         remaining.retain(|s| !cluster.contains(s));
 
-        let mut cluster_choices: BTreeMap<String, Vec<i128>> = cluster
+        let mut cluster_choices: HashMap<Int, Vec<i128>> = cluster
             .iter()
             .filter_map(|s| choices.get(s).map(|v| (s.clone(), v.clone())))
             .collect();
@@ -140,8 +142,8 @@ fn declare_block(script: &Script) -> String {
     out
 }
 
-fn collect_choices(assertions: &[Bool], max_n: usize) -> BTreeMap<String, Vec<i128>> {
-    let mut raw: BTreeMap<String, Vec<i128>> = BTreeMap::new();
+fn collect_choices(assertions: &[Bool], max_n: usize) -> HashMap<Int, Vec<i128>> {
+    let mut raw: HashMap<Int, Vec<i128>> = HashMap::new();
     for a in assertions {
         for (sym, _, vals) in choices_in_assertion(a) {
             let cur = raw.entry(sym).or_default();
@@ -158,7 +160,7 @@ fn collect_choices(assertions: &[Bool], max_n: usize) -> BTreeMap<String, Vec<i1
         .collect()
 }
 
-fn choices_in_assertion(f: &Bool) -> Vec<(String, Bool, Vec<i128>)> {
+fn choices_in_assertion(f: &Bool) -> Vec<(Int, Bool, Vec<i128>)> {
     if let Some((sym, vals)) = parse_or_equalities(f) {
         return vec![(sym, f.clone(), vals)];
     }
@@ -174,14 +176,14 @@ fn choices_in_assertion(f: &Bool) -> Vec<(String, Bool, Vec<i128>)> {
     out
 }
 
-fn parse_or_equalities(f: &Bool) -> Option<(String, Vec<i128>)> {
+fn parse_or_equalities(f: &Bool) -> Option<(Int, Vec<i128>)> {
     let parts = or_parts(f)?;
-    let mut sym: Option<String> = None;
+    let mut sym: Option<Int> = None;
     let mut vals = Vec::new();
     for d in parts {
         let (s, v) = eq_symbol_int(&d)?;
         if let Some(existing) = &sym {
-            if existing != &s {
+            if !existing.ast_eq(&s) {
                 return None;
             }
         } else {
@@ -198,30 +200,31 @@ fn parse_or_equalities(f: &Bool) -> Option<(String, Vec<i128>)> {
     Some((sym, vals))
 }
 
-fn eq_symbol_int(term: &Bool) -> Option<(String, i128)> {
+fn eq_symbol_int(term: &Bool) -> Option<(Int, i128)> {
     let ast = Dynamic::from_ast(term);
-    if ast.kind() != z3::AstKind::App {
-        return None;
-    }
-    if smt2::decl_name(&ast.decl()) != "=" || ast.num_children() != 2 {
+    if ast.kind() != AstKind::App || ast.num_children() != 2 || ast.decl().kind() != DeclKind::Eq {
         return None;
     }
     let lhs = ast.nth_child(0)?;
     let rhs = ast.nth_child(1)?;
-    if let Some(sym) = smt2::symbol_name_dyn(&lhs) {
-        if let Some(v) = smt2::int_literal_dyn(&rhs) {
-            return Some((sym, v));
+    if let Some(sym) = lhs.as_int() {
+        if is_int_const(&lhs) {
+            if let Some(v) = smt2::int_value_dyn(&rhs) {
+                return Some((sym, v));
+            }
         }
     }
-    if let Some(sym) = smt2::symbol_name_dyn(&rhs) {
-        if let Some(v) = smt2::int_literal_dyn(&lhs) {
-            return Some((sym, v));
+    if let Some(sym) = rhs.as_int() {
+        if is_int_const(&rhs) {
+            if let Some(v) = smt2::int_value_dyn(&lhs) {
+                return Some((sym, v));
+            }
         }
     }
     None
 }
 
-fn const_pinned_in(f: &Bool) -> HashSet<String> {
+fn const_pinned_in(f: &Bool) -> HashSet<Int> {
     if let Some((sym, _)) = eq_symbol_int(f) {
         return HashSet::from([sym]);
     }
@@ -232,17 +235,17 @@ fn const_pinned_in(f: &Bool) -> HashSet<String> {
 }
 
 fn flag_cluster(
-    seed: &str,
+    seed: &Int,
     assertions: &[Bool],
-    choices: &BTreeMap<String, Vec<i128>>,
-) -> HashSet<String> {
-    let choice_syms: HashSet<String> = choices.keys().cloned().collect();
-    let mut cluster: HashSet<String> = HashSet::from([seed.to_string()]);
+    choices: &HashMap<Int, Vec<i128>>,
+) -> HashSet<Int> {
+    let choice_syms: HashSet<Int> = choices.keys().cloned().collect();
+    let mut cluster: HashSet<Int> = HashSet::from([seed.clone()]);
     let mut changed = true;
     while changed {
         changed = false;
         for a in assertions {
-            let fvs = smt2::free_variables_bool(a);
+            let fvs = free_int_nodes(a);
             if fvs.is_disjoint(&cluster) {
                 continue;
             }
@@ -256,14 +259,11 @@ fn flag_cluster(
             }
         }
         for a in assertions {
-            let fvs: HashSet<String> = smt2::free_variables_bool(a)
-                .into_iter()
-                .filter(|name| is_int_symbol_name(name))
-                .collect();
+            let fvs = free_int_nodes(a);
             if fvs.is_disjoint(&cluster) {
                 continue;
             }
-            let extras: HashSet<String> = fvs.difference(&cluster).cloned().collect();
+            let extras: HashSet<Int> = fvs.difference(&cluster).cloned().collect();
             if extras.is_subset(&choice_syms) {
                 for s in extras {
                     if cluster.insert(s) {
@@ -276,14 +276,10 @@ fn flag_cluster(
     cluster
 }
 
-fn is_int_symbol_name(_name: &str) -> bool {
-    true
-}
-
-fn cluster_assertions(assertions: &[Bool], cluster: &HashSet<String>) -> Vec<Bool> {
+fn cluster_assertions(assertions: &[Bool], cluster: &HashSet<Int>) -> Vec<Bool> {
     assertions
         .iter()
-        .filter(|a| smt2::free_variables_bool(a).is_subset(cluster))
+        .filter(|a| free_int_nodes(a).is_subset(cluster))
         .cloned()
         .collect()
 }
@@ -306,7 +302,7 @@ fn batch_insert(batch: &mut Vec<Bool>, fact: Bool) -> bool {
 fn probe_cluster(
     prefix: &str,
     rel: &[Bool],
-    cluster_choices: &BTreeMap<String, Vec<i128>>,
+    cluster_choices: &HashMap<Int, Vec<i128>>,
     batch: &mut Vec<Bool>,
 ) -> ProbeOutcomes {
     let mut out = ProbeOutcomes {
@@ -323,9 +319,11 @@ fn probe_cluster(
         solver.assert(a);
     }
 
-    for (sym, vals) in cluster_choices {
+    let mut syms: Vec<_> = cluster_choices.iter().collect();
+    syms.sort_by_cached_key(|(s, _)| decl_name(&Dynamic::from_ast(*s).decl()));
+    for (sym, vals) in syms {
         for v in vals {
-            let probe = Int::new_const(sym.as_str()).eq(&int_from_i128(*v));
+            let probe = sym.eq(&int_from_i128(*v));
             let r = probe_assumption(&solver, &probe);
             match r {
                 Some(true) => out.probes_sat += 1,
@@ -374,6 +372,10 @@ mod tests {
             .unwrap_or(false)
     }
 
+    fn int_const(name: &str) -> Int {
+        Int::new_const(name)
+    }
+
     #[test]
     fn flag_cluster_drops_wide_columns() {
         let script = Script::parse(
@@ -385,9 +387,9 @@ mod tests {
         let asserts = collect_assert_terms(&script);
         let flag_dom = asserts[0].clone();
         let choices = collect_choices(&asserts, 3);
-        let cluster = flag_cluster("opcode_and_flag", &asserts, &choices);
-        assert!(cluster.contains("opcode_and_flag"));
-        assert!(!cluster.contains("a__0_0"));
+        let cluster = flag_cluster(&int_const("opcode_and_flag"), &asserts, &choices);
+        assert!(cluster.contains(&int_const("opcode_and_flag")));
+        assert!(!cluster.contains(&int_const("a__0_0")));
         let sliced = cluster_assertions(&asserts, &cluster);
         assert_eq!(sliced.len(), 1);
         assert!(sliced[0].ast_eq(&flag_dom));
@@ -401,8 +403,11 @@ mod tests {
         .unwrap();
         let asserts = collect_assert_terms(&script);
         let choices = collect_choices(&asserts, 3);
-        let cluster = flag_cluster("x", &asserts, &choices);
-        assert_eq!(cluster, HashSet::from(["x".to_string(), "y".to_string()]));
+        let cluster = flag_cluster(&int_const("x"), &asserts, &choices);
+        assert_eq!(
+            cluster,
+            HashSet::from([int_const("x"), int_const("y")])
+        );
     }
 
     #[test]

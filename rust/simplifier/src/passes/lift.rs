@@ -9,6 +9,7 @@ use smt2::ast_util::{
     contains_bound_var_dyn, de_bruijn_bound_name,
 };
 use smt2::ast_build::{free_variables_bool, iter_nodes_dyn, symbol_name_dyn};
+use smt2::ast_util::{free_symbol_ids_bool, symbol_id_from_name};
 use smt2::{declare_fun_name_cmd, map_bool_children, parse_single_command, Script, SExpr, SmtCommand};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
@@ -318,14 +319,14 @@ impl LiftWalker {
         // After de Bruijn naming the still-live qvars are free named symbols in
         // ``named_body``. Iterate ``bound_order`` (declaration order) so the
         // rebuilt quantifier keeps that order; map position to de Bruijn index.
-        let body_fv = free_variables_bool(&named_body);
+        let body_fv = free_symbol_ids_bool(&named_body);
         let mut qvars_remaining: Vec<Dynamic> = Vec::new();
         for (pos, name) in bound_order.iter().enumerate() {
             let q_idx = n_bounds - 1 - pos;
             if !qvar_live[q_idx] {
                 continue;
             }
-            if !body_fv.contains(name) {
+            if !body_fv.contains(&symbol_id_from_name(name)) {
                 self.unused_qvars_dropped += 1;
                 continue;
             }

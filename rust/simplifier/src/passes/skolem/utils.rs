@@ -1,8 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
 use smt2::ast_build::{int_literal_dyn, iter_nodes_dyn, parse_bool_formula, symbol_name_dyn};
-use smt2::ast_util::{decl_name, quantifier_bounds, quantifier_body_bool, strip_prefix};
-use smt2::{declare_fun_name_cmd, free_variables_bool, seed_parser_context, ParseCtx, Script, SmtCommand};
+use smt2::ast_util::{
+    decl_name, free_symbol_ids_bool, int_value_dyn, quantifier_bounds, quantifier_body_bool, strip_prefix,
+    symbol_id_dyn, symbol_id_from_name, SymbolId,
+};
+use smt2::{declare_fun_name_cmd, seed_parser_context, ParseCtx, Script, SmtCommand};
 use z3::ast::{Ast, AstKind, Bool, Dynamic};
 use z3::SortKind as Z3SortKind;
 
@@ -33,7 +36,7 @@ fn build_symbol_sorts(
 /// One declare-fun pass yielding both the per-symbol sort map and the set of
 /// non-nullary (function) symbols. Replaces the separate `collect_symbol_sorts`
 /// declare walk and `collect_function_symbols`.
-fn declare_fun_sorts_and_ufs(script: &Script) -> (HashMap<String, SortKind>, HashSet<String>) {
+fn declare_fun_sorts_and_ufs(script: &Script) -> (HashMap<String, SortKind>, HashSet<SymbolId>) {
     let mut sorts = HashMap::new();
     let mut ufs = HashSet::new();
     for cmd in &script.commands {
@@ -43,14 +46,14 @@ fn declare_fun_sorts_and_ufs(script: &Script) -> (HashMap<String, SortKind>, Has
         let raw = cmd.to_smtlib(&script.source);
         sorts.insert(name.clone(), sort_from_decl(&raw));
         if !is_nullary_declare_fun(&raw) {
-            ufs.insert(name);
+            ufs.insert(symbol_id_from_name(&name));
         }
     }
     (sorts, ufs)
 }
 
 pub struct AssertScan {
-    pub live_symbols: HashSet<String>,
+    pub live_symbols: HashSet<SymbolId>,
     pub qvar_sorts: Vec<(String, SortKind)>,
 }
 
@@ -65,14 +68,16 @@ pub fn scan_asserts(script: &Script) -> AssertScan {
             continue;
         };
         for node in iter_nodes_dyn(&Dynamic::from_ast(body)) {
-            if let Some(name) = symbol_name_dyn(&node) {
-                if name != "true" && name != "false" && int_literal_dyn(&node).is_none() {
-                    live.insert(name);
+            if let Some(id) = symbol_id_dyn(&node) {
+                if int_value_dyn(&node).is_none()
+                    && !node.as_bool().and_then(|b| b.as_bool()).is_some()
+                {
+                    live.insert(id);
                 }
             }
             if let Some((qvars, _, _)) = parse_forall(&node) {
                 for (n, s) in qvars {
-                    live.insert(n.clone());
+                    live.insert(symbol_id_from_name(&n));
                     qvar_sorts.push((n, s));
                 }
             }
@@ -251,21 +256,21 @@ fn is_nullary_declare_fun(raw: &str) -> bool {
 
 fn filter_live_pins(
     pins: Vec<SkolemPin>,
-    live: &HashSet<String>,
-    ufs: &HashSet<String>,
+    live: &HashSet<SymbolId>,
+    ufs: &HashSet<SymbolId>,
 ) -> (Vec<SkolemPin>, usize) {
     let mut out = Vec::with_capacity(pins.len());
     let mut dropped = 0usize;
     for pin in pins {
-        let vars: HashSet<String> = free_variables_bool(&pin.equation)
+        let vars: HashSet<SymbolId> = free_symbol_ids_bool(&pin.equation)
             .into_iter()
-            .filter(|n| n != "true" && n != "false" && !ufs.contains(n))
+            .filter(|id| !ufs.contains(id))
             .collect();
         if vars.is_empty() {
             dropped += 1;
             continue;
         }
-        if vars.iter().all(|n| live.contains(n)) {
+        if vars.iter().all(|id| live.contains(id)) {
             out.push(pin);
         } else {
             dropped += 1;
@@ -303,8 +308,8 @@ fn load_skolem_setinfos_shared(
     script: &Script,
     sorts: &HashMap<String, SortKind>,
     qvar_sorts: &[(String, SortKind)],
-    live: &HashSet<String>,
-    ufs: &HashSet<String>,
+    live: &HashSet<SymbolId>,
+    ufs: &HashSet<SymbolId>,
 ) -> (Vec<SkolemPin>, usize) {
     let mut out = Vec::new();
     let mut parse = ParseCtx::new();

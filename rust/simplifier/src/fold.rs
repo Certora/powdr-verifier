@@ -1,10 +1,10 @@
 //! Constant folding on Z3 AST (evaluator pass).
 
 use smt2::ast_util::{
-    debug_assert_direct_int_operand, decl_name, int_from_i128, int_value, int_value_dyn,
-    rebuild_app,
+    debug_assert_direct_int_operand, int_from_i128, int_value, int_value_dyn, rebuild_app,
 };
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
+use z3::DeclKind;
 
 pub fn fold_constants_fixpoint(b: &Bool, field_mod: Option<u64>, max_iters: usize) -> Bool {
     let mut cur = b.clone();
@@ -26,9 +26,10 @@ fn fold_bool(b: &Bool, field_mod: Option<u64>) -> Bool {
     if let Some(v) = b.as_bool() {
         return Bool::from_bool(v);
     }
-    if let Some(name) = (ast.kind() == AstKind::App).then(|| decl_name(&ast.decl())) {
-        match name.as_str() {
-            "not" if ast.num_children() == 1 => {
+    if ast.kind() == AstKind::App {
+        let kind = ast.decl().kind();
+        match kind {
+            DeclKind::Not if ast.num_children() == 1 => {
                 if let Some(inner) = ast.nth_child(0).and_then(|c| c.as_bool()) {
                     let folded = fold_bool(&inner, field_mod);
                     if let Some(v) = folded.as_bool() {
@@ -37,8 +38,8 @@ fn fold_bool(b: &Bool, field_mod: Option<u64>) -> Bool {
                     return folded.not();
                 }
             }
-            "and" | "or" => {
-                let op = name.as_str();
+            DeclKind::And | DeclKind::Or => {
+                let is_and = kind == DeclKind::And;
                 let mut consts = Vec::new();
                 let mut symbolic = Vec::new();
                 for ch in ast.children() {
@@ -54,66 +55,66 @@ fn fold_bool(b: &Bool, field_mod: Option<u64>) -> Bool {
                 if consts.is_empty() {
                     return b.clone();
                 }
-                let folded = if op == "and" {
+                let folded = if is_and {
                     consts.iter().all(|&x| x)
                 } else {
                     consts.iter().any(|&x| x)
                 };
-                if op == "and" && !folded {
+                if is_and && !folded {
                     return Bool::from_bool(false);
                 }
-                if op == "or" && folded {
+                if !is_and && folded {
                     return Bool::from_bool(true);
                 }
                 if symbolic.is_empty() {
                     return Bool::from_bool(folded);
                 }
                 let refs: Vec<&Bool> = symbolic.iter().collect();
-                return if op == "and" {
+                return if is_and {
                     Bool::and(&refs)
                 } else {
                     Bool::or(&refs)
                 };
             }
-            "=" if ast.num_children() == 2 => {
+            DeclKind::Eq if ast.num_children() == 2 => {
                 let a = ast.nth_child(0);
                 let c = ast.nth_child(1);
                 if let (Some(a), Some(c)) = (a, c) {
-                if let (Some(ab), Some(cb)) = (a.as_bool(), c.as_bool()) {
-                    if let (Some(x), Some(y)) = (ab.as_bool(), cb.as_bool()) {
-                        return Bool::from_bool(x == y);
+                    if let (Some(ab), Some(cb)) = (a.as_bool(), c.as_bool()) {
+                        if let (Some(x), Some(y)) = (ab.as_bool(), cb.as_bool()) {
+                            return Bool::from_bool(x == y);
+                        }
                     }
-                }
-                if let (Some(ai), Some(ci)) = (a.as_int(), c.as_int()) {
-                    if let (Some(x), Some(y)) = (int_value(&ai), int_value(&ci)) {
-                        return Bool::from_bool(x == y);
+                    if let (Some(ai), Some(ci)) = (a.as_int(), c.as_int()) {
+                        if let (Some(x), Some(y)) = (int_value(&ai), int_value(&ci)) {
+                            return Bool::from_bool(x == y);
+                        }
                     }
-                }
                 }
             }
-            "distinct" if ast.num_children() == 2 => {
+            DeclKind::Distinct if ast.num_children() == 2 => {
                 let a = ast.nth_child(0);
                 let c = ast.nth_child(1);
                 if let (Some(a), Some(c)) = (a, c) {
-                if let (Some(ai), Some(ci)) = (a.as_int(), c.as_int()) {
-                    if let (Some(x), Some(y)) = (int_value(&ai), int_value(&ci)) {
-                        return Bool::from_bool(x != y);
+                    if let (Some(ai), Some(ci)) = (a.as_int(), c.as_int()) {
+                        if let (Some(x), Some(y)) = (int_value(&ai), int_value(&ci)) {
+                            return Bool::from_bool(x != y);
+                        }
                     }
                 }
-                }
             }
-            "ite" if ast.num_children() == 3 => {
+            DeclKind::Ite if ast.num_children() == 3 => {
                 if let Some(cond) = ast.nth_child(0).and_then(|c| c.as_bool()) {
-                if let Some(c) = cond.as_bool() {
-                    let branch = if c {
-                        ast.nth_child(1).and_then(|c| c.as_bool())
-                    } else {
-                        ast.nth_child(2).and_then(|c| c.as_bool())
-                    };
-                    if let Some(branch) = branch {
-                    return fold_bool(&branch, field_mod);
+                    if let Some(c) = cond.as_bool() {
+                        let branch = if c {
+                            ast.nth_child(1).and_then(|c| c.as_bool())
+                        } else {
+                            ast.nth_child(2).and_then(|c| c.as_bool())
+                        };
+                        if let Some(branch) = branch {
+                            return fold_bool(&branch, field_mod);
+                        }
                     }
-                }
                 }
             }
             _ => {}
@@ -127,8 +128,7 @@ fn map_bool_children_default(b: &Bool, field_mod: Option<u64>) -> Bool {
     if ast.kind() != AstKind::App {
         return b.clone();
     }
-    let name = decl_name(&ast.decl());
-    if name == "not" && ast.num_children() == 1 {
+    if ast.decl().kind() == DeclKind::Not && ast.num_children() == 1 {
         if let Some(inner) = ast.nth_child(0).and_then(|c| c.as_bool()) {
             return fold_bool(&inner, field_mod).not();
         }
@@ -169,24 +169,23 @@ fn fold_int(e: &Int, field_mod: Option<u64>) -> Int {
     if ast.kind() != AstKind::App {
         return e.clone();
     }
-    let name = decl_name(&ast.decl());
     let p = field_mod.map(|m| m as i128);
-    match name.as_str() {
-        "+" => return fold_nary_int(&ast, |vals| vals.iter().sum(), p),
-        "*" => return fold_nary_int(&ast, |vals| vals.iter().product(), p),
-        "-" if ast.num_children() == 1 => {
+    match ast.decl().kind() {
+        DeclKind::Add => return fold_nary_int(&ast, |vals| vals.iter().sum(), p),
+        DeclKind::Mul => return fold_nary_int(&ast, |vals| vals.iter().product(), p),
+        DeclKind::Uminus if ast.num_children() == 1 => {
             if let Some(v) = int_value_dyn(&ast.nth_child(0).unwrap()) {
                 return int_atom(-v, p);
             }
         }
-        "-" if ast.num_children() == 2 => {
+        DeclKind::Sub if ast.num_children() == 2 => {
             let a = int_value_dyn(&ast.nth_child(0).unwrap());
             let b = int_value_dyn(&ast.nth_child(1).unwrap());
             if let (Some(x), Some(y)) = (a, b) {
                 return int_atom(x - y, p);
             }
         }
-        "div" if ast.num_children() == 2 => {
+        DeclKind::Div if ast.num_children() == 2 => {
             let a = int_value_dyn(&ast.nth_child(0).unwrap());
             let b = int_value_dyn(&ast.nth_child(1).unwrap());
             if let (Some(x), Some(y)) = (a, b) {
@@ -195,7 +194,7 @@ fn fold_int(e: &Int, field_mod: Option<u64>) -> Int {
                 }
             }
         }
-        "mod" if ast.num_children() == 2 => {
+        DeclKind::Mod if ast.num_children() == 2 => {
             let a = int_value_dyn(&ast.nth_child(0).unwrap());
             let b = int_value_dyn(&ast.nth_child(1).unwrap());
             if let (Some(x), Some(y)) = (a, b) {
@@ -218,6 +217,7 @@ fn fold_int(e: &Int, field_mod: Option<u64>) -> Int {
 }
 
 fn fold_nary_int(ast: &Dynamic, f: fn(&[i128]) -> i128, field_mod: Option<i128>) -> Int {
+    let is_mul = ast.decl().kind() == DeclKind::Mul;
     let mut int_acc = Vec::new();
     let mut symbolic = Vec::new();
     for ch in ast.children() {
@@ -234,9 +234,8 @@ fn fold_nary_int(ast: &Dynamic, f: fn(&[i128]) -> i128, field_mod: Option<i128>)
     if symbolic.is_empty() {
         return folded;
     }
-    let head = decl_name(&ast.decl());
     let mut args: Vec<Int> = symbolic;
-    let identity = if head == "*" { 1 } else { 0 };
+    let identity = if is_mul { 1 } else { 0 };
     if int_value(&folded) != Some(identity) {
         args.push(folded);
     }
@@ -247,10 +246,10 @@ fn fold_nary_int(ast: &Dynamic, f: fn(&[i128]) -> i128, field_mod: Option<i128>)
     for a in &args {
         debug_assert_direct_int_operand(a);
     }
-    if head == "+" {
-        Int::add(&refs)
-    } else {
+    if is_mul {
         Int::mul(&refs)
+    } else {
+        Int::add(&refs)
     }
 }
 
