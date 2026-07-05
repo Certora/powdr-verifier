@@ -4,12 +4,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use smt2::ast_util::{
     ast_hash_bool, bound_var_index, decl_name, flatten_or, is_forall, or_body_parts,
-    quantifier_body_bool, quantifier_body_deps, quantifier_bound_names, quantifier_bounds_de_bruijn,
-    rebuild_forall_dyn, resolve_bound_or_free_name, substitute_bound_vars_dyn,
-    contains_bound_var_dyn, de_bruijn_bound_name,
+    quantifier_body_bool, quantifier_body_deps, quantifier_bound_names, quantifier_bound_symbol_ids,
+    quantifier_bounds_de_bruijn, rebuild_forall_dyn, substitute_bound_vars_dyn,
+    contains_bound_var_dyn, de_bruijn_bound_symbol_id,
+    free_symbol_ids_bool, symbol_id_dyn, symbol_id_from_name, symbol_name_for_id, SymbolId,
 };
-use smt2::ast_build::{free_variables_bool, iter_nodes_dyn, symbol_name_dyn};
-use smt2::ast_util::{free_symbol_ids_bool, symbol_id_from_name};
+use smt2::ast_build::{iter_nodes_dyn, symbol_name_dyn};
 use smt2::{declare_fun_name_cmd, map_bool_children, parse_single_command, Script, SExpr, SmtCommand};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
@@ -50,11 +50,11 @@ fn declare_fun_sort(cmd: &SmtCommand) -> DeclSort {
         .unwrap_or(DeclSort::Int)
 }
 
-fn collect_symbol_sorts(script: &Script) -> HashMap<String, DeclSort> {
+fn collect_symbol_sorts(script: &Script) -> HashMap<SymbolId, DeclSort> {
     let mut out = HashMap::new();
     for cmd in &script.commands {
         if let Some(name) = declare_fun_name_cmd(cmd) {
-            out.insert(name, declare_fun_sort(cmd));
+            out.insert(symbol_id_from_name(&name), declare_fun_sort(cmd));
         }
     }
     out
@@ -68,10 +68,10 @@ fn dyn_sort(ast: &Dynamic) -> DeclSort {
     }
 }
 
-fn symbol_sort_in_eq(name: &str, eq: &Bool) -> Option<DeclSort> {
+fn symbol_sort_in_eq(id: SymbolId, eq: &Bool) -> Option<DeclSort> {
     let ast = Dynamic::from_ast(eq);
     for node in iter_nodes_dyn(&ast) {
-        if symbol_name_dyn(&node).as_deref() == Some(name) {
+        if symbol_id_dyn(&node) == Some(id) {
             return Some(dyn_sort(&node));
         }
     }
@@ -79,15 +79,15 @@ fn symbol_sort_in_eq(name: &str, eq: &Bool) -> Option<DeclSort> {
 }
 
 fn infer_symbol_sort(
-    name: &str,
-    sorts: &HashMap<String, DeclSort>,
+    id: SymbolId,
+    sorts: &HashMap<SymbolId, DeclSort>,
     eq_hint: Option<&Bool>,
 ) -> DeclSort {
-    if let Some(sort) = sorts.get(name) {
+    if let Some(sort) = sorts.get(&id) {
         return *sort;
     }
     if let Some(eq) = eq_hint {
-        if let Some(sort) = symbol_sort_in_eq(name, eq) {
+        if let Some(sort) = symbol_sort_in_eq(id, eq) {
             return sort;
         }
     }
@@ -95,13 +95,13 @@ fn infer_symbol_sort(
 }
 
 struct LiftWalker {
-    lifted: BTreeMap<String, Bool>,
-    sorts: HashMap<String, DeclSort>,
+    lifted: BTreeMap<SymbolId, Bool>,
+    sorts: HashMap<SymbolId, DeclSort>,
     unused_qvars_dropped: usize,
 }
 
 impl LiftWalker {
-    fn new(sorts: HashMap<String, DeclSort>) -> Self {
+    fn new(sorts: HashMap<SymbolId, DeclSort>) -> Self {
         Self {
             lifted: BTreeMap::new(),
             sorts,
@@ -109,8 +109,8 @@ impl LiftWalker {
         }
     }
 
-    fn record_bound_sort(&mut self, name: &str, sort: DeclSort) {
-        self.sorts.entry(name.to_string()).or_insert(sort);
+    fn record_bound_sort(&mut self, id: SymbolId, sort: DeclSort) {
+        self.sorts.entry(id).or_insert(sort);
     }
 
     fn walk_bool(&mut self, b: &Bool) -> Bool {
@@ -127,10 +127,10 @@ impl LiftWalker {
     fn process_forall(&mut self, b: &Bool) -> Bool {
         let ast = Dynamic::from_ast(b);
         let all_bounds = quantifier_bounds_de_bruijn(&ast);
-        let bound_order: Vec<String> = quantifier_bound_names(&ast);
+        let bound_order: Vec<SymbolId> = quantifier_bound_symbol_ids(&ast);
         for de_bruijn_idx in 0..all_bounds.len() {
             let bound = &all_bounds[de_bruijn_idx];
-            if let Some(name) = de_bruijn_bound_name(&bound_order, de_bruijn_idx) {
+            if let Some(id) = de_bruijn_bound_symbol_id(&bound_order, de_bruijn_idx) {
                 let sort = if bound.as_bool().is_some() {
                     DeclSort::Bool
                 } else if bound.as_int().is_some() {
@@ -138,7 +138,7 @@ impl LiftWalker {
                 } else {
                     DeclSort::Array
                 };
-                self.record_bound_sort(&name, sort);
+                self.record_bound_sort(id, sort);
             }
         }
 
@@ -236,16 +236,19 @@ impl LiftWalker {
                 continue;
             };
             resolved[ci] = true;
-            let Some(name) = de_bruijn_bound_name(&bound_order, q_idx) else {
+            let Some(id) = de_bruijn_bound_symbol_id(&bound_order, q_idx) else {
                 continue;
             };
-            if self.lifted.contains_key(&name) {
+            if self.lifted.contains_key(&id) {
                 continue;
             }
             let Ok(named_expr) = name_debruijn_dyn_with(&expr, &all_bounds) else {
                 continue;
             };
-            let sort = self.sorts.get(&name).copied().unwrap_or(DeclSort::Int);
+            let Some(name) = symbol_name_for_id(id) else {
+                continue;
+            };
+            let sort = self.sorts.get(&id).copied().unwrap_or(DeclSort::Int);
             let hoisted = match sort {
                 DeclSort::Bool => match named_expr.as_bool() {
                     Some(rhs) => Bool::new_const(name.as_str()).eq(&rhs),
@@ -256,7 +259,7 @@ impl LiftWalker {
                     None => continue,
                 },
             };
-            self.lifted.insert(name, hoisted);
+            self.lifted.insert(id, hoisted);
             qvar_live[q_idx] = false;
             lifted_flags[ci] = true;
             // Lifting ``q_idx`` removes it from the live qvars: refresh dependents'
@@ -321,16 +324,19 @@ impl LiftWalker {
         // rebuilt quantifier keeps that order; map position to de Bruijn index.
         let body_fv = free_symbol_ids_bool(&named_body);
         let mut qvars_remaining: Vec<Dynamic> = Vec::new();
-        for (pos, name) in bound_order.iter().enumerate() {
+        for (pos, id) in bound_order.iter().enumerate() {
             let q_idx = n_bounds - 1 - pos;
             if !qvar_live[q_idx] {
                 continue;
             }
-            if !body_fv.contains(&symbol_id_from_name(name)) {
+            if !body_fv.contains(id) {
                 self.unused_qvars_dropped += 1;
                 continue;
             }
-            let sort = self.sorts.get(name).copied().unwrap_or(DeclSort::Int);
+            let Some(name) = symbol_name_for_id(*id) else {
+                continue;
+            };
+            let sort = self.sorts.get(id).copied().unwrap_or(DeclSort::Int);
             qvars_remaining.push(match sort {
                 DeclSort::Bool => Dynamic::from_ast(&Bool::new_const(name.as_str())),
                 _ => Dynamic::from_ast(&Int::new_const(name.as_str())),
@@ -353,15 +359,16 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut prefix = Vec::new();
     let mut suffix = Vec::new();
     let mut in_prefix = true;
-    let mut declared: HashSet<String> = script
+    let mut declared: HashSet<SymbolId> = script
         .commands
         .iter()
         .filter_map(declare_fun_name_cmd)
+        .map(|n| symbol_id_from_name(&n))
         .collect();
 
     for cmd in &script.commands {
         if let Some(name) = declare_fun_name_cmd(cmd) {
-            declared.insert(name);
+            declared.insert(symbol_id_from_name(&name));
         }
         if cmd.assert_bool().is_some() {
             in_prefix = false;
@@ -381,26 +388,29 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut insert = Vec::new();
     if !walker.lifted.is_empty() {
         let mut ctx = AssertBuildCtx::from_script(script)?;
-        let mut to_declare: BTreeMap<String, DeclSort> = BTreeMap::new();
-        for (name, eq) in &walker.lifted {
-            if let Some(sort) = walker.sorts.get(name) {
-                to_declare.entry(name.clone()).or_insert(*sort);
+        let mut to_declare: BTreeMap<SymbolId, DeclSort> = BTreeMap::new();
+        for (id, eq) in &walker.lifted {
+            if let Some(sort) = walker.sorts.get(id) {
+                to_declare.entry(*id).or_insert(*sort);
             }
-            for sym in free_variables_bool(eq) {
+            for sym in free_symbol_ids_bool(eq) {
                 if !declared.contains(&sym) {
-                    let sort = infer_symbol_sort(&sym, &walker.sorts, Some(eq));
+                    let sort = infer_symbol_sort(sym, &walker.sorts, Some(eq));
                     to_declare.entry(sym).or_insert(sort);
                 }
             }
         }
-        for (name, sort) in to_declare {
-            if declared.contains(&name) {
+        for (id, sort) in to_declare {
+            if declared.contains(&id) {
                 continue;
             }
+            let Some(name) = symbol_name_for_id(id) else {
+                continue;
+            };
             let raw = format!("(declare-fun {name} () {})", sort_kind_to_smt(sort));
             let cmd = parse_single_command(&raw, ctx.parse())?;
             insert.push(cmd);
-            declared.insert(name);
+            declared.insert(id);
             hoisted_decls += 1;
         }
         for eq in walker.lifted.values() {

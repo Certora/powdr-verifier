@@ -511,7 +511,7 @@ pub fn quantifier_bound_names(ast: &Dynamic) -> Vec<String> {
 /// Interned Z3 symbol identity. Z3 interns symbol names per manager, so pointer
 /// equality of the underlying ``Z3_symbol`` is name equality — usable for
 /// string-free name comparisons within one context.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct SymbolId(usize);
 
 /// Binder name identities of a quantifier (declaration order), without materializing strings.
@@ -632,6 +632,11 @@ pub fn contains_bound_var_dyn(ast: &Dynamic) -> bool {
 pub fn de_bruijn_bound_name(bound_order: &[String], idx: usize) -> Option<String> {
     let pos = bound_order.len().checked_sub(1)?.checked_sub(idx)?;
     bound_order.get(pos).cloned()
+}
+
+pub fn de_bruijn_bound_symbol_id(bound_order: &[SymbolId], idx: usize) -> Option<SymbolId> {
+    let pos = bound_order.len().checked_sub(1)?.checked_sub(idx)?;
+    bound_order.get(pos).copied()
 }
 
 pub fn resolve_bound_or_free_name(ast: &Dynamic, bound_order: &[String]) -> Option<String> {
