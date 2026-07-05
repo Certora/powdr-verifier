@@ -28,7 +28,8 @@ pub use ast_util::{
     rebuild_app, rebuild_forall_dyn, rebuild_quantifier_dyn, resolve_bound_or_free_name,
     strip_annotations, strip_annotations_deep,
     scoped_free_int_symbols, strip_prefix, substitute_bound_vars_dyn, swap_prefix,
-    contains_bound_var_dyn, de_bruijn_bound_name, debug_assert_direct_int_operand,
+    contains_bound_var_dyn, de_bruijn_bound_name, de_bruijn_bound_symbol_id,
+    debug_assert_direct_int_operand,
     has_bool_sort_leaf_dyn, unwrap_zero_mod_eq,
 };
 pub use command::{
