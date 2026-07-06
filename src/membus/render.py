@@ -345,7 +345,7 @@ EXTRACT OUTPUT
   CONSTRAINTS = strict `<` order edges, each preceded by a `# justification`.
   One circuit -> all memory interactions; two -> only the REMOVED set (A - B).
 
-SOLVE (v1: AS1, constant keys, graph solver; fails gracefully otherwise)
+SOLVE (constant keys -> graph solver; symbolic keys -> SMT, aliasing open)
   Solves the bus constraints (no memory-consistency assumption) to recover, per
   cell, the recv<->send matching, and marks each interaction in/out/flow:
     input  = the recv reading the entry value (prev_ts < ts_entry);
@@ -354,6 +354,11 @@ SOLVE (v1: AS1, constant keys, graph solver; fails gracefully otherwise)
   vtime is virtual time relative to ts_entry (T+0); ts_exit = last clock. Any
   complete mapping is a solution; `unique` reports whether it is forced. Row id
   is the membus ordinal, stable across --as so solutions can be merged.
+  Symbolic keys (base+off, AS2): the alias partition is not static, so claims
+  are checked per-group with aliasing OPEN — a claim is `forced` iff it holds
+  under EVERY aliasing resolution (blocking check); anything else is a guess,
+  shown "(unforced)" and never committed by align. Boundary io of a cell that
+  a memory-loaded base might alias is typically unforced; interior flow is.
 
 ALIGN (AS1 + AS2; before has >= after, i.e. a removal pass) — HIGH CONFIDENCE
   Maps every BEFORE interaction (robust ids) either to an equivalent kept
