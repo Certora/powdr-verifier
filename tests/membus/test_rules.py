@@ -167,3 +167,76 @@ def test_affine_dense_roots_rejected():
     # admits adjacent integer solutions -> no affine claim at any modulus
     an = _gadget(-30720)
     assert an.affine("mem_ptr_limbs__0_5@9") is None
+
+
+# -- Bound propagation across two-column equalities ---------------------------
+
+def test_bound_propagates_through_equality():
+    # x is range-checked; y == x (a forwarding equality, as the `memory` pass
+    # emits after removing the register read whose recv data bounded y)
+    an = _an(cons=[_add("x@1", _m(P - 1, "y@2"))],
+             bis=[{"id": 3, "mult": 1, "args": ["x@1", 8]}])
+    b = an.bounds.get("y@2")
+    assert b is not None and (b.lo, b.hi) == (0, 256)
+    assert b.premises and b.premises[0].col == "x@1"
+
+
+def test_bound_propagates_through_offset():
+    # y = x + 40: the interval shifts with the offset
+    an = _an(cons=[_add("y@2", _m(P - 1, "x@1"), P - 40)],
+             bis=[{"id": 3, "mult": 1, "args": ["x@1", 8]}])
+    b = an.bounds.get("y@2")
+    assert b is not None and (b.lo, b.hi) == (40, 296)
+
+
+def test_bound_propagation_stops_at_wrap():
+    # y = x - 1 with x in [0, 256): the shifted interval leaves [0, p) below
+    # (the y = p - 1 wrap branch survives), so no bound may be derived for y
+    an = _an(cons=[_add("y@2", _m(P - 1, "x@1"), 1)],
+             bis=[{"id": 3, "mult": 1, "args": ["x@1", 8]}])
+    assert an.bounds.get("y@2") is None
+
+
+def test_bound_propagation_restores_gadget_after_forwarding():
+    # the flicker scenario: base bytes b0/b1 are NOT membus recv data, but
+    # forwarding equalities tie them to range-checked columns -> the affine
+    # gadget must still certify
+    b0, b1, limb = "rs1_data__0_0@3", "rs1_data__1_0@4", "mem_ptr_limbs__0_5@9"
+    f = _add(_m((-30720) % P, b0), _m((-7864320) % P, b1), _m(30720, limb),
+             (-1228800) % P)
+    g = _add(_m((-30720) % P, b0), _m((-7864320) % P, b1), _m(30720, limb),
+             (-1228800 - 1) % P)
+    an = _an(
+        cons=[[f, "*", g],
+              _add(b0, _m(P - 1, "w0@11")),       # b0 == w0 (forwarded)
+              _add(b1, _m(P - 1, "w1@12"))],      # b1 == w1
+        bis=[{"id": 3, "mult": 1, "args": [limb, 14]},
+             {"id": 3, "mult": 1, "args": ["w0@11", 8]},
+             {"id": 3, "mult": 1, "args": ["w1@12", 8]}])
+    d = an.affine(limb)
+    assert d is not None and d.modulus == 65536 and d.offset == 40
+
+
+def test_single_column_constraint_pins_residue():
+    # -x + 128 == 0 pins x to exactly 128
+    an = _an(cons=[_add(_m(P - 1, "x@1"), 128)])
+    b = an.bounds.get("x@1")
+    assert b is not None and (b.lo, b.hi) == (128, 129)
+
+
+def test_gadget_with_constant_pinned_bytes_certifies():
+    # the 2106332 residual: base bytes pinned to constants (a constant base
+    # address) instead of being range-checked or membus recv data. The tight
+    # constant window even excludes the carry root -> the identity is EXACT.
+    b0, b1, limb = "rs1_data__0_0@3", "rs1_data__1_0@4", "mem_ptr_limbs__0_5@9"
+    f = _add(_m((-30720) % P, b0), _m((-7864320) % P, b1), _m(30720, limb),
+             (-1228800) % P)
+    g = _add(_m((-30720) % P, b0), _m((-7864320) % P, b1), _m(30720, limb),
+             (-1228800 - 1) % P)
+    an = _an(
+        cons=[[f, "*", g],
+              _add(_m(P - 1, b0), 0),            # b0 == 0
+              _add(_m(P - 1, b1), 32)],          # b1 == 32
+        bis=[{"id": 3, "mult": 1, "args": [limb, 14]}])
+    d = an.affine(limb)
+    assert d is not None and d.offset == 40 and d.modulus is None
