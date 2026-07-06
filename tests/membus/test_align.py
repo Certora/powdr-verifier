@@ -214,11 +214,13 @@ def test_as2_pure_kept_matches_despite_pointer_rewrite():
     assert _row(al, 0).local_role == "" and _row(al, 0).local_partners == []
 
 
-def test_as2_removal_aborts_without_solve():
+def test_as2_removal_with_unresolvable_keys_aborts():
+    # an actual AS2 removal routes through solve; pointers without a certified
+    # affine gadget cannot join an alias partition, so solve refuses
     before = _before_as2()
     after = {"bus_interactions": [before["bus_interactions"][0]],
              "constraints": before["constraints"]}
-    with pytest.raises(ValueError, match="requires solve"):
+    with pytest.raises(ValueError, match="unresolved symbolic memkeys"):
         align.compute(before, after, 1, 2)
 
 
@@ -247,3 +249,30 @@ def test_json_schema_stable():
     assert set(d["counts"]) >= {"before", "after", "kept", "removed", "local_pairs", "inert"}
     assert {"before_id", "status", "after_id", "local_role", "local_partners"} <= set(
         d["interactions"][0])
+
+
+def test_as2_removal_with_forced_matching_aligns():
+    # the interior pair of an AS2 cell (gadget-backed base+offset keys) is
+    # removed: solve marks its edge forced, so align justifies the removal
+    from tests.membus.test_solve import _dump_as2
+    before = _dump_as2()
+    after = dict(before)
+    after["bus_interactions"] = [
+        b for i, b in enumerate(before["bus_interactions"]) if i not in (0, 3)]
+    al = align.compute(before, after, 1, 2)
+    assert al.n_kept == 4 and al.n_removed == 2 and al.n_local_pairs == 1
+    assert _row(al, 0).status == "removed" and _row(al, 0).local_partners == [3]
+    assert _row(al, 3).status == "removed" and _row(al, 3).local_partners == [0]
+    assert _row(al, 1).status == "kept" and _row(al, 1).local_role == "input"
+
+
+def test_as2_removal_not_forced_aborts():
+    # sloppy interior bound -> the removed pair's matching is not forced
+    # (varies across models) -> align refuses to justify the removal
+    from tests.membus.test_solve import _dump_as2
+    before = _dump_as2(r1_thr_const=1)
+    after = dict(before)
+    after["bus_interactions"] = [
+        b for i, b in enumerate(before["bus_interactions"]) if i not in (0, 3)]
+    with pytest.raises(ValueError, match="no forced local connection"):
+        align.compute(before, after, 1, 2)

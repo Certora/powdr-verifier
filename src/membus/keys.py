@@ -74,34 +74,41 @@ def _unresolved(ptr) -> Unresolved:
 
 def recover_key(an: Analysis, row: MemRow) -> Key:
     """Recover the address key of a memory interaction's pointer."""
+    return recover_key_fact(an, row)[0]
+
+
+def recover_key_fact(an: Analysis, row: MemRow):
+    """``(key, AffineDef | None)`` — the key plus the certified gadget fact it
+    rests on (None for constant / unresolved keys), so consumers can carry the
+    fact's premises and assumptions."""
     ptr = row.ptr
     if isinstance(ptr, int):
         from src.lens.normalize import to_signed
-        return Const(to_signed(ptr))
+        return Const(to_signed(ptr)), None
     lf = linform(ptr)
     if lf is None:                                   # nonlinear (flag-multiplexed)
-        return _unresolved(ptr)
+        return _unresolved(ptr), None
     if lf.is_const:
-        return Const(lf.const)
+        return Const(lf.const), None
     # limbs of the pointer that have a certified affine definition
     decs = [(col, c, an.affine(col)) for col, c in lf.items() if an.affine(col) is not None]
     if not decs:
-        return _unresolved(ptr)
+        return _unresolved(ptr), None
     # the low limb = smallest |coeff| in the pointer (the low 16 bits). The
     # modular identity only transfers to the pointer when the limb enters with
     # coefficient 1 (`ptr = limb + 2^16·high + …`); anything else is declined.
     col, c, dec = min(decs, key=lambda t: abs(t[1]))
     if c != 1:
-        return _unresolved(ptr)
+        return _unresolved(ptr), None
     weights = dict(dec.weights)
     byte0 = min((b for b, w in weights.items() if w == 1),
                 default=min(weights, key=lambda b: abs(weights[b])) if weights else None)
     if byte0 is None:
-        return _unresolved(ptr)
+        return _unresolved(ptr), None
     offset = dec.offset + lf.const
     if dec.modulus is not None:
         offset %= dec.modulus
-    return BaseOffset(naming.fam_access(byte0), offset, dec.modulus)
+    return BaseOffset(naming.fam_access(byte0), offset, dec.modulus), dec
 
 
 def classify_address_space(ks: list[Key]) -> tuple[bool, str]:
