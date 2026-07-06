@@ -3,6 +3,8 @@ from textwrap import dedent
 
 import z3
 
+from pysmt.shortcuts import Solver
+
 from src.simplify.bitwise import UF_AND, UF_OR, UF_XOR, simplify_bitwise
 from src.smt.utils import *
 
@@ -51,11 +53,11 @@ def test_bitwise_grounds_axioms_for_seen_terms():
     z = Symbol("z", INT)
     xy = Function(UF_XOR, [x, y])
 
-    assert Iff(Equals(x, y), Equals(xy, Int(0))) in asserts
-    assert Iff(Equals(x, Int(0)), Equals(xy, y)) in asserts
-    assert Iff(Equals(y, Int(0)), Equals(xy, x)) in asserts
-    assert Iff(Equals(x, xy), Equals(y, Int(0))) in asserts
-    assert Iff(Equals(y, xy), Equals(x, Int(0))) in asserts
+    assert Implies(Equals(x, y), Equals(xy, Int(0))) in asserts
+    assert Implies(Equals(x, Int(0)), Equals(xy, y)) in asserts
+    assert Implies(Equals(y, Int(0)), Equals(xy, x)) in asserts
+    assert Implies(Equals(x, xy), Equals(y, Int(0))) in asserts
+    assert Implies(Equals(y, xy), Equals(x, Int(0))) in asserts
     assert Equals(Int(0), Int(0)) in asserts
     assert Equals(xy, z) in asserts
 
@@ -84,11 +86,11 @@ def test_bitwise_injects_axioms_inside_quantifier():
     body = asserts[0].arg(0)
     assert body.is_and()
     assert Equals(xy, z) in body.args()
-    assert Iff(Equals(x, y), Equals(xy, Int(0))) in body.args()
-    assert Iff(Equals(x, Int(0)), Equals(xy, y)) in body.args()
-    assert Iff(Equals(y, Int(0)), Equals(xy, x)) in body.args()
-    assert Iff(Equals(x, xy), Equals(y, Int(0))) in body.args()
-    assert Iff(Equals(y, xy), Equals(x, Int(0))) in body.args()
+    assert Implies(Equals(x, y), Equals(xy, Int(0))) in body.args()
+    assert Implies(Equals(x, Int(0)), Equals(xy, y)) in body.args()
+    assert Implies(Equals(y, Int(0)), Equals(xy, x)) in body.args()
+    assert Implies(Equals(x, xy), Equals(y, Int(0))) in body.args()
+    assert Implies(Equals(y, xy), Equals(x, Int(0))) in body.args()
 
 
 def test_bitwise_simplifies_quantified_xor_terms_locally():
@@ -167,6 +169,32 @@ def _z3_and_row(a_value):
     s.add(0 <= x, x <= 255, 0 <= y, y <= 255, 0 <= z, z <= 255)
     s.add(uf_xor(x, y) == z)
     return s, uf_xor, uf_and, x, y
+
+
+def test_bitwise_zero_lemmas_compatible_with_nonzero_constant_operand():
+    """Regression: Iff on 0-identity was unsound when the other operand is a
+    non-zero constant (folds to false <=> ... and contradicts x=0 => and=0)."""
+    smt_script = _parse(
+        """
+        (set-logic ALL)
+        (declare-fun uf_and (Int Int) Int)
+        (declare-fun x () Int)
+        (assert (= x 0))
+        (assert (= (uf_and x 252) 0))
+        (check-sat)
+        """
+    )
+    simplified = simplify_bitwise(smt_script)
+    buf = StringIO()
+    simplified.serialize(buf)
+    script_text = buf.getvalue()
+    assert "(=> (= 252 0)" not in script_text
+    assert "(= (= 252 0)" not in script_text
+    with Solver(name="z3", logic=None) as solver:
+        for cmd in simplified:
+            if cmd.name == "assert":
+                solver.add_assertion(cmd.args[0])
+        assert solver.solve(), script_text
 
 
 def test_linking_rejects_overapproximated_and_witness():

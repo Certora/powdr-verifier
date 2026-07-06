@@ -209,41 +209,103 @@ fn apply_uf(name: &str, x: Int, y: Int) -> Int {
 
 fn emit_axioms(terms: &BitwiseTerms, stats: &mut BitwiseStats) -> Vec<Bool> {
     let mut out = Vec::new();
+    let zero = int_from_i128(0);
+    let byte_max = int_from_i128(255);
     for term in terms.xors.terms() {
-        if let Some((_, x, y)) = uf_binary_dyn(&Dynamic::from_ast(term)) {
-            if x.ast_eq(&y) {
-                continue;
-            }
-            let xor = term.clone();
-            let and_xy = apply_uf(UF_AND, x.clone(), y.clone());
-            let or_xy = apply_uf(UF_OR, x.clone(), y.clone());
-            let guard = byte_guard(&x, &y);
-            let sum = Int::add(&[&x, &y]);
-            let two_and = Int::mul(&[&int_from_i128(2), &and_xy]);
-            let rhs = Int::add(&[&xor, &two_and]);
-            out.push(guard.implies(&sum.eq(&rhs)));
-            let or_rhs = Int::sub(&[&sum, &and_xy]);
-            out.push(guard.implies(&or_xy.eq(&or_rhs)));
-            stats.emitted_link += 2;
-            out.push(x.eq(&y).eq(&xor.eq(&int_from_i128(0))));
+        let Some((_, x, y)) = uf_binary_dyn(&Dynamic::from_ast(term)) else {
+            continue;
+        };
+        let xor = term.clone();
+        if x.ast_eq(&y) {
+            out.push(xor.eq(&zero));
             stats.emitted_xor += 1;
+            continue;
         }
+        let and_xy = apply_uf(UF_AND, x.clone(), y.clone());
+        let or_xy = apply_uf(UF_OR, x.clone(), y.clone());
+        let guard = byte_guard(&x, &y);
+        let sum = Int::add(&[&x, &y]);
+        let two_and = Int::mul(&[&int_from_i128(2), &and_xy]);
+        out.push(guard.implies(&sum.eq(&Int::add(&[&xor, &two_and]))));
+        out.push(guard.implies(
+            &Bool::and(&[
+                &and_xy.ge(&zero),
+                &and_xy.le(&x),
+                &and_xy.le(&y),
+            ]),
+        ));
+        let or_rhs = Int::sub(&[&sum, &and_xy]);
+        out.push(guard.implies(
+            &Bool::and(&[
+                &or_xy.eq(&or_rhs),
+                &or_xy.ge(&zero),
+                &or_xy.le(&byte_max),
+            ]),
+        ));
+        stats.emitted_link += 3;
+        out.push(x.eq(&y).eq(&xor.eq(&zero)));
+        out.push(x.eq(&zero).eq(&xor.eq(&y)));
+        out.push(y.eq(&zero).eq(&xor.eq(&x)));
+        stats.emitted_xor += 3;
+        out.push(byte_guard_y_eq_max(&x, &y, &byte_max).implies(
+            &xor.eq(&Int::sub(&[&byte_max, &x])),
+        ));
+        out.push(byte_guard_x_eq_max(&x, &y, &byte_max).implies(
+            &xor.eq(&Int::sub(&[&byte_max, &y])),
+        ));
+        stats.emitted_xor += 2;
     }
     for term in terms.ands.terms() {
-        if let Some((_, x, y)) = uf_binary_dyn(&Dynamic::from_ast(term)) {
-            out.push(x.eq(&int_from_i128(0)).eq(&term.eq(&int_from_i128(0))));
-            out.push(y.eq(&int_from_i128(0)).eq(&term.eq(&int_from_i128(0))));
-            stats.emitted_and += 2;
+        let Some((_, x, y)) = uf_binary_dyn(&Dynamic::from_ast(term)) else {
+            continue;
+        };
+        if x.ast_eq(&y) {
+            out.push(term.eq(&x));
+            stats.emitted_and += 1;
+            continue;
         }
+        out.push(x.eq(&y).implies(&term.eq(&x)));
+        out.push(x.eq(&zero).implies(&term.eq(&zero)));
+        out.push(y.eq(&zero).implies(&term.eq(&zero)));
+        stats.emitted_and += 3;
+        out.push(byte_guard_y_eq_max(&x, &y, &byte_max).implies(&term.eq(&x)));
+        out.push(byte_guard_x_eq_max(&x, &y, &byte_max).implies(&term.eq(&y)));
+        stats.emitted_and += 2;
     }
     for term in terms.ors.terms() {
-        if let Some((_, x, y)) = uf_binary_dyn(&Dynamic::from_ast(term)) {
-            out.push(x.eq(&int_from_i128(0)).eq(&term.eq(&y)));
-            out.push(y.eq(&int_from_i128(0)).eq(&term.eq(&x)));
-            stats.emitted_or += 2;
+        let Some((_, x, y)) = uf_binary_dyn(&Dynamic::from_ast(term)) else {
+            continue;
+        };
+        if x.ast_eq(&y) {
+            out.push(term.eq(&x));
+            stats.emitted_or += 1;
+            continue;
         }
+        out.push(x.eq(&y).implies(&term.eq(&x)));
+        out.push(x.eq(&zero).implies(&term.eq(&y)));
+        out.push(y.eq(&zero).implies(&term.eq(&x)));
+        stats.emitted_or += 3;
+        out.push(byte_guard_y_eq_max(&x, &y, &byte_max).implies(&term.eq(&byte_max)));
+        out.push(byte_guard_x_eq_max(&x, &y, &byte_max).implies(&term.eq(&byte_max)));
+        stats.emitted_or += 2;
     }
     out
+}
+
+fn byte_guard_y_eq_max(x: &Int, y: &Int, byte_max: &Int) -> Bool {
+    Bool::and(&[
+        &x.ge(&int_from_i128(0)),
+        &x.le(byte_max),
+        &y.eq(byte_max),
+    ])
+}
+
+fn byte_guard_x_eq_max(x: &Int, y: &Int, byte_max: &Int) -> Bool {
+    Bool::and(&[
+        &y.ge(&int_from_i128(0)),
+        &y.le(byte_max),
+        &x.eq(byte_max),
+    ])
 }
 
 fn is_zero(t: &Int) -> bool {

@@ -136,10 +136,6 @@ def _ground_xor_lemmas(t: BitwiseTerms) -> Iterable[FNode]:
                 And(LE(Int(0), y), LE(y, Int(255)), Equals(x, Int(255))),
                 Equals(term, Minus(Int(255), y)),
             )
-            # (x == term) -> y == 0
-            yield Iff(Equals(x, term), Equals(y, Int(0)))
-            # (y == term) -> x == 0
-            yield Iff(Equals(y, term), Equals(x, Int(0)))
 
 
 def _ground_and_lemmas(t: BitwiseTerms) -> Iterable[FNode]:
@@ -149,12 +145,12 @@ def _ground_and_lemmas(t: BitwiseTerms) -> Iterable[FNode]:
         if x == y:
             yield Equals(term, x)
         else:
-            # x & x == x
-            yield Iff(Equals(x, y), Equals(term, x))
-            # 0 & y == 0
-            yield Iff(Equals(x, Int(0)), Equals(term, Int(0)))
-            # x & 0 == 0
-            yield Iff(Equals(y, Int(0)), Equals(term, Int(0)))
+            # x == y  ->  x & y == x
+            yield Implies(Equals(x, y), Equals(term, x))
+            # x == 0  ->  x & y == 0
+            yield Implies(Equals(x, Int(0)), Equals(term, Int(0)))
+            # y == 0  ->  x & y == 0
+            yield Implies(Equals(y, Int(0)), Equals(term, Int(0)))
             # (0 <= x <= 255) and (y == 255) -> term == x  (full byte mask)
             yield Implies(
                 And(LE(Int(0), x), LE(x, Int(255)), Equals(y, Int(255))),
@@ -174,12 +170,12 @@ def _ground_or_lemmas(t: BitwiseTerms) -> Iterable[FNode]:
         if x == y:
             yield Equals(term, x)
         else:
-            # x | x == x
-            yield Iff(Equals(x, y), Equals(term, x))
-            # 0 | y == y
-            yield Iff(Equals(x, Int(0)), Equals(term, y))
-            # x | 0 == x
-            yield Iff(Equals(y, Int(0)), Equals(term, x))
+            # x == y  ->  x | y == x
+            yield Implies(Equals(x, y), Equals(term, x))
+            # x == 0  ->  x | y == y
+            yield Implies(Equals(x, Int(0)), Equals(term, y))
+            # y == 0  ->  x | y == x
+            yield Implies(Equals(y, Int(0)), Equals(term, x))
             # (0 <= x <= 255) and (y == 255) -> term == 255
             yield Implies(
                 And(LE(Int(0), x), LE(x, Int(255)), Equals(y, Int(255))),
