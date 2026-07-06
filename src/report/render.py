@@ -259,7 +259,7 @@ class TreeTableWidget:
 
 
 def _substep_label(node: TreeNode) -> str:
-    if not node.name == "check":
+    if node.name not in ("check", "simplifier"):
         return node.name
     blob = " ".join(str(p) for p in node.inputs).lower()
     if "soundness" in blob:

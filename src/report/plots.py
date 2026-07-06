@@ -14,21 +14,44 @@ from .html_utils import copy_command_badge
 
 _PLOT_FONT_SIZE = 14
 
-_REPORT_SERIES_ORDER = ["encode", "completeness", "soundness", "simplify"]
+_BLOCK_SERIES_ORDER = ["encode", "completeness", "soundness"]
+
+_PASS_SOLVED_SUBSTEPS = {
+    "verify-encode": "encode",
+    "check (completeness)": "check (completeness)",
+    "check (soundness)": "check (soundness)",
+    "simplifier (completeness)": "simplify (completeness)",
+    "simplifier (soundness)": "simplify (soundness)",
+}
+
+_PASS_SOLVED_SERIES_ORDER = list(_PASS_SOLVED_SUBSTEPS.values())
+
+_PASS_SOLVED_SUBSTEP_NAMES_SQL = ", ".join(
+    f"'{name}'" for name in _PASS_SOLVED_SUBSTEPS
+)
+
+_PASS_SOLVED_SUBSTEP_NAMES_UNION = " UNION ALL ".join(
+    f"SELECT '{name}' AS name" for name in _PASS_SOLVED_SUBSTEPS
+)
+
+
+def _substep_solved_where(prefix: str = "s.") -> str:
+    return f"""(
+        ({prefix}name = 'verify-encode' AND {prefix}status = 'success')
+        OR ({prefix}name IN ('check (completeness)', 'check (soundness)')
+            AND ({prefix}status = 'success'
+                 OR ({prefix}status IN ('sat', 'unsat') AND {prefix}status = {prefix}expected)))
+        OR ({prefix}name IN ('simplifier (completeness)', 'simplifier (soundness)')
+            AND {prefix}status IN ('qf', 'not-qf'))
+    )"""
+
+
+def _substep_solved_case(prefix: str = "s.") -> str:
+    return f"CASE WHEN {_substep_solved_where(prefix)} THEN 1 ELSE 0 END"
 
 
 def _report_series_name(substep_name: str) -> str | None:
-    match substep_name:
-        case "verify-encode":
-            return "encode"
-        case "check (completeness)":
-            return "completeness"
-        case "check (soundness)":
-            return "soundness"
-        case "simplifier":
-            return "simplify"
-        case _:
-            return None
+    return _PASS_SOLVED_SUBSTEPS.get(substep_name)
 
 
 def _style_fig(fig) -> None:
@@ -752,21 +775,24 @@ def _badge_kind(kind: str, at_step: object = None) -> str:
 
 def verified_over_time() -> str:
     sub = query(
-        """
-        SELECT name, running_time FROM substeps
-        WHERE parent IS NULL AND status = 'success' AND running_time IS NOT NULL
+        f"""
+        SELECT name, running_time FROM substeps s
+        WHERE parent IS NULL
+          AND name IN ({_PASS_SOLVED_SUBSTEP_NAMES_SQL})
+          AND running_time IS NOT NULL
+          AND {_substep_solved_where()}
         """
     )
     rec: list[dict[str, object]] = []
     for name, rt in sub:
         series = _report_series_name(str(name))
-        if series is None or series == "simplify":
+        if series is None:
             continue
         rec.append({"series": series, "time": rt})
     if not rec:
         return ""
     df = pandas.DataFrame(rec)
-    order = [s for s in _REPORT_SERIES_ORDER if s in df["series"].unique()]
+    order = [s for s in _PASS_SOLVED_SERIES_ORDER if s in df["series"].unique()]
     fig = plotly.express.ecdf(
         df,
         y="time",
@@ -908,7 +934,7 @@ def block_solved_percentage_ecdf() -> str:
         return ""
     df = pandas.DataFrame(rec)
     n_blocks = len(rows)
-    order = [s for s in _REPORT_SERIES_ORDER if s in df["series"].unique()]
+    order = [s for s in _BLOCK_SERIES_ORDER if s in df["series"].unique()]
     fig = plotly.express.ecdf(
         df,
         y="pct",
@@ -927,52 +953,59 @@ def block_solved_percentage_ecdf() -> str:
 
 
 def pass_solved_percentage_ecdf() -> str:
-    whole = query(
-        """
-        SELECT passname,
-               100.0 * SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) / COUNT(*) AS pct
-        FROM verification_steps
-        WHERE passname IS NOT NULL AND passname != ''
-        GROUP BY passname
-        HAVING COUNT(*) > 0
-        """
-    )
     sub = query(
-        """
-        SELECT v.passname, s.name,
-               100.0 * SUM(CASE WHEN s.status = 'success' THEN 1 ELSE 0 END) / COUNT(*) AS pct
-        FROM substeps s
-        JOIN verification_steps v ON v.id = s.verification_step_id
-        WHERE s.parent IS NULL AND v.passname IS NOT NULL AND v.passname != ''
-        GROUP BY v.passname, s.name
-        HAVING COUNT(*) > 0
+        f"""
+        SELECT v.passname, n.name,
+               COUNT(DISTINCT CASE
+                   WHEN s.id IS NOT NULL AND {_substep_solved_case()}
+                   THEN v.id END) AS n_solved,
+               COUNT(DISTINCT v.id) AS n_total,
+               100.0 * COUNT(DISTINCT CASE
+                   WHEN s.id IS NOT NULL AND {_substep_solved_case()}
+                   THEN v.id END) / COUNT(DISTINCT v.id) AS pct
+        FROM verification_steps v
+        CROSS JOIN ({_PASS_SOLVED_SUBSTEP_NAMES_UNION}) AS n
+        LEFT JOIN substeps s ON s.verification_step_id = v.id
+            AND s.parent IS NULL AND s.name = n.name
+        WHERE v.passname IS NOT NULL AND v.passname != ''
+        GROUP BY v.passname, n.name
+        HAVING COUNT(DISTINCT v.id) > 0
         """
     )
     rec: list[dict[str, object]] = []
-    for passname, pct in whole:
-        rec.append({"series": "verification", "passname": passname, "pct": pct})
-    for passname, name, pct in sub:
-        rec.append({"series": str(name), "passname": passname, "pct": pct})
+    for passname, name, n_solved, n_total, pct in sub:
+        series = _PASS_SOLVED_SUBSTEPS.get(str(name))
+        if series is None:
+            continue
+        rec.append({
+            "series": series,
+            "passname": passname,
+            "pct": pct,
+            "n_solved": int(n_solved),
+            "n_total": int(n_total),
+        })
     if not rec:
         return ""
     df = pandas.DataFrame(rec)
-    ver = df[df["series"] == "verification"].set_index("passname")["pct"]
-    pass_order = ver.sort_values(ascending=False).index.tolist()
-    names = {r["series"] for r in rec}
-    order: list[str] = []
-    if "verification" in names:
-        order.append("verification")
-        names.discard("verification")
-    order.extend(sorted(names))
+    pass_order = sorted(df["passname"].unique())
     fig = plotly.express.bar(
         df,
         x="passname",
         y="pct",
         color="series",
-        category_orders={"passname": pass_order, "series": order},
+        custom_data=["n_solved", "n_total"],
+        category_orders={"passname": pass_order, "series": _PASS_SOLVED_SERIES_ORDER},
         title="Percentage of verification steps solved per pass",
         range_y=[0, 100],
         labels={"passname": "pass", "pct": "% solved", "series": "Series"},
+    )
+    fig.update_traces(
+        hovertemplate=(
+            "pass=%{x}<br>"
+            "%{fullData.name}<br>"
+            "solved: %{y:.0f}% (%{customdata[0]}/%{customdata[1]})"
+            "<extra></extra>"
+        ),
     )
     fig.update_layout(barmode="group")
     fig.update_xaxes(tickangle=-35)
@@ -1104,13 +1137,13 @@ def _path_relative_to_base(path_str: str, base: Path) -> str:
 
 def substeps_stacked_lines(input_base: Path) -> str:
     rows = query(
-        """
+        f"""
         SELECT sub.verification_step_id, sub.name, COALESCE(sub.running_time, 0),
                v.input1, v.input2, v.status
         FROM substeps sub
         JOIN verification_steps v ON v.id = sub.verification_step_id
-        WHERE sub.name IN ('verify-encode', 'simplifier')
-           OR (sub.name IN ('check (completeness)', 'check (soundness)') AND sub.parent IS NULL)
+        WHERE sub.parent IS NULL
+          AND sub.name IN ({_PASS_SOLVED_SUBSTEP_NAMES_SQL})
         """
     )
     if not rows:
@@ -1155,7 +1188,7 @@ def substeps_stacked_lines(input_base: Path) -> str:
     step_order = encode_series.sort_values(ascending=True).index.tolist()
     rank = {vid: i for i, vid in enumerate(step_order)}
     df["x_rank"] = df["verification_step_id"].map(rank)
-    stack_order = [s for s in _REPORT_SERIES_ORDER if s in df["series"].unique()]
+    stack_order = [s for s in _PASS_SOLVED_SERIES_ORDER if s in df["series"].unique()]
 
     fig = plotly.express.bar(
         df,
