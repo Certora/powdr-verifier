@@ -70,6 +70,7 @@ from .busmodel import (
 )
 from .facts import TS_MAX, AffineDef, Assumption, Bound, EffKind, Fact, Gap, RecvUpper, Src
 from .linform import LinForm, linform, product
+from . import propagate
 
 P = BABYBEAR_PRIME
 
@@ -134,6 +135,10 @@ class Analysis:
         return None if has_const_active else sel
 
     @functools.cached_property
+    def _propagation(self) -> tuple[dict[str, int], list[LinForm]]:
+        return propagate.propagate(self)
+
+    @functools.cached_property
     def kinds(self) -> dict[int, EffKind | None]:
         """Membus ordinal → EffKind fact, or None when the multiplicity does
         not resolve (genuinely symbolic — pre-`solver` flag muxes)."""
@@ -156,6 +161,12 @@ class Analysis:
             kind = "send" if lf.coeffs[0][1] == 1 else "recv"   # g := 1
             return EffKind(row.ordinal, kind, sources=src,
                            assumptions=frozenset({Assumption.ACTIVE_SELECTOR}))
+        pins, zeros = self._propagation
+        v = propagate.eval_mult(lf, pins, zeros)
+        if v is not None:
+            kind = {1: "send", P - 1: "recv", 0: "disabled"}.get(v)
+            if kind is not None:
+                return EffKind(row.ordinal, kind, sources=src)
         return None
 
     # -- Timestamp domain (positional) ----------------------------------------

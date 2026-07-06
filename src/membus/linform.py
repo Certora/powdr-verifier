@@ -60,6 +60,17 @@ class LinForm:
     def is_const(self) -> bool:
         return not self.coeffs
 
+    def subst(self, pins: dict[str, int]) -> "LinForm":
+        """Fold pinned columns into ``const``; drop them from ``coeffs``."""
+        const = self.const
+        rem: dict[str, int] = {}
+        for col, c in self.coeffs:
+            if col in pins:
+                const += c * pins[col]
+            else:
+                rem[col] = c
+        return LinForm.make(rem, const)
+
     def __str__(self) -> str:
         parts = [f"{v}*{k}" for k, v in self.coeffs]
         if self.const or not parts:
