@@ -311,6 +311,8 @@ def check():
                 break
 
         with action.action("solve") as subaction:
+            if action.expected is not None:
+                subaction += {"expected": action.expected}
             if not ARGS().solve_chunked:
                 check_smt_script(smt_script, subaction, input_for_log=ARGS().input)
                 return action
