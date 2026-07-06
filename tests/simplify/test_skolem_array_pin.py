@@ -14,6 +14,16 @@ def test_skolem_map_accepts_array_qvar_pin():
     assert m.emit_disjuncts() == [Not(Equals(q_mem, free_mem))]
 
 
+def test_emit_disjuncts_sorted_by_qvar_name():
+    q_a = Symbol("before-a@0", BOOL)
+    q_b = Symbol("before-b@0", BOOL)
+    m = SkolemMap([q_a, q_b])
+    m.pin(q_b, Symbol("after-b@0"), source="test")
+    m.pin(q_a, Symbol("after-a@0"), source="test")
+    targets = [d.args()[0].args()[0].symbol_name() for d in m.emit_disjuncts()]
+    assert targets == ["before-a@0", "before-b@0"]
+
+
 def test_skolem_derived_array_pin_hoists_via_lift_forall():
     at = ArrayType(INT, INT)
     q_mem = Symbol("after_sk_arr", at)
