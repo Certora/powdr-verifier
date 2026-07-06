@@ -1,8 +1,7 @@
 """SMT-LIB simplification pipeline driven by colon-separated tactic names.
 
 Each tactic mutates or inspects a parsed script in place; optional per-step
-dumps are controlled via ``--dump-steps``. Serialization uses ``--pretty`` or
-the ``pretty`` tactic (sets ``ARGS().pretty``).
+dumps are controlled via ``--dump-steps``. Use ``--pretty`` for pretty-printed output.
 """
 import copy
 import logging
@@ -52,15 +51,15 @@ _T = TypeVar("_T")
 TACTIC_QEPREFIX = "nnf:skolem:lift:witness:demod:isqf"
 
 DEFAULT_TACTIC = (
-    TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:rewrite:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod:pretty"
+    TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:rewrite:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod"
 )
 
 # Custom colon-separated pipelines keyed by powdr optimization pass name (e.g. ``remove_free``).
 STEP_TACTICS: dict[str, str] = {
-    "exec_bus": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod:pretty",
-    "loop_iteration": TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:z3-propagate-values:normalize:demod:pretty",
-    "solver": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod:pretty",
-    "substitute_bus_interactio_fields": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod:pretty",
+    "exec_bus": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod",
+    "loop_iteration": TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:z3-propagate-values:normalize:demod",
+    "solver": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod",
+    "substitute_bus_interactio_fields": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod",
 }
 
 
