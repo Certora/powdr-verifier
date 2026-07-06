@@ -168,9 +168,6 @@ def compute(before: Any, after: Any, mem_id: int = 1, addr_space: int = 1,
             assume_is_valid: bool = True) -> Alignment:
     """Align before/after memory busses for ``addr_space``. Raises ``ValueError``
     (CLI -> exit 2) on any condition it cannot justify."""
-    if addr_space not in (1, 2):
-        raise ValueError(f"align: unsupported address space {addr_space} (supported: 1, 2)")
-
     an_b = Analysis(before, mem_id, assume_is_valid)
     an_a = Analysis(after, mem_id, assume_is_valid)
 

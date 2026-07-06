@@ -174,8 +174,10 @@ def test_abort_symbolic_address_space():
         align.compute(before, _after([1, 2, 4, 5]), 1, 1)
 
 
-def test_abort_unsupported_address_space():
-    with pytest.raises(ValueError, match="unsupported address space"):
+def test_abort_empty_address_space():
+    # any explicit AS is alignable (AS3 = reveal/public outputs), but an AS
+    # with no interactions in before has nothing to account for
+    with pytest.raises(ValueError, match="no memory interactions"):
         align.compute(_before(), _after([1, 2, 4, 5]), 1, 3)
 
 
