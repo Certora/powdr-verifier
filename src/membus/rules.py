@@ -17,6 +17,10 @@ Rules (names follow the R0/R1/R2 scheme of the busat prototype):
   multi-column args bound **no** column (marking their columns nonneg was
   review finding 5). Memory-bus **recv** data args are bytes by
   ``Assumption.MEMBUS_BYTE`` (recv only — writes are the circuit's burden).
+  Bounds then propagate to fixpoint across two-column ±1 constraints
+  (``pos = neg + d``) when the shifted interval stays inside ``[0, p)`` —
+  the forwarding equalities the `memory` pass emits keep the removed
+  register read's byte bounds alive until the solver substitutes them.
 - **Timestamp domain (positional).** A column is a **clock** because it is
   the single column in the timestamp slot (``args[6]``) of a send, a **recv
   witness** because it sits in a recv's slot — never because of its name.
@@ -291,17 +295,19 @@ class Analysis:
                 bits = _bits_of(args[1])
                 if bits is None:
                     continue
-                val = args[0]
-                if isinstance(val, str):
-                    put(Bound(val, 0, 1 << bits, sources=src))
-                elif (isinstance(val, list) and len(val) == 3 and val[1] == "*"
-                      and isinstance(val[0], int) and isinstance(val[2], str)):
-                    try:
-                        s = pow(val[0] % P, -1, P)
-                    except ValueError:
-                        continue
-                    if s * (1 << bits) < P:      # no wrap ⟹ sound scaled bound
-                        put(Bound(val[2], 0, s * (1 << bits), sources=src))
+                lf = linform(args[0])            # canonical: shape-independent
+                if lf is None or lf.const != 0 or len(lf.coeffs) != 1:
+                    continue
+                col, c = lf.coeffs[0]
+                if c == 1:
+                    put(Bound(col, 0, 1 << bits, sources=src))
+                    continue
+                try:
+                    s = pow(c % P, -1, P)
+                except ValueError:
+                    continue
+                if s * (1 << bits) < P:          # no wrap ⟹ sound scaled bound
+                    put(Bound(col, 0, s * (1 << bits), sources=src))
             elif bid == BITWISE:
                 for a in args[:2]:
                     if isinstance(a, str):
@@ -322,6 +328,47 @@ class Analysis:
                               assumptions=frozenset({Assumption.MEMBUS_BYTE})))
         for fact in self.ts_domain[2].values():  # positional timestamp bounds
             put(fact)
+
+        # A single-column linear constraint pins the column's residue outright:
+        # a·col + c ≡ 0 (mod p) ⟹ col = (−c·a⁻¹) mod p. No window argument
+        # needed — the claim is exactly the canonical residue.
+        for idx, con in enumerate(self.machine.get("constraints", [])):
+            lf = linform(con)
+            if lf is None or len(lf.coeffs) != 1:
+                continue
+            col, a = lf.coeffs[0]
+            try:
+                v = (-lf.const * pow(a % P, -1, P)) % P
+            except ValueError:
+                continue
+            put(Bound(col, v, v + 1, sources=(Src("constraint", idx),)))
+
+        # Closure: propagate bounds across two-column ±1 constraints
+        # (``pos − neg + const = 0``, i.e. ``pos = neg + d`` with
+        # ``d = −const``). Sound as an integer statement when the shifted
+        # interval stays inside one residue period: ``lo+d ≥ 0`` and
+        # ``hi+d ≤ p``. This keeps key recovery stable across the window the
+        # `memory` pass opens: it removes the register read whose recv data
+        # carried the base bytes' MEMBUS_BYTE bounds, but adds forwarding
+        # equalities (``read.data == written.data``) that the bound survives
+        # through until the solver substitutes the dead columns away.
+        changed = True
+        while changed:
+            changed = False
+            for idx, pos, neg, const in self._two_col_gaps:
+                for src_col, dst_col, d in ((neg, pos, -const), (pos, neg, const)):
+                    b = out.get(src_col)
+                    if b is None or b.hi is None:
+                        continue
+                    lo, hi = b.lo + d, b.hi + d
+                    if lo < 0 or hi > P:
+                        continue                 # would leave [0, p): wrap branch
+                    cur = out.get(dst_col)
+                    if cur is None or cur.hi is None or hi < cur.hi:
+                        out[dst_col] = Bound(dst_col, lo, hi,
+                                             sources=(Src("constraint", idx),),
+                                             premises=(b,))
+                        changed = True
         return out
 
     def _window(self, terms: list[tuple[str, int]], const: int,
