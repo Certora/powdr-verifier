@@ -84,7 +84,7 @@ class SkolemMap:
         types (booleans, arrays) are emitted verbatim.
         """
         out = []
-        for q, expr in self.pins.items():
+        for q, expr in sorted(self.pins.items(), key=lambda kv: kv[0].symbol_name()):
             rhs = wrap_mod(expr) if q.get_type().is_int_type() else expr
             out.append(Not(Equals(q, rhs)))
         return out
@@ -159,7 +159,7 @@ def simplify_skolem(smt_script: script.SmtLibScript, subaction=None) -> script.S
             (i for i, cmd in enumerate(smt_script.commands) if cmd.name == "check-sat"),
             len(smt_script.commands),
         )
-        for var, expr in free_pins:
+        for var, expr in sorted(free_pins, key=lambda kv: kv[0].symbol_name()):
             logging.info("skolem %r pinned %s := %s", "rules-free", var, expr)
             pin = script.SmtLibCommand(name="assert", args=[Equals(var, expr)])
             smt_script.commands.insert(insert_idx, pin)

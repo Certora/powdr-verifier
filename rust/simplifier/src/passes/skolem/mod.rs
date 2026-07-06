@@ -52,11 +52,12 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     })?;
 
     let all_qvars: HashSet<SymbolId> = qvar_sets.iter().flatten().copied().collect();
-    let free_pins = if let Some(p) = field {
+    let mut free_pins = if let Some(p) = field {
         rules::contribute_free(&out, &all_qvars, p)
     } else {
         Vec::new()
     };
+    free_pins.sort_by(|(a, _), (b, _)| a.cmp(b));
     if !free_pins.is_empty() {
         applied.insert("rules-free".to_string(), free_pins.len());
     }

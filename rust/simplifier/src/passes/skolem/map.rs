@@ -46,12 +46,19 @@ impl SkolemMap {
 
     pub fn emit_disjuncts(&self) -> Vec<Bool> {
         let p = field_mod();
+        let mut pinned: Vec<(SymbolId, &Dynamic)> =
+            self.pins.iter().map(|(q, e)| (*q, e)).collect();
+        pinned.sort_by(|(a, _), (b, _)| {
+            let na = symbol_name_for_id(*a).unwrap_or_default();
+            let nb = symbol_name_for_id(*b).unwrap_or_default();
+            na.cmp(&nb)
+        });
         let mut out = Vec::new();
-        for (q, expr) in &self.pins {
-            let Some(name) = symbol_name_for_id(*q) else {
+        for (q, expr) in pinned {
+            let Some(name) = symbol_name_for_id(q) else {
                 continue;
             };
-            let sort = self.qvar_sorts.get(q).copied().unwrap_or(SortKind::Other);
+            let sort = self.qvar_sorts.get(&q).copied().unwrap_or(SortKind::Other);
             match sort {
                 SortKind::Bool => {
                     let Some(rhs) = expr.as_bool() else {
@@ -81,5 +88,34 @@ impl SkolemMap {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod emit_tests {
+    use super::*;
+    use smt2::ast_util::symbol_id_from_name;
+
+    #[test]
+    fn emit_disjuncts_sorted_by_target_name() {
+        std::env::set_var("SIMPLIFIER_FIELD_MOD", "2013265921");
+        let mut m = SkolemMap::new(&[
+            ("before-b@0".to_string(), SortKind::Int),
+            ("before-a@0".to_string(), SortKind::Int),
+        ]);
+        m.pin(
+            symbol_id_from_name("before-b@0"),
+            Dynamic::from_ast(&Int::new_const("after-b@0")),
+            "test",
+        );
+        m.pin(
+            symbol_id_from_name("before-a@0"),
+            Dynamic::from_ast(&Int::new_const("after-a@0")),
+            "test",
+        );
+        let disjuncts = m.emit_disjuncts();
+        assert_eq!(disjuncts.len(), 2);
+        assert!(disjuncts[0].to_string().contains("before-a@0"));
+        assert!(disjuncts[1].to_string().contains("before-b@0"));
     }
 }
