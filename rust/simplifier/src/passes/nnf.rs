@@ -29,7 +29,7 @@ fn convert_to_nnf(b: &Bool) -> Bool {
         return negate(&inner);
     }
     if let Some((a, c)) = is_implies(&stripped) {
-        return flatten_or(vec![negate(&a), c]);
+        return flatten_or(vec![negate(&a), convert_to_nnf(&c)]);
     }
     map_bool_children(&stripped, &mut |child| convert_to_nnf(child))
 }
@@ -72,6 +72,12 @@ mod tests {
     fn demorgan() {
         let t = parse_assert("(not (and a b))");
         assert_eq!(convert_to_nnf(&t).to_string(), "(or (not a) (not b))");
+    }
+
+    #[test]
+    fn demorgan_nested_under_or() {
+        let t = parse_assert("(or a (not (or b c)))");
+        assert_eq!(convert_to_nnf(&t).to_string(), "(or a (and (not b) (not c)))");
     }
 
     #[test]

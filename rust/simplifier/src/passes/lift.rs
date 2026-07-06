@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use smt2::ast_util::{
     ast_hash_bool, bound_var_index, decl_name, flatten_or, is_forall, or_body_parts,
     quantifier_body_bool, quantifier_body_deps, quantifier_bound_names, quantifier_bound_symbol_ids,
-    quantifier_bounds_de_bruijn, rebuild_forall_dyn, substitute_bound_vars_dyn,
+    quantifier_bounds_de_bruijn, rebuild_forall_dyn, resolve_bound_or_free_name,
+    substitute_bound_vars_dyn,
     contains_bound_var_dyn, de_bruijn_bound_symbol_id,
     free_symbol_ids_bool, symbol_id_dyn, symbol_id_from_name, symbol_name_for_id, SymbolId,
 };
