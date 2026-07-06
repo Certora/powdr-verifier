@@ -92,17 +92,21 @@ def test_json_schema_stable():
     assert d["address_space"] == 1 and d["ts_entry"] == 0 and d["ts_exit"] == 3
     assert d["unique"] is True and d["n_inputs"] == 2
     assert "cells" in d and "interactions" in d
-    assert {"ordinal", "kind", "io", "vtime", "flow", "reads_from"} <= set(d["interactions"][0])
+    assert {"ordinal", "kind", "io", "vtime", "flow", "reads_from",
+            "forced"} <= set(d["interactions"][0])
+    assert all(r["forced"] for r in d["interactions"])   # constant keys, unique cells
 
 
-def test_rejects_non_address_space_1():
-    with pytest.raises(ValueError, match="only address space 1"):
+def test_rejects_empty_address_space():
+    with pytest.raises(ValueError, match="no memory interactions"):
         solve.compute(_dump(), 1, 2)
 
 
-def test_rejects_non_constant_keys():
+def test_rejects_unresolved_symbolic_keys():
+    # a symbolic pointer with no certified affine gadget cannot join any alias
+    # partition -- the symbolic path refuses rather than guess
     d = {"bus_interactions": [_send("rs1_x@5", FS0)], "constraints": []}
-    with pytest.raises(ValueError, match="non-constant memkeys"):
+    with pytest.raises(ValueError, match="unresolved symbolic memkeys"):
         solve.compute(d, 1, 1)
 
 
@@ -242,3 +246,84 @@ def test_rejects_unresolved_ts_base():
     # no R1 chain -> fs1's offset from the base is unknown -> ts_entry not well defined
     with pytest.raises(ValueError, match="offsets from a fixed base"):
         solve.compute(_dump(with_chain=False), 1, 1)
+
+
+# --------------------------------------------------------------------------- #
+# AS2: symbolic base+offset keys -> per-group SMT with aliasing open
+# --------------------------------------------------------------------------- #
+
+L40 = "mem_ptr_limbs__0_40@40"
+L44 = "mem_ptr_limbs__0_44@44"
+LHI = "mem_ptr_limbs__1_0@45"
+RS0, RS1C = "rs1_data__0_0@3", "rs1_data__1_0@4"
+PV40A = "aux__prev_timestamp_40@46"
+PV40B = "aux__prev_timestamp_41@47"
+PV44 = "aux__prev_timestamp_44@48"
+
+
+def _ptr(limb):
+    return _add(limb, _m(65536, LHI))
+
+
+def _gadget(limb, off):
+    # low-limb decomposition gadget (Y + c)*(Y + c - 1) == 0 with
+    # Y = 30720*(limb - rs0 - 256*rs1c), c = -30720*off (cf. test_keys)
+    c = -30720 * off
+    f = _add(_m(-30720, RS0), _m(-7864320, RS1C), _m(30720, limb), c)
+    g = _add(_m(-30720, RS0), _m(-7864320, RS1C), _m(30720, limb), c - 1)
+    return [f, "*", g]
+
+
+def _as2(mult, ptr, ts):
+    return {"id": 1, "mult": mult, "args": [2, ptr, 0, 0, 0, 0, ts]}
+
+
+def _dump_as2(r1_thr_const=-1):
+    """Two AS2 cells off one register base: rs1_0+40 (RMW chain: input recv,
+    interior recv reading s0, output send) and rs1_0+44 (input + output).
+    ``r1_thr_const`` shifts the interior recv's R2 bound: -1 = tight (reads
+    exactly s0); +1 = sloppy (covers both sends -> matching not forced)."""
+    bis = [
+        _as2(1, _ptr(L40), _add(FS0, 1)),    # 0: s0 @ T+1
+        _as2(-1, _ptr(L40), PV40A),          # 1: input recv (thr T+0)
+        _as2(1, _ptr(L40), _add(FS1, 1)),    # 2: s1 @ T+4 (output)
+        _as2(-1, _ptr(L40), PV40B),          # 3: interior recv -> s0
+        _as2(1, _ptr(L44), _add(FS1, 2)),    # 4: output @ T+5
+        _as2(-1, _ptr(L44), PV44),           # 5: input recv
+        # low limbs + shared high limb are range-checked (14 bits)
+        {"id": 3, "mult": 1, "args": [L40, 14]},
+        {"id": 3, "mult": 1, "args": [L44, 14]},
+        {"id": 3, "mult": 1, "args": [LHI, 14]},
+        # base bytes are recv data on the memory bus (membus-byte assumption)
+        {"id": 1, "mult": -1, "args": [1, 99, RS0, RS1C, "z0@1", "z1@2", "t@3"]},
+    ]
+    cons = [
+        _add(FS0, _m(-1, PV40A), 0),               # pv <= T+0 -> input
+        _add(FS1, _m(-1, PV40B), r1_thr_const),    # pv <= T+3+const
+        _add(FS0, _m(-1, PV44), 0),                # pv <= T+0 -> input
+        _add(FS1, _m(-1, FS0), -3),                # R1 chain: fs1 = fs0 + 3
+        _gadget(L40, 40),
+        _gadget(L44, 44),
+    ]
+    return {"bus_interactions": bis, "constraints": cons}
+
+
+def test_as2_symbolic_keys_solved_and_forced():
+    sol = solve.compute(_dump_as2(), 1, 2)
+    assert sol.unique is True
+    by_key = {c.key: c for c in sol.cells}
+    assert set(by_key) == {"rs1_0+40", "rs1_0+44"}
+    assert by_key["rs1_0+40"].unique and by_key["rs1_0+40"].edges == [(3, 0)]
+    assert by_key["rs1_0+40"].input_recv == 1 and by_key["rs1_0+40"].output_send == 2
+    assert _row(sol, 3).reads_from == 0 and _row(sol, 3).forced
+    assert _row(sol, 1).io == "in" and _row(sol, 1).forced
+    assert _row(sol, 2).io == "out" and _row(sol, 2).forced
+    assert sol.n_inputs == 2 and sol.n_outputs == 2
+
+
+def test_as2_wide_window_not_forced():
+    # interior recv bound covers both sends -> two complete matchings survive
+    sol = solve.compute(_dump_as2(r1_thr_const=1), 1, 2)
+    assert sol.unique is False
+    assert _row(sol, 3).forced is False
+    assert "(unforced)" in _row(sol, 3).flow

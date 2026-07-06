@@ -12,9 +12,9 @@ account for **every** before interaction, in robust ids (membus ordinals):
   pointer is not part of the match key).
 - **local connection (b/c)**: from `solve(before)` — a recv to the local send it
   reads, a send to the local recv that reads it. Independent of (a): a kept recv
-  can also read a local send. AS1 only for now: `solve` does not support AS2
-  yet, so an AS2 alignment carries no local connections and ABORTS if the pass
-  actually removed AS2 interactions (nothing can justify the removal).
+  can also read a local send. On symbolic-key spaces (AS2) only claims `solve`
+  marked FORCED — entailed under every aliasing resolution — are committed; a
+  removal justified by anything less aborts.
 
 `mult == 0` interactions are inert: removed and matched to nothing.
 
@@ -198,24 +198,31 @@ def compute(before: Any, after: Any, mem_id: int = 1, addr_space: int = 1,
             f"align: after has {len(added)} interaction(s) not present in before "
             f"(e.g. #{added[0]}) -- not a pure removal")
 
-    if addr_space != 1:
-        # `solve` is AS1-only, so no local connections. A pure-kept mapping is a
-        # justified bijection on its own; an actual removal has nothing to
-        # justify it -> abort (mult == 0 removals are inert and need none).
+    non_inert_removed = {o for o in removed if an_b.kinds[o].kind != "disabled"}
+    if addr_space != 1 and not non_inert_removed:
+        # A pure-kept mapping is a justified bijection on its own (mult == 0
+        # removals are inert and need none) — no solve required.
         return _align_without_solve(an_b, B, A, kept, removed, mem_id, addr_space)
 
-    # local connections for the removed set — require a globally unique solve
+    # local connections for the removed set. AS1 (constant keys) requires the
+    # globally unique graph solution; symbolic-key spaces commit per-row claims
+    # that solve marked FORCED (entailed under every aliasing resolution).
     sol = solve.compute(before, mem_id, addr_space, assume_is_valid)   # ValueError -> abort
-    if not sol.unique:
+    if addr_space == 1 and not sol.unique:
         raise ValueError(
             "align: solve(before) is not globally unique; cannot commit to local connections")
     row_of = {r.ordinal: r for r in sol.rows}
 
-    # self-balance: every removed non-inert interaction pairs with a removed partner
+    # self-balance: every removed non-inert interaction pairs with a removed
+    # partner, via a claim that is forced (unique/entailed), never a guess
     for o in removed:
         r = row_of[o]
         if r.kind == "disabled":
             continue                                          # inert: matched to nothing
+        if not r.forced:
+            raise ValueError(
+                f"align: removed interaction #{o} has no forced local connection "
+                f"(its matching varies with aliasing) -- cannot justify the removal")
         if r.kind == "recv":
             if r.io == "in":
                 raise ValueError(f"align: removed a boundary input recv #{o} (reads entry)")
@@ -241,6 +248,8 @@ def compute(before: Any, after: Any, mem_id: int = 1, addr_space: int = 1,
             role, partners = "inert", []
             if status == "removed":
                 n_inert += 1
+        elif not r.forced:
+            role, partners = "", []                # a guess is reported by solve, not here
         elif r.kind == "recv":
             if r.io == "in":
                 role, partners = "input", []
@@ -262,11 +271,11 @@ def compute(before: Any, after: Any, mem_id: int = 1, addr_space: int = 1,
 
 def _align_without_solve(an_b: Analysis, B: list[MemRow], A: list[MemRow],
                          kept, removed, mem_id, addr_space) -> Alignment:
-    """Alignment rows when `solve` is unavailable (AS2): cross-match only.
+    """Alignment rows for a pure-kept non-AS1 pair: cross-match only.
 
-    Every non-inert before interaction must be kept — a removed send/recv would
-    need `solve` to justify its local pairing, so it aborts. Keys are recovered
-    for display only (they are not part of the match)."""
+    Reached only when nothing non-inert was removed (the caller routes actual
+    removals through `solve`), so the mapping is a justified bijection with no
+    local connections. Keys are recovered for display only."""
     from .facts import Assumption
 
     rows: list[AlignRow] = []
