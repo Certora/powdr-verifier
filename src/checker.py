@@ -298,38 +298,35 @@ def check():
         init_stats_run(wipe=False)
         set_stats_tag(getattr(ARGS(), "stats_tag", None) or stats_tag_from_path(ARGS().input))
 
-    parser = SmtLibParser()
-    logging.info(f"loading from {ARGS().input}")
-    smt_script = list(parser.get_script_fname(str(ARGS().input)))
-
     with Action("check") as action:
         action += {"inputs": [ARGS().input]}
+
+        with action.action("parse"):
+            logging.info(f"loading from {ARGS().input}")
+            smt_script = list(SmtLibParser().get_script_fname(str(ARGS().input)))
+
         for cmd in smt_script:
             if cmd.name == "set-info" and cmd.args[0] == ":status":
                 action += {"expected": cmd.args[1]}
                 break
 
-        if not ARGS().solve_chunked:
-            check_smt_script(smt_script, action, input_for_log=ARGS().input)
-            return action
+        with action.action("solve") as subaction:
+            if not ARGS().solve_chunked:
+                check_smt_script(smt_script, subaction, input_for_log=ARGS().input)
+                return action
 
-        goal = _find_largest_or_goal(smt_script)
-        if goal is None:
-            logging.warning(
-                "no splittable Or-disjunction found, checking entire script"
+            goal = _find_largest_or_goal(smt_script)
+            if goal is None:
+                logging.warning(
+                    "no splittable Or-disjunction found, checking entire script"
+                )
+                check_smt_script(smt_script, subaction, input_for_log=ARGS().input)
+                return action
+            
+            check_smt_script_disjuncts(
+                smt_script,
+                goal,
+                subaction,
+                input_for_log=ARGS().input,
             )
-            check_smt_script(smt_script, action, input_for_log=ARGS().input)
-            return action
-
-        logging.warning(
-            "checking goal disjunct-by-disjunct (%d disjuncts) (%s)",
-            len(goal.args()),
-            ARGS().input,
-        )
-        check_smt_script_disjuncts(
-            smt_script,
-            goal,
-            action,
-            input_for_log=ARGS().input,
-        )
         return action
