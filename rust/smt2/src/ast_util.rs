@@ -452,6 +452,10 @@ fn has_quantifier_dyn(ast: &Dynamic) -> bool {
         return true;
     }
     if ast.kind() == AstKind::App {
+        let name = smtlib_decl_name(&ast.decl());
+        if name == "forall" || name == "exists" {
+            return true;
+        }
         for i in 0..ast.num_children() {
             if let Some(ch) = ast.nth_child(i) {
                 if has_quantifier_dyn(&ch) {

@@ -245,8 +245,13 @@ impl SmtCommand {
                 ..
             } => format!("(assert {t})"),
             SmtCommand::Assert { bool: b, .. } => {
-                let raw = z3_if_to_ite(&b.to_string());
-                format!("(assert {})", crate::sexpr::strip_smtlib_annotations(&raw))
+                if crate::ast_util::has_quantifier(b) {
+                    let pretty = crate::pretty::pretty_print_bool_in_script(b);
+                    format!("(assert {pretty})")
+                } else {
+                    let raw = z3_if_to_ite(&b.to_string());
+                    format!("(assert {})", crate::sexpr::strip_smtlib_annotations(&raw))
+                }
             }
             SmtCommand::CheckSat => "(check-sat)".into(),
             SmtCommand::GetModel => "(get-model)".into(),
