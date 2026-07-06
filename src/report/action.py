@@ -100,7 +100,14 @@ class Action:
             if len(sub) == 0:
                 return None
             if len(sub) == 1:
-                return list(sub)[0]
+                s = list(sub)[0]
+                if "expected" in self.properties and s in ("sat", "unsat"):
+                    return classify_expected_vs_result(
+                        name=self.name,
+                        expected=self.expected,
+                        result=s,
+                    )
+                return s
             if "wrong" in sub:
                 return "wrong"
             if "memout" in sub:
