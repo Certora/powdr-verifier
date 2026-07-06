@@ -49,7 +49,7 @@ from .simplify.rust import run_rust_pipeline, rust_step_action_props
 
 _T = TypeVar("_T")
 
-TACTIC_QEPREFIX = "nnf:skolem:lift:witness:demod:z3-propagate-values:isqf"
+TACTIC_QEPREFIX = "nnf:skolem:lift:witness:demod:isqf"
 
 DEFAULT_TACTIC = (
     TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:rewrite:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod:pretty"
