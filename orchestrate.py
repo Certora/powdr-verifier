@@ -352,19 +352,17 @@ def run_trace(*files):
             res_trace = __run_main("trace", f, trace_smt2, parse_output=True)
             dump += res_trace
             for file in sorted(res_trace.outputs):
-                with dump.action("check") as check:
-                    check += { "inputs": [file] }
-                    res_simp = __do_simplify(file, file.with_suffix(".rewrite.smt2"))
-                    check += res_simp
-                    for rewritten in res_simp.outputs:
-                        check += __run_main(
-                            "check",
-                            rewritten,
-                            "--dump-model",
-                            rewritten.with_suffix(".model"),
-                            parse_output=True,
-                            timeout=TIMEOUT_CHECK_SEC,
-                        )
+                res_simp = __do_simplify(file, file.with_suffix(".rewrite.smt2"))
+                dump += res_simp
+                for rewritten in res_simp.outputs:
+                    dump += __run_main(
+                        "check",
+                        rewritten,
+                        "--dump-model",
+                        rewritten.with_suffix(".model"),
+                        parse_output=True,
+                        timeout=TIMEOUT_CHECK_SEC,
+                    )
 
 def run_diff(*pairs):
     for a,b in pairs:
@@ -443,23 +441,22 @@ def run_verify(a, b):
         res_verify.name = "verify-encode"
         a_verify += res_verify
         for file in sorted(res_verify.outputs or []):
-            with a_verify.action("check", inputs=[file]) as a_check:
-                res_simp = __do_simplify(
-                    file,
-                    file.with_suffix(".rewrite.smt2"),
-                    optimization_step=optimization_step,
-                    stats_run_id=stats_run_id,
+            res_simp = __do_simplify(
+                file,
+                file.with_suffix(".rewrite.smt2"),
+                optimization_step=optimization_step,
+                stats_run_id=stats_run_id,
+            )
+            a_verify += res_simp
+            for rewritten in (res_simp.outputs or []):
+                a_verify += __run_main(
+                    "check",
+                    rewritten,
+                    "--dump-model", file.with_suffix(".model"),
+                    parse_output=True,
+                    timeout=TIMEOUT_CHECK_SEC,
+                    stats_args=__stats_extra(stats_run_id, rewritten),
                 )
-                a_check += res_simp
-                for rewritten in (res_simp.outputs or []):
-                    a_check += __run_main(
-                        "check",
-                        rewritten,
-                        "--dump-model", file.with_suffix(".model"),
-                        parse_output=True,
-                        timeout=TIMEOUT_CHECK_SEC,
-                        stats_args=__stats_extra(stats_run_id, rewritten),
-                    )
 
 if __name__ == '__main__':
     args = parse_args()

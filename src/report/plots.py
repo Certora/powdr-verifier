@@ -1110,7 +1110,7 @@ def substeps_stacked_lines(input_base: Path) -> str:
         FROM substeps sub
         JOIN verification_steps v ON v.id = sub.verification_step_id
         WHERE sub.name IN ('verify-encode', 'simplifier')
-           OR (sub.name IN ('check (completeness)', 'check (soundness)') AND sub.parent IS NOT NULL)
+           OR (sub.name IN ('check (completeness)', 'check (soundness)') AND sub.parent IS NULL)
         """
     )
     if not rows:
