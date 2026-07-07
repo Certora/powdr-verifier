@@ -20,8 +20,8 @@ FormulaWithAxioms = collections.namedtuple(
 FormulaWithAxioms.__doc__ = """Structured PySMT bundle produced by ``SmtConverter``.
 
 ``constraints`` and ``axioms`` are lists of ``FNode``; ``derived`` maps column
-symbols to defining formulas; ``globals`` collects symbols treated as rigid
-across quantifier prefixes.
+symbols to lists of defining formulas (a symbol may have more than one);
+``globals`` collects symbols treated as rigid across quantifier prefixes.
 """
 
 
@@ -49,7 +49,7 @@ class SmtConverter:
         """Create a converter that turns JSON-like dumps into SMT, namespacing symbols by `name`."""
         self.basic_block = basic_block
         self.constraints = []
-        self.derived_columns = {}
+        self.derived_columns: dict[FNode, list[FNode]] = collections.defaultdict(list)
         self.name = name
         self.memory_bus_alignment = memory_bus_alignment
         self.source_path = source_path
@@ -119,15 +119,21 @@ class SmtConverter:
                 return Int(0)
 
     def convert_derived(self, data: Iterable[Any]):
-        """Convert derived-column definitions into symbolic equalities (stored for later use)."""
+        """Convert derived-column definitions into symbolic equalities (stored for later use).
+
+        A single symbol may carry multiple defining equalities (powdr's
+        ``remove_free`` can emit several derived rows for the same column),
+        so definitions are appended to a per-symbol list.
+        """
         for derived in data:
             match derived:
                 case [bool(_), str(name), cm] | [str(name), cm]:
                     sym = self._symbol(name, INT)
-                    assert sym not in self.derived_columns
-                    self.derived_columns[sym] = with_comment(
-                        Equals(sym, self.convert_computation_method(cm)),
-                        f"DERIVED COLUMN {name}",
+                    self.derived_columns[sym].append(
+                        with_comment(
+                            Equals(sym, self.convert_computation_method(cm)),
+                            f"DERIVED COLUMN {name}",
+                        )
                     )
                 case _:
                     logging.error(f"Unsupported derived column: {derived}")
@@ -213,7 +219,7 @@ class SmtConverter:
                 constraints
             )
         axioms = list(without_trues(self.bus_interaction_encoder.get_axioms()))
-        derived = dict(self.derived_columns)
+        derived = {k: list(v) for k, v in self.derived_columns.items()}
         fwa = FormulaWithAxioms(
             constraints=constraints,
             axioms=axioms,
