@@ -136,3 +136,7 @@ def test_is_load_case_split_2103993():
     row28 = next(r for r in an.mem if r.ordinal == 28)
     assert row14.addr_space_expr == 2
     assert row28.addr_space_expr == 2
+    for ord in (16, 17, 26, 27):
+        row = next(r for r in an.mem if r.ordinal == ord)
+        assert row.ptr == 44
+        assert keys.recover_key(an, row) == keys.Const(44)

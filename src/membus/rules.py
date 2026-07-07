@@ -99,7 +99,8 @@ class Analysis:
         self._mem_bus_ordinal = bus_ordinal_of_mem(data, mem_id)
         self._propagation = propagate.propagate(self)
         pins, zeros = self._propagation
-        self.mem = [propagate.simplify_mem_row(r, pins, zeros) for r in self.mem]
+        envs = propagate.surviving_envs(self, pins)
+        self.mem = [propagate.simplify_mem_row(r, pins, zeros, envs) for r in self.mem]
 
     def eval_expr(self, expr: Any) -> int | None:
         """Resolve a linear dump expression via propagation, or ``None``."""

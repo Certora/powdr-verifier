@@ -135,6 +135,7 @@ def _neg_coeffs(coeffs: tuple[tuple[str, int], ...]) -> tuple[tuple[str, int], .
 
 
 _IS_LOAD_RE = re.compile(r"^is_load_(\d+)@")
+_ACCESS_RE = re.compile(r"_(\d+)@\d+$")
 
 
 def _eval_constraint(expr: Any, env: dict[str, int]) -> int:
@@ -252,6 +253,64 @@ def _refute_is_load_pins(an: Analysis, pins: dict[str, int]) -> dict[str, int]:
     return out
 
 
+def _accesses_in_expr(expr: Any) -> set[int]:
+    out: set[int] = set()
+    for col in names(expr):
+        m = _ACCESS_RE.search(col)
+        if m is not None:
+            out.add(int(m.group(1)))
+    return out
+
+
+def surviving_envs(an: Analysis, pins: dict[str, int]) -> dict[int, list[dict[str, int]]]:
+    """Pinned + flag assignments satisfying each access's mux/opcode cone."""
+    cols = _all_constraint_cols(an.machine)
+    cons = an.machine.get("constraints", [])
+    out: dict[int, list[dict[str, int]]] = {}
+    for is_load in sorted(c for c in cols if c.startswith("is_load_")):
+        m = _IS_LOAD_RE.match(is_load)
+        if m is None or is_load not in pins:
+            continue
+        access = int(m.group(1))
+        flag_cols = _flag_cols_for_access(cols, access)
+        if not flag_cols:
+            continue
+        deciding = _deciding_constraints(cons, is_load, flag_cols, pins)
+        envs: list[dict[str, int]] = []
+        for bits in iproduct((0, 1), repeat=len(flag_cols)):
+            trial = {**pins, is_load: pins[is_load]}
+            for col, v in zip(flag_cols, bits):
+                trial[col] = v
+            if all(_eval_constraint(c, trial) == 0 for c in deciding):
+                envs.append(trial)
+        if envs:
+            out[access] = envs
+    return out
+
+
+def _refute_expr(expr: Any, pins: dict[str, int],
+                 envs_by_access: dict[int, list[dict[str, int]]]) -> int | None:
+    """If ``expr`` has one value under every surviving flag env, return it."""
+    if isinstance(expr, int):
+        return to_signed(expr)
+    accs = _accesses_in_expr(expr)
+    if len(accs) != 1:
+        return None
+    envs = envs_by_access.get(next(iter(accs)))
+    if not envs:
+        return None
+    folded = _fold_pins(expr, pins)
+    if isinstance(folded, int):
+        return folded
+    vals: set[int] = set()
+    for env in envs:
+        try:
+            vals.add(to_signed(_eval_constraint(folded, env)))
+        except ValueError:
+            return None
+    return next(iter(vals)) if len(vals) == 1 else None
+
+
 def propagate(an: Analysis) -> tuple[dict[str, int], list[LinForm]]:
     """Fixpoint column pins + residual linear zeros (after substitution)."""
     bounds = prop_bounds(an)
@@ -343,7 +402,8 @@ def _lf_to_expr(lf: LinForm) -> Any:
     return expr
 
 
-def simplify_expr(pins: dict[str, int], zeros: list[LinForm], expr: Any) -> Any:
+def simplify_expr(pins: dict[str, int], zeros: list[LinForm], expr: Any,
+                  *, envs_by_access: dict[int, list[dict[str, int]]] | None = None) -> Any:
     """Fold propagation into a dump expression; resolve to int when possible."""
     v = eval_expr(pins, zeros, expr)
     if v is not None:
@@ -374,10 +434,17 @@ def simplify_mult(pins: dict[str, int], zeros: list[LinForm], mult: Any) -> Any:
     return lf.const if lf.is_const else _lf_to_expr(lf)
 
 
-def simplify_mem_row(row: MemRow, pins: dict[str, int], zeros: list[LinForm]) -> MemRow:
-    return MemRow(row.ordinal,
-                  simplify_mult(pins, zeros, row.mult),
-                  tuple(simplify_expr(pins, zeros, a) for a in row.args))
+def simplify_mem_row(row: MemRow, pins: dict[str, int], zeros: list[LinForm],
+                   envs_by_access: dict[int, list[dict[str, int]]] | None = None) -> MemRow:
+    args: list[Any] = []
+    for i, a in enumerate(row.args):
+        if i == 1 and envs_by_access is not None:
+            v = _refute_expr(a, pins, envs_by_access)
+            args.append(v if v is not None
+                        else simplify_expr(pins, zeros, a, envs_by_access=envs_by_access))
+        else:
+            args.append(simplify_expr(pins, zeros, a, envs_by_access=envs_by_access))
+    return MemRow(row.ordinal, simplify_mult(pins, zeros, row.mult), tuple(args))
 
 
 def eval_expr(pins: dict[str, int], zeros: list[LinForm], expr: Any) -> int | None:
