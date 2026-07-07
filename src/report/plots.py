@@ -17,7 +17,7 @@ _PLOT_FONT_SIZE = 14
 _BLOCK_SERIES_ORDER = ["encode", "completeness", "soundness"]
 
 _PASS_SOLVED_SUBSTEPS = {
-    "verify-encode": "encode",
+    "encode": "encode",
     "check (completeness)": "check (completeness)",
     "check (soundness)": "check (soundness)",
     "simplifier (completeness)": "simplify (completeness)",
@@ -37,7 +37,7 @@ _PASS_SOLVED_SUBSTEP_NAMES_UNION = " UNION ALL ".join(
 
 def _substep_solved_where(prefix: str = "s.") -> str:
     return f"""(
-        ({prefix}name = 'verify-encode' AND {prefix}status = 'success')
+        ({prefix}name = 'encode' AND {prefix}status = 'success')
         OR ({prefix}name IN ('check (completeness)', 'check (soundness)')
             AND ({prefix}status = 'success'
                  OR ({prefix}status IN ('sat', 'unsat') AND {prefix}status = {prefix}expected)))
@@ -896,7 +896,7 @@ def block_solved_percentage_ecdf() -> str:
                 v.block,
                 v.id,
                 MAX(CASE
-                    WHEN s.name = 'verify-encode' AND s.parent IS NULL AND s.status = 'success'
+                    WHEN s.name = 'encode' AND s.parent IS NULL AND s.status = 'success'
                     THEN 1 ELSE 0
                 END) AS encode_ok,
                 MAX(CASE
