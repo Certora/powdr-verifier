@@ -30,6 +30,13 @@ def _canon(v: int) -> int:
     return to_signed(v % BABYBEAR_PRIME)
 
 
+def bits_of(arg: Any) -> int | None:
+    """The bit-width arg of a VariableRangeChecker row, if constant."""
+    if isinstance(arg, str) and arg.isdigit():
+        arg = int(arg)
+    return arg if isinstance(arg, int) and 0 <= arg < 31 else None
+
+
 @dataclass(frozen=True)
 class LinForm:
     """``Σ coeffs[col]·col + const`` with canonical signed integer entries."""

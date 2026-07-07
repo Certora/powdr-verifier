@@ -69,7 +69,7 @@ from .busmodel import (
     range_bus_rows,
 )
 from .facts import TS_MAX, AffineDef, Assumption, Bound, EffKind, Fact, Gap, RecvUpper, Src
-from .linform import LinForm, linform, product
+from .linform import LinForm, bits_of, linform, product
 from . import propagate
 
 P = BABYBEAR_PRIME
@@ -77,13 +77,6 @@ P = BABYBEAR_PRIME
 # Residue-enumeration cap for the range-check R2 form: 2^bits SMT-free loop
 # iterations per candidate row. Corpus widths are ≤ 12 bits.
 _MAX_ENUM_BITS = 16
-
-
-def _bits_of(arg: Any) -> int | None:
-    """The bit-width arg of a VariableRangeChecker row, if constant."""
-    if isinstance(arg, str) and arg.isdigit():
-        arg = int(arg)
-    return arg if isinstance(arg, int) and 0 <= arg < 31 else None
 
 
 class Analysis:
@@ -101,11 +94,6 @@ class Analysis:
         pins, zeros = self._propagation
         envs = propagate.surviving_envs(self, pins)
         self.mem = [propagate.simplify_mem_row(r, pins, zeros, envs) for r in self.mem]
-
-    def eval_expr(self, expr: Any) -> int | None:
-        """Resolve a linear dump expression via propagation, or ``None``."""
-        pins, zeros = self._propagation
-        return propagate.eval_expr(pins, zeros, expr)
 
     def mem_src(self, row: MemRow) -> Src:
         return Src("bus", self._mem_bus_ordinal[row.ordinal])
@@ -142,25 +130,6 @@ class Analysis:
             elif sel != g:
                 return None                     # two gating columns ⟹ ambiguous
         return None if has_const_active else sel
-
-    @functools.cached_property
-    def addr_spaces(self) -> dict[int, int | None]:
-        """Membus ordinal → propagated address space, or None if symbolic."""
-        return {r.ordinal: r.addr_space for r in self.mem}
-
-    @functools.cached_property
-    def symbolic_as_ordinals(self) -> list[int]:
-        """Ordinals whose address space is not a constant int after propagation."""
-        return [r.ordinal for r in self.mem if r.addr_space is None]
-
-    def require_explicit_address_spaces(self, subject: str) -> None:
-        """Raise unless every interaction has a resolved address space."""
-        syms = self.symbolic_as_ordinals
-        if syms:
-            raise ValueError(
-                f"{subject}: {len(syms)} memory interaction(s) have a symbolic address "
-                f"space (e.g. #{syms[0]}) — requires solved AS form (all address spaces "
-                f"explicit)")
 
     @functools.cached_property
     def kinds(self) -> dict[int, EffKind | None]:
@@ -323,7 +292,7 @@ class Analysis:
         for idx, bid, args in range_bus_rows(self.machine):
             src = (Src("bus", idx),)
             if bid == VAR_RANGE and len(args) >= 2:
-                bits = _bits_of(args[1])
+                bits = bits_of(args[1])
                 if bits is None:
                     continue
                 val = args[0]
@@ -445,7 +414,7 @@ class Analysis:
         for idx, bid, args in range_bus_rows(self.machine):
             if bid != VAR_RANGE or len(args) < 2:
                 continue
-            bits = _bits_of(args[1])
+            bits = bits_of(args[1])
             lf = linform(args[0])
             if bits is None or bits > _MAX_ENUM_BITS or lf is None:
                 continue

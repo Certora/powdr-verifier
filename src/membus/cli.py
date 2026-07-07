@@ -15,7 +15,7 @@ from src.lens import loader, resolve
 
 from . import align, certify, extract, meminfo, memstats, render, solve
 from .busfmt import memory_bus_id
-from .busmodel import memory_rows, symbolic_as_ordinals
+from .busmodel import symbolic_as_ordinals
 from .propagate import format_debug
 from .render import JSON, PLAIN, Target, default_mode
 from .rules import Analysis
@@ -163,14 +163,14 @@ def _run_info(args, mode):
     data, labels, t = _load_circuit(args.group, args.block, args.step,
                                     getattr(args, "file_a", None), args.root)
     mem_id = memory_bus_id(labels)
+    an = Analysis(data, mem_id)
     if args.debug_propagate:
-        an = Analysis(data, mem_id)
         print(format_debug(an), file=sys.stderr)
-    rows = meminfo.compute(data, mem_id, args.addr_space)
+    rows = meminfo.compute(data, mem_id, args.addr_space, an=an)
     total = len(rows)
     if args.limit and total > args.limit:
         rows = rows[:args.limit]
-    symbolic_as = len(symbolic_as_ordinals(memory_rows(data, mem_id)))
+    symbolic_as = len(symbolic_as_ordinals(an.mem))
     print(render.render_info(rows, t, mode, total, symbolic_as))
 
 

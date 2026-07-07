@@ -15,7 +15,7 @@ from src.lens.normalize import BABYBEAR_PRIME, to_signed
 
 from .busmodel import BITWISE, TUPLE_RANGE, VAR_RANGE, MemRow, range_bus_rows
 from .facts import TS_MAX
-from .linform import LinForm, domain_gadget, linform, names, product
+from .linform import LinForm, bits_of, domain_gadget, linform, names, product
 
 if TYPE_CHECKING:
     from .rules import Analysis
@@ -24,12 +24,6 @@ P = BABYBEAR_PRIME
 
 # (lo, hi_exclusive); hi None = unbounded above lo
 _PropBound = tuple[int, int | None]
-
-
-def _bits_of(arg: Any) -> int | None:
-    if isinstance(arg, str) and arg.isdigit():
-        arg = int(arg)
-    return arg if isinstance(arg, int) and 0 <= arg < 31 else None
 
 
 def prop_bounds(an: Analysis) -> dict[str, _PropBound]:
@@ -45,7 +39,7 @@ def prop_bounds(an: Analysis) -> dict[str, _PropBound]:
 
     for _idx, bid, args in range_bus_rows(an.machine):
         if bid == VAR_RANGE and len(args) >= 2:
-            bits = _bits_of(args[1])
+            bits = bits_of(args[1])
             if bits is None:
                 continue
             val = args[0]

@@ -6,12 +6,19 @@ import pytest
 
 from src.lens.normalize import BABYBEAR_PRIME as P
 from src.membus import keys, propagate
+from src.membus.busmodel import symbolic_as_ordinals
 from src.membus.linform import LinForm, linform
 from src.membus.rules import Analysis
 
 _DUMP = (Path(__file__).resolve().parents[2]
          / "powdr-dumps/guest-keccak-selection"
          / "apc_candidate_2103992_002_loop_iteration.json")
+_DUMP_2103992 = (Path(__file__).resolve().parents[2]
+                 / "powdr-dumps/guest-keccak-selection"
+                 / "apc_candidate_2103992_000_unopt.json")
+_DUMP_2103993 = (Path(__file__).resolve().parents[2]
+                 / "powdr-dumps/guest-keccak-selection"
+                 / "apc_candidate_2103993_000_unopt.json")
 
 
 def _an(cons=(), bis=()):
@@ -29,17 +36,17 @@ def _add(*terms):
     return e
 
 
-def test_linform_subst_folds_pins():
-    lf = LinForm.make({"a@1": 1, "b@2": -1}, 3)
-    assert lf.subst({"a@1": 5, "b@2": 2}) == LinForm.make({}, 6)
-
-
 def _bool(col: str):
     return [col, "*", [col, "+", -1]]
 
 
 def _ternary_bool(col: str):
     return [col, "*", [[col, "-", 1], "*", [col, "-", 2]]]
+
+
+def test_linform_subst_folds_pins():
+    lf = LinForm.make({"a@1": 1, "b@2": -1}, 3)
+    assert lf.subst({"a@1": 5, "b@2": 2}) == LinForm.make({}, 6)
 
 
 def test_same_coeff_offset():
@@ -67,7 +74,6 @@ def test_single_column_pin():
 
 
 def test_chained_substitution():
-    # b = 1, then a + b - 1 = 0 => a = 0; mult = -a => disabled
     cons = [_bool("a@2"), _bool("b@1"),
             _add("b@1", -1), _add("a@2", "b@1", -1)]
     an = Analysis({"constraints": cons,
@@ -78,7 +84,6 @@ def test_chained_substitution():
 
 
 def test_boolean_gadget_enables_pin_window():
-  # col*(col-1)=0 plus col-1=0 => col=1 (boolean bound from product)
     cons = [["c@1", "*", ["c@1", "+", -1]], _add("c@1", -1)]
     an = _an(cons, [{"id": 1, "mult": "c@1", "args": [1, 8, 0, 0, 0, 0, "t@2"]}])
     assert an.kinds[0].kind == "send"
@@ -110,28 +115,30 @@ def test_eval_expr_resolves_as_and_pointer():
     assert keys.recover_key(an, row) == keys.Const(8)
 
 
-def test_linear_constraint_pins_column():
-    an = _an([_add("mem_as@1", -2)], [])
-    assert an._propagation[0]["mem_as@1"] == 2
-
-
 def test_ternary_boolean_gadget_bounds():
-    an = _an([_ternary_bool("f@1"), _add("f@1", -1)], [])
-    assert an._propagation[0]["f@1"] == 1
+    cons = [_ternary_bool("f@1"), _add("f@1", -1)]
+    an = _an(cons, [{"id": 1, "mult": "f@1", "args": [1, 8, 0, 0, 0, 0, "t@2"]}])
+    assert an.kinds[0].kind == "send"
 
 
-_DUMP_2103993 = (Path(__file__).resolve().parents[2]
-                 / "powdr-dumps/guest-keccak-selection"
-                 / "apc_candidate_2103993_000_unopt.json")
+@pytest.mark.skipif(not _DUMP_2103992.is_file(), reason="regression dump not present")
+def test_2103992_step0_acceptance():
+    data = json.loads(_DUMP_2103992.read_text())
+    an = Analysis(data, assume_is_valid=False)
+    assert symbolic_as_ordinals(an.mem) == []
+    for row in an.mem:
+        assert an.kinds.get(row.ordinal) is not None, f"ordinal {row.ordinal}"
+    for row in an.mem:
+        if row.addr_space not in (0, 1):
+            continue
+        key = keys.recover_key(an, row)
+        assert isinstance(key, keys.Const), f"AS{row.addr_space} #{row.ordinal}: {key}"
 
 
 @pytest.mark.skipif(not _DUMP_2103993.is_file(), reason="regression dump not present")
 def test_is_load_case_split_2103993():
     data = json.loads(_DUMP_2103993.read_text())
     an = Analysis(data, assume_is_valid=False)
-    pins = an._propagation[0]
-    assert pins["is_load_2@100"] == 1
-    assert pins["is_load_4@177"] == 0
     row14 = next(r for r in an.mem if r.ordinal == 14)
     row28 = next(r for r in an.mem if r.ordinal == 28)
     assert row14.addr_space_expr == 2

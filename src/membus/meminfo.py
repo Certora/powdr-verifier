@@ -45,8 +45,10 @@ def _display_kind(an: Analysis, ordinal: int, mult: Any) -> str:
     return "sym" if linform(mult) is None else "other"
 
 
-def compute(data: Any, mem_id: int = 1, addr_space: int | None = None) -> list[InfoRow]:
-    an = Analysis(data, mem_id)
+def compute(data: Any, mem_id: int = 1, addr_space: int | None = None,
+            an: Analysis | None = None) -> list[InfoRow]:
+    if an is None:
+        an = Analysis(data, mem_id)
     have_machine = "constraints" in an.machine and "bus_interactions" in an.machine
     chain = (order.send_order(an) or []) if have_machine else []
     soff = order.send_offsets(an) if have_machine else {}
