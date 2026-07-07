@@ -437,7 +437,7 @@ def run_verify(a, b):
             ],
             stats_args=__stats_extra(stats_run_id),
         )
-        res_verify.name = "verify-encode"
+        res_verify.name = "encode"
         a_verify += res_verify
         for file in sorted(res_verify.outputs or []):
             res_simp = __do_simplify(
