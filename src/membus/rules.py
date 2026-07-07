@@ -69,7 +69,7 @@ from .busmodel import (
     range_bus_rows,
 )
 from .facts import TS_MAX, AffineDef, Assumption, Bound, EffKind, Fact, Gap, RecvUpper, Src
-from .linform import LinForm, bits_of, linform, product
+from .linform import LinForm, bits_of, linform, names, product
 from . import propagate
 
 P = BABYBEAR_PRIME
@@ -93,7 +93,20 @@ class Analysis:
         pins, zeros, decoding = propagate.propagate(self)
         self._propagation = (pins, zeros)
         envs = propagate.surviving_envs(self, pins, decoding)
-        self.mem = [propagate.simplify_mem_row(r, pins, zeros, envs) for r in self.mem]
+        substitutions = data.get("substitutions") if isinstance(data, dict) else None
+        send_cols: set[str] = set()
+        for row in self.mem:
+            k = self._kind(row)
+            if k is not None and k.kind == "send":
+                col = self._slot_col(row.ts)
+                if col is not None:
+                    send_cols.add(col)
+        self._ts_aliases = propagate.send_ts_aliases(
+            send_cols, self._two_col_gaps, substitutions)
+        self.mem = [
+            propagate.simplify_mem_row(r, pins, zeros, envs, self._ts_aliases)
+            for r in self.mem
+        ]
 
     def mem_src(self, row: MemRow) -> Src:
         return Src("bus", self._mem_bus_ordinal[row.ordinal])
@@ -387,10 +400,45 @@ class Analysis:
         rest = [(c, v) for c, v in lf.items() if c not in clocks and c not in witnesses]
         return fs, pv, rest
 
+    def _ungate_lessthan(self, con: Any) -> Any:
+        """Fold pins / timestamp aliases into a constraint and peel selector
+        factors off a gated LessThan.
+
+        A LessThan may appear as ``sel · (fs − pv − …) = 0`` where ``sel`` is a
+        pinned column (``is_valid``) or a linear selector propagation proves
+        equals 1 (``Σ opcode_flags``, whose ``Σ − 1`` is a known zero). It may
+        also reference a per-access ``from_state`` clock that timestamp
+        normalization folded onto the shared base. Fold both, then drop any
+        top-level product factor that evaluates to 1; a factor of 0 makes the
+        constraint vacuous (no bound), signalled by ``None``.
+        """
+        pins, zeros = self._propagation
+        expr = propagate._fold_pins(con, pins, self._ts_aliases)
+        while isinstance(expr, list) and len(expr) == 3 and expr[1] == "*":
+            va = propagate.eval_expr(pins, zeros, expr[0])
+            vb = propagate.eval_expr(pins, zeros, expr[2])
+            if va == 0 or vb == 0:
+                return None
+            if va == 1:
+                expr = expr[2]
+            elif vb == 1:
+                expr = expr[0]
+            else:
+                break
+        return expr
+
     def _recv_upper_constraints(self) -> list[RecvUpper]:
+        # A RecvUpper needs exactly one recv-witness column; skip the (majority
+        # of) constraints touching none before the costly fold / ungate.
+        witnesses = self.ts_domain[1]
         out = []
         for idx, con in enumerate(self.machine.get("constraints", [])):
-            lf = linform(con)
+            if witnesses.isdisjoint(names(con)):
+                continue
+            body = self._ungate_lessthan(con)
+            if body is None:
+                continue
+            lf = linform(body)
             if lf is None:
                 continue
             fs, pv, rest = self._split_ts(lf)

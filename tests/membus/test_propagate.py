@@ -168,6 +168,37 @@ def test_fold_pins_algebraic_identities():
     assert propagate._fold_pins([0, "-", col], {}) == ["-", col]
 
 
+def test_fold_pins_relative_toward_base():
+    rel = {"ts_b@2": ("ts_a@1", 3)}
+    assert propagate._fold_pins("ts_b@2", {}, rel) == ["ts_a@1", "+", 3]
+    assert propagate._fold_pins("ts_a@1", {}, rel) == "ts_a@1"
+
+
+def test_send_ts_aliases_picks_minimum_offset_base():
+    subs = [
+        ["ts_b@2", ["ts_a@1", "+", 3]],
+        ["ts_c@3", ["ts_b@2", "+", 2]],
+    ]
+    aliases = propagate.send_ts_aliases({"ts_a@1", "ts_b@2", "ts_c@3"}, [], subs)
+    assert aliases == {
+        "ts_a@1": ("ts_a@1", 0),
+        "ts_b@2": ("ts_a@1", 3),
+        "ts_c@3": ("ts_a@1", 5),
+    }
+
+
+def test_send_ts_aliases_two_col_gaps():
+    gaps = [(0, "ts_b@2", "ts_a@1", -3)]   # ts_b = ts_a + 3
+    aliases = propagate.send_ts_aliases({"ts_a@1", "ts_b@2"}, gaps, None)
+    assert aliases == {"ts_a@1": ("ts_a@1", 0), "ts_b@2": ("ts_a@1", 3)}
+
+
+def test_rewrite_ts_slot_composes_intra_offset():
+    aliases = {"ts_b@2": ("ts_a@1", 3)}
+    assert propagate._rewrite_ts_slot(["ts_b@2", "+", 1], aliases) == ["ts_a@1", "+", 4]
+    assert propagate._rewrite_ts_slot("ts_a@1", aliases) == "ts_a@1"
+
+
 @pytest.mark.skipif(not _DUMP_2100223.is_file(), reason="regression dump not present")
 def test_2100223_store_pointer_not_guessed():
     """AS2 write_base at access 542 must not become const 0 via unbound mem_ptr."""

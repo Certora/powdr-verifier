@@ -111,6 +111,28 @@ def test_r2_multiple_bounds_all_kept():
     assert sorted(u.const for u in an.recv_uppers[PV]) == [-4, -1]
 
 
+def _bool(col):
+    return [col, "*", [col, "+", -1]]
+
+
+def test_r2_constraint_gated_by_pinned_selector():
+    # sel * (fs - pv - 1) = 0 with sel pinned to 1 -> the LessThan is recognized
+    sel = "is_valid@9"
+    body = _add(FS, _m(-1, PV), -1)
+    con = [sel, "*", body]
+    an = _an([_bool(sel), _add(sel, -1), con], bis=_MEM_ROWS)
+    assert [u.const for u in an.recv_uppers[PV]] == [-1]
+
+
+def test_r2_constraint_gated_by_flag_sum_selector():
+    # (a + b) * (fs - pv - 1) = 0 where a + b == 1 is a known zero -> recognized
+    a, b = "op_a@9", "op_b@10"
+    body = _add(FS, _m(-1, PV), -1)
+    con = [_add(a, b), "*", body]
+    an = _an([_bool(a), _bool(b), _add(a, b, -1), con], bis=_MEM_ROWS)
+    assert [u.const for u in an.recv_uppers[PV]] == [-1]
+
+
 def test_ts_domain_is_positional_not_named():
     # a slot column with a non-timestamp name is a clock; a from_state-named
     # column NOT in any slot (nor gap-linked) is not

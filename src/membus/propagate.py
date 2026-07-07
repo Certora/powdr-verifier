@@ -6,6 +6,7 @@ can justify propagated multiplicities.
 """
 from __future__ import annotations
 
+import collections
 import json
 import re
 from dataclasses import dataclass
@@ -129,6 +130,28 @@ def _neg_coeffs(coeffs: tuple[tuple[str, int], ...]) -> tuple[tuple[str, int], .
     return tuple((c, -v) for c, v in coeffs)
 
 
+# id(zeros) -> (zeros, {coeffs: const}); a single Analysis reuses one zeros list,
+# so this holds one live entry. Guarded by identity to survive id reuse.
+_ZERO_INDEX_CACHE: dict[int, tuple[list, dict[tuple[tuple[str, int], ...], int]]] = {}
+
+
+def _zero_index(zeros: list[LinForm]) -> dict[tuple[tuple[str, int], ...], int]:
+    """``coeffs -> const`` for the residual zeros, built once per ``zeros`` list.
+
+    Two zeros with the same coeffs would force a nonzero constant to vanish
+    (a contradiction), so keeping the first is safe.
+    """
+    key = id(zeros)
+    hit = _ZERO_INDEX_CACHE.get(key)
+    if hit is not None and hit[0] is zeros:
+        return hit[1]
+    idx: dict[tuple[tuple[str, int], ...], int] = {}
+    for lf in zeros:
+        idx.setdefault(lf.coeffs, lf.const)
+    _ZERO_INDEX_CACHE[key] = (zeros, idx)
+    return idx
+
+
 _IS_LOAD_RE = re.compile(r"^is_load_(\d+)@")
 _ACCESS_RE = re.compile(r"_(\d+)@\d+$")
 
@@ -208,6 +231,21 @@ def _all_constraint_cols(machine: dict) -> set[str]:
 def _flag_cols_for_access(cols: set[str], access: int) -> tuple[str, ...]:
     needle = f"_{access}@"
     return tuple(sorted(c for c in cols if c.startswith("flags__") and needle in c))
+
+
+def _flags_by_access(cols: set[str]) -> dict[int, tuple[str, ...]]:
+    """Group ``flags__…`` columns by their access index in one pass.
+
+    Replaces per-access ``_flag_cols_for_access`` scans (O(accesses·cols)).
+    """
+    out: dict[int, list[str]] = {}
+    for c in cols:
+        if not c.startswith("flags__"):
+            continue
+        m = _ACCESS_RE.search(c)
+        if m is not None:
+            out.setdefault(int(m.group(1)), []).append(c)
+    return {a: tuple(sorted(v)) for a, v in out.items()}
 
 
 @dataclass(frozen=True)
@@ -302,6 +340,7 @@ def _refute_is_load(is_load: str, flag_cols: tuple[str, ...],
 def _refute_is_load_pins(an: Analysis, pins: dict[str, int],
                          index: _DecodingIndex) -> dict[str, int]:
     cols = _all_constraint_cols(an.machine)
+    flags = _flags_by_access(cols)
     out = dict(pins)
     for is_load in sorted(c for c in cols if c.startswith("is_load_")):
         if is_load in out:
@@ -309,7 +348,7 @@ def _refute_is_load_pins(an: Analysis, pins: dict[str, int],
         m = _IS_LOAD_RE.match(is_load)
         if m is None:
             continue
-        flag_cols = _flag_cols_for_access(cols, int(m.group(1)))
+        flag_cols = flags.get(int(m.group(1)), ())
         if not flag_cols:
             continue
         v = _refute_is_load(is_load, flag_cols, index, out)
@@ -331,13 +370,14 @@ def surviving_envs(an: Analysis, pins: dict[str, int],
                    index: _DecodingIndex) -> dict[int, list[dict[str, int]]]:
     """Pinned + flag assignments satisfying each access's mux/opcode cone."""
     cols = _all_constraint_cols(an.machine)
+    flags = _flags_by_access(cols)
     out: dict[int, list[dict[str, int]]] = {}
     for is_load in sorted(c for c in cols if c.startswith("is_load_")):
         m = _IS_LOAD_RE.match(is_load)
         if m is None or is_load not in pins:
             continue
         access = int(m.group(1))
-        flag_cols = _flag_cols_for_access(cols, access)
+        flag_cols = flags.get(access, ())
         if not flag_cols:
             continue
         deciding = index.deciding_constraints(is_load, flag_cols)
@@ -422,28 +462,45 @@ def eval_mult(mf: LinForm | None, pins: dict[str, int],
     mf = mf.subst(pins)
     if mf.is_const:
         return mf.const % P
-    for lf in zeros:
-        if mf.coeffs == lf.coeffs:
-            return (mf.const - lf.const) % P
-        if mf.coeffs == _neg_coeffs(lf.coeffs):
-            return (mf.const + lf.const) % P
+    index = _zero_index(zeros)
+    zc = index.get(mf.coeffs)
+    if zc is not None:
+        return (mf.const - zc) % P
+    zc = index.get(_neg_coeffs(mf.coeffs))
+    if zc is not None:
+        return (mf.const + zc) % P
     return None
 
 
-def _fold_pins(expr: Any, pins: dict[str, int]) -> Any:
-    """Substitute pinned columns; evaluate mod-p when no columns remain."""
+_RelPin = tuple[str, int]
+
+
+def _fold_pins(expr: Any, pins: dict[str, int],
+               rel_pins: dict[str, _RelPin] | None = None) -> Any:
+    """Substitute pinned columns; evaluate mod-p when no columns remain.
+
+    ``rel_pins`` maps a column to ``(base, offset)`` with ``col ≡ base + offset``;
+    substitution always rewrites toward the smaller-offset base.
+    """
     if isinstance(expr, int):
         return expr
     if isinstance(expr, str):
-        return pins.get(expr, expr)
+        if expr in pins:
+            return pins[expr]
+        if rel_pins is not None and expr in rel_pins:
+            base, off = rel_pins[expr]
+            if off == 0:
+                return base
+            return [base, "+", off]
+        return expr
     if isinstance(expr, list) and len(expr) == 2 and expr[0] == "-":
-        inner = _fold_pins(expr[1], pins)
+        inner = _fold_pins(expr[1], pins, rel_pins)
         if isinstance(inner, int):
             return to_signed(-inner)
         return ["-", inner]
     if isinstance(expr, list) and len(expr) == 3:
-        a = _fold_pins(expr[0], pins)
-        b = _fold_pins(expr[2], pins)
+        a = _fold_pins(expr[0], pins, rel_pins)
+        b = _fold_pins(expr[2], pins, rel_pins)
         op = expr[1]
         if isinstance(a, int) and isinstance(b, int):
             if op == "+":
@@ -494,12 +551,111 @@ def _lf_to_expr(lf: LinForm) -> Any:
     return expr
 
 
-def simplify_expr(pins: dict[str, int], zeros: list[LinForm], expr: Any) -> Any:
+def _two_col_gap_edges(two_col_gaps: list[tuple[int, str, str, int]],
+                        ) -> dict[str, list[tuple[str, int]]]:
+    """``pos - neg + const = 0`` ⟹ ``pos = neg + (-const)``."""
+    adj: dict[str, list[tuple[str, int]]] = collections.defaultdict(list)
+    for _idx, pos, neg, const in two_col_gaps:
+        gap = -const
+        adj[neg].append((pos, gap))
+        adj[pos].append((neg, -gap))
+    return adj
+
+
+def _substitution_edges(substitutions: list[Any] | None,
+                        ) -> dict[str, list[tuple[str, int]]]:
+    """``[var, base + off]`` pairs as directed offset edges."""
+    adj: dict[str, list[tuple[str, int]]] = collections.defaultdict(list)
+    if not substitutions:
+        return adj
+    for pair in substitutions:
+        if not (isinstance(pair, list) and len(pair) == 2):
+            continue
+        var, defn = pair
+        if not isinstance(var, str) or isinstance(defn, int):
+            continue
+        lf = linform(defn)
+        if lf is None or len(lf.coeffs) != 1 or lf.coeffs[0][1] != 1:
+            continue
+        base, off = lf.coeffs[0][0], lf.const
+        adj[base].append((var, off))
+        adj[var].append((base, -off))
+    return adj
+
+
+def send_ts_aliases(send_cols: set[str],
+                    two_col_gaps: list[tuple[int, str, str, int]],
+                    substitutions: list[Any] | None,
+                    ) -> dict[str, _RelPin]:
+    """Map each send clock column to ``(base, offset)`` with minimum base time.
+
+    Edges come from two-column ±1 constraints and substitution defs
+    ``var = col + const``, restricted to edges between two send clocks so a
+    recv witness can never be chosen as the base. Conflicting paths drop the
+    whole component.
+    """
+    if not send_cols:
+        return {}
+    raw = _two_col_gap_edges(two_col_gaps)
+    for base, edges in _substitution_edges(substitutions).items():
+        raw[base].extend(edges)
+    adj: dict[str, list[tuple[str, int]]] = collections.defaultdict(list)
+    for col, edges in raw.items():
+        if col not in send_cols:
+            continue
+        adj[col] = [(nxt, d) for nxt, d in edges if nxt in send_cols]
+    aliases: dict[str, _RelPin] = {}
+    seen: set[str] = set()
+    for start in sorted(send_cols):
+        if start in seen:
+            continue
+        rel: dict[str, int] = {start: 0}
+        queue = [start]
+        ok = True
+        while queue:
+            cur = queue.pop()
+            seen.add(cur)
+            for nxt, d in adj.get(cur, ()):
+                v = rel[cur] + d
+                if nxt in rel:
+                    if rel[nxt] != v:
+                        ok = False
+                else:
+                    rel[nxt] = v
+                    queue.append(nxt)
+        if not ok:
+            continue
+        base = min(rel, key=lambda c: (rel[c], c))
+        base_off = rel[base]
+        for col, v in rel.items():
+            if col in send_cols:
+                aliases[col] = (base, v - base_off)
+    return aliases
+
+
+def _rewrite_ts_slot(expr: Any, aliases: dict[str, _RelPin]) -> Any:
+    """Rewrite ``col + intra`` to the common base clock + combined offset."""
+    lf = linform(expr)
+    if lf is None or len(lf.coeffs) != 1 or lf.coeffs[0][1] != 1:
+        return expr
+    col, intra = lf.coeffs[0][0], lf.const
+    hit = aliases.get(col)
+    if hit is None:
+        return expr
+    base, off = hit
+    total = off + intra
+    if total == 0:
+        return base
+    return [base, "+", total]
+
+
+def simplify_expr(pins: dict[str, int], zeros: list[LinForm], expr: Any,
+                  rel_pins: dict[str, _RelPin] | None = None) -> Any:
     """Fold propagation into a dump expression; resolve to int when possible."""
     v = eval_expr(pins, zeros, expr)
     if v is not None:
         return v
-    folded = _fold_pins(expr, pins)
+    folded = _fold_pins(expr, pins, rel_pins)
     if isinstance(folded, int):
         return folded
     if folded is not expr:
@@ -526,12 +682,15 @@ def simplify_mult(pins: dict[str, int], zeros: list[LinForm], mult: Any) -> Any:
 
 
 def simplify_mem_row(row: MemRow, pins: dict[str, int], zeros: list[LinForm],
-                   envs_by_access: dict[int, list[dict[str, int]]]) -> MemRow:
+                   envs_by_access: dict[int, list[dict[str, int]]],
+                   ts_aliases: dict[str, _RelPin] | None = None) -> MemRow:
     as_arg = simplify_expr(pins, zeros, row.args[0])
     ptr_arg = _refute_expr(row.args[1], pins, envs_by_access)
     if ptr_arg is None:
         ptr_arg = simplify_expr(pins, zeros, row.args[1])
     ts_arg = simplify_expr(pins, zeros, row.args[-1])
+    if ts_aliases:
+        ts_arg = _rewrite_ts_slot(ts_arg, ts_aliases)
     args = (as_arg, ptr_arg, *row.args[2:-1], ts_arg)
     return MemRow(row.ordinal, simplify_mult(pins, zeros, row.mult), args)
 
