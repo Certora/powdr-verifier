@@ -494,8 +494,7 @@ def _lf_to_expr(lf: LinForm) -> Any:
     return expr
 
 
-def simplify_expr(pins: dict[str, int], zeros: list[LinForm], expr: Any,
-                  *, envs_by_access: dict[int, list[dict[str, int]]] | None = None) -> Any:
+def simplify_expr(pins: dict[str, int], zeros: list[LinForm], expr: Any) -> Any:
     """Fold propagation into a dump expression; resolve to int when possible."""
     v = eval_expr(pins, zeros, expr)
     if v is not None:
@@ -527,16 +526,14 @@ def simplify_mult(pins: dict[str, int], zeros: list[LinForm], mult: Any) -> Any:
 
 
 def simplify_mem_row(row: MemRow, pins: dict[str, int], zeros: list[LinForm],
-                   envs_by_access: dict[int, list[dict[str, int]]] | None = None) -> MemRow:
-    args: list[Any] = []
-    for i, a in enumerate(row.args):
-        if i == 1 and envs_by_access is not None:
-            v = _refute_expr(a, pins, envs_by_access)
-            args.append(v if v is not None
-                        else simplify_expr(pins, zeros, a, envs_by_access=envs_by_access))
-        else:
-            args.append(simplify_expr(pins, zeros, a, envs_by_access=envs_by_access))
-    return MemRow(row.ordinal, simplify_mult(pins, zeros, row.mult), tuple(args))
+                   envs_by_access: dict[int, list[dict[str, int]]]) -> MemRow:
+    as_arg = simplify_expr(pins, zeros, row.args[0])
+    ptr_arg = _refute_expr(row.args[1], pins, envs_by_access)
+    if ptr_arg is None:
+        ptr_arg = simplify_expr(pins, zeros, row.args[1])
+    ts_arg = simplify_expr(pins, zeros, row.args[-1])
+    args = (as_arg, ptr_arg, *row.args[2:-1], ts_arg)
+    return MemRow(row.ordinal, simplify_mult(pins, zeros, row.mult), args)
 
 
 def eval_expr(pins: dict[str, int], zeros: list[LinForm], expr: Any) -> int | None:
