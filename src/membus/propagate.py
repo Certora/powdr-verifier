@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from src.lens.normalize import BABYBEAR_PRIME
+from src.lens.normalize import BABYBEAR_PRIME, to_signed
 
-from .busmodel import BITWISE, TUPLE_RANGE, VAR_RANGE, range_bus_rows
+from .busmodel import BITWISE, TUPLE_RANGE, VAR_RANGE, MemRow, range_bus_rows
+from .facts import TS_MAX
 from .linform import LinForm, linform, product
 
 if TYPE_CHECKING:
@@ -73,6 +74,11 @@ def prop_bounds(an: Analysis) -> dict[str, _PropBound]:
                 and len(pr.left.coeffs) == 1
                 and pr.left.coeffs[0][1] == 1):
             put(pr.left.coeffs[0][0], 0, 2)
+
+    for row in an.mem:
+        for arg in (row.addr_space_expr, row.ptr):
+            if isinstance(arg, str):
+                put(arg, 0, TS_MAX)
 
     return out
 
@@ -155,3 +161,63 @@ def eval_mult(mf: LinForm | None, pins: dict[str, int],
         if mf.coeffs == _neg_coeffs(lf.coeffs):
             return (mf.const + lf.const) % P
     return None
+
+
+def _lf_to_expr(lf: LinForm) -> Any:
+    if lf.is_const:
+        return lf.const
+    parts: list[Any] = []
+    for col, c in lf.coeffs:
+        if c == 1:
+            parts.append(col)
+        elif c == -1:
+            parts.append(["-", col])
+        else:
+            parts.append([c, "*", col])
+    if lf.const != 0:
+        parts.append(lf.const)
+    expr = parts[0]
+    for p in parts[1:]:
+        expr = [expr, "+", p]
+    return expr
+
+
+def simplify_expr(pins: dict[str, int], zeros: list[LinForm], expr: Any) -> Any:
+    """Fold propagation into a dump expression; resolve to int when possible."""
+    v = eval_expr(pins, zeros, expr)
+    if v is not None:
+        return v
+    lf = linform(expr)
+    if lf is None:
+        return expr
+    lf = lf.subst(pins)
+    return lf.const if lf.is_const else _lf_to_expr(lf)
+
+
+def simplify_mult(pins: dict[str, int], zeros: list[LinForm], mult: Any) -> Any:
+    lf = linform(mult)
+    if lf is None:
+        return mult
+    v = eval_mult(lf, pins, zeros)
+    if v is not None:
+        return to_signed(v)
+    lf = lf.subst(pins)
+    return lf.const if lf.is_const else _lf_to_expr(lf)
+
+
+def simplify_mem_row(row: MemRow, pins: dict[str, int], zeros: list[LinForm]) -> MemRow:
+    args = (simplify_expr(pins, zeros, row.addr_space_expr),
+            simplify_expr(pins, zeros, row.ptr),
+            *row.data, row.ts)
+    return MemRow(row.ordinal, simplify_mult(pins, zeros, row.mult), args)
+
+
+def eval_expr(pins: dict[str, int], zeros: list[LinForm], expr: Any) -> int | None:
+    """Resolve a linear dump expression via propagation, or ``None``."""
+    if isinstance(expr, int):
+        return to_signed(expr)
+    lf = linform(expr)
+    if lf is None:
+        return None
+    v = eval_mult(lf, pins, zeros)
+    return to_signed(v) if v is not None else None

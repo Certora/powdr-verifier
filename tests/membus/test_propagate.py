@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from src.lens.normalize import BABYBEAR_PRIME as P
-from src.membus import propagate
+from src.membus import keys, propagate
 from src.membus.linform import LinForm, linform
 from src.membus.rules import Analysis
 
@@ -94,3 +94,13 @@ def test_eval_mult_direct():
     pins, zeros = propagate.propagate(_an([_bool("x@1"), _add("x@1", -1)]))
     assert pins["x@1"] == 1
     assert propagate.eval_mult(mf, pins, zeros) == P - 1
+
+
+def test_eval_expr_resolves_as_and_pointer():
+    cons = [_add("as@1", -2), _add("ptr@3", -8)]
+    bis = [{"id": 1, "mult": 1, "args": ["as@1", "ptr@3", 0, 0, 0, 0, "t@4"]}]
+    an = _an(cons, bis)
+    row = an.mem[0]
+    assert row.addr_space_expr == 2
+    assert row.ptr == 8
+    assert keys.recover_key(an, row) == keys.Const(8)

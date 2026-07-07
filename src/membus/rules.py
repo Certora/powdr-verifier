@@ -97,6 +97,14 @@ class Analysis:
         self.assume_is_valid = assume_is_valid
         self.mem = memory_rows(data, mem_id)
         self._mem_bus_ordinal = bus_ordinal_of_mem(data, mem_id)
+        self._propagation = propagate.propagate(self)
+        pins, zeros = self._propagation
+        self.mem = [propagate.simplify_mem_row(r, pins, zeros) for r in self.mem]
+
+    def eval_expr(self, expr: Any) -> int | None:
+        """Resolve a linear dump expression via propagation, or ``None``."""
+        pins, zeros = self._propagation
+        return propagate.eval_expr(pins, zeros, expr)
 
     def mem_src(self, row: MemRow) -> Src:
         return Src("bus", self._mem_bus_ordinal[row.ordinal])
@@ -135,8 +143,23 @@ class Analysis:
         return None if has_const_active else sel
 
     @functools.cached_property
-    def _propagation(self) -> tuple[dict[str, int], list[LinForm]]:
-        return propagate.propagate(self)
+    def addr_spaces(self) -> dict[int, int | None]:
+        """Membus ordinal → propagated address space, or None if symbolic."""
+        return {r.ordinal: r.addr_space for r in self.mem}
+
+    @functools.cached_property
+    def symbolic_as_ordinals(self) -> list[int]:
+        """Ordinals whose address space is not a constant int after propagation."""
+        return [r.ordinal for r in self.mem if r.addr_space is None]
+
+    def require_explicit_address_spaces(self, subject: str) -> None:
+        """Raise unless every interaction has a resolved address space."""
+        syms = self.symbolic_as_ordinals
+        if syms:
+            raise ValueError(
+                f"{subject}: {len(syms)} memory interaction(s) have a symbolic address "
+                f"space (e.g. #{syms[0]}) — requires solved AS form (all address spaces "
+                f"explicit)")
 
     @functools.cached_property
     def kinds(self) -> dict[int, EffKind | None]:
