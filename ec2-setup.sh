@@ -5,6 +5,7 @@
 git clone git@github.com:Certora/powdr.git
 
 sudo apt install python3-venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r verifier/requirements.txt
 pysmt-install --z3 --confirm-agreement
