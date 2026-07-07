@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
-use z3::{Context, FuncDecl, SortKind};
+use z3::{Context, DeclKind, FuncDecl, SortKind};
 use z3_sys::*;
 
 pub fn decl_name(decl: &FuncDecl) -> String {
@@ -61,11 +61,15 @@ pub fn ast_hash_dyn(ast: &Dynamic) -> u64 {
 }
 
 pub fn ast_hash_bool(b: &Bool) -> u64 {
-    ast_hash_dyn(&Dynamic::from_ast(b))
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    b.hash(&mut hasher);
+    hasher.finish()
 }
 
 pub fn ast_hash_int(i: &Int) -> u64 {
-    ast_hash_dyn(&Dynamic::from_ast(i))
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    i.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Deduplicated Int terms with structural lookup.
@@ -146,8 +150,7 @@ pub fn int_value(e: &Int) -> Option<i128> {
     if let Some(v) = e.as_i64() {
         return Some(v as i128);
     }
-    let dyn_ = Dynamic::from_ast(e);
-    if !is_int_numeral(&dyn_) {
+    if e.kind() != AstKind::Numeral || e.get_sort().kind() != SortKind::Int {
         return None;
     }
     unsafe {
@@ -374,27 +377,30 @@ pub fn free_uf_function_symbols(b: &Bool) -> BTreeMap<String, usize> {
     out
 }
 
-fn is_builtin_int_function(name: &str) -> bool {
+fn is_builtin_int_decl_kind(kind: DeclKind) -> bool {
     matches!(
-        name,
-        "+" | "-"
-            | "*"
-            | "mod"
-            | "div"
-            | "rem"
-            | "abs"
-            | "to_int"
-            | "ite"
-            | "^"
-            | "and"
-            | "or"
-            | "not"
-            | "="
-            | "<"
-            | ">"
-            | "<="
-            | ">="
-            | "distinct"
+        kind,
+        DeclKind::Add
+            | DeclKind::Sub
+            | DeclKind::Mul
+            | DeclKind::Mod
+            | DeclKind::Div
+            | DeclKind::Rem
+            | DeclKind::Uminus
+            | DeclKind::ToInt
+            | DeclKind::Ite
+            | DeclKind::And
+            | DeclKind::Or
+            | DeclKind::Not
+            | DeclKind::Eq
+            | DeclKind::Lt
+            | DeclKind::Le
+            | DeclKind::Gt
+            | DeclKind::Ge
+            | DeclKind::Distinct
+            | DeclKind::Implies
+            | DeclKind::Anum
+            | DeclKind::Agnum
     )
 }
 
@@ -420,7 +426,7 @@ fn collect_uf_function_symbols(
             let arity = decl.arity();
             if arity > 0
                 && ast.get_sort().kind() == SortKind::Int
-                && !is_builtin_int_function(&name)
+                && !is_builtin_int_decl_kind(decl.kind())
                 && !bound.contains(&name)
             {
                 out.entry(name).or_insert(arity);
@@ -452,10 +458,6 @@ fn has_quantifier_dyn(ast: &Dynamic) -> bool {
         return true;
     }
     if ast.kind() == AstKind::App {
-        let name = smtlib_decl_name(&ast.decl());
-        if name == "forall" || name == "exists" {
-            return true;
-        }
         for i in 0..ast.num_children() {
             if let Some(ch) = ast.nth_child(i) {
                 if has_quantifier_dyn(&ch) {
@@ -732,9 +734,8 @@ pub fn has_bool_sort_leaf_dyn(ast: &Dynamic) -> bool {
 
 /// Debug-only: a direct ``Int`` arithmetic operand must not be Bool-sorted.
 pub fn debug_assert_direct_int_operand(n: &Int) {
-    let ast = Dynamic::from_ast(n);
     debug_assert!(
-        ast.get_sort().kind() != SortKind::Bool,
+        n.get_sort().kind() != SortKind::Bool,
         "Bool variable used as direct Int arithmetic operand: {n}"
     );
 }
@@ -807,15 +808,11 @@ pub fn rebuild_quantifier_dyn(is_forall: bool, bounds: &[Dynamic], body: &Bool) 
 }
 
 pub fn unwrap_zero_mod_eq(b: &Bool, field: i128) -> Option<Int> {
-    let ast = Dynamic::from_ast(b);
-    if ast.kind() != AstKind::App {
+    if b.kind() != AstKind::App || b.decl().kind() != DeclKind::Eq || b.num_children() != 2 {
         return None;
     }
-    if decl_name(&ast.decl()) != "=" || ast.num_children() != 2 {
-        return None;
-    }
-    let lhs = ast.nth_child(0)?;
-    let rhs = ast.nth_child(1)?;
+    let lhs = b.nth_child(0)?;
+    let rhs = b.nth_child(1)?;
     let inner = if int_value_dyn(&rhs) == Some(0) {
         lhs
     } else if int_value_dyn(&lhs) == Some(0) {
@@ -823,14 +820,14 @@ pub fn unwrap_zero_mod_eq(b: &Bool, field: i128) -> Option<Int> {
     } else {
         return None;
     };
-    unwrap_mod_expr(&inner, field)
+    unwrap_mod_expr_dyn(&inner, field)
 }
 
-fn unwrap_mod_expr(ast: &Dynamic, field: i128) -> Option<Int> {
-    if ast.kind() != AstKind::App {
-        return None;
-    }
-    if decl_name(&ast.decl()) != "mod" || ast.num_children() != 2 {
+fn unwrap_mod_expr_dyn(ast: &Dynamic, field: i128) -> Option<Int> {
+    if ast.kind() != AstKind::App
+        || ast.decl().kind() != DeclKind::Mod
+        || ast.num_children() != 2
+    {
         return None;
     }
     let modulus = ast.nth_child(1)?;
@@ -840,21 +837,45 @@ fn unwrap_mod_expr(ast: &Dynamic, field: i128) -> Option<Int> {
     ast.nth_child(0)?.as_int()
 }
 
-pub fn bool_decl_name(b: &Bool) -> Option<String> {
-    let ast = Dynamic::from_ast(b);
-    if ast.kind() == AstKind::App {
-        Some(decl_name(&ast.decl()))
+pub fn bool_decl_kind(b: &Bool) -> Option<DeclKind> {
+    if b.kind() == AstKind::App {
+        Some(b.decl().kind())
     } else {
         None
     }
 }
 
+pub fn bool_decl_name(b: &Bool) -> Option<String> {
+    bool_decl_kind(b).map(|_| decl_name(&b.decl()))
+}
+
 pub fn bool_children(b: &Bool) -> Vec<Bool> {
-    Dynamic::from_ast(b)
-        .children()
-        .into_iter()
-        .filter_map(|c| c.as_bool())
+    (0..b.num_children())
+        .filter_map(|i| b.nth_child(i).and_then(|c| c.as_bool()))
         .collect()
+}
+
+pub fn and_parts(b: &Bool) -> Option<Vec<Bool>> {
+    if b.kind() == AstKind::App && b.decl().kind() == DeclKind::And {
+        return Some(bool_children(b));
+    }
+    None
+}
+
+pub fn or_parts(b: &Bool) -> Option<Vec<Bool>> {
+    if b.kind() == AstKind::App && b.decl().kind() == DeclKind::Or {
+        return Some(bool_children(b));
+    }
+    None
+}
+
+fn peel_annotation(b: &Bool) -> Bool {
+    if b.kind() == AstKind::App && decl_name(&b.decl()) == "!" && b.num_children() == 1 {
+        if let Some(inner) = b.nth_child(0).and_then(|c| c.as_bool()) {
+            return peel_annotation(&inner);
+        }
+    }
+    b.clone()
 }
 
 pub fn flatten_and(children: Vec<Bool>) -> Bool {
@@ -889,32 +910,6 @@ pub fn flatten_or(children: Vec<Bool>) -> Bool {
     }
 }
 
-pub fn and_parts(b: &Bool) -> Option<Vec<Bool>> {
-    let ast = Dynamic::from_ast(b);
-    if ast.kind() != AstKind::App || decl_name(&ast.decl()) != "and" {
-        return None;
-    }
-    Some(bool_children(b))
-}
-
-pub fn or_parts(b: &Bool) -> Option<Vec<Bool>> {
-    let ast = Dynamic::from_ast(b);
-    if ast.kind() != AstKind::App || decl_name(&ast.decl()) != "or" {
-        return None;
-    }
-    Some(bool_children(b))
-}
-
-fn peel_annotation(b: &Bool) -> Bool {
-    let ast = Dynamic::from_ast(b);
-    if ast.kind() == AstKind::App && decl_name(&ast.decl()) == "!" {
-        if let Some(inner) = ast.nth_child(0).and_then(|c| c.as_bool()) {
-            return peel_annotation(&inner);
-        }
-    }
-    b.clone()
-}
-
 /// Drop SMT-LIB ``(! inner attr…)`` wrappers (Z3 pattern / weight annotations).
 pub fn strip_annotations(b: &Bool) -> Bool {
     peel_annotation(b)
@@ -922,13 +917,13 @@ pub fn strip_annotations(b: &Bool) -> Bool {
 
 /// Recursively remove annotation wrappers, including inside quantifier bodies.
 pub fn strip_annotations_deep(b: &Bool) -> Bool {
-    let ast = Dynamic::from_ast(b);
-    if ast.kind() == AstKind::App && decl_name(&ast.decl()) == "!" {
-        if let Some(inner) = ast.nth_child(0).and_then(|c| c.as_bool()) {
+    if b.kind() == AstKind::App && decl_name(&b.decl()) == "!" && b.num_children() == 1 {
+        if let Some(inner) = b.nth_child(0).and_then(|c| c.as_bool()) {
             return strip_annotations_deep(&inner);
         }
     }
-    if ast.kind() == AstKind::Quantifier {
+    if b.kind() == AstKind::Quantifier {
+        let ast = Dynamic::from_ast(b);
         let bounds = quantifier_bounds(&ast);
         let is_forall = quantifier_is_forall(&ast);
         let body = quantifier_body_bool(&ast).expect("quantifier body");
@@ -944,38 +939,28 @@ pub fn or_body_parts(b: &Bool) -> Option<Vec<Bool>> {
 }
 
 pub fn is_implies(b: &Bool) -> Option<(Bool, Bool)> {
-    let ast = Dynamic::from_ast(b);
-    if ast.kind() != AstKind::App {
+    if b.kind() != AstKind::App || b.decl().kind() != DeclKind::Implies || b.num_children() != 2 {
         return None;
     }
-    let name = decl_name(&ast.decl());
-    if name != "=>" && name != "implies" {
-        return None;
-    }
-    if ast.num_children() != 2 {
-        return None;
-    }
-    let a = ast.nth_child(0)?.as_bool()?;
-    let c = ast.nth_child(1)?.as_bool()?;
+    let a = b.nth_child(0)?.as_bool()?;
+    let c = b.nth_child(1)?.as_bool()?;
     Some((a, c))
 }
 
 pub fn is_not(b: &Bool) -> Option<Bool> {
-    let ast = Dynamic::from_ast(b);
-    if ast.kind() != AstKind::App || decl_name(&ast.decl()) != "not" || ast.num_children() != 1 {
+    if b.kind() != AstKind::App || b.decl().kind() != DeclKind::Not || b.num_children() != 1 {
         return None;
     }
-    ast.nth_child(0)?.as_bool()
+    b.nth_child(0)?.as_bool()
 }
 
 pub fn is_ite(b: &Bool) -> Option<(Bool, Bool, Bool)> {
-    let ast = Dynamic::from_ast(b);
-    if ast.kind() != AstKind::App || decl_name(&ast.decl()) != "ite" || ast.num_children() != 3 {
+    if b.kind() != AstKind::App || b.decl().kind() != DeclKind::Ite || b.num_children() != 3 {
         return None;
     }
-    let cond = ast.nth_child(0)?.as_bool()?;
-    let then_b = ast.nth_child(1)?.as_bool()?;
-    let else_b = ast.nth_child(2)?.as_bool()?;
+    let cond = b.nth_child(0)?.as_bool()?;
+    let then_b = b.nth_child(1)?.as_bool()?;
+    let else_b = b.nth_child(2)?.as_bool()?;
     Some((cond, then_b, else_b))
 }
 
@@ -988,8 +973,8 @@ pub fn int_from_i128(v: i128) -> Int {
 }
 
 pub fn map_bool_children(b: &Bool, f: &mut impl FnMut(&Bool) -> Bool) -> Bool {
-    let ast = Dynamic::from_ast(b);
-    if ast.kind() == AstKind::Quantifier {
+    if b.kind() == AstKind::Quantifier {
+        let ast = Dynamic::from_ast(b);
         let orig_names = quantifier_bound_names(&ast);
         let bounds = quantifier_bounds(&ast);
         let is_forall = quantifier_is_forall(&ast);
@@ -1003,29 +988,29 @@ pub fn map_bool_children(b: &Bool, f: &mut impl FnMut(&Bool) -> Bool) -> Bool {
         );
         return rebuilt;
     }
-    if let Some(name) = bool_decl_name(b) {
-        match name.as_str() {
-            "and" => {
+    if b.kind() == AstKind::App {
+        match b.decl().kind() {
+            DeclKind::And => {
                 let args: Vec<Bool> = bool_children(b).into_iter().map(|c| f(&c)).collect();
                 return flatten_and(args);
             }
-            "or" => {
+            DeclKind::Or => {
                 let args: Vec<Bool> = bool_children(b).into_iter().map(|c| f(&c)).collect();
                 return flatten_or(args);
             }
-            "not" if ast.num_children() == 1 => {
+            DeclKind::Not if b.num_children() == 1 => {
                 if let Some(inner) = is_not(b) {
                     return f(&inner).not();
                 }
             }
-            "=>" | "implies" if ast.num_children() == 2 => {
+            DeclKind::Implies if b.num_children() == 2 => {
                 if let Some((a, c)) = is_implies(b) {
                     let na = f(&a);
                     let nc = f(&c);
                     return na.implies(&nc);
                 }
             }
-            "ite" if ast.num_children() == 3 => {
+            DeclKind::Ite if b.num_children() == 3 => {
                 if let Some((cond, then_b, else_b)) = is_ite(b) {
                     let nc = f(&cond);
                     let nt = f(&then_b);
@@ -1048,17 +1033,18 @@ pub fn map_bool_children_opt(
     b: &Bool,
     f: &mut impl FnMut(&Bool) -> Option<Bool>,
 ) -> Option<Bool> {
-    let ast = Dynamic::from_ast(b);
-    if ast.kind() == AstKind::Quantifier {
+    if b.kind() == AstKind::Quantifier {
+        let ast = Dynamic::from_ast(b);
         let bounds = quantifier_bounds(&ast);
         let is_forall = quantifier_is_forall(&ast);
         let body = quantifier_body_bool(&ast).expect("quantifier body");
         let new_body = f(&body)?;
         return Some(rebuild_quantifier_dyn(is_forall, &bounds, &new_body));
     }
-    if let Some(name) = bool_decl_name(b) {
-        match name.as_str() {
-            "and" | "or" => {
+    if b.kind() == AstKind::App {
+        match b.decl().kind() {
+            DeclKind::And | DeclKind::Or => {
+                let is_and = b.decl().kind() == DeclKind::And;
                 let children = bool_children(b);
                 let mut changed = false;
                 let args: Vec<Bool> = children
@@ -1074,18 +1060,18 @@ pub fn map_bool_children_opt(
                 if !changed {
                     return None;
                 }
-                return Some(if name == "and" {
+                return Some(if is_and {
                     flatten_and(args)
                 } else {
                     flatten_or(args)
                 });
             }
-            "not" if ast.num_children() == 1 => {
+            DeclKind::Not if b.num_children() == 1 => {
                 if let Some(inner) = is_not(b) {
                     return Some(f(&inner)?.not());
                 }
             }
-            "=>" | "implies" if ast.num_children() == 2 => {
+            DeclKind::Implies if b.num_children() == 2 => {
                 if let Some((a, c)) = is_implies(b) {
                     let na = f(&a);
                     let nc = f(&c);
@@ -1097,7 +1083,7 @@ pub fn map_bool_children_opt(
                     return Some(na.implies(&nc));
                 }
             }
-            "ite" if ast.num_children() == 3 => {
+            DeclKind::Ite if b.num_children() == 3 => {
                 if let Some((cond, then_b, else_b)) = is_ite(b) {
                     let nc = f(&cond);
                     let nt = f(&then_b);

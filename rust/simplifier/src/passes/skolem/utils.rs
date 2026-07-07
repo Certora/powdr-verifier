@@ -2,11 +2,12 @@ use std::collections::{HashMap, HashSet};
 
 use smt2::ast_build::{int_literal_dyn, iter_nodes_dyn, parse_bool_formula, symbol_name_dyn};
 use smt2::ast_util::{
-    decl_name, free_symbol_ids_bool, int_value_dyn, quantifier_bounds, quantifier_body_bool, strip_prefix,
+    free_symbol_ids_bool, int_value_dyn, quantifier_bounds, quantifier_body_bool, strip_prefix,
     symbol_id_dyn, symbol_id_from_name, SymbolId,
 };
 use smt2::{declare_fun_name_cmd, seed_parser_context, ParseCtx, Script, SmtCommand};
 use z3::ast::{Ast, AstKind, Bool, Dynamic};
+use z3::DeclKind;
 use z3::SortKind as Z3SortKind;
 
 use super::types::{SkolemPin, SortKind};
@@ -148,12 +149,11 @@ fn equation_var_symbol(ast: &Dynamic) -> Option<String> {
 }
 
 pub fn split_equation(eq: &Bool) -> Option<(String, Dynamic)> {
-    let ast = Dynamic::from_ast(eq);
-    if ast.kind() != AstKind::App || decl_name(&ast.decl()) != "=" || ast.num_children() != 2 {
+    if eq.kind() != AstKind::App || eq.decl().kind() != DeclKind::Eq || eq.num_children() != 2 {
         return None;
     }
-    let a = ast.nth_child(0)?;
-    let b = ast.nth_child(1)?;
+    let a = eq.nth_child(0)?;
+    let b = eq.nth_child(1)?;
     if let Some(name) = equation_var_symbol(&a) {
         return Some((name, b));
     }

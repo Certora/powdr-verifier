@@ -38,7 +38,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
 
     let prefix = declare_block(script);
     let mut remaining: Vec<Int> = choices.keys().cloned().collect();
-    remaining.sort_by_cached_key(|s| decl_name(&Dynamic::from_ast(s).decl()));
+    remaining.sort_by_cached_key(|s| decl_name(&s.decl()));
     let mut symbols_probed = 0usize;
     let mut clusters_probed = 0usize;
     let mut flag_vars_total = 0usize;
@@ -320,7 +320,7 @@ fn probe_cluster(
     }
 
     let mut syms: Vec<_> = cluster_choices.iter().collect();
-    syms.sort_by_cached_key(|(s, _)| decl_name(&Dynamic::from_ast(*s).decl()));
+    syms.sort_by_cached_key(|(s, _)| decl_name(&s.decl()));
     for (sym, vals) in syms {
         for v in vals {
             let probe = sym.eq(&int_from_i128(*v));

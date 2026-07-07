@@ -11,7 +11,7 @@ use smt2::{
     symbol_id_dyn, symbol_id_from_name, IntTermSet, ParseCtx, Script, SymbolId,
 };
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
-use z3::SortKind;
+use z3::{DeclKind, SortKind};
 
 type Monomial = Vec<u32>;
 type Poly = HashMap<Monomial, i128>;
@@ -163,9 +163,8 @@ fn collect_variables(
 
         if let Some(int_n) = n.as_int() {
             if n.kind() == AstKind::App {
-                let head = smt2::decl_name(&n.decl());
                 if let Some(p) = field_mod {
-                    if head == "mod"
+                    if n.decl().kind() == DeclKind::Mod
                         && n.num_children() == 2
                         && n
                             .nth_child(1)
@@ -179,7 +178,7 @@ fn collect_variables(
                         return;
                     }
                 }
-                if is_combinator(&head) {
+                if is_combinator_kind(n.decl().kind()) {
                     for i in 0..n.num_children() {
                         if let Some(ch) = n.nth_child(i) {
                             visit(&ch, field_mod, bool_symbols, terms, seen);
@@ -206,8 +205,7 @@ fn collect_variables(
         }
 
         if n.kind() == AstKind::App {
-            let head = smt2::decl_name(&n.decl());
-            if is_bool_or_relation_head(&head) {
+            if is_bool_or_relation_kind(n.decl().kind()) {
                 for i in 0..n.num_children() {
                     if let Some(ch) = n.nth_child(i) {
                         visit(&ch, field_mod, bool_symbols, terms, seen);
@@ -251,23 +249,32 @@ fn sort_terms(terms: IntTermSet) -> IntTermSet {
     IntTermSet::from_sorted_unique(keyed.into_iter().map(|(_, t)| t).collect())
 }
 
-fn is_combinator(head: &str) -> bool {
-    matches!(head, "+" | "-" | "*")
+fn is_combinator_kind(kind: DeclKind) -> bool {
+    matches!(kind, DeclKind::Add | DeclKind::Sub | DeclKind::Mul)
 }
 
-fn is_bool_or_relation_head(head: &str) -> bool {
+fn is_bool_or_relation_kind(kind: DeclKind) -> bool {
     matches!(
-        head,
-        "and" | "or" | "not" | "=>" | "ite" | "=" | "<" | "<=" | ">" | ">=" | "distinct"
+        kind,
+        DeclKind::And
+            | DeclKind::Or
+            | DeclKind::Not
+            | DeclKind::Implies
+            | DeclKind::Ite
+            | DeclKind::Eq
+            | DeclKind::Lt
+            | DeclKind::Le
+            | DeclKind::Gt
+            | DeclKind::Ge
+            | DeclKind::Distinct
     )
 }
 
 fn field_mod_wrap(t: &Int, p: i128) -> bool {
-    let ast = Dynamic::from_ast(t);
-    ast.kind() == AstKind::App
-        && smt2::decl_name(&ast.decl()) == "mod"
-        && ast.num_children() == 2
-        && ast
+    t.kind() == AstKind::App
+        && t.decl().kind() == DeclKind::Mod
+        && t.num_children() == 2
+        && t
             .nth_child(1)
             .and_then(|m| int_value_dyn(&m))
             .map(|m| m == p)
@@ -278,8 +285,7 @@ fn unwrap_field_mod_body(t: &Int, p: i128) -> Int {
     if !field_mod_wrap(t, p) {
         return t.clone();
     }
-    Dynamic::from_ast(t)
-        .nth_child(0)
+    t.nth_child(0)
         .and_then(|c| c.as_int())
         .unwrap_or_else(|| t.clone())
 }
@@ -404,52 +410,50 @@ fn expr_to_poly(n: &Int, var_terms: &IntTermSet, modulo: Option<i128>) -> Option
         };
     }
 
-    let dyn_ = Dynamic::from_ast(n);
-    let head = if dyn_.kind() == AstKind::App {
-        smt2::decl_name(&dyn_.decl())
-    } else {
-        String::new()
-    };
-
-    match head.as_str() {
-        "+" => {
-            let mut acc = Poly::new();
-            for ch in dyn_.children() {
-                let q = expr_to_poly(&ch.as_int()?, var_terms, modulo)?;
-                acc = poly_add(acc, &q, 1, modulo);
-            }
-            Some(acc)
-        }
-        "-" if dyn_.num_children() == 1 => {
-            let ch = dyn_.nth_child(0)?.as_int()?;
-            expr_to_poly(&ch, var_terms, modulo).map(|mut p| {
-                for v in p.values_mut() {
-                    *v = -*v;
-                    if let Some(m) = modulo {
-                        *v = coeff_mod(*v, m);
-                    }
+    if n.kind() == AstKind::App {
+        match n.decl().kind() {
+            DeclKind::Add => {
+                let mut acc = Poly::new();
+                for i in 0..n.num_children() {
+                    let q = expr_to_poly(&n.nth_child(i)?.as_int()?, var_terms, modulo)?;
+                    acc = poly_add(acc, &q, 1, modulo);
                 }
-                p.retain(|_, v| *v != 0);
-                p
-            })
-        }
-        "-" if dyn_.num_children() == 2 => {
-            let pa = expr_to_poly(&dyn_.nth_child(0)?.as_int()?, var_terms, modulo)?;
-            let pb = expr_to_poly(&dyn_.nth_child(1)?.as_int()?, var_terms, modulo)?;
-            Some(poly_add(pa, &pb, -1, modulo))
-        }
-        "*" => {
-            let mut acc = Poly::from([(Vec::new(), 1i128)]);
-            for ch in dyn_.children() {
-                let q = expr_to_poly(&ch.as_int()?, var_terms, modulo)?;
-                acc = poly_mul(&acc, &q, modulo);
+                Some(acc)
             }
-            Some(acc)
+            DeclKind::Uminus if n.num_children() == 1 => {
+                let ch = n.nth_child(0)?.as_int()?;
+                expr_to_poly(&ch, var_terms, modulo).map(|mut p| {
+                    for v in p.values_mut() {
+                        *v = -*v;
+                        if let Some(m) = modulo {
+                            *v = coeff_mod(*v, m);
+                        }
+                    }
+                    p.retain(|_, v| *v != 0);
+                    p
+                })
+            }
+            DeclKind::Sub if n.num_children() == 2 => {
+                let pa = expr_to_poly(&n.nth_child(0)?.as_int()?, var_terms, modulo)?;
+                let pb = expr_to_poly(&n.nth_child(1)?.as_int()?, var_terms, modulo)?;
+                Some(poly_add(pa, &pb, -1, modulo))
+            }
+            DeclKind::Mul => {
+                let mut acc = Poly::from([(Vec::new(), 1i128)]);
+                for i in 0..n.num_children() {
+                    let q = expr_to_poly(&n.nth_child(i)?.as_int()?, var_terms, modulo)?;
+                    acc = poly_mul(&acc, &q, modulo);
+                }
+                Some(acc)
+            }
+            _ => {
+                let idx = var_terms.index_of(n)?;
+                Some(HashMap::from([(vec![idx as u32], 1)]))
+            }
         }
-        _ => {
-            let idx = var_terms.index_of(n)?;
-            Some(HashMap::from([(vec![idx as u32], 1)]))
-        }
+    } else {
+        let idx = var_terms.index_of(n)?;
+        Some(HashMap::from([(vec![idx as u32], 1)]))
     }
 }
 
@@ -669,23 +673,22 @@ fn normalize_term(term: &Bool, ctx: &NormalizeCtx<'_>) -> Bool {
         let new_body = normalize_term(&body, ctx);
         return smt2::rebuild_quantifier_dyn(is_forall, &bounds, &new_body);
     }
-    if ast.kind() == AstKind::App && ast.num_children() == 2 {
-        let head = smt2::decl_name(&ast.decl());
-        let lhs = ast.nth_child(0).and_then(|c| c.as_int());
-        let rhs = ast.nth_child(1).and_then(|c| c.as_int());
+    if term.kind() == AstKind::App && term.num_children() == 2 {
+        let lhs = term.nth_child(0).and_then(|c| c.as_int());
+        let rhs = term.nth_child(1).and_then(|c| c.as_int());
         if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
-            match head.as_str() {
-                "=" => {
+            match term.decl().kind() {
+                DeclKind::Eq => {
                     if let Some(rep) = normalize_equals(&lhs, &rhs, ctx) {
                         return rep;
                     }
                 }
-                "<" => {
+                DeclKind::Lt => {
                     if let Some(rep) = normalize_int_rel_gcd(&lhs, &rhs, ctx) {
                         return rep.lt(&int_from_i128(0));
                     }
                 }
-                "<=" => {
+                DeclKind::Le => {
                     if let Some(rep) = normalize_int_rel_gcd(&lhs, &rhs, ctx) {
                         return rep.le(&int_from_i128(0));
                     }

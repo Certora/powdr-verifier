@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use smt2::ast_util::{ast_hash_bool, decl_name, int_from_i128, int_value_dyn};
-use smt2::{map_asserts, IntTermSet, Script};
+use smt2::{declare_fun_name_cmd, map_asserts, IntTermSet, Script};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
 use crate::expr_util::AssertBuildCtx;
@@ -30,7 +30,26 @@ struct BitwiseStats {
     emitted_link: usize,
 }
 
+fn has_bitwise_declarations(script: &Script) -> bool {
+    script
+        .commands
+        .iter()
+        .filter(|c| c.name() == "declare-fun")
+        .filter_map(declare_fun_name_cmd)
+        .any(|name| name == UF_XOR || name == UF_AND || name == UF_OR)
+}
+
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
+    if !has_bitwise_declarations(script) {
+        return Ok((
+            script.clone(),
+            serde_json::json!({
+                "top_level_bitwise_axiom_asserts": 0,
+                "bitwise_stats": stats_payload(&BitwiseStats::default()),
+            }),
+        ));
+    }
+
     let mut stats = BitwiseStats::default();
     let mut seen_axioms: HashSet<u64> = HashSet::new();
     let mut top_axioms: Vec<Bool> = Vec::new();

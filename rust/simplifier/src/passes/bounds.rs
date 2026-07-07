@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use smt2::{declare_fun_name_cmd, decl_name, free_int_nodes, int_from_i128, map_asserts, symbol_id_from_name, Script, SmtCommand, SymbolId};
-use z3::ast::{Ast, Bool, Dynamic, Int};
+use z3::ast::{Ast, Bool, Int};
 
 use crate::expr_util::{rebuild_script, AssertBuildCtx};
 use crate::passes::skolem::ast_build::field_mod;
@@ -33,7 +33,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     }
 
     let mut bound_syms: Vec<Int> = bounded.into_iter().collect();
-    bound_syms.sort_by_cached_key(|i| decl_name(&Dynamic::from_ast(i).decl()));
+    bound_syms.sort_by_cached_key(|i| decl_name(&i.decl()));
 
     let bound_asserts: Vec<Bool> = bound_syms
         .iter()
@@ -76,7 +76,7 @@ fn needs_basic_range_axiom(name: &str) -> bool {
 }
 
 fn is_bounded_int_symbol(sym: &Int, sorts: &SymbolSorts) -> bool {
-    let name = decl_name(&Dynamic::from_ast(sym).decl());
+    let name = decl_name(&sym.decl());
     if !needs_basic_range_axiom(&name) {
         return false;
     }

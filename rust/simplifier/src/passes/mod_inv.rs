@@ -3,18 +3,27 @@
 use std::collections::HashSet;
 
 use smt2::ast_util::{decl_name, rebuild_app};
-use smt2::{IntTermSet, Script, SmtCommand};
+use smt2::{declare_fun_name_cmd, IntTermSet, Script};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 use crate::expr_util::AssertBuildCtx;
 
 const UF_MOD_INV: &str = "uf_mod_inv";
+
+fn has_mod_inv_declaration(script: &Script) -> bool {
+    script
+        .commands
+        .iter()
+        .filter(|c| c.name() == "declare-fun")
+        .filter_map(declare_fun_name_cmd)
+        .any(|name| name == UF_MOD_INV)
+}
 
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let field = std::env::var("SIMPLIFIER_FIELD_MOD")
         .ok()
         .and_then(|s| s.parse::<i128>().ok())
         .ok_or("SIMPLIFIER_FIELD_MOD not set")?;
-    if !contains_mod_inv(script) {
+    if !has_mod_inv_declaration(script) {
         return Ok((
             script.clone(),
             serde_json::json!({
@@ -67,30 +76,6 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
             "fallback_fresh_symbols": fallback_fresh_symbols,
         }),
     ))
-}
-
-fn contains_mod_inv(script: &Script) -> bool {
-    script
-        .commands
-        .iter()
-        .filter_map(SmtCommand::assert_bool)
-        .any(contains_mod_inv_bool)
-}
-
-fn contains_mod_inv_bool(b: &Bool) -> bool {
-    let mut stack = vec![Dynamic::from_ast(b)];
-    while let Some(node) = stack.pop() {
-        if node.kind() == AstKind::App && decl_name(&node.decl()) == UF_MOD_INV {
-            return true;
-        }
-        if node.kind() == AstKind::Quantifier {
-            continue;
-        }
-        for ch in node.children() {
-            stack.push(ch);
-        }
-    }
-    false
 }
 
 struct FallbackRewriter {
