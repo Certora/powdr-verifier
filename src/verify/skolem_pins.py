@@ -36,11 +36,11 @@ def _pin_ufs(pins: list[FNode]) -> list[FNode]:
 
 
 def drop_mirrored_derived(
-    derived: dict[FNode, FNode],
-    other_derived: dict[FNode, FNode],
+    derived: dict[FNode, list[FNode]],
+    other_derived: dict[FNode, list[FNode]],
     prefix: str,
     other_prefix: str,
-) -> dict[FNode, FNode]:
+) -> dict[FNode, list[FNode]]:
     """Drop derived columns that the other side defines identically.
 
     When before and after dumps share a derived column (same name and
@@ -57,17 +57,21 @@ def drop_mirrored_derived(
     Columns without an identical counterpart keep their functional pin
     (the only valid witness when the circuits genuinely differ).
     """
-    other_stripped = {
-        strip_prefix_from_vars(k, other_prefix): strip_prefix_from_vars(eq, other_prefix)
-        for k, eq in other_derived.items()
-    }
-    out: dict[FNode, FNode] = {}
-    for k, eq in derived.items():
-        ks = strip_prefix_from_vars(k, prefix)
-        if other_stripped.get(ks) == strip_prefix_from_vars(eq, prefix):
-            logging.info("derived pin dropped (mirrored on both sides): %s", k)
-            continue
-        out[k] = eq
+    other_stripped: dict[FNode, set[FNode]] = {}
+    for k, eqs in other_derived.items():
+        bucket = other_stripped.setdefault(strip_prefix_from_vars(k, other_prefix), set())
+        bucket.update(strip_prefix_from_vars(eq, other_prefix) for eq in eqs)
+    out: dict[FNode, list[FNode]] = {}
+    for k, eqs in derived.items():
+        mirrored = other_stripped.get(strip_prefix_from_vars(k, prefix), frozenset())
+        kept = []
+        for eq in eqs:
+            if strip_prefix_from_vars(eq, prefix) in mirrored:
+                logging.info("derived pin dropped (mirrored on both sides): %s", k)
+                continue
+            kept.append(eq)
+        if kept:
+            out[k] = kept
     return out
 
 
@@ -91,7 +95,7 @@ def filter_loaded_skolem_pins(
 
 
 def derived_columns_skolem_setinfo(
-    derived: dict[FNode, FNode],
+    derived: dict[FNode, FNode | list[FNode]],
     *,
     kind: SkolemPinKind = SkolemPinKind.DERIVED,
 ) -> SetInfos:
@@ -111,7 +115,9 @@ def derived_columns_skolem_setinfo(
     Pins referencing symbols absent from the script are dropped in the skolem
     pass (:func:`~.simplify.skolem_utils.load_skolem_setinfos`).
     """
-    derived_pins = list(derived.values())
+    derived_pins: list[FNode] = []
+    for v in derived.values():
+        derived_pins.extend(v if isinstance(v, list) else [v])
     decls = _pin_ufs(derived_pins)
     return SetInfos(
         equations=[SkolemPin(eq, kind) for eq in derived_pins],
