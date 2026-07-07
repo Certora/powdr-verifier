@@ -76,9 +76,15 @@ def prop_bounds(an: Analysis) -> dict[str, _PropBound]:
             put(pr.left.coeffs[0][0], 0, 2)
 
     for row in an.mem:
-        for arg in (row.addr_space_expr, row.ptr):
-            if isinstance(arg, str):
-                put(arg, 0, TS_MAX)
+        if isinstance(row.addr_space_expr, str):
+            put(row.addr_space_expr, 0, TS_MAX)
+        if isinstance(row.ptr, str):
+            put(row.ptr, 0, TS_MAX)
+        for byte in row.data:
+            if isinstance(byte, str):
+                put(byte, 0, 1 << 8)
+        if isinstance(row.ts, str):
+            put(row.ts, 0, TS_MAX)
 
     return out
 
@@ -206,10 +212,9 @@ def simplify_mult(pins: dict[str, int], zeros: list[LinForm], mult: Any) -> Any:
 
 
 def simplify_mem_row(row: MemRow, pins: dict[str, int], zeros: list[LinForm]) -> MemRow:
-    args = (simplify_expr(pins, zeros, row.addr_space_expr),
-            simplify_expr(pins, zeros, row.ptr),
-            *row.data, row.ts)
-    return MemRow(row.ordinal, simplify_mult(pins, zeros, row.mult), args)
+    return MemRow(row.ordinal,
+                  simplify_mult(pins, zeros, row.mult),
+                  tuple(simplify_expr(pins, zeros, a) for a in row.args))
 
 
 def eval_expr(pins: dict[str, int], zeros: list[LinForm], expr: Any) -> int | None:
