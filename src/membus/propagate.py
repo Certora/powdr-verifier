@@ -6,13 +6,14 @@ can justify propagated multiplicities.
 """
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from src.lens.normalize import BABYBEAR_PRIME, to_signed
 
 from .busmodel import BITWISE, TUPLE_RANGE, VAR_RANGE, MemRow, range_bus_rows
 from .facts import TS_MAX
-from .linform import LinForm, linform, product
+from .linform import LinForm, domain_gadget, linform, product
 
 if TYPE_CHECKING:
     from .rules import Analysis
@@ -66,6 +67,13 @@ def prop_bounds(an: Analysis) -> dict[str, _PropBound]:
                     put(a, 0, None)
 
     for con in an.machine.get("constraints", []):
+        lf = linform(con)
+        if lf is not None and len(lf.coeffs) == 1:
+            put(lf.coeffs[0][0], 0, TS_MAX)
+        dg = domain_gadget(con)
+        if dg is not None:
+            put(dg[0], 0, dg[1])
+            continue
         pr = product(con)
         if pr is None:
             continue
@@ -226,3 +234,19 @@ def eval_expr(pins: dict[str, int], zeros: list[LinForm], expr: Any) -> int | No
         return None
     v = eval_mult(lf, pins, zeros)
     return to_signed(v) if v is not None else None
+
+
+def format_debug(an: Analysis) -> str:
+    """Human-readable propagation state and simplified memory rows."""
+    pins, zeros = an._propagation
+    lines = [f"# propagation pins ({len(pins)})"]
+    for col in sorted(pins):
+        lines.append(f"  {col} = {pins[col]}")
+    lines.append(f"# propagation zeros ({len(zeros)})")
+    for lf in zeros:
+        lines.append(f"  {lf}")
+    lines.append(f"# memory interactions ({len(an.mem)}) after simplification")
+    for r in an.mem:
+        lines.append(
+            f"  #{r.ordinal}  mult={json.dumps(r.mult)}  args={json.dumps(list(r.args))}")
+    return "\n".join(lines)

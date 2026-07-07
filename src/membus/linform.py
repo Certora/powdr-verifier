@@ -139,6 +139,43 @@ def product(e: Any) -> Product | None:
     return None
 
 
+def _flatten_mul(e: Any) -> list[Any]:
+    """Left-flattened factors of a nested ``*`` expression."""
+    if isinstance(e, list) and len(e) == 3 and e[1] == "*":
+        return _flatten_mul(e[0]) + _flatten_mul(e[2])
+    return [e]
+
+
+def domain_gadget(e: Any) -> tuple[str, int] | None:
+    """``col * (col-1) * … * (col-(n-1)) = 0`` → ``(col, n)``; else None."""
+    factors = _flatten_mul(e)
+    col: str | None = None
+    deltas: list[int] = []
+    for f in factors:
+        if isinstance(f, str):
+            if col is None:
+                col = f
+            elif f != col:
+                return None
+            deltas.append(0)
+        elif isinstance(f, list) and len(f) == 3 and f[1] == "-":
+            if not isinstance(f[0], str) or not isinstance(f[2], int):
+                return None
+            if col is None:
+                col = f[0]
+            elif f[0] != col:
+                return None
+            deltas.append(f[2])
+        else:
+            return None
+    if col is None or not deltas:
+        return None
+    deltas.sort()
+    if deltas != list(range(len(deltas))):
+        return None
+    return col, len(deltas)
+
+
 _OPS = ("+", "-", "*")
 
 
