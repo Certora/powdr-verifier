@@ -9,7 +9,7 @@ from src.membus import keys, propagate
 from src.membus.linform import LinForm, linform
 from src.membus.rules import Analysis
 
-_DUMP = (Path(__file__).resolve().parents[1]
+_DUMP = (Path(__file__).resolve().parents[2]
          / "powdr-dumps/guest-keccak-selection"
          / "apc_candidate_2103992_002_loop_iteration.json")
 
@@ -36,6 +36,10 @@ def test_linform_subst_folds_pins():
 
 def _bool(col: str):
     return [col, "*", [col, "+", -1]]
+
+
+def _ternary_bool(col: str):
+    return [col, "*", [[col, "-", 1], "*", [col, "-", 2]]]
 
 
 def test_same_coeff_offset():
@@ -104,3 +108,31 @@ def test_eval_expr_resolves_as_and_pointer():
     assert row.addr_space_expr == 2
     assert row.ptr == 8
     assert keys.recover_key(an, row) == keys.Const(8)
+
+
+def test_linear_constraint_pins_column():
+    an = _an([_add("mem_as@1", -2)], [])
+    assert an._propagation[0]["mem_as@1"] == 2
+
+
+def test_ternary_boolean_gadget_bounds():
+    an = _an([_ternary_bool("f@1"), _add("f@1", -1)], [])
+    assert an._propagation[0]["f@1"] == 1
+
+
+_DUMP_2103993 = (Path(__file__).resolve().parents[2]
+                 / "powdr-dumps/guest-keccak-selection"
+                 / "apc_candidate_2103993_000_unopt.json")
+
+
+@pytest.mark.skipif(not _DUMP_2103993.is_file(), reason="regression dump not present")
+def test_is_load_case_split_2103993():
+    data = json.loads(_DUMP_2103993.read_text())
+    an = Analysis(data, assume_is_valid=False)
+    pins = an._propagation[0]
+    assert pins["is_load_2@100"] == 1
+    assert pins["is_load_4@177"] == 0
+    row14 = next(r for r in an.mem if r.ordinal == 14)
+    row28 = next(r for r in an.mem if r.ordinal == 28)
+    assert row14.addr_space_expr == 2
+    assert row28.addr_space_expr == 2
