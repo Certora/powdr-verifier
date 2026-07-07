@@ -90,9 +90,9 @@ class Analysis:
         self.assume_is_valid = assume_is_valid
         self.mem = memory_rows(data, mem_id)
         self._mem_bus_ordinal = bus_ordinal_of_mem(data, mem_id)
-        self._propagation = propagate.propagate(self)
-        pins, zeros = self._propagation
-        envs = propagate.surviving_envs(self, pins)
+        pins, zeros, decoding = propagate.propagate(self)
+        self._propagation = (pins, zeros)
+        envs = propagate.surviving_envs(self, pins, decoding)
         self.mem = [propagate.simplify_mem_row(r, pins, zeros, envs) for r in self.mem]
 
     def mem_src(self, row: MemRow) -> Src:

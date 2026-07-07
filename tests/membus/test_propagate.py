@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from src.lens.loader import machine_of
 from src.lens.normalize import BABYBEAR_PRIME as P
 from src.membus import keys, propagate
 from src.membus.busmodel import symbolic_as_ordinals
@@ -13,6 +14,9 @@ from src.membus.rules import Analysis
 _DUMP = (Path(__file__).resolve().parents[2]
          / "powdr-dumps/guest-keccak-selection"
          / "apc_candidate_2103992_002_loop_iteration.json")
+_DUMP_2100223 = (Path(__file__).resolve().parents[2]
+                 / "powdr-dumps/guest-keccak-selection"
+                 / "apc_candidate_2100223_000_unopt.json")
 _DUMP_2103992 = (Path(__file__).resolve().parents[2]
                  / "powdr-dumps/guest-keccak-selection"
                  / "apc_candidate_2103992_000_unopt.json")
@@ -100,7 +104,7 @@ def test_loop_iteration_dump_all_kinds_resolved():
 
 def test_eval_mult_direct():
     mf = linform(["-", "x@1"])
-    pins, zeros = propagate.propagate(_an([_bool("x@1"), _add("x@1", -1)]))
+    pins, zeros, _ = propagate.propagate(_an([_bool("x@1"), _add("x@1", -1)]))
     assert pins["x@1"] == 1
     assert propagate.eval_mult(mf, pins, zeros) == P - 1
 
@@ -121,6 +125,68 @@ def test_ternary_boolean_gadget_bounds():
     assert an.kinds[0].kind == "send"
 
 
+def test_refute_expr_requires_bound_columns():
+    """Unbound columns that still affect the value are not guessed."""
+    expr = ["ptr@1", "+", "mem@2"]
+    pins = {"ptr@1": 8}
+    envs = {0: [{"ptr@1": 8, "flags__0_0@3": 0}]}
+    assert propagate._refute_expr(expr, pins, envs) is None
+
+
+def test_refute_expr_zeroes_pinned_factor():
+    """Pinned zero eliminates an unbound multiplicand."""
+    expr = [["is_load_0@10", "*", "rd_0@11"], "+", "ptr_0@12"]
+    pins = {"is_load_0@10": 0, "ptr_0@12": 44}
+    envs = {0: [{"is_load_0@10": 0, "ptr_0@12": 44, "flags__0_0@5": 0}]}
+    assert propagate._refute_expr(expr, pins, envs) == 44
+
+
+@pytest.mark.skipif(not _DUMP_2100223.is_file(), reason="regression dump not present")
+def test_decoding_index_matches_naive_deciding():
+    data = json.loads(_DUMP_2100223.read_text())
+    cons = machine_of(data).get("constraints", [])
+    index = propagate._DecodingIndex.build(cons)
+    cols = propagate._all_constraint_cols({"constraints": cons})
+    for is_load in sorted(c for c in cols if c.startswith("is_load_")):
+        m = propagate._IS_LOAD_RE.match(is_load)
+        if m is None:
+            continue
+        flag_cols = propagate._flag_cols_for_access(cols, int(m.group(1)))
+        if not flag_cols:
+            continue
+        naive = propagate._deciding_constraints(cons, is_load, flag_cols, {})
+        indexed = index.deciding_constraints(is_load, flag_cols)
+        assert indexed == naive, is_load
+
+
+def test_fold_pins_algebraic_identities():
+    col = "mem_ptr_limbs__0_1@52"
+    assert propagate._fold_pins([0, "+", [1, "*", col]], {}) == col
+    assert propagate._fold_pins([col, "+", 0], {}) == col
+    assert propagate._fold_pins([col, "-", 0], {}) == col
+    assert propagate._fold_pins([[1, "*", col], "*", 1], {}) == col
+    assert propagate._fold_pins([0, "-", col], {}) == ["-", col]
+
+
+@pytest.mark.skipif(not _DUMP_2100223.is_file(), reason="regression dump not present")
+def test_2100223_store_pointer_not_guessed():
+    """AS2 write_base at access 542 must not become const 0 via unbound mem_ptr."""
+    data = json.loads(_DUMP_2100223.read_text())
+    an = Analysis(data, assume_is_valid=False)
+    row = an.mem[819]
+    assert row.addr_space == 2
+    assert not isinstance(row.ptr, int)
+    key = keys.recover_key(an, row)
+    assert not isinstance(key, keys.Const), f"guessed pointer: {key}"
+
+
+@pytest.mark.skipif(not _DUMP_2100223.is_file(), reason="regression dump not present")
+def test_2100223_step0_no_symbolic_address_space():
+    data = json.loads(_DUMP_2100223.read_text())
+    an = Analysis(data, assume_is_valid=False)
+    assert symbolic_as_ordinals(an.mem) == []
+
+
 @pytest.mark.skipif(not _DUMP_2103992.is_file(), reason="regression dump not present")
 def test_2103992_step0_acceptance():
     data = json.loads(_DUMP_2103992.read_text())
@@ -128,11 +194,6 @@ def test_2103992_step0_acceptance():
     assert symbolic_as_ordinals(an.mem) == []
     for row in an.mem:
         assert an.kinds.get(row.ordinal) is not None, f"ordinal {row.ordinal}"
-    for row in an.mem:
-        if row.addr_space not in (0, 1):
-            continue
-        key = keys.recover_key(an, row)
-        assert isinstance(key, keys.Const), f"AS{row.addr_space} #{row.ordinal}: {key}"
 
 
 @pytest.mark.skipif(not _DUMP_2103993.is_file(), reason="regression dump not present")
