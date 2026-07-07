@@ -16,7 +16,9 @@ from src.lens import loader, resolve
 from . import align, certify, extract, meminfo, memstats, render, solve
 from .busfmt import memory_bus_id
 from .busmodel import memory_rows, symbolic_as_ordinals
+from .propagate import format_debug
 from .render import JSON, PLAIN, Target, default_mode
+from .rules import Analysis
 
 
 def _add_common(parser: argparse.ArgumentParser, suppress: bool) -> None:
@@ -62,6 +64,9 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="restrict to this address space")
     sp_info.add_argument("--limit", type=int, default=0,
                          help="max interactions listed (default 0 = all)")
+    sp_info.add_argument("--debug-propagate", action="store_true",
+                         help="print propagation pins/zeros and simplified mem rows "
+                              "(stderr) before the info table")
 
     sp_solve = sub.add_parser("solve", parents=[common],
                               help="solve the memory bus: inputs / outputs / data flow")
@@ -158,6 +163,9 @@ def _run_info(args, mode):
     data, labels, t = _load_circuit(args.group, args.block, args.step,
                                     getattr(args, "file_a", None), args.root)
     mem_id = memory_bus_id(labels)
+    if args.debug_propagate:
+        an = Analysis(data, mem_id)
+        print(format_debug(an), file=sys.stderr)
     rows = meminfo.compute(data, mem_id, args.addr_space)
     total = len(rows)
     if args.limit and total > args.limit:
