@@ -337,7 +337,6 @@ def run_powdr(test, dirsuffix = ""):
 def run_powdr_guest(test, dirsuffix = ""):
     dir = POWDR_DUMPS_DIR.relative_to(POWDR_DIR, walk_up=True) / f"{test}{dirsuffix}"
     cmd = [
-        f"APC_EXPORT_PATH={dir}",
         "APC_EXPORT_LEVEL=3",
         f"cargo run -p cli-openvm-riscv --bin powdr_openvm_riscv -r -- select-apcs --profile-input 1 --autoprecompiles 1 --apc-candidates-dir {dir} {test}",
     ]
