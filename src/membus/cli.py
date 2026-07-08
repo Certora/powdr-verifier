@@ -88,7 +88,8 @@ def _build_parser() -> argparse.ArgumentParser:
                               help="solve the memory bus: inputs / outputs / data flow")
     _circuit_a_args(sp_solve)
     sp_solve.add_argument("--as", dest="addr_space", type=int, default=1,
-                          help="address space to solve (default 1; v1 supports AS1 only)")
+                          help="address space to solve (default 1; symbolic-key "
+                               "spaces like AS2 use the SMT engine, aliasing open)")
     sp_solve.add_argument("--assume-is-valid", dest="assume_is_valid",
                           action=argparse.BooleanOptionalAction, default=True,
                           help="assume the openvm activation selector is_valid==1 "
@@ -115,8 +116,8 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="the AFTER pass of the same block (before has >= after)")
     sp_al.add_argument("--file-b", dest="file_b", help="explicit JSON for the after circuit")
     sp_al.add_argument("--as", dest="addr_space", type=int, default=1,
-                       help="address space to align (default 1; AS2 = cross-match "
-                            "only, aborts on an actual AS2 removal)")
+                       help="address space to align (default 1; AS2 removals are "
+                            "justified via solve's forced matching)")
     sp_al.add_argument("--assume-is-valid", dest="assume_is_valid",
                        action=argparse.BooleanOptionalAction, default=True,
                        help="assume the openvm activation selector is_valid==1 (default on)")
