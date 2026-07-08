@@ -59,7 +59,9 @@ STEP_TACTICS: dict[str, str] = {
     "exec_bus": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod",
     "loop_iteration": TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:z3-propagate-values:normalize:demod",
     "solver": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod",
-    "substitute_bus_interactio_fields": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod",
+    # z3-propagate-values blows up assert count here (~40k -> ~74k) and makes
+    # z3-solve-eqs exceed the orchestrate simplify budget; normalize suffices.
+    "substitute_bus_interactio_fields": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:normalize:demod",
 }
 
 
@@ -93,7 +95,7 @@ def resolve_tactic(tactic: str, optimization_step: str | None = None) -> str:
     """Resolve ``default`` and per-step overrides to a colon-separated pipeline."""
     if tactic != "default":
         return tactic
-    if optimization_step and optimization_step in STEP_TACTICS:
+    if optimization_step is not None and optimization_step in STEP_TACTICS:
         return STEP_TACTICS[optimization_step]
     return DEFAULT_TACTIC
 

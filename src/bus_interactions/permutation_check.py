@@ -1064,7 +1064,7 @@ class PermutationCheckMixin:
                     conjuncts = learned + [c for c in conjuncts if c not in learned]
         simplified: list[FNode] = []
         for c in conjuncts:
-            s = c.simplify()
+            s = bool_simplify(c)
             if not s.is_true():
                 simplified.append(keep_comment(s, c))
         # ``simplified`` is already fully simplified, so skip BCP's presimplify pass.
