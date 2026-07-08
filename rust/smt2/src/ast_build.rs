@@ -87,23 +87,45 @@ pub fn is_symbol_dyn(ast: &Dynamic) -> bool {
         && int_literal_dyn(ast).is_none()
 }
 
-pub fn iter_nodes_dyn(ast: &Dynamic) -> Vec<Dynamic> {
-    let mut out = Vec::new();
-    walk_dyn(ast, &mut out);
-    out
+pub struct DynNodes<'a> {
+    stack: Vec<Dynamic>,
+    _root: std::marker::PhantomData<&'a Dynamic>,
 }
 
-fn walk_dyn(ast: &Dynamic, out: &mut Vec<Dynamic>) {
-    out.push(ast.clone());
-    if ast.kind() == AstKind::Quantifier {
-        if let Some(body) = quantifier_body(ast) {
-            walk_dyn(&body, out);
+impl<'a> DynNodes<'a> {
+    fn new(ast: &'a Dynamic) -> Self {
+        Self {
+            stack: vec![ast.clone()],
+            _root: std::marker::PhantomData,
         }
-        return;
     }
-    for ch in ast_children(ast) {
-        walk_dyn(&ch, out);
+}
+
+impl Iterator for DynNodes<'_> {
+    type Item = Dynamic;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ast = self.stack.pop()?;
+        if ast.kind() == AstKind::Quantifier {
+            if let Some(body) = quantifier_body(&ast) {
+                self.stack.push(body);
+            }
+        } else {
+            for ch in ast_children(&ast).into_iter().rev() {
+                self.stack.push(ch);
+            }
+        }
+        Some(ast)
     }
+}
+
+/// Pre-order DFS over ``ast`` and its descendants (quantifier bodies only; no binder walk).
+pub fn iter_nodes_dyn(ast: &Dynamic) -> DynNodes<'_> {
+    DynNodes::new(ast)
+}
+
+pub fn count_nodes_dyn(ast: &Dynamic) -> usize {
+    iter_nodes_dyn(ast).count()
 }
 
 pub fn flatten_op_int(head: &str, ast: &Int) -> Vec<Int> {

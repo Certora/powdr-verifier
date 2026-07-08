@@ -2,9 +2,10 @@
 
 use std::collections::HashMap;
 
-use z3::ast::Bool;
+use z3::ast::{Ast, Bool};
+use z3::{FuncDecl, Sort, SortKind};
 
-use crate::ast_util::z3_if_to_ite;
+use crate::ast_util::{symbol_id_dyn, z3_if_to_ite, SymbolId};
 use crate::sexpr::{command_head, SExpr, Span, Spanned};
 use crate::z3_parse::ParseCtx;
 
@@ -22,7 +23,13 @@ pub enum SmtCommand {
     SetInfo(Spanned<SExpr>),
     SetLogic(Spanned<SExpr>),
     SetOption(Spanned<SExpr>),
-    DeclareFun(Spanned<SExpr>),
+    DeclareFun {
+        form: Spanned<SExpr>,
+        /// Cached Z3 symbol identity for nullary ``declare-fun`` (set at parse after ingest).
+        symbol_id: Option<SymbolId>,
+        /// Cached Z3 range sort for nullary ``declare-fun``.
+        sort_kind: Option<SortKind>,
+    },
     Assert {
         bool: Bool,
         span: Option<Span>,
@@ -68,7 +75,7 @@ impl SmtCommand {
                 if !rest.trim().is_empty() {
                     return Err(format!("trailing input after command: `{slice}`"));
                 }
-                Ok(SmtCommand::DeclareFun(form))
+                Ok(new_declare_fun(form))
             }
             "assert" => {
                 let b = parse_assert(slice, span, ctx)?;
@@ -133,7 +140,7 @@ impl SmtCommand {
             }
             "declare-fun" => {
                 ctx.ingest_command(slice)?;
-                Ok(SmtCommand::DeclareFun(form))
+                Ok(new_declare_fun(form))
             }
             "assert" => {
                 let b = parse_assert(slice, form.span, ctx)?;
@@ -164,7 +171,7 @@ impl SmtCommand {
             SmtCommand::SetInfo(_) => "set-info",
             SmtCommand::SetLogic(_) => "set-logic",
             SmtCommand::SetOption(_) => "set-option",
-            SmtCommand::DeclareFun(_) => "declare-fun",
+            SmtCommand::DeclareFun { .. } => "declare-fun",
             SmtCommand::Assert { .. } => "assert",
             SmtCommand::CheckSat => "check-sat",
             SmtCommand::GetModel => "get-model",
@@ -179,9 +186,9 @@ impl SmtCommand {
             SmtCommand::SetInfo(f)
             | SmtCommand::SetLogic(f)
             | SmtCommand::SetOption(f)
-            | SmtCommand::DeclareFun(f)
             | SmtCommand::Echo(f)
             | SmtCommand::Raw(f) => Some(f.span),
+            SmtCommand::DeclareFun { form, .. } => Some(form.span),
             SmtCommand::Assert { .. } | SmtCommand::CheckSat | SmtCommand::GetModel | SmtCommand::GetUnsatCore => None,
         }
     }
@@ -191,9 +198,9 @@ impl SmtCommand {
             SmtCommand::SetInfo(f)
             | SmtCommand::SetLogic(f)
             | SmtCommand::SetOption(f)
-            | SmtCommand::DeclareFun(f)
             | SmtCommand::Echo(f)
             | SmtCommand::Raw(f) => Some(f),
+            SmtCommand::DeclareFun { form, .. } => Some(form),
             _ => None,
         }
     }
@@ -259,16 +266,23 @@ impl SmtCommand {
             SmtCommand::SetInfo(f)
             | SmtCommand::SetLogic(f)
             | SmtCommand::SetOption(f)
-            | SmtCommand::DeclareFun(f)
             | SmtCommand::Echo(f)
             | SmtCommand::Raw(f) => Self::spanned_text(f, source),
+            SmtCommand::DeclareFun { form, .. } => Self::spanned_text(form, source),
         }
     }
 }
 
 pub fn declare_fun_symbol(form: &SExpr) -> Option<String> {
-    let args = form.args()?;
-    args.first()?.node.as_atom().map(|s| s.to_string())
+    declare_fun_symbol_name_from_form(form).map(|s| s.to_string())
+}
+
+pub fn declare_fun_symbol_name(cmd: &SmtCommand) -> Option<&str> {
+    declare_fun_symbol_name_from_form(declare_fun_form(cmd)?)
+}
+
+fn declare_fun_symbol_name_from_form(form: &SExpr) -> Option<&str> {
+    form.args()?.first()?.node.as_atom()
 }
 
 pub fn parse_single_command(input: &str, ctx: &mut ParseCtx) -> Result<SmtCommand, String> {
@@ -278,11 +292,119 @@ pub fn parse_single_command(input: &str, ctx: &mut ParseCtx) -> Result<SmtComman
 
 pub fn declare_fun_name_cmd(cmd: &SmtCommand) -> Option<String> {
     match cmd {
-        SmtCommand::DeclareFun(f) => declare_fun_symbol(&f.node),
+        SmtCommand::DeclareFun { form, .. } => declare_fun_symbol(&form.node),
         _ => cmd
             .spanned_form()
             .and_then(|f| if cmd.name() == "declare-fun" { declare_fun_symbol(&f.node) } else { None }),
     }
+}
+
+fn declare_fun_form(cmd: &SmtCommand) -> Option<&SExpr> {
+    match cmd {
+        SmtCommand::DeclareFun { form, .. } => Some(&form.node),
+        _ => cmd
+            .spanned_form()
+            .filter(|_| cmd.name() == "declare-fun")
+            .map(|f| &f.node),
+    }
+}
+
+fn nullary_declare_fun_params(params: &SExpr) -> bool {
+    matches!(params, SExpr::List(items) if items.is_empty())
+}
+
+fn sort_atom_names(sort: &Sort, atom: &str) -> bool {
+    atom == sort.to_string().as_str()
+}
+
+fn sexpr_to_z3_sort(sort: &SExpr) -> Sort {
+    match sort {
+        SExpr::List(items) if items.first().and_then(|h| h.node.head()) == Some("Array") => {
+            let dom = items
+                .get(1)
+                .map(|s| sexpr_to_z3_sort(&s.node))
+                .unwrap_or_else(Sort::int);
+            let rng = items
+                .get(2)
+                .map(|s| sexpr_to_z3_sort(&s.node))
+                .unwrap_or_else(Sort::int);
+            Sort::array(&dom, &rng)
+        }
+        SExpr::Atom(atom) => {
+            let bool_sort = Sort::bool();
+            let int_sort = Sort::int();
+            if sort_atom_names(&bool_sort, atom) {
+                bool_sort
+            } else if sort_atom_names(&int_sort, atom) {
+                int_sort
+            } else {
+                int_sort
+            }
+        }
+        _ => Sort::int(),
+    }
+}
+
+fn sort_kind_from_sexpr(sort: &SExpr) -> SortKind {
+    sexpr_to_z3_sort(sort).kind()
+}
+
+fn nullary_declare_fun_meta(form: &SExpr) -> Option<(SymbolId, SortKind)> {
+    let args = form.args()?;
+    let name = args.first()?.node.as_atom()?;
+    if !nullary_declare_fun_params(&args.get(1)?.node) {
+        return None;
+    }
+    let sort = sexpr_to_z3_sort(&args.get(2)?.node);
+    let kind = sort.kind();
+    let ast = FuncDecl::new(name, &[], &sort).apply(&[]);
+    let id = symbol_id_dyn(&ast)?;
+    Some((id, kind))
+}
+
+fn new_declare_fun(form: Spanned<SExpr>) -> SmtCommand {
+    let meta = nullary_declare_fun_meta(&form.node);
+    let (symbol_id, sort_kind) = match meta {
+        Some((id, kind)) => (Some(id), Some(kind)),
+        None => (None, None),
+    };
+    SmtCommand::DeclareFun {
+        form,
+        symbol_id,
+        sort_kind,
+    }
+}
+
+/// Cached nullary ``declare-fun`` symbol identity (see [`SmtCommand::DeclareFun`]).
+pub fn declare_fun_symbol_id(cmd: &SmtCommand) -> Option<SymbolId> {
+    match cmd {
+        SmtCommand::DeclareFun { symbol_id, .. } => *symbol_id,
+        _ => declare_fun_form(cmd)
+            .and_then(nullary_declare_fun_meta)
+            .map(|(id, _)| id),
+    }
+}
+
+/// Cached nullary ``declare-fun`` range sort (see [`SmtCommand::DeclareFun`]).
+pub fn declare_fun_sort_kind(cmd: &SmtCommand) -> Option<SortKind> {
+    match cmd {
+        SmtCommand::DeclareFun { sort_kind, .. } => *sort_kind,
+        _ => declare_fun_form(cmd)
+            .and_then(nullary_declare_fun_meta)
+            .map(|(_, kind)| kind),
+    }
+}
+
+/// Return sort of a nullary ``declare-fun`` from its s-expression (``[name, params, sort]``).
+pub fn declare_fun_sort_atom(cmd: &SmtCommand) -> Option<&str> {
+    declare_fun_form(cmd)?
+        .args()?
+        .get(2)
+        .and_then(|sort| sort.node.as_atom())
+}
+
+pub fn declare_fun_is_bool(cmd: &SmtCommand) -> bool {
+    declare_fun_sort_kind(cmd) == Some(SortKind::Bool)
 }
 
 pub fn command_text<'a>(cmd: &SmtCommand, source: &'a str) -> &'a str {
@@ -298,9 +420,9 @@ pub fn command_text<'a>(cmd: &SmtCommand, source: &'a str) -> &'a str {
         SmtCommand::SetInfo(f)
         | SmtCommand::SetLogic(f)
         | SmtCommand::SetOption(f)
-        | SmtCommand::DeclareFun(f)
         | SmtCommand::Echo(f)
         | SmtCommand::Raw(f) => f.text(source),
+        SmtCommand::DeclareFun { form, .. } => form.text(source),
     }
 }
 

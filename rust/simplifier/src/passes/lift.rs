@@ -10,7 +10,7 @@ use smt2::ast_util::{
     contains_bound_var_dyn, de_bruijn_bound_symbol_id,
     free_symbol_ids_bool, symbol_id_dyn, symbol_id_from_name, symbol_name_for_id, SymbolId,
 };
-use smt2::ast_build::{iter_nodes_dyn, symbol_name_dyn};
+use smt2::ast_build::{count_nodes_dyn, iter_nodes_dyn, symbol_name_dyn};
 use smt2::{declare_fun_name_cmd, map_bool_children, parse_single_command, Script, SExpr, SmtCommand};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 use z3::DeclKind;
@@ -176,9 +176,9 @@ impl LiftWalker {
             // Size of the side most likely hoisted (the non-target side); a soft
             // "prefer smaller" preference only, never affecting correctness.
             let expr_size = if l_resolvable {
-                iter_nodes_dyn(&rhs).len()
+                count_nodes_dyn(&rhs)
             } else {
-                iter_nodes_dyn(&lhs).len()
+                count_nodes_dyn(&lhs)
             };
             cands.push(LiftCand {
                 d: d.clone(),

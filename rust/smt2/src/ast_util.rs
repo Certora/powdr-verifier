@@ -538,6 +538,24 @@ pub fn quantifier_bound_symbol_ids(ast: &Dynamic) -> Vec<SymbolId> {
     }
 }
 
+/// Z3 range sorts of quantifier binders (declaration order).
+pub fn quantifier_bound_sort_kinds(ast: &Dynamic) -> Vec<SortKind> {
+    if ast.kind() != AstKind::Quantifier {
+        return Vec::new();
+    }
+    let ctx = ast.get_ctx();
+    unsafe {
+        let z3 = ctx.get_z3_context();
+        let n = Z3_get_quantifier_num_bound(z3, ast.get_z3_ast());
+        let mut out = Vec::with_capacity(n as usize);
+        for i in 0..n {
+            let sort = Z3_get_quantifier_bound_sort(z3, ast.get_z3_ast(), i).unwrap();
+            out.push(Z3_get_sort_kind(z3, sort));
+        }
+        out
+    }
+}
+
 /// Name identity of a free constant/symbol node, without materializing a string.
 /// Mirrors the predicate of [`crate::ast_build::symbol_name_dyn`].
 pub fn symbol_id_dyn(ast: &Dynamic) -> Option<SymbolId> {
@@ -726,7 +744,7 @@ pub fn quantifier_bound_sort_is_bool(_name: &str, z3_sk: SortKind) -> bool {
 
 /// ``Var`` nodes and nullary ``App`` symbols whose Z3 sort is ``Bool``.
 pub fn has_bool_sort_leaf_dyn(ast: &Dynamic) -> bool {
-    crate::ast_build::iter_nodes_dyn(ast).into_iter().any(|n| {
+    crate::ast_build::iter_nodes_dyn(ast).any(|n| {
         n.get_sort().kind() == SortKind::Bool
             && matches!(n.kind(), AstKind::Var | AstKind::App if n.is_const())
     })

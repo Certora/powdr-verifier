@@ -318,6 +318,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn declare_fun_caches_symbol_id() {
+        use crate::command::{declare_fun_is_bool, declare_fun_sort_kind, declare_fun_symbol_id};
+        use crate::ast_util::symbol_id_dyn;
+        use z3::ast::{Bool, Dynamic};
+        use z3::SortKind;
+
+        let script = Script::parse("(declare-fun flag () Bool)\n(assert flag)\n").unwrap();
+        let decl = &script.commands[0];
+        assert!(declare_fun_is_bool(decl));
+        assert_eq!(declare_fun_sort_kind(decl), Some(SortKind::Bool));
+        let cached = declare_fun_symbol_id(decl).expect("cached symbol id");
+        let from_ast = symbol_id_dyn(&Dynamic::from_ast(&Bool::new_const("flag"))).unwrap();
+        assert_eq!(cached, from_ast);
+    }
+
+    #[test]
     fn split_at_check_sat() {
         let script = Script::parse(
             "(declare-fun x () Int)\n(assert (= x 1))\n(check-sat)\n(get-model)\n",

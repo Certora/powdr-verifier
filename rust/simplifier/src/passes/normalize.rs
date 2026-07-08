@@ -6,9 +6,10 @@ use std::collections::{HashMap, HashSet};
 use smt2::command::SmtCommand;
 use smt2::{
     assert_commands, ast_hash_dyn, ast_hash_int, debug_assert_direct_int_operand,
-    declare_fun_name_cmd, declared_symbol_names, ensure_free_symbols_declared, int_from_i128,
-    int_value, int_value_dyn, map_bool_children, quantifier_bound_symbol_ids, seed_parser_context,
-    symbol_id_dyn, symbol_id_from_name, IntTermSet, ParseCtx, Script, SymbolId,
+    declare_fun_is_bool, declare_fun_symbol_id, declared_symbol_names, ensure_free_symbols_declared, int_from_i128,
+    int_value, int_value_dyn, map_bool_children, quantifier_bound_symbol_ids,
+    quantifier_bound_sort_kinds, seed_parser_context,
+    symbol_id_dyn, IntTermSet, ParseCtx, Script, SymbolId,
 };
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 use z3::{DeclKind, SortKind};
@@ -16,22 +17,34 @@ use z3::{DeclKind, SortKind};
 type Monomial = Vec<u32>;
 type Poly = HashMap<Monomial, i128>;
 
-fn declare_fun_sort(raw: &str) -> Option<&str> {
-    let body = raw.trim().strip_suffix(')')?.trim();
-    body.rsplit_once(' ').map(|(_, sort)| sort)
-}
-
-fn symbol_is_bool_name(name: &str) -> bool {
-    name.contains("memory_is") || name.contains("memory_match")
+fn collect_bool_symbols_from_ast(ast: &Dynamic, out: &mut HashSet<SymbolId>) {
+    if ast.kind() == AstKind::Quantifier {
+        for (id, kind) in quantifier_bound_symbol_ids(ast)
+            .into_iter()
+            .zip(quantifier_bound_sort_kinds(ast))
+        {
+            if kind == SortKind::Bool {
+                out.insert(id);
+            }
+        }
+    }
+    for n in smt2::iter_nodes_dyn(ast) {
+        if let Some(id) = symbol_id_dyn(&n) {
+            if n.get_sort().kind() == SortKind::Bool {
+                out.insert(id);
+            }
+        }
+    }
 }
 
 fn collect_bool_symbols(script: &Script) -> HashSet<SymbolId> {
     let mut out = HashSet::new();
     for cmd in &script.commands {
-        if let Some(name) = declare_fun_name_cmd(cmd) {
-            let raw = cmd.to_smtlib(&script.source);
-            if declare_fun_sort(&raw) == Some("Bool") {
-                out.insert(symbol_id_from_name(&name));
+        if cmd.name() == "declare-fun" {
+            if declare_fun_is_bool(cmd) {
+                if let Some(id) = declare_fun_symbol_id(cmd) {
+                    out.insert(id);
+                }
             }
             continue;
         }
@@ -40,25 +53,6 @@ fn collect_bool_symbols(script: &Script) -> HashSet<SymbolId> {
         }
     }
     out
-}
-
-fn collect_bool_symbols_from_ast(ast: &Dynamic, out: &mut HashSet<SymbolId>) {
-    if ast.kind() == AstKind::Quantifier {
-        let ids = quantifier_bound_symbol_ids(ast);
-        let names = smt2::quantifier_bound_names(ast);
-        for (id, name) in ids.into_iter().zip(names) {
-            if symbol_is_bool_name(&name) {
-                out.insert(id);
-            }
-        }
-    }
-    for n in smt2::iter_nodes_dyn(ast) {
-        if let (Some(id), Some(name)) = (symbol_id_dyn(&n), smt2::symbol_name_dyn(&n)) {
-            if symbol_is_bool_name(&name) {
-                out.insert(id);
-            }
-        }
-    }
 }
 
 pub fn field_mod() -> Option<i128> {
@@ -193,10 +187,7 @@ fn collect_variables(
             );
             if let Some(id) = symbol_id_dyn(n) {
                 debug_assert!(
-                    !bool_symbols.contains(&id)
-                        && smt2::symbol_name_dyn(n)
-                            .map(|name| !symbol_is_bool_name(&name))
-                            .unwrap_or(true),
+                    !bool_symbols.contains(&id) && n.get_sort().kind() != SortKind::Bool,
                     "Bool symbol registered as polynomial generator"
                 );
             }

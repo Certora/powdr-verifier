@@ -9,7 +9,7 @@ pub mod sexpr;
 pub mod z3_parse;
 
 pub use ast_build::{
-    bool_atom, free_variables_bool, int_atom, int_literal_dyn, is_symbol_dyn,
+    bool_atom, count_nodes_dyn, free_variables_bool, int_atom, int_literal_dyn, is_symbol_dyn,
     iter_nodes_dyn, list_bool, list_int, parse_bool_formula, parse_int_or_const, split_product_int,
     substitute_bool, substitute_dyn, substitute_int, symbol_name_dyn, wrap_mod_expr_int,
 };
@@ -23,7 +23,7 @@ pub use ast_util::{
     map_bool_children_opt,
     mod_int_literal_string, or_body_parts, or_parts, parse_int_literal, smtlib_decl_name, z3_if_to_ite,
     quantifier_body, quantifier_body_bool, quantifier_body_deps, quantifier_bound_names,
-    quantifier_bound_symbol_ids, quantifier_bounds, quantifier_bounds_de_bruijn,
+    quantifier_bound_symbol_ids, quantifier_bound_sort_kinds, quantifier_bounds, quantifier_bounds_de_bruijn,
     symbol_id_dyn, symbol_id_from_name, symbol_name_for_id, SymbolId,
     rebuild_app, rebuild_forall_dyn, rebuild_quantifier_dyn, resolve_bound_or_free_name,
     strip_annotations, strip_annotations_deep, strip_annotations_opt,
@@ -33,7 +33,9 @@ pub use ast_util::{
     has_bool_sort_leaf_dyn, unwrap_zero_mod_eq,
 };
 pub use command::{
-    declare_fun_name_cmd, declare_fun_symbol, parse_single_command, SmtCommand,
+    declare_fun_is_bool, declare_fun_name_cmd, declare_fun_sort_atom, declare_fun_sort_kind,
+    declare_fun_symbol, declare_fun_symbol_id, declare_fun_symbol_name, parse_single_command,
+    SmtCommand,
 };
 pub use io::{dump_string, dump_writer, load_path, load_reader};
 pub use pretty::{pretty_print_command, pretty_print_script};
