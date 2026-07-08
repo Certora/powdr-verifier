@@ -17,6 +17,7 @@ import pytest
 from src.lens import resolve
 from src.paths import POWDR_DIR, POWDR_DUMPS_DIR, VERIFIER_DIR, WORKSPACE_DIR
 from src.simplify.rust import resolve_simplifier_bin
+from src.check.rust import resolve_checker_bin
 
 CASES_ROOT = VERIFIER_DIR / "tests" / "regression_cases"
 _SCRIPTS = {"main.py": VERIFIER_DIR / "main.py", "orchestrate.py": VERIFIER_DIR / "orchestrate.py"}
@@ -153,6 +154,8 @@ def _missing(case: Case) -> str | None:
             return "powdr checkout missing"
         if req == "rust-simplifier" and resolve_simplifier_bin() is None:
             return "simplifier binary not built"
+        if req == "rust-checker" and resolve_checker_bin() is None:
+            return "checker binary not built"
     missing = [
         rel
         for k, rel in case.inputs.items()
