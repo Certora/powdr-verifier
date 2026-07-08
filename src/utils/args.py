@@ -46,7 +46,7 @@ def __build_parser(skip_subparsers=False):
     parser.add_argument(
         "--memory-presolve",
         type=MemoryPresolve,
-        default=argparse.SUPPRESS,
+        default=MemoryPresolve.NONE,
         choices=list(MemoryPresolve),
     )
     parser.add_argument("--dump-smt", action="store_true")
@@ -156,17 +156,6 @@ def __build_parser(skip_subparsers=False):
     return parser
 
 
-def set_args_from_step(args: argparse.Namespace) -> None:
-    step = getattr(args, "optimization_step", None)
-    if not hasattr(args, "memory_presolve"):
-        if step is None:
-            args.memory_presolve = MemoryPresolve.INCREMENTAL
-        elif step == "memory":
-            args.memory_presolve = MemoryPresolve.WITH_SAT
-        else:
-            args.memory_presolve = MemoryPresolve.NONE
-
-
 def parse_args(args=None):
     """Parse the command line arguments."""
     parser = __build_parser()
@@ -177,8 +166,6 @@ def parse_args(args=None):
         __ARGS, extra = parser.parse_known_args(args)
         if extra:
             logging.info(f"unknown arguments: {" ".join(extra)}")
-
-    set_args_from_step(__ARGS)
 
     ARGS().V = ARGS().V + 2 * ARGS().VV + ARGS().v * [""] + 2 * ARGS().vv * [""]
     def make_verbose(logger: logging.Logger):
