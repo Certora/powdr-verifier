@@ -1,0 +1,6 @@
+(set-logic ALL)
+(declare-fun x () Int)
+(assert (= x 1))
+(assert (= x 2))
+(set-info :status unsat)
+(check-sat)

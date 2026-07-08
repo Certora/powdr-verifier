@@ -246,6 +246,25 @@ def check_smt_script(
     check_timeout: float | None = None,
 ) -> str:
     """Run the same solver grid as :func:`check`; return ``sat`` / ``unsat`` / inconclusive."""
+    try:
+        from .check.rust import (
+            merge_solve_action,
+            resolve_checker_bin,
+            run_checker_subprocess_text,
+        )
+        from .simplify.utils import _script_to_string
+
+        if resolve_checker_bin() is not None:
+            text = _script_to_string(smt_script)
+            data = run_checker_subprocess_text(
+                text,
+                solve_chunked=ARGS().solve_chunked if hasattr(ARGS(), "solve_chunked") else True,
+                check_timeout=check_timeout,
+            )
+            return merge_solve_action(action, data)
+    except (FileNotFoundError, RuntimeError, json.JSONDecodeError) as e:
+        logging.debug("rust checker fallback: %s", e)
+
     last_attempt = None
     log_key = _display_path(input_for_log)
     log = logging.warning if input_for_log is not None else logging.debug
@@ -297,6 +316,15 @@ def check():
     if stats_enabled():
         init_stats_run(wipe=False)
         set_stats_tag(getattr(ARGS(), "stats_tag", None) or stats_tag_from_path(ARGS().input))
+
+    try:
+        from .check.rust import action_from_dict, resolve_checker_bin, run_checker_subprocess
+
+        if resolve_checker_bin() is not None:
+            data = run_checker_subprocess(ARGS().input)
+            return action_from_dict(data)
+    except (FileNotFoundError, RuntimeError, json.JSONDecodeError) as e:
+        logging.debug("rust checker fallback: %s", e)
 
     with Action("check") as action:
         action += {"inputs": [ARGS().input]}

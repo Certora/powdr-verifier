@@ -23,6 +23,7 @@ source verifier/ec2-z3-env.sh
 
 cd verifier/rust
 cargo build --release -p simplifier
+cargo build --release -p checker
 cd ../..
 
 python3 verifier/orchestrate.py powdr-guest guest-keccak

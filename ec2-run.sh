@@ -20,6 +20,7 @@ git pull
 source ec2-z3-env.sh
 pushd rust
 cargo build --release -p simplifier
+cargo build --release -p checker
 popd
 popd
 
