@@ -178,6 +178,12 @@ def basic_stats() -> str:
 """
 
 
+def _normalize_outcome_step(step: str | None) -> str | None:
+    if step == "verify":
+        return "encode"
+    return step
+
+
 def _parse_job_kinds(kinds_csv: str | None) -> list[tuple[str, str | None]]:
     if not kinds_csv:
         return []
@@ -185,7 +191,7 @@ def _parse_job_kinds(kinds_csv: str | None) -> list[tuple[str, str | None]]:
     for part in kinds_csv.split(","):
         if "@" in part:
             kind, step = part.split("@", 1)
-            kinds.append((kind, step or None))
+            kinds.append((kind, _normalize_outcome_step(step or None)))
         else:
             kinds.append((part, None))
     return kinds
