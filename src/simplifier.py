@@ -62,6 +62,8 @@ STEP_TACTICS: dict[str, str] = {
     # z3-propagate-values blows up assert count here (~40k -> ~74k) and makes
     # z3-solve-eqs exceed the orchestrate simplify budget; normalize suffices.
     "substitute_bus_interactio_fields": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:normalize:demod",
+    # memory -> low_degree_bus: drop rewrite/bitwise/z3; monolithic bus asserts are huge.
+    "low_degree_bus": TACTIC_QEPREFIX + ":bounds:mod_inv:demod:domain_probe:normalize:demod",
 }
 
 

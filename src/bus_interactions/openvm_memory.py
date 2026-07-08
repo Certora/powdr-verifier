@@ -368,6 +368,10 @@ class OpenVMMemoryEncoder(
             if mults[i] is not None and mults[j] is not None and (mults[i] + mults[j]) % p != 0:
                 return True
             for x, y in zip(flat_args(i), flat_args(j)):
+                if x.is_int_constant() and y.is_int_constant():
+                    if (x.constant_value() - y.constant_value()) % p != 0:
+                        return True
+                    continue
                 d = wrap_mod(Minus(x, y)).simplify()
                 if d.is_int_constant() and d.constant_value() % p != 0:
                     return True
