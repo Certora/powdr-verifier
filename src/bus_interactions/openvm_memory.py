@@ -1,6 +1,7 @@
 """Memory bus: array-valued state chain with stores, reads, and permutation semantics."""
 import itertools
 import logging
+from functools import lru_cache
 from typing import Any
 
 from .permutation_check import (
@@ -354,6 +355,7 @@ class OpenVMMemoryEncoder(
             a, ptr, data, t = self._interactions[i].args
             return [a, ptr, *data, t]
 
+        @lru_cache(maxsize=None)
         def cannot_match(i: int, j: int) -> bool:
             """``m(i, j)`` is statically impossible.
 
