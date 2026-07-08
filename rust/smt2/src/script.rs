@@ -259,6 +259,21 @@ pub fn map_asserts(
     script: &Script,
     mut f: impl FnMut(&Bool) -> Result<Bool, String>,
 ) -> Result<Script, String> {
+    map_asserts_opt(script, |b| {
+        let new_b = f(b)?;
+        Ok(if new_b.ast_eq(b) { None } else { Some(new_b) })
+    })
+}
+
+/// Identity-preserving variant of [`map_asserts`].
+///
+/// ``f`` returns ``None`` for an unchanged assert, letting callers avoid cloning
+/// (and re-declaring) when a pass leaves an assert untouched; the original
+/// command is reused as-is.
+pub fn map_asserts_opt(
+    script: &Script,
+    mut f: impl FnMut(&Bool) -> Result<Option<Bool>, String>,
+) -> Result<Script, String> {
     let mut ctx = ParseCtx::new();
     seed_parser_context(&mut ctx, script)?;
     let mut declared: HashSet<String> = declared_symbol_names(&script.commands).into_iter().collect();
@@ -266,19 +281,17 @@ pub fn map_asserts(
     let mut commands = Vec::with_capacity(script.commands.len());
     for cmd in &script.commands {
         match cmd {
-            SmtCommand::Assert { bool: b, span, .. } => {
-                let new_b = f(b)?;
-                ensure_free_symbols_declared(&new_b, &mut ctx, &mut declared)?;
-                if !new_b.ast_eq(b) {
+            SmtCommand::Assert { bool: b, span, .. } => match f(b)? {
+                Some(new_b) => {
+                    ensure_free_symbols_declared(&new_b, &mut ctx, &mut declared)?;
                     commands.push(SmtCommand::Assert {
                         bool: new_b,
                         span: *span,
                         term_text: None,
                     });
-                } else {
-                    commands.push(cmd.clone());
                 }
-            }
+                None => commands.push(cmd.clone()),
+            },
             _ => commands.push(cmd.clone()),
         }
     }

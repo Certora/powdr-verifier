@@ -870,12 +870,18 @@ pub fn or_parts(b: &Bool) -> Option<Vec<Bool>> {
 }
 
 fn peel_annotation(b: &Bool) -> Bool {
+    peel_annotation_opt(b).unwrap_or_else(|| b.clone())
+}
+
+/// Peel ``(! inner attr…)`` wrappers, returning ``None`` (no clone) when ``b``
+/// carries no top-level annotation.
+fn peel_annotation_opt(b: &Bool) -> Option<Bool> {
     if b.kind() == AstKind::App && decl_name(&b.decl()) == "!" && b.num_children() == 1 {
         if let Some(inner) = b.nth_child(0).and_then(|c| c.as_bool()) {
-            return peel_annotation(&inner);
+            return Some(peel_annotation_opt(&inner).unwrap_or(inner));
         }
     }
-    b.clone()
+    None
 }
 
 pub fn flatten_and(children: Vec<Bool>) -> Bool {
@@ -913,6 +919,11 @@ pub fn flatten_or(children: Vec<Bool>) -> Bool {
 /// Drop SMT-LIB ``(! inner attr…)`` wrappers (Z3 pattern / weight annotations).
 pub fn strip_annotations(b: &Bool) -> Bool {
     peel_annotation(b)
+}
+
+/// Identity-preserving [`strip_annotations`]: ``None`` (no clone) when unannotated.
+pub fn strip_annotations_opt(b: &Bool) -> Option<Bool> {
+    peel_annotation_opt(b)
 }
 
 /// Recursively remove annotation wrappers, including inside quantifier bodies.

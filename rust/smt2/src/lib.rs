@@ -26,7 +26,7 @@ pub use ast_util::{
     quantifier_bound_symbol_ids, quantifier_bounds, quantifier_bounds_de_bruijn,
     symbol_id_dyn, symbol_id_from_name, symbol_name_for_id, SymbolId,
     rebuild_app, rebuild_forall_dyn, rebuild_quantifier_dyn, resolve_bound_or_free_name,
-    strip_annotations, strip_annotations_deep,
+    strip_annotations, strip_annotations_deep, strip_annotations_opt,
     scoped_free_int_symbols, strip_prefix, substitute_bound_vars_dyn, swap_prefix,
     contains_bound_var_dyn, de_bruijn_bound_name, de_bruijn_bound_symbol_id,
     debug_assert_direct_int_operand,
@@ -40,7 +40,8 @@ pub use pretty::{pretty_print_command, pretty_print_script};
 pub use script::{
     assert_commands, asserts_excluding_true, declared_symbol_names, ensure_declarations_for_asserts,
     ensure_free_symbols_declared,
-    extra_declarations, map_asserts, seed_parser_context, splice_z3_result, Script, ScriptParts,
+    extra_declarations, map_asserts, map_asserts_opt, seed_parser_context, splice_z3_result,
+    Script, ScriptParts,
 };
 pub use sexpr::{strip_smtlib_annotations, SExpr, Span, Spanned};
 pub use z3_parse::ParseCtx;
