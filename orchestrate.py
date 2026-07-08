@@ -235,7 +235,8 @@ def __run_main(
         stdout, stderr, timed_out = communicate_with_timeout(proc, timeout)
         if timed_out:
             logging.error(f"timed out running {cmdstr}")
-            return Action(command, result="timeout")
+            step = "encode" if command == "verify" else command
+            return Action(step, result="timeout")
         if proc.returncode != 0:
             if is_subprocess_memout(proc.returncode, stderr):
                 return Action(
@@ -437,7 +438,8 @@ def run_verify(a, b):
             ],
             stats_args=__stats_extra(stats_run_id),
         )
-        res_verify.name = "encode"
+        if isinstance(res_verify, Action):
+            res_verify.properties["name"] = "encode"
         a_verify += res_verify
         for file in sorted(res_verify.outputs or []):
             res_simp = __do_simplify(
