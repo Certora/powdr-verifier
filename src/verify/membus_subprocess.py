@@ -46,6 +46,33 @@ def fetch_solve_json(dump_path: Path | None, *, addr_space: int = 1) -> dict | N
     )
 
 
+def fetch_solve_json_all(
+    dump_path: Path | None,
+    *,
+    present: set[int] | None = None,
+    addr_spaces: tuple[int, ...] = (1, 2),
+) -> dict | None:
+    """Run ``solve`` for each address space and merge interaction rows."""
+    if dump_path is None or not dump_path.is_file():
+        return None
+    merged: dict | None = None
+    for addr_space in addr_spaces:
+        if present is not None and addr_space not in present:
+            continue
+        sol = fetch_solve_json(dump_path, addr_space=addr_space)
+        if sol is None:
+            continue
+        if merged is None:
+            merged = sol
+        else:
+            merged = {
+                **merged,
+                "interactions": (merged.get("interactions") or [])
+                + (sol.get("interactions") or []),
+            }
+    return merged
+
+
 def fetch_extract_json(dump_path: Path | None) -> dict | None:
     if dump_path is None or not dump_path.is_file():
         return None

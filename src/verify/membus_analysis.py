@@ -1,7 +1,6 @@
 """Structured memory-bus analysis for plain permutation encoding."""
 from __future__ import annotations
 
-import collections
 import itertools
 import logging
 from collections import namedtuple
@@ -21,7 +20,7 @@ from .membus_subprocess import (
     fetch_align_json,
     fetch_extract_json,
     fetch_info_json,
-    fetch_solve_json,
+    fetch_solve_json_all,
 )
 from .membus_types import MembusParsedKey, parse_membus_key
 
@@ -55,6 +54,7 @@ class SideState:
     facts: list[IdFacts]
     matches: list[set[int]]
     status: list[list[Tri]]
+    order_edges: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -105,6 +105,12 @@ def _normalize_dump(data: dict[str, Any]) -> dict[str, Any]:
         },
         "bus_map": {"bus_ids": {"1": "Memory"}},
     }
+
+
+def _parse_addr_space(raw: Any) -> int | None:
+    if raw is None or raw == "sym":
+        return None
+    return int(raw)
 
 
 def _parse_time(s: str | None) -> TimeInfo | None:
@@ -217,6 +223,82 @@ def _status_tuple(st: list[Tri]) -> Status:
     return Status(st[0], st[1], st[2], st[3])
 
 
+def _apply_boundary_io(status: list[list[Tri]], i: int, io: str | None) -> None:
+    match io:
+        case "in":
+            _set_flag(status[i], 1, False)
+            _set_flag(status[i], 3, False)
+        case "out":
+            _set_flag(status[i], 0, False)
+            _set_flag(status[i], 3, False)
+
+
+def _apply_local_role(
+    status: list[list[Tri]],
+    i: int,
+    f: IdFacts,
+    *,
+    role: str | None,
+    partners: list[int],
+    io: str | None,
+) -> None:
+    if role == "inert":
+        _set_flag(status[i], 2, True)
+    elif role == "interior":
+        f.interior_partners.update(partners)
+    io_eff = io
+    if not io_eff and role in ("input", "output"):
+        io_eff = {"input": "in", "output": "out"}[role]
+    if io_eff:
+        f.solve_io = io_eff
+        _apply_boundary_io(status, i, io_eff)
+
+
+def _merge_info(f: IdFacts, raw: dict) -> None:
+    if raw.get("kind"):
+        f.kind = raw["kind"]
+    if raw.get("address_space") is not None:
+        f.addr_space = _parse_addr_space(raw["address_space"])
+    if raw.get("key"):
+        f.key = parse_membus_key(raw["key"])
+    t = _parse_time(raw.get("time"))
+    if t is not None:
+        f.time = t
+
+
+def _merge_extract(f: IdFacts, raw: dict) -> None:
+    if raw.get("abstract_ts") is not None:
+        f.abstract_ts = raw["abstract_ts"]
+    if f.addr_space is None and raw.get("address_space") is not None:
+        f.addr_space = _parse_addr_space(raw["address_space"])
+    if f.key is None and raw.get("key"):
+        f.key = parse_membus_key(raw["key"])
+
+
+def _merge_solve(f: IdFacts, raw: dict) -> None:
+    if raw.get("kind") and not f.kind:
+        f.kind = raw["kind"]
+    if f.addr_space is None and raw.get("address_space") is not None:
+        f.addr_space = _parse_addr_space(raw["address_space"])
+    if raw.get("key") and not f.key:
+        f.key = parse_membus_key(raw["key"])
+    if raw.get("forced") is False:
+        return
+    if raw.get("io"):
+        f.solve_io = raw["io"]
+    vint = raw.get("vtime_int")
+    if vint is not None:
+        f.time = TimeInfo("exact", int(vint))
+    elif raw.get("io") == "in":
+        f.time = TimeInfo("upper", 0)
+    rf = raw.get("reads_from")
+    if rf is not None:
+        f.interior_partners.add(int(rf))
+    for rb in raw.get("read_by") or []:
+        f.interior_partners.add(int(rb))
+
+
+
 def _ingest_side(
     data: dict,
     path: Path,
@@ -224,62 +306,38 @@ def _ingest_side(
     solve: dict | None,
     info: dict | None,
     extract: dict | None,
+    align_rows: list[dict] | None = None,
 ) -> SideState:
     mem_id = _memory_bus_id(data)
     assert mem_id is not None
     n = _memory_interaction_count(data)
     facts = [IdFacts() for _ in range(n)]
     mults = _json_mult_const(data, mem_id)
+    order_edges: list[dict] = []
+    unordered: list[dict] = []
 
     if info:
         for raw in info.get("interactions") or []:
             o = raw.get("ordinal")
             if o is None or o >= n:
                 continue
-            f = facts[o]
-            if raw.get("kind"):
-                f.kind = raw["kind"]
-            as_raw = raw.get("address_space")
-            if as_raw is not None and as_raw != "sym":
-                f.addr_space = int(as_raw)
-            if raw.get("key"):
-                f.key = parse_membus_key(raw["key"])
-            t = _parse_time(raw.get("time"))
-            if t is not None:
-                f.time = t
+            _merge_info(facts[o], raw)
 
     if extract:
-        ts_by_ord = {
-            r["ordinal"]: r["abstract_ts"]
-            for r in extract.get("interactions") or []
-            if r.get("ordinal") is not None
-        }
-        for o, ts in ts_by_ord.items():
-            if o < n:
-                facts[o].abstract_ts = ts
+        order_edges = list(extract.get("order_edges") or [])
+        unordered = list(extract.get("unordered") or [])
+        for raw in extract.get("interactions") or []:
+            o = raw.get("ordinal")
+            if o is None or o >= n:
+                continue
+            _merge_extract(facts[o], raw)
 
     if solve:
         for raw in solve.get("interactions") or []:
             o = raw.get("ordinal")
             if o is None or o >= n:
                 continue
-            f = facts[o]
-            if raw.get("kind") and not f.kind:
-                f.kind = raw["kind"]
-            if raw.get("key") and not f.key:
-                f.key = parse_membus_key(raw["key"])
-            if raw.get("io"):
-                f.solve_io = raw["io"]
-            vint = raw.get("vtime_int")
-            if vint is not None:
-                f.time = TimeInfo("exact", int(vint))
-            elif raw.get("io") == "in":
-                f.time = TimeInfo("upper", 0)
-            rf = raw.get("reads_from")
-            if rf is not None:
-                f.interior_partners.add(int(rf))
-            for rb in raw.get("read_by") or []:
-                f.interior_partners.add(int(rb))
+            _merge_solve(facts[o], raw)
 
     for o in range(n):
         if o < len(mults):
@@ -287,6 +345,24 @@ def _ingest_side(
 
     matches = [set(range(n)) for _ in range(n)]
     status = [[None, None, None, None] for _ in range(n)]
+
+    if align_rows:
+        for raw in align_rows:
+            o = raw.get("before_id")
+            if o is None or o >= n:
+                continue
+            if raw.get("kind") and not facts[o].kind:
+                facts[o].kind = raw["kind"]
+            if raw.get("key") and not facts[o].key:
+                facts[o].key = parse_membus_key(raw["key"])
+            _apply_local_role(
+                status,
+                o,
+                facts[o],
+                role=raw.get("local_role"),
+                partners=list(raw.get("local_partners") or []),
+                io=raw.get("io"),
+            )
 
     for i in range(n):
         f = facts[i]
@@ -311,15 +387,23 @@ def _ingest_side(
                 elif mc == 1:
                     _set_flag(status[i], 0, False)
 
-        match f.solve_io:
-            case "in":
-                _set_flag(status[i], 1, False)
-                _set_flag(status[i], 3, False)
-            case "out":
-                _set_flag(status[i], 0, False)
-                _set_flag(status[i], 3, False)
+        if f.solve_io:
+            _apply_boundary_io(status, i, f.solve_io)
 
-    return SideState(n=n, facts=facts, matches=matches, status=status)
+    if unordered:
+        _LOG.warning(
+            "membus analysis: %s has %d unordered abstract timestamp(s)",
+            path,
+            len(unordered),
+        )
+
+    return SideState(
+        n=n,
+        facts=facts,
+        matches=matches,
+        status=status,
+        order_edges=order_edges,
+    )
 
 
 def _rule_out_pairs(state: SideState, ordered_ts: set[frozenset[str]]) -> None:
@@ -347,12 +431,6 @@ def _restrict_partners(state: SideState) -> None:
     for i, f in enumerate(state.facts):
         if not f.interior_partners:
             continue
-        # The self-match m(i,i) covers the disabled/input/output cases. It is
-        # only truly ruled out when the multiplicity is a non-zero constant:
-        # then the row can never be disabled (is_valid == 0 would still leave
-        # mult != 0), so it is genuinely interior. For an is_valid-gated
-        # multiplicity the row is disabled (and self-matches) when is_valid == 0,
-        # so the self-match must be kept.
         self_ruled_out = f.mult_const is not None and f.mult_const % p != 0
         allowed = set(f.interior_partners)
         if not self_ruled_out:
@@ -386,7 +464,7 @@ def _apply_exactly_one(st: list[Tri]) -> bool:
             if v is None:
                 st[k] = True
                 return True
-    return changed
+    return False
 
 
 def _run_worklist(state: SideState) -> None:
@@ -494,14 +572,21 @@ def _analyze_side(
     solve: dict | None,
     info: dict | None,
     extract: dict | None,
-    order_edges: list[dict],
-) -> tuple[list[set[int]], list[Status]]:
-    state = _ingest_side(data, path, solve=solve, info=info, extract=extract)
-    ordered_ts = _ordered_ts_pairs(order_edges)
+    align_rows: list[dict] | None = None,
+) -> SideState:
+    state = _ingest_side(
+        data,
+        path,
+        solve=solve,
+        info=info,
+        extract=extract,
+        align_rows=align_rows,
+    )
+    ordered_ts = _ordered_ts_pairs(state.order_edges)
     _rule_out_pairs(state, ordered_ts)
     _restrict_partners(state)
     _run_worklist(state)
-    return _finalize_side(state)
+    return state
 
 
 def run_membus_analysis(
@@ -513,6 +598,7 @@ def run_membus_analysis(
     before = _normalize_dump(before)
     after = _normalize_dump(after)
     before_to_after: dict[int, int] = {}
+    before_align_rows: list[dict] = []
     align_ok = False
     present = _memory_address_spaces(before)
 
@@ -523,6 +609,7 @@ def run_membus_analysis(
         if al is None:
             continue
         align_ok = True
+        before_align_rows.extend(al.get("interactions") or [])
         for raw in al.get("interactions") or []:
             aid = raw.get("after_id")
             bid = raw.get("before_id")
@@ -540,28 +627,26 @@ def run_membus_analysis(
     after_info = fetch_info_json(after_path)
     before_extract = fetch_extract_json(before_path)
     after_extract = fetch_extract_json(after_path)
-    before_solve = fetch_solve_json(before_path, addr_space=1)
-    after_solve = fetch_solve_json(after_path, addr_space=1)
+    before_solve = fetch_solve_json_all(before_path, present=present)
+    after_solve = fetch_solve_json_all(after_path, present=present)
 
-    before_edges = (before_extract or {}).get("order_edges") or []
-    after_edges = (after_extract or {}).get("order_edges") or []
-
-    before_matches, before_status = _analyze_side(
+    before_state = _analyze_side(
         before,
         before_path,
         solve=before_solve,
         info=before_info,
         extract=before_extract,
-        order_edges=before_edges,
+        align_rows=before_align_rows,
     )
-    after_matches, after_status = _analyze_side(
+    after_state = _analyze_side(
         after,
         after_path,
         solve=after_solve,
         info=after_info,
         extract=after_extract,
-        order_edges=after_edges,
     )
+    before_matches, before_status = _finalize_side(before_state)
+    after_matches, after_status = _finalize_side(after_state)
 
     _LOG.info(
         "membus analysis: n_before=%d n_after=%d aligned_pairs=%d",
