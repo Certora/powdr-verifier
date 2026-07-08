@@ -80,7 +80,17 @@ def test_bogus_fact_certificate_is_sat():
     assert certify.run_z3(cert.smt2, certify.find_z3()) == "sat"
 
 
-def test_z3_path_override():
+def test_propagation_facts_in_all_facts():
+    cons = [["g@1", "*", ["g@1", "+", -1]], ["g@1", "+", -1]]
+    an = Analysis({"constraints": cons,
+                   "bus_interactions": [{"id": 1, "mult": "g@1",
+                                         "args": [1, 8, 0, 0, 0, 0, "t@2"]}]},
+                  assume_is_valid=False)
+    types = {type(f).__name__ for f in certify.all_facts(an)}
+    assert {"Pin", "EffKind"} <= types
+    for f in certify.all_facts(an):
+        cert = certify.certificate(an, f)
+        assert "(check-sat)" in cert.smt2
     with pytest.raises(ValueError, match="z3 binary not found"):
         certify.certify_dump(_dump(), run=True, z3_path="/nonexistent/z3")
 

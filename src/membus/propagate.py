@@ -1,12 +1,8 @@
-"""Constant propagation for memory-bus multiplicities (internal, uncertified).
-
-TODO: once this mechanism has settled, promote extracted equalities to typed
-facts (single-column pins vs multi-column linear zeros — names TBD) so certify
-can justify propagated multiplicities.
-"""
+"""Constant propagation for memory-bus multiplicities — certified via typed facts."""
 from __future__ import annotations
 
 import collections
+import functools
 import json
 import re
 from dataclasses import dataclass
@@ -16,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from src.lens.normalize import BABYBEAR_PRIME, to_signed
 
 from .busmodel import BITWISE, TUPLE_RANGE, VAR_RANGE, MemRow, range_bus_rows
-from .facts import TS_MAX
+from .facts import Bound, ExprEval, Fact, LinZero, Pin, Src, TS_MAX
 from .linform import LinForm, bits_of, domain_gadget, linform, names, product
 
 if TYPE_CHECKING:
@@ -24,29 +20,34 @@ if TYPE_CHECKING:
 
 P = BABYBEAR_PRIME
 
-# (lo, hi_exclusive); hi None = unbounded above lo
-_PropBound = tuple[int, int | None]
+_IS_LOAD_RE = re.compile(r"^is_load_(\d+)@")
+_ACCESS_RE = re.compile(r"_(\d+)@\d+$")
 
 
-def prop_bounds(an: Analysis) -> dict[str, _PropBound]:
-    """Bounds for propagation window checks — no dependency on ``kinds``."""
-    out: dict[str, _PropBound] = {}
+def _certifiable(b: Bound) -> bool:
+    return bool(b.sources) or bool(b.assumptions)
 
-    def put(col: str, lo: int, hi: int | None) -> None:
-        cur = out.get(col)
+
+def prop_bound_facts(an: Analysis) -> dict[str, Bound]:
+    """Certifiable column bounds for propagation window premises."""
+    out: dict[str, Bound] = {}
+
+    def put(fact: Bound) -> None:
+        cur = out.get(fact.col)
         if cur is None:
-            out[col] = (lo, hi)
-        elif hi is not None and (cur[1] is None or hi < cur[1]):
-            out[col] = (lo, hi)
+            out[fact.col] = fact
+        elif fact.hi is not None and (cur.hi is None or fact.hi < cur.hi):
+            out[fact.col] = fact
 
-    for _idx, bid, args in range_bus_rows(an.machine):
+    for idx, bid, args in range_bus_rows(an.machine):
+        src = (Src("bus", idx),)
         if bid == VAR_RANGE and len(args) >= 2:
             bits = bits_of(args[1])
             if bits is None:
                 continue
             val = args[0]
             if isinstance(val, str):
-                put(val, 0, 1 << bits)
+                put(Bound(val, 0, 1 << bits, sources=src))
             elif (isinstance(val, list) and len(val) == 3 and val[1] == "*"
                   and isinstance(val[0], int) and isinstance(val[2], str)):
                 try:
@@ -54,23 +55,24 @@ def prop_bounds(an: Analysis) -> dict[str, _PropBound]:
                 except ValueError:
                     continue
                 if s * (1 << bits) < P:
-                    put(val[2], 0, s * (1 << bits))
+                    put(Bound(val[2], 0, s * (1 << bits), sources=src))
         elif bid == BITWISE:
             for a in args[:2]:
                 if isinstance(a, str):
-                    put(a, 0, 1 << 8)
+                    put(Bound(a, 0, 1 << 8, sources=src))
         elif bid == TUPLE_RANGE:
             for a in args:
                 if isinstance(a, str):
-                    put(a, 0, None)
+                    put(Bound(a, 0, None, sources=src))
 
-    for con in an.machine.get("constraints", []):
+    for idx, con in enumerate(an.machine.get("constraints", [])):
+        src = (Src("constraint", idx),)
         lf = linform(con)
         if lf is not None and len(lf.coeffs) == 1:
-            put(lf.coeffs[0][0], 0, TS_MAX)
+            put(Bound(lf.coeffs[0][0], 0, TS_MAX, sources=src))
         dg = domain_gadget(con)
         if dg is not None:
-            put(dg[0], 0, dg[1])
+            put(Bound(dg[0], 0, dg[1], sources=src))
             continue
         pr = product(con)
         if pr is None:
@@ -79,50 +81,57 @@ def prop_bounds(an: Analysis) -> dict[str, _PropBound]:
                 and pr.right.const == pr.left.const - 1
                 and len(pr.left.coeffs) == 1
                 and pr.left.coeffs[0][1] == 1):
-            put(pr.left.coeffs[0][0], 0, 2)
+            put(Bound(pr.left.coeffs[0][0], 0, 2, sources=src))
 
     for row in an.mem:
+        src = (Src("bus", row.ordinal),)
         if isinstance(row.addr_space_expr, str):
-            put(row.addr_space_expr, 0, TS_MAX)
+            put(Bound(row.addr_space_expr, 0, TS_MAX, sources=src))
         if isinstance(row.ptr, str):
-            put(row.ptr, 0, TS_MAX)
+            put(Bound(row.ptr, 0, TS_MAX, sources=src))
         for byte in row.data:
             if isinstance(byte, str):
-                put(byte, 0, 1 << 8)
+                put(Bound(byte, 0, 1 << 8, sources=src))
         if isinstance(row.ts, str):
-            put(row.ts, 0, TS_MAX)
+            put(Bound(row.ts, 0, TS_MAX, sources=src))
 
     return out
 
 
-def _prop_window(lf: LinForm, bounds: dict[str, _PropBound]) -> tuple[int, int] | None:
+def _window_premises(lf: LinForm, bounds: dict[str, Bound],
+                     ) -> tuple[int, int, tuple[Bound, ...]] | None:
     lo = hi = lf.const
+    prem: list[Bound] = []
     for col, c in lf.coeffs:
         b = bounds.get(col)
-        if b is None or b[1] is None or b[0] < 0:
+        if b is None or b.hi is None or b.lo < 0:
             return None
-        top = b[1] - 1
+        if not _certifiable(b):
+            return None
+        top = b.hi - 1
+        prem.append(b)
         lo += min(0, c * top)
         hi += max(0, c * top)
-    return lo, hi
+    return lo, hi, tuple(prem)
 
 
 def _window_sound(lo: int, hi: int) -> bool:
     return lo > -P and hi < P
 
 
-def _try_pin(lf: LinForm, bounds: dict[str, _PropBound]) -> tuple[str, int] | None:
+def _try_pin(lf: LinForm, bounds: dict[str, Bound],
+             ) -> tuple[str, int, tuple[Bound, ...]] | None:
     """``lf ≡ 0`` with a single column ⟹ pin that column, if window-unique."""
     if len(lf.coeffs) != 1:
         return None
-    win = _prop_window(lf, bounds)
-    if win is None or not _window_sound(*win):
+    win = _window_premises(lf, bounds)
+    if win is None or not _window_sound(win[0], win[1]):
         return None
     col, coeff = lf.coeffs[0]
     if coeff == 1:
-        return col, LinForm.make({}, -lf.const).const
+        return col, LinForm.make({}, -lf.const).const, win[2]
     if coeff == -1:
-        return col, LinForm.make({}, lf.const).const
+        return col, LinForm.make({}, lf.const).const, win[2]
     return None
 
 
@@ -130,39 +139,64 @@ def _neg_coeffs(coeffs: tuple[tuple[str, int], ...]) -> tuple[tuple[str, int], .
     return tuple((c, -v) for c, v in coeffs)
 
 
-# id(zeros) -> (zeros, {coeffs: const}); a single Analysis reuses one zeros list,
-# so this holds one live entry. Guarded by identity to survive id reuse.
-_ZERO_INDEX_CACHE: dict[int, tuple[list, dict[tuple[tuple[str, int], ...], int]]] = {}
+@dataclass(frozen=True)
+class _DecodingIndex:
+    """Pre-indexed mux / flag-domain constraints for is_load refutation."""
+
+    mux_by_is_load: dict[str, tuple[int, Any]]
+    nonlinear_by_names: dict[frozenset[str], tuple[tuple[int, Any], ...]]
+
+    @classmethod
+    def build(cls, cons: list[Any]) -> _DecodingIndex:
+        mux: dict[str, tuple[int, Any]] = {}
+        nonlinear: dict[frozenset[str], list[tuple[int, Any]]] = {}
+        for idx, c in enumerate(cons):
+            if (isinstance(c, list) and len(c) == 3 and c[1] == "-"
+                    and isinstance(c[0], str) and c[0] not in mux):
+                mux[c[0]] = (idx, c)
+            if linform(c) is None:
+                nonlinear.setdefault(frozenset(names(c)), []).append((idx, c))
+        return cls(mux, {k: tuple(v) for k, v in nonlinear.items()})
+
+    def flag_domain_nonlinear(self, flag_cols: tuple[str, ...],
+                              is_load: str) -> list[tuple[int, Any]]:
+        candidates = self.nonlinear_by_names.get(frozenset(flag_cols), ())
+        return [(i, c) for i, c in candidates if is_load not in names(c)]
+
+    def deciding_constraints(self, is_load: str,
+                             flag_cols: tuple[str, ...]) -> list[tuple[int, Any]]:
+        out: list[tuple[int, Any]] = []
+        mux = self.mux_by_is_load.get(is_load)
+        if mux is not None:
+            out.append(mux)
+        out.extend(self.flag_domain_nonlinear(flag_cols, is_load))
+        return out
+
+    def deciding_sources(self, is_load: str,
+                         flag_cols: tuple[str, ...]) -> tuple[Src, ...]:
+        return tuple(Src("constraint", idx)
+                     for idx, _ in self.deciding_constraints(is_load, flag_cols))
 
 
-def _zero_index(zeros: list[LinForm]) -> dict[tuple[tuple[str, int], ...], int]:
-    """``coeffs -> const`` for the residual zeros, built once per ``zeros`` list.
+@dataclass(frozen=True)
+class PropagationResult:
+    """Propagation state: facts are the only stored fields."""
 
-    Two zeros with the same coeffs would force a nonzero constant to vanish
-    (a contradiction), so keeping the first is safe.
-    """
-    key = id(zeros)
-    hit = _ZERO_INDEX_CACHE.get(key)
-    if hit is not None and hit[0] is zeros:
-        return hit[1]
-    idx: dict[tuple[tuple[str, int], ...], int] = {}
-    for lf in zeros:
-        idx.setdefault(lf.coeffs, lf.const)
-    _ZERO_INDEX_CACHE[key] = (zeros, idx)
-    return idx
+    pins: dict[str, Pin]
+    zeros: tuple[LinZero, ...]
+    exprs: tuple[ExprEval, ...]
+    decoding: _DecodingIndex
 
+    @functools.cached_property
+    def pin_values(self) -> dict[str, int]:
+        return {c: p.value for c, p in self.pins.items()}
 
-_IS_LOAD_RE = re.compile(r"^is_load_(\d+)@")
-_ACCESS_RE = re.compile(r"_(\d+)@\d+$")
+    @functools.cached_property
+    def zero_index(self) -> dict[tuple[tuple[str, int], ...], LinZero]:
+        return {z.coeffs: z for z in self.zeros}
 
 
 def _eval_constraint(expr: Any, env: dict[str, int]) -> int:
-    """Evaluate a dump constraint expression mod p (uncertified).
-
-    Missing columns default to 0 — only for constraint SAT over a partial env
-    (e.g. flag enumeration). Use :func:`_eval_partial` when unbound columns
-    must not be guessed.
-    """
     if isinstance(expr, bool):
         raise ValueError(f"unexpected bool: {expr!r}")
     if isinstance(expr, int):
@@ -184,11 +218,6 @@ def _eval_constraint(expr: Any, env: dict[str, int]) -> int:
 
 
 def _eval_partial(expr: Any, env: dict[str, int]) -> int | None:
-    """Evaluate mod p, or ``None`` if a remaining column is not in ``env``.
-
-    ``0 * <unbound>`` and ``<unbound> * 0`` fold to 0 without reading the
-    unbound factor (pinned zeros can eliminate a column from the value).
-    """
     if isinstance(expr, bool):
         raise ValueError(f"unexpected bool: {expr!r}")
     if isinstance(expr, int):
@@ -234,10 +263,6 @@ def _flag_cols_for_access(cols: set[str], access: int) -> tuple[str, ...]:
 
 
 def _flags_by_access(cols: set[str]) -> dict[int, tuple[str, ...]]:
-    """Group ``flags__…`` columns by their access index in one pass.
-
-    Replaces per-access ``_flag_cols_for_access`` scans (O(accesses·cols)).
-    """
     out: dict[int, list[str]] = {}
     for c in cols:
         if not c.startswith("flags__"):
@@ -246,72 +271,6 @@ def _flags_by_access(cols: set[str]) -> dict[int, tuple[str, ...]]:
         if m is not None:
             out.setdefault(int(m.group(1)), []).append(c)
     return {a: tuple(sorted(v)) for a, v in out.items()}
-
-
-@dataclass(frozen=True)
-class _DecodingIndex:
-    """Pre-indexed mux / flag-domain constraints for is_load refutation."""
-
-    mux_by_is_load: dict[str, Any]
-    nonlinear_by_names: dict[frozenset[str], tuple[Any, ...]]
-
-    @classmethod
-    def build(cls, cons: list[Any]) -> _DecodingIndex:
-        mux: dict[str, Any] = {}
-        nonlinear: dict[frozenset[str], list[Any]] = {}
-        for c in cons:
-            if (isinstance(c, list) and len(c) == 3 and c[1] == "-"
-                    and isinstance(c[0], str) and c[0] not in mux):
-                mux[c[0]] = c
-            if linform(c) is None:
-                nonlinear.setdefault(frozenset(names(c)), []).append(c)
-        return cls(mux, {k: tuple(v) for k, v in nonlinear.items()})
-
-    def flag_domain_nonlinear(self, flag_cols: tuple[str, ...],
-                              is_load: str) -> list[Any]:
-        candidates = self.nonlinear_by_names.get(frozenset(flag_cols), ())
-        return [c for c in candidates if is_load not in names(c)]
-
-    def deciding_constraints(self, is_load: str,
-                             flag_cols: tuple[str, ...]) -> list[Any]:
-        out: list[Any] = []
-        mux = self.mux_by_is_load.get(is_load)
-        if mux is not None:
-            out.append(mux)
-        out.extend(self.flag_domain_nonlinear(flag_cols, is_load))
-        return out
-
-
-def _flag_domain_nonlinear(cons: list[Any], flag_cols: tuple[str, ...],
-                           is_load: str) -> list[Any]:
-    """Nonlinear constraints mentioning only this access's decode flags."""
-    need = set(flag_cols)
-    return [c for c in cons
-            if linform(c) is None and is_load not in names(c)
-            and names(c) == need]
-
-
-def _mux_constraint(cons: list[Any], is_load: str) -> Any | None:
-    for c in cons:
-        if (isinstance(c, list) and len(c) == 3 and c[1] == "-"
-                and c[0] == is_load):
-            return c
-    return None
-
-
-def _deciding_constraints(cons: list[Any], is_load: str, flag_cols: tuple[str, ...],
-                          pins: dict[str, int],
-                          index: _DecodingIndex | None = None) -> list[Any]:
-    """Mux + flag-domain nonlinear constraints for this access."""
-    del pins  # env supplies Step-1 pins; no extra linear bundle needed
-    if index is not None:
-        return index.deciding_constraints(is_load, flag_cols)
-    out: list[Any] = []
-    mux = _mux_constraint(cons, is_load)
-    if mux is not None:
-        out.append(mux)
-    out.extend(_flag_domain_nonlinear(cons, flag_cols, is_load))
-    return out
 
 
 def _sat_with_flags(cons: list[Any], env: dict[str, int],
@@ -326,24 +285,23 @@ def _sat_with_flags(cons: list[Any], env: dict[str, int],
 
 
 def _refute_is_load(is_load: str, flag_cols: tuple[str, ...],
-                    index: _DecodingIndex, pins: dict[str, int]) -> int | None:
-    deciding = index.deciding_constraints(is_load, flag_cols)
+                    index: _DecodingIndex, pin_values: dict[str, int]) -> int | None:
+    deciding = [c for _, c in index.deciding_constraints(is_load, flag_cols)]
     if not deciding:
         return None
     survivors: list[int] = []
     for v in (0, 1):
-        if _sat_with_flags(deciding, {**pins, is_load: v}, flag_cols):
+        if _sat_with_flags(deciding, {**pin_values, is_load: v}, flag_cols):
             survivors.append(v)
     return survivors[0] if len(survivors) == 1 else None
 
 
-def _refute_is_load_pins(an: Analysis, pins: dict[str, int],
-                         index: _DecodingIndex) -> dict[str, int]:
+def _refute_is_load_pins(pins: dict[str, Pin], pin_values: dict[str, int],
+                         an: Analysis, index: _DecodingIndex) -> None:
     cols = _all_constraint_cols(an.machine)
     flags = _flags_by_access(cols)
-    out = dict(pins)
     for is_load in sorted(c for c in cols if c.startswith("is_load_")):
-        if is_load in out:
+        if is_load in pins:
             continue
         m = _IS_LOAD_RE.match(is_load)
         if m is None:
@@ -351,10 +309,17 @@ def _refute_is_load_pins(an: Analysis, pins: dict[str, int],
         flag_cols = flags.get(int(m.group(1)), ())
         if not flag_cols:
             continue
-        v = _refute_is_load(is_load, flag_cols, index, out)
-        if v is not None:
-            out[is_load] = v
-    return out
+        v = _refute_is_load(is_load, flag_cols, index, pin_values)
+        if v is None:
+            continue
+        prem = tuple(pins.values())
+        pins[is_load] = Pin(
+            is_load, v,
+            sources=index.deciding_sources(is_load, flag_cols),
+            premises=prem,
+            refute_flags=flag_cols,
+        )
+        pin_values[is_load] = v
 
 
 def _accesses_in_expr(expr: Any) -> set[int]:
@@ -366,24 +331,26 @@ def _accesses_in_expr(expr: Any) -> set[int]:
     return out
 
 
-def surviving_envs(an: Analysis, pins: dict[str, int],
-                   index: _DecodingIndex) -> dict[int, list[dict[str, int]]]:
+def surviving_envs(an: Analysis, prop: PropagationResult,
+                   ) -> dict[int, list[dict[str, int]]]:
     """Pinned + flag assignments satisfying each access's mux/opcode cone."""
+    pin_values = prop.pin_values
     cols = _all_constraint_cols(an.machine)
     flags = _flags_by_access(cols)
     out: dict[int, list[dict[str, int]]] = {}
-    for is_load in sorted(c for c in cols if c.startswith("is_load_")):
+    index = prop.decoding
+    for is_load in sorted(c for c in pin_values if c.startswith("is_load_")):
         m = _IS_LOAD_RE.match(is_load)
-        if m is None or is_load not in pins:
+        if m is None:
             continue
         access = int(m.group(1))
         flag_cols = flags.get(access, ())
         if not flag_cols:
             continue
-        deciding = index.deciding_constraints(is_load, flag_cols)
+        deciding = [c for _, c in index.deciding_constraints(is_load, flag_cols)]
         envs: list[dict[str, int]] = []
         for bits in iproduct((0, 1), repeat=len(flag_cols)):
-            trial = {**pins, is_load: pins[is_load]}
+            trial = dict(pin_values)
             for col, v in zip(flag_cols, bits):
                 trial[col] = v
             if all(_eval_constraint(c, trial) == 0 for c in deciding):
@@ -393,95 +360,84 @@ def surviving_envs(an: Analysis, pins: dict[str, int],
     return out
 
 
-def _refute_expr(expr: Any, pins: dict[str, int],
-                 envs_by_access: dict[int, list[dict[str, int]]]) -> int | None:
-    """If ``expr`` has one value under every surviving flag env, return it.
-
-    Pin-fold first, then evaluate with :func:`_eval_partial` so columns
-    eliminated by pinned zeros (e.g. ``is_load * rd`` with ``is_load=0``) do
-    not block folding; unbound columns that still affect the value yield
-    ``None`` rather than defaulting to 0.
-    """
-    if isinstance(expr, int):
-        return to_signed(expr)
-    accs = _accesses_in_expr(expr)
-    if len(accs) != 1:
-        return None
-    envs = envs_by_access.get(next(iter(accs)))
-    if not envs:
-        return None
-    folded = _fold_pins(expr, pins)
-    if isinstance(folded, int):
-        return folded
-    vals: set[int] = set()
-    for env in envs:
-        v = _eval_partial(folded, env)
-        if v is None:
-            return None
-        vals.add(to_signed(v))
-    return next(iter(vals)) if len(vals) == 1 else None
-
-
-def propagate(an: Analysis) -> tuple[dict[str, int], list[LinForm], _DecodingIndex]:
+def propagate(an: Analysis) -> PropagationResult:
     """Fixpoint column pins + residual linear zeros (after substitution)."""
-    bounds = prop_bounds(an)
+    bounds = prop_bound_facts(an)
     cons = an.machine.get("constraints", [])
     decoding = _DecodingIndex.build(cons)
-    raw = [lf for c in cons if (lf := linform(c)) is not None]
-    pins: dict[str, int] = {}
+    raw = [(idx, lf) for idx, c in enumerate(cons) if (lf := linform(c)) is not None]
+    pins: dict[str, Pin] = {}
+    pin_values: dict[str, int] = {}
     changed = True
     while changed:
         changed = False
-        for lf_raw in raw:
-            lf = lf_raw.subst(pins)
+        for idx, lf_raw in raw:
+            applied = tuple(pins[c] for c in lf_raw.columns if c in pins)
+            lf = lf_raw.subst(pin_values)
             if lf.is_const:
                 continue
             hit = _try_pin(lf, bounds)
             if hit is not None and hit[0] not in pins:
-                pins[hit[0]] = hit[1]
+                col, val, win_bounds = hit
+                pins[col] = Pin(col, val,
+                                sources=(Src("constraint", idx),),
+                                premises=win_bounds + applied)
+                pin_values[col] = val
                 changed = True
 
-    pins = _refute_is_load_pins(an, pins, decoding)
+    _refute_is_load_pins(pins, pin_values, an, decoding)
 
-    zeros: list[LinForm] = []
-    for lf_raw in raw:
-        lf = lf_raw.subst(pins)
+    zeros: list[LinZero] = []
+    for idx, lf_raw in raw:
+        applied = tuple(pins[c] for c in lf_raw.columns if c in pins)
+        lf = lf_raw.subst(pin_values)
         if lf.is_const:
             continue
-        win = _prop_window(lf, bounds)
-        if win is not None and _window_sound(*win):
-            zeros.append(lf)
-    return pins, zeros, decoding
+        win = _window_premises(lf, bounds)
+        if win is not None and _window_sound(win[0], win[1]):
+            zeros.append(LinZero(
+                lf.coeffs, lf.const,
+                sources=(Src("constraint", idx),),
+                premises=win[2] + applied))
+
+    return PropagationResult(pins=pins, zeros=tuple(zeros), exprs=(), decoding=decoding)
 
 
-def eval_mult(mf: LinForm | None, pins: dict[str, int],
-              zeros: list[LinForm]) -> int | None:
-    """Evaluate a multiplicity linear form; ``None`` if not resolved."""
+def eval_mult(mf: LinForm | None, prop: PropagationResult) -> int | None:
+    v, _ = eval_mult_basis(mf, prop)
+    return v
+
+
+def eval_mult_basis(mf: LinForm | None, prop: PropagationResult,
+                    ) -> tuple[int | None, tuple[Fact, ...]]:
     if mf is None:
-        return None
-    mf = mf.subst(pins)
+        return None, ()
+    prem: list[Fact] = [prop.pins[c] for c in mf.columns if c in prop.pins]
+    mf = mf.subst(prop.pin_values)
     if mf.is_const:
-        return mf.const % P
-    index = _zero_index(zeros)
-    zc = index.get(mf.coeffs)
-    if zc is not None:
-        return (mf.const - zc) % P
-    zc = index.get(_neg_coeffs(mf.coeffs))
-    if zc is not None:
-        return (mf.const + zc) % P
-    return None
+        return mf.const % P, tuple(prem)
+    zi = prop.zero_index
+    zf = zi.get(mf.coeffs)
+    if zf is not None:
+        return (mf.const - zf.const) % P, tuple(prem) + (zf,)
+    zf = zi.get(_neg_coeffs(mf.coeffs))
+    if zf is not None:
+        return (mf.const + zf.const) % P, tuple(prem) + (zf,)
+    return None, ()
 
 
 _RelPin = tuple[str, int]
 
 
-def _fold_pins(expr: Any, pins: dict[str, int],
+def _fold_pins(expr: Any, prop_or_pins: PropagationResult | dict[str, int],
                rel_pins: dict[str, _RelPin] | None = None) -> Any:
-    """Substitute pinned columns; evaluate mod-p when no columns remain.
-
-    ``rel_pins`` maps a column to ``(base, offset)`` with ``col ≡ base + offset``;
-    substitution always rewrites toward the smaller-offset base.
-    """
+    if isinstance(prop_or_pins, dict):
+        prop = PropagationResult(
+            pins={c: Pin(c, v) for c, v in prop_or_pins.items()},
+            zeros=(), exprs=(), decoding=_DecodingIndex({}, {}))
+    else:
+        prop = prop_or_pins
+    pins = prop.pin_values
     if isinstance(expr, int):
         return expr
     if isinstance(expr, str):
@@ -494,13 +450,13 @@ def _fold_pins(expr: Any, pins: dict[str, int],
             return [base, "+", off]
         return expr
     if isinstance(expr, list) and len(expr) == 2 and expr[0] == "-":
-        inner = _fold_pins(expr[1], pins, rel_pins)
+        inner = _fold_pins(expr[1], prop, rel_pins)
         if isinstance(inner, int):
             return to_signed(-inner)
         return ["-", inner]
     if isinstance(expr, list) and len(expr) == 3:
-        a = _fold_pins(expr[0], pins, rel_pins)
-        b = _fold_pins(expr[2], pins, rel_pins)
+        a = _fold_pins(expr[0], prop, rel_pins)
+        b = _fold_pins(expr[2], prop, rel_pins)
         op = expr[1]
         if isinstance(a, int) and isinstance(b, int):
             if op == "+":
@@ -553,7 +509,6 @@ def _lf_to_expr(lf: LinForm) -> Any:
 
 def _two_col_gap_edges(two_col_gaps: list[tuple[int, str, str, int]],
                         ) -> dict[str, list[tuple[str, int]]]:
-    """``pos - neg + const = 0`` ⟹ ``pos = neg + (-const)``."""
     adj: dict[str, list[tuple[str, int]]] = collections.defaultdict(list)
     for _idx, pos, neg, const in two_col_gaps:
         gap = -const
@@ -564,7 +519,6 @@ def _two_col_gap_edges(two_col_gaps: list[tuple[int, str, str, int]],
 
 def _substitution_edges(substitutions: list[Any] | None,
                         ) -> dict[str, list[tuple[str, int]]]:
-    """``[var, base + off]`` pairs as directed offset edges."""
     adj: dict[str, list[tuple[str, int]]] = collections.defaultdict(list)
     if not substitutions:
         return adj
@@ -587,13 +541,6 @@ def send_ts_aliases(send_cols: set[str],
                     two_col_gaps: list[tuple[int, str, str, int]],
                     substitutions: list[Any] | None,
                     ) -> dict[str, _RelPin]:
-    """Map each send clock column to ``(base, offset)`` with minimum base time.
-
-    Edges come from two-column ±1 constraints and substitution defs
-    ``var = col + const``, restricted to edges between two send clocks so a
-    recv witness can never be chosen as the base. Conflicting paths drop the
-    whole component.
-    """
     if not send_cols:
         return {}
     raw = _two_col_gap_edges(two_col_gaps)
@@ -634,7 +581,6 @@ def send_ts_aliases(send_cols: set[str],
 
 
 def _rewrite_ts_slot(expr: Any, aliases: dict[str, _RelPin]) -> Any:
-    """Rewrite ``col + intra`` to the common base clock + combined offset."""
     lf = linform(expr)
     if lf is None or len(lf.coeffs) != 1 or lf.coeffs[0][1] != 1:
         return expr
@@ -649,74 +595,162 @@ def _rewrite_ts_slot(expr: Any, aliases: dict[str, _RelPin]) -> Any:
     return [base, "+", total]
 
 
-def simplify_expr(pins: dict[str, int], zeros: list[LinForm], expr: Any,
+def _pin_premises_for_expr(expr: Any, prop: PropagationResult) -> tuple[Fact, ...]:
+    """Pin facts for columns substituted while folding ``expr``."""
+    seen: set[str] = set()
+    prem: list[Fact] = []
+
+    def walk(e: Any) -> None:
+        if isinstance(e, str) and e in prop.pins and e not in seen:
+            seen.add(e)
+            prem.append(prop.pins[e])
+        elif isinstance(e, list):
+            for part in e:
+                walk(part)
+
+    walk(expr)
+    return tuple(prem)
+
+
+def _try_refute_expr(expr: Any, prop: PropagationResult,
+                     envs_by_access: dict[int, list[dict[str, int]]],
+                     ) -> ExprEval | None:
+    if isinstance(expr, int):
+        return None
+    accs = _accesses_in_expr(expr)
+    if len(accs) != 1:
+        return None
+    access = next(iter(accs))
+    envs = envs_by_access.get(access)
+    if not envs:
+        return None
+    folded = _fold_pins(expr, prop)
+    if isinstance(folded, int):
+        value = folded
+    else:
+        vals: set[int] = set()
+        for env in envs:
+            v = _eval_partial(folded, env)
+            if v is None:
+                return None
+            vals.add(to_signed(v))
+        if len(vals) != 1:
+            return None
+        value = next(iter(vals))
+    cols = set(prop.pin_values) | set(names(expr))
+    flags = _flags_by_access(cols)
+    flag_cols = flags.get(access, ())
+    is_load = f"is_load_{access}@"
+    for col in prop.pin_values:
+        m = _IS_LOAD_RE.match(col)
+        if m is not None and int(m.group(1)) == access:
+            is_load = col
+            break
+    sources = prop.decoding.deciding_sources(is_load, flag_cols) if flag_cols else ()
+    return ExprEval(expr, value, access,
+                    sources=sources,
+                    premises=_pin_premises_for_expr(expr, prop))
+
+
+def eval_expr(prop: PropagationResult, expr: Any) -> int | None:
+    if isinstance(expr, int):
+        return to_signed(expr)
+    lf = linform(expr)
+    if lf is None:
+        return None
+    v = eval_mult(lf, prop)
+    return to_signed(v) if v is not None else None
+
+
+def simplify_expr(prop: PropagationResult, expr: Any,
                   rel_pins: dict[str, _RelPin] | None = None) -> Any:
-    """Fold propagation into a dump expression; resolve to int when possible."""
-    v = eval_expr(pins, zeros, expr)
+    v = eval_expr(prop, expr)
     if v is not None:
         return v
-    folded = _fold_pins(expr, pins, rel_pins)
+    folded = _fold_pins(expr, prop, rel_pins)
     if isinstance(folded, int):
         return folded
     if folded is not expr:
-        v = eval_expr(pins, zeros, folded)
+        v = eval_expr(prop, folded)
         if v is not None:
             return v
         expr = folded
     lf = linform(expr)
     if lf is None:
         return expr
-    lf = lf.subst(pins)
+    lf = lf.subst(prop.pin_values)
     return lf.const if lf.is_const else _lf_to_expr(lf)
 
 
-def simplify_mult(pins: dict[str, int], zeros: list[LinForm], mult: Any) -> Any:
+def simplify_mult(prop: PropagationResult, mult: Any) -> Any:
     lf = linform(mult)
     if lf is None:
         return mult
-    v = eval_mult(lf, pins, zeros)
+    v = eval_mult(lf, prop)
     if v is not None:
         return to_signed(v)
-    lf = lf.subst(pins)
+    lf = lf.subst(prop.pin_values)
     return lf.const if lf.is_const else _lf_to_expr(lf)
 
 
-def simplify_mem_row(row: MemRow, pins: dict[str, int], zeros: list[LinForm],
-                   envs_by_access: dict[int, list[dict[str, int]]],
-                   ts_aliases: dict[str, _RelPin] | None = None) -> MemRow:
-    as_arg = simplify_expr(pins, zeros, row.args[0])
-    ptr_arg = _refute_expr(row.args[1], pins, envs_by_access)
-    if ptr_arg is None:
-        ptr_arg = simplify_expr(pins, zeros, row.args[1])
-    ts_arg = simplify_expr(pins, zeros, row.args[-1])
+def simplify_mem_row(row: MemRow, prop: PropagationResult,
+                     envs_by_access: dict[int, list[dict[str, int]]],
+                     ts_aliases: dict[str, _RelPin] | None = None) -> MemRow:
+    as_arg = simplify_expr(prop, row.args[0])
+    ev = _try_refute_expr(row.args[1], prop, envs_by_access)
+    ptr_arg = ev.value if ev is not None else simplify_expr(prop, row.args[1])
+    ts_arg = simplify_expr(prop, row.args[-1])
     if ts_aliases:
         ts_arg = _rewrite_ts_slot(ts_arg, ts_aliases)
     args = (as_arg, ptr_arg, *row.args[2:-1], ts_arg)
-    return MemRow(row.ordinal, simplify_mult(pins, zeros, row.mult), args)
+    return MemRow(row.ordinal, simplify_mult(prop, row.mult), args)
 
 
-def eval_expr(pins: dict[str, int], zeros: list[LinForm], expr: Any) -> int | None:
-    """Resolve a linear dump expression via propagation, or ``None``."""
-    if isinstance(expr, int):
-        return to_signed(expr)
-    lf = linform(expr)
-    if lf is None:
-        return None
-    v = eval_mult(lf, pins, zeros)
-    return to_signed(v) if v is not None else None
+def simplify_mem_rows(mem: list[MemRow], prop: PropagationResult,
+                      envs_by_access: dict[int, list[dict[str, int]]],
+                      ts_aliases: dict[str, _RelPin] | None = None,
+                      ) -> tuple[list[MemRow], tuple[ExprEval, ...]]:
+    exprs: list[ExprEval] = []
+    out: list[MemRow] = []
+    for row in mem:
+        ev = _try_refute_expr(row.args[1], prop, envs_by_access)
+        if ev is not None:
+            exprs.append(ev)
+        out.append(simplify_mem_row(row, prop, envs_by_access, ts_aliases))
+    return out, tuple(exprs)
 
 
 def format_debug(an: Analysis) -> str:
-    """Human-readable propagation state and simplified memory rows."""
-    pins, zeros = an._propagation
-    lines = [f"# propagation pins ({len(pins)})"]
-    for col in sorted(pins):
-        lines.append(f"  {col} = {pins[col]}")
-    lines.append(f"# propagation zeros ({len(zeros)})")
-    for lf in zeros:
-        lines.append(f"  {lf}")
+    prop = an._propagation
+    lines = [f"# propagation pins ({len(prop.pins)})"]
+    for col in sorted(prop.pins):
+        lines.append(f"  {col} = {prop.pins[col].value}")
+    lines.append(f"# propagation zeros ({len(prop.zeros)})")
+    for z in prop.zeros:
+        lines.append(f"  {z}")
+    lines.append(f"# propagation exprs ({len(prop.exprs)})")
+    for e in prop.exprs:
+        lines.append(f"  {e}")
     lines.append(f"# memory interactions ({len(an.mem)}) after simplification")
     for r in an.mem:
         lines.append(
             f"  #{r.ordinal}  mult={json.dumps(r.mult)}  args={json.dumps(list(r.args))}")
     return "\n".join(lines)
+
+
+def _deciding_constraints(cons: list[Any], is_load: str, flag_cols: tuple[str, ...],
+                          pins: dict[str, int],
+                          index: _DecodingIndex | None = None) -> list[Any]:
+    del pins, cons
+    if index is not None:
+        return [c for _, c in index.deciding_constraints(is_load, flag_cols)]
+    return []
+
+
+def _refute_expr(expr: Any, pins: dict[str, int],
+                 envs_by_access: dict[int, list[dict[str, int]]]) -> int | None:
+    prop = PropagationResult(
+        pins={c: Pin(c, v) for c, v in pins.items()},
+        zeros=(), exprs=(), decoding=_DecodingIndex({}, {}))
+    ev = _try_refute_expr(expr, prop, envs_by_access)
+    return ev.value if ev is not None else None

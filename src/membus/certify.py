@@ -25,12 +25,13 @@ from __future__ import annotations
 import shutil
 import subprocess
 from dataclasses import dataclass
+from itertools import product as iproduct
 from pathlib import Path
 from typing import Any
 
 from src.lens.normalize import BABYBEAR_PRIME
 
-from .facts import AffineDef, Assumption, Bound, EffKind, Fact, Gap, RecvUpper
+from .facts import AffineDef, Assumption, Bound, EffKind, ExprEval, Fact, Gap, LinZero, Pin, RecvUpper
 from .linform import linform, names
 from .rules import Analysis
 
@@ -209,6 +210,40 @@ class _Query:
             self.declare(sel)
             self.assert_(f"(= {_smt_sym(sel)} 1)")
 
+    def _assert_flag_refutation(self, pin: Pin) -> None:
+        if not pin.refute_flags:
+            return
+        flag_cols = pin.refute_flags
+        deciding = [self.an.machine["constraints"][s.index]
+                    for s in pin.sources if s.kind == "constraint"]
+        for col in flag_cols:
+            self.declare(col)
+            self.assert_(f"(and (<= 0 {_smt_sym(col)}) (<= {_smt_sym(col)} 1))")
+        self.declare(pin.col)
+
+        def env_sat(is_load_val: int, bits: tuple[int, ...]) -> str:
+            env = {pin.col: is_load_val, **dict(zip(flag_cols, bits))}
+            for p in pin.premises:
+                if isinstance(p, Pin):
+                    env[p.col] = p.value
+            conj = [self.field_zero(c) for c in deciding]
+            flag_eq = [f"(= {_smt_sym(c)} {v})" for c, v in zip(flag_cols, bits)]
+            is_load_eq = f"(= {_smt_sym(pin.col)} {is_load_val})"
+            return f"(and {is_load_eq} {' '.join(flag_eq)} {' '.join(conj)})"
+
+        witness = []
+        for bits in iproduct((0, 1), repeat=len(flag_cols)):
+            witness.append(env_sat(pin.value, bits))
+        self.comment("witness: some flag assignment satisfies deciding constraints")
+        self.assert_(f"(or {' '.join(witness)})")
+
+        refuted = 1 - pin.value
+        refuted_cases = []
+        for bits in iproduct((0, 1), repeat=len(flag_cols)):
+            refuted_cases.append(env_sat(refuted, bits))
+        self.comment(f"refutation: is_load={refuted} unsatisfiable under any flag assignment")
+        self.assert_(f"(not (or {' '.join(refuted_cases)}))")
+
     def claim(self, f: Fact) -> str:
         if isinstance(f, Bound):
             self.declare(f.col)
@@ -238,6 +273,18 @@ class _Query:
             self.declare(row.mult)
             v = {"send": 1, "recv": P - 1, "disabled": 0}[f.kind]
             return f"(= (mod {_expr(row.mult)} {P}) {v})"
+        if isinstance(f, Pin):
+            self.declare(f.col)
+            if f.refute_flags:
+                self._assert_flag_refutation(f)
+            return f"(= {_smt_sym(f.col)} {f.value})"
+        if isinstance(f, LinZero):
+            for col, _ in f.coeffs:
+                self.declare(col)
+            return f"(= {_lin(list(f.coeffs), f.const)} 0)"
+        if isinstance(f, ExprEval):
+            self.declare(f.expr)
+            return f"(= {_expr(f.expr)} {f.value})"
         raise TypeError(f"no claim rendering for {type(f).__name__}")
 
     def finish(self, negated_claim: str) -> str:
@@ -276,6 +323,10 @@ def all_facts(an: Analysis) -> list[Fact]:
     memory rows, column bounds, timestamp gaps, recv bounds, and the affine
     definitions of the pointer limbs."""
     out: list[Fact] = []
+    prop = an._propagation
+    out += list(prop.pins.values())
+    out += list(prop.zeros)
+    out += list(prop.exprs)
     out += [k for k in an.kinds.values() if k is not None]
     out += list(an.bounds.values())
     out += list(an.gaps)

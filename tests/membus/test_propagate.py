@@ -73,8 +73,13 @@ def test_negated_coeff_offset():
 
 def test_single_column_pin():
     cons = [_bool("g@1"), _add("g@1", -1)]
-    an = _an(cons, [{"id": 1, "mult": "g@1", "args": [1, 8, 0, 0, 0, 0, "t@2"]}])
+    an = Analysis({"constraints": cons,
+                   "bus_interactions": [{"id": 1, "mult": "g@1",
+                                         "args": [1, 8, 0, 0, 0, 0, "t@2"]}]},
+                  assume_is_valid=False)
     assert an.kinds[0].kind == "send"
+    assert an._propagation.pins["g@1"].value == 1
+    assert an.kinds[0].premises
 
 
 def test_chained_substitution():
@@ -104,9 +109,9 @@ def test_loop_iteration_dump_all_kinds_resolved():
 
 def test_eval_mult_direct():
     mf = linform(["-", "x@1"])
-    pins, zeros, _ = propagate.propagate(_an([_bool("x@1"), _add("x@1", -1)]))
-    assert pins["x@1"] == 1
-    assert propagate.eval_mult(mf, pins, zeros) == P - 1
+    prop = propagate.propagate(_an([_bool("x@1"), _add("x@1", -1)]))
+    assert prop.pins["x@1"].value == 1
+    assert propagate.eval_mult(mf, prop) == P - 1
 
 
 def test_eval_expr_resolves_as_and_pointer():
@@ -156,7 +161,7 @@ def test_decoding_index_matches_naive_deciding():
             continue
         naive = propagate._deciding_constraints(cons, is_load, flag_cols, {})
         indexed = index.deciding_constraints(is_load, flag_cols)
-        assert indexed == naive, is_load
+        assert [c for _, c in indexed] == naive, is_load
 
 
 def test_fold_pins_algebraic_identities():

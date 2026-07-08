@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import functools
 import math
+from dataclasses import replace
 from typing import Any
 
 from src.lens.loader import machine_of
@@ -90,9 +91,8 @@ class Analysis:
         self.assume_is_valid = assume_is_valid
         self.mem = memory_rows(data, mem_id)
         self._mem_bus_ordinal = bus_ordinal_of_mem(data, mem_id)
-        pins, zeros, decoding = propagate.propagate(self)
-        self._propagation = (pins, zeros)
-        envs = propagate.surviving_envs(self, pins, decoding)
+        self._propagation = propagate.propagate(self)
+        envs = propagate.surviving_envs(self, self._propagation)
         substitutions = data.get("substitutions") if isinstance(data, dict) else None
         send_cols: set[str] = set()
         for row in self.mem:
@@ -103,10 +103,10 @@ class Analysis:
                     send_cols.add(col)
         self._ts_aliases = propagate.send_ts_aliases(
             send_cols, self._two_col_gaps, substitutions)
-        self.mem = [
-            propagate.simplify_mem_row(r, pins, zeros, envs, self._ts_aliases)
-            for r in self.mem
-        ]
+        self._kinds_cache = {row.ordinal: self._kind(row) for row in self.mem}
+        self.mem, exprs = propagate.simplify_mem_rows(
+            self.mem, self._propagation, envs, self._ts_aliases)
+        self._propagation = replace(self._propagation, exprs=exprs)
 
     def mem_src(self, row: MemRow) -> Src:
         return Src("bus", self._mem_bus_ordinal[row.ordinal])
@@ -148,10 +148,7 @@ class Analysis:
     def kinds(self) -> dict[int, EffKind | None]:
         """Membus ordinal → EffKind fact, or None when the multiplicity does
         not resolve (genuinely symbolic — pre-`solver` flag muxes)."""
-        out: dict[int, EffKind | None] = {}
-        for row in self.mem:
-            out[row.ordinal] = self._kind(row)
-        return out
+        return self._kinds_cache
 
     def _kind(self, row: MemRow) -> EffKind | None:
         lf = linform(row.mult)
@@ -167,12 +164,11 @@ class Analysis:
             kind = "send" if lf.coeffs[0][1] == 1 else "recv"   # g := 1
             return EffKind(row.ordinal, kind, sources=src,
                            assumptions=frozenset({Assumption.ACTIVE_SELECTOR}))
-        pins, zeros = self._propagation
-        v = propagate.eval_mult(lf, pins, zeros)
+        v, prem = propagate.eval_mult_basis(lf, self._propagation)
         if v is not None:
             kind = {1: "send", P - 1: "recv", 0: "disabled"}.get(v)
             if kind is not None:
-                return EffKind(row.ordinal, kind, sources=src)
+                return EffKind(row.ordinal, kind, sources=src, premises=prem)
         return None
 
     # -- Timestamp domain (positional) ----------------------------------------
@@ -412,11 +408,11 @@ class Analysis:
         top-level product factor that evaluates to 1; a factor of 0 makes the
         constraint vacuous (no bound), signalled by ``None``.
         """
-        pins, zeros = self._propagation
-        expr = propagate._fold_pins(con, pins, self._ts_aliases)
+        prop = self._propagation
+        expr = propagate._fold_pins(con, prop, self._ts_aliases)
         while isinstance(expr, list) and len(expr) == 3 and expr[1] == "*":
-            va = propagate.eval_expr(pins, zeros, expr[0])
-            vb = propagate.eval_expr(pins, zeros, expr[2])
+            va = propagate.eval_expr(prop, expr[0])
+            vb = propagate.eval_expr(prop, expr[2])
             if va == 0 or vb == 0:
                 return None
             if va == 1:
