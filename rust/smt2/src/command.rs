@@ -2,10 +2,10 @@
 
 use std::collections::HashMap;
 
-use z3::ast::{Ast, Bool};
+use z3::ast::Bool;
 use z3::{FuncDecl, Sort, SortKind};
 
-use crate::ast_util::{symbol_id_dyn, z3_if_to_ite, SymbolId};
+use crate::ast_util::{symbol_id_dyn, symbol_id_from_name, z3_if_to_ite, SymbolId};
 use crate::sexpr::{command_head, SExpr, Span, Spanned};
 use crate::z3_parse::ParseCtx;
 
@@ -25,9 +25,9 @@ pub enum SmtCommand {
     SetOption(Spanned<SExpr>),
     DeclareFun {
         form: Spanned<SExpr>,
-        /// Cached Z3 symbol identity for nullary ``declare-fun`` (set at parse after ingest).
+        /// Cached Z3 symbol identity for ``declare-fun`` (set at parse after ingest).
         symbol_id: Option<SymbolId>,
-        /// Cached Z3 range sort for nullary ``declare-fun``.
+        /// Cached Z3 range sort for ``declare-fun``.
         sort_kind: Option<SortKind>,
     },
     Assert {
@@ -354,8 +354,37 @@ fn nullary_declare_fun_meta(form: &SExpr) -> Option<(SymbolId, SortKind)> {
     Some((id, kind))
 }
 
+fn int_only_param_arity(params: &SExpr) -> Option<usize> {
+    let items = match params {
+        SExpr::List(items) => items,
+        _ => return None,
+    };
+    for p in items {
+        match &p.node {
+            SExpr::Atom(a) if a == "Int" => {}
+            _ => return None,
+        }
+    }
+    Some(items.len())
+}
+
+/// Symbol metadata for nullary and ``Int``-returning UF ``declare-fun`` forms.
+fn declare_fun_meta(form: &SExpr) -> Option<(SymbolId, SortKind)> {
+    if let Some(meta) = nullary_declare_fun_meta(form) {
+        return Some(meta);
+    }
+    let args = form.args()?;
+    let name = args.first()?.node.as_atom()?;
+    int_only_param_arity(&args.get(1)?.node)?;
+    let ret = sexpr_to_z3_sort(&args.get(2)?.node);
+    if ret.kind() != SortKind::Int {
+        return None;
+    }
+    Some((symbol_id_from_name(name), SortKind::Int))
+}
+
 fn new_declare_fun(form: Spanned<SExpr>) -> SmtCommand {
-    let meta = nullary_declare_fun_meta(&form.node);
+    let meta = declare_fun_meta(&form.node);
     let (symbol_id, sort_kind) = match meta {
         Some((id, kind)) => (Some(id), Some(kind)),
         None => (None, None),
@@ -367,12 +396,12 @@ fn new_declare_fun(form: Spanned<SExpr>) -> SmtCommand {
     }
 }
 
-/// Cached nullary ``declare-fun`` symbol identity (see [`SmtCommand::DeclareFun`]).
+/// Cached ``declare-fun`` symbol identity (see [`SmtCommand::DeclareFun`]).
 pub fn declare_fun_symbol_id(cmd: &SmtCommand) -> Option<SymbolId> {
     match cmd {
         SmtCommand::DeclareFun { symbol_id, .. } => *symbol_id,
         _ => declare_fun_form(cmd)
-            .and_then(nullary_declare_fun_meta)
+            .and_then(declare_fun_meta)
             .map(|(id, _)| id),
     }
 }
