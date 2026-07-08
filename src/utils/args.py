@@ -64,7 +64,7 @@ def __build_parser(skip_subparsers=False):
         "--default-executor",
         type=str,
         choices=["p", "r"],
-        default="p",
+        default="r",
         metavar="EXEC",
         help="default simplifier backend: p=python, r=rust",
     )
