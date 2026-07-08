@@ -410,6 +410,43 @@ mod tests {
         let fixed = ensure_declarations_for_asserts(&script).unwrap();
         let s = crate::dump_string(&fixed);
         assert!(s.contains("(declare-fun uf_and (Int Int) Int)"));
+        assert_eq!(
+            s.matches("(declare-fun uf_xor (Int Int) Int)").count(),
+            1
+        );
         assert!(Script::parse(&s).is_ok());
+    }
+
+    #[test]
+    fn ensure_declarations_does_not_duplicate_uf_xor() {
+        let script = Script::parse(
+            "(declare-fun uf_xor (Int Int) Int)\n\
+             (declare-fun x () Int)\n\
+             (declare-fun y () Int)\n\
+             (assert (= (uf_xor x y) 0))\n\
+             (check-sat)\n",
+        )
+        .unwrap();
+        let fixed = ensure_declarations_for_asserts(&script).unwrap();
+        let xor_decls = fixed
+            .commands
+            .iter()
+            .filter(|c| c.name() == "declare-fun")
+            .filter_map(declare_fun_name_cmd)
+            .filter(|name| name == "uf_xor")
+            .count();
+        assert_eq!(xor_decls, 1);
+    }
+
+    #[test]
+    fn declare_fun_uf_caches_symbol_id() {
+        use crate::command::declare_fun_symbol_id;
+        use crate::ast_util::symbol_id_from_name;
+
+        let script =
+            Script::parse("(declare-fun uf_xor (Int Int) Int)\n(check-sat)\n").unwrap();
+        let cached = declare_fun_symbol_id(&script.commands[0]).expect("cached symbol id");
+        assert_eq!(cached, symbol_id_from_name("uf_xor"));
+        assert_eq!(declared_symbol_ids(&script.commands).contains(&cached), true);
     }
 }
