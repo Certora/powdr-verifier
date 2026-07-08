@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
-use z3::{FuncDecl, Sort};
+use z3::{DeclKind, FuncDecl, Sort};
 
 use crate::ast_util::{
     ast_children, decl_name, free_symbol_ids_bool, int_from_i128, is_int_const, parse_int_literal,
@@ -65,7 +65,10 @@ pub fn int_literal_dyn(ast: &Dynamic) -> Option<i128> {
     if ast.kind() == AstKind::Numeral && ast.get_sort().kind() == z3::SortKind::Int {
         return ast.as_int().and_then(|i| crate::ast_util::int_value(&i));
     }
-    if ast.kind() == AstKind::App && decl_name(&ast.decl()) == "-" && ast.num_children() == 1 {
+    if ast.kind() == AstKind::App
+        && ast.num_children() == 1
+        && ast.decl().kind() == DeclKind::Uminus
+    {
         return ast.nth_child(0).and_then(|c| int_literal_dyn(&c).map(|v| -v));
     }
     None
@@ -84,35 +87,64 @@ pub fn is_symbol_dyn(ast: &Dynamic) -> bool {
         && int_literal_dyn(ast).is_none()
 }
 
-pub fn iter_nodes_dyn(ast: &Dynamic) -> Vec<Dynamic> {
-    let mut out = Vec::new();
-    walk_dyn(ast, &mut out);
-    out
+pub struct DynNodes<'a> {
+    stack: Vec<Dynamic>,
+    _root: std::marker::PhantomData<&'a Dynamic>,
 }
 
-fn walk_dyn(ast: &Dynamic, out: &mut Vec<Dynamic>) {
-    out.push(ast.clone());
-    if ast.kind() == AstKind::Quantifier {
-        if let Some(body) = quantifier_body(ast) {
-            walk_dyn(&body, out);
+impl<'a> DynNodes<'a> {
+    fn new(ast: &'a Dynamic) -> Self {
+        Self {
+            stack: vec![ast.clone()],
+            _root: std::marker::PhantomData,
         }
-        return;
     }
-    for ch in ast_children(ast) {
-        walk_dyn(&ch, out);
+}
+
+impl Iterator for DynNodes<'_> {
+    type Item = Dynamic;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ast = self.stack.pop()?;
+        if ast.kind() == AstKind::Quantifier {
+            if let Some(body) = quantifier_body(&ast) {
+                self.stack.push(body);
+            }
+        } else {
+            for ch in ast_children(&ast).into_iter().rev() {
+                self.stack.push(ch);
+            }
+        }
+        Some(ast)
     }
+}
+
+/// Pre-order DFS over ``ast`` and its descendants (quantifier bodies only; no binder walk).
+pub fn iter_nodes_dyn(ast: &Dynamic) -> DynNodes<'_> {
+    DynNodes::new(ast)
+}
+
+pub fn count_nodes_dyn(ast: &Dynamic) -> usize {
+    iter_nodes_dyn(ast).count()
 }
 
 pub fn flatten_op_int(head: &str, ast: &Int) -> Vec<Int> {
-    let d = Dynamic::from_ast(ast);
-    if d.kind() == AstKind::App && decl_name(&d.decl()) == head {
-        let mut out = Vec::new();
-        for i in 0..d.num_children() {
-            if let Some(ch) = d.nth_child(i).and_then(|c| c.as_int()) {
-                out.extend(flatten_op_int(head, &ch));
+    if ast.kind() == AstKind::App {
+        let kind = ast.decl().kind();
+        let matches = match head {
+            "+" => kind == DeclKind::Add,
+            "*" => kind == DeclKind::Mul,
+            _ => decl_name(&ast.decl()) == head,
+        };
+        if matches {
+            let mut out = Vec::new();
+            for i in 0..ast.num_children() {
+                if let Some(ch) = ast.nth_child(i).and_then(|c| c.as_int()) {
+                    out.extend(flatten_op_int(head, &ch));
+                }
             }
+            return out;
         }
-        return out;
     }
     vec![ast.clone()]
 }
@@ -131,26 +163,35 @@ pub fn split_product_int(f: &Int, p: i128) -> (i128, Vec<Int>) {
 }
 
 pub fn substitute_int(ast: &Int, name: &str, replacement: &Int) -> Int {
-    let d = Dynamic::from_ast(ast);
-    if let Some(sym) = symbol_name_dyn(&d) {
+    if let Some(sym) = symbol_name_dyn(&Dynamic::from_ast(ast)) {
         if sym == name {
             return replacement.clone();
         }
         return ast.clone();
     }
-    if d.kind() == AstKind::App {
-        let head = decl_name(&d.decl());
-        let args: Vec<Int> = (0..d.num_children())
+    if ast.kind() == AstKind::App {
+        let args: Vec<Int> = (0..ast.num_children())
             .filter_map(|i| {
-                d.nth_child(i)
+                ast.nth_child(i)
                     .and_then(|c| c.as_int())
                     .map(|ch| substitute_int(&ch, name, replacement))
             })
             .collect();
-        if head == "mod" && args.len() == 2 {
-            return args[0].modulo(&args[1]);
+        match ast.decl().kind() {
+            DeclKind::Mod if args.len() == 2 => return args[0].modulo(&args[1]),
+            DeclKind::Add if !args.is_empty() => return Int::add(&args.iter().collect::<Vec<_>>()),
+            DeclKind::Mul if !args.is_empty() => return Int::mul(&args.iter().collect::<Vec<_>>()),
+            DeclKind::Uminus if args.len() == 1 => return Int::unary_minus(&args[0]),
+            DeclKind::Sub if args.len() == 2 => {
+                return Int::sub(&[&args[0], &args[1]]);
+            }
+            _ => {
+                let refs: Vec<&dyn Ast> = args.iter().map(|a| a as &dyn Ast).collect();
+                return rebuild_app(&ast.decl(), &refs)
+                    .as_int()
+                    .unwrap_or_else(|| ast.clone());
+            }
         }
-        return list_int(&head, args);
     }
     ast.clone()
 }

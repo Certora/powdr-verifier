@@ -6,71 +6,19 @@ use std::collections::{HashMap, HashSet};
 use smt2::command::SmtCommand;
 use smt2::{
     assert_commands, ast_hash_dyn, ast_hash_int, debug_assert_direct_int_operand,
-    declare_fun_name_cmd, declared_symbol_names, ensure_free_symbols_declared, int_from_i128,
-    int_value, int_value_dyn, map_bool_children, quantifier_bound_symbol_ids, seed_parser_context,
-    symbol_id_dyn, symbol_id_from_name, IntTermSet, ParseCtx, Script, SymbolId,
+    declared_symbol_ids, ensure_free_symbols_declared, int_from_i128,
+    int_value, int_value_dyn, map_bool_children, seed_parser_context,
+    symbol_id_dyn, IntTermSet, ParseCtx, Script,
 };
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
-use z3::SortKind;
+use z3::{DeclKind, SortKind};
 
 type Monomial = Vec<u32>;
 type Poly = HashMap<Monomial, i128>;
 
-fn declare_fun_sort(raw: &str) -> Option<&str> {
-    let body = raw.trim().strip_suffix(')')?.trim();
-    body.rsplit_once(' ').map(|(_, sort)| sort)
-}
-
-fn symbol_is_bool_name(name: &str) -> bool {
-    name.contains("memory_is") || name.contains("memory_match")
-}
-
-fn collect_bool_symbols(script: &Script) -> HashSet<SymbolId> {
-    let mut out = HashSet::new();
-    for cmd in &script.commands {
-        if let Some(name) = declare_fun_name_cmd(cmd) {
-            let raw = cmd.to_smtlib(&script.source);
-            if declare_fun_sort(&raw) == Some("Bool") {
-                out.insert(symbol_id_from_name(&name));
-            }
-            continue;
-        }
-        if let Some(b) = cmd.assert_bool() {
-            collect_bool_symbols_from_ast(&Dynamic::from_ast(b), &mut out);
-        }
-    }
-    out
-}
-
-fn collect_bool_symbols_from_ast(ast: &Dynamic, out: &mut HashSet<SymbolId>) {
-    if ast.kind() == AstKind::Quantifier {
-        let ids = quantifier_bound_symbol_ids(ast);
-        let names = smt2::quantifier_bound_names(ast);
-        for (id, name) in ids.into_iter().zip(names) {
-            if symbol_is_bool_name(&name) {
-                out.insert(id);
-            }
-        }
-    }
-    for n in smt2::iter_nodes_dyn(ast) {
-        if let (Some(id), Some(name)) = (symbol_id_dyn(&n), smt2::symbol_name_dyn(&n)) {
-            if symbol_is_bool_name(&name) {
-                out.insert(id);
-            }
-        }
-    }
-}
-
-pub fn field_mod() -> Option<i128> {
-    std::env::var("SIMPLIFIER_FIELD_MOD")
-        .ok()
-        .and_then(|s| s.parse().ok())
-}
-
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let p = field_mod();
-    let bool_symbols = collect_bool_symbols(script);
-    let var_terms = collect_variables(script, p, &bool_symbols);
+    let var_terms = collect_variables(script, p);
     let ctx = NormalizeCtx {
         var_terms: &var_terms,
         field_mod: p,
@@ -80,7 +28,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut changed = 0usize;
     let mut parse_ctx = ParseCtx::new();
     seed_parser_context(&mut parse_ctx, script)?;
-    let mut declared: HashSet<String> = declared_symbol_names(&script.commands).into_iter().collect();
+    let mut declared = declared_symbol_ids(&script.commands);
     let mut commands = Vec::with_capacity(script.commands.len());
     for cmd in &script.commands {
         match cmd {
@@ -111,6 +59,12 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     Ok((out, stats))
 }
 
+pub fn field_mod() -> Option<i128> {
+    std::env::var("SIMPLIFIER_FIELD_MOD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+}
+
 struct NormalizeCtx<'a> {
     var_terms: &'a IntTermSet,
     field_mod: Option<i128>,
@@ -121,18 +75,13 @@ fn int_literal_mod(t: &Int, modulo: Option<i128>) -> Option<i128> {
     int_value(t).map(|v| coeff_mod(v, m))
 }
 
-fn collect_variables(
-    script: &Script,
-    field_mod: Option<i128>,
-    bool_symbols: &HashSet<SymbolId>,
-) -> IntTermSet {
+fn collect_variables(script: &Script, field_mod: Option<i128>) -> IntTermSet {
     let mut terms = IntTermSet::new();
     let mut seen: HashSet<u64> = HashSet::new();
 
     fn visit(
         n: &Dynamic,
         field_mod: Option<i128>,
-        bool_symbols: &HashSet<SymbolId>,
         terms: &mut IntTermSet,
         seen: &mut HashSet<u64>,
     ) {
@@ -148,24 +97,21 @@ fn collect_variables(
             return;
         }
 
-        if let Some(id) = symbol_id_dyn(n) {
-            if bool_symbols.contains(&id) {
-                return;
-            }
+        if symbol_id_dyn(n).is_some() && n.get_sort().kind() == SortKind::Bool {
+            return;
         }
 
         if n.kind() == AstKind::Quantifier {
             if let Some(body) = smt2::quantifier_body(n) {
-                visit(&body, field_mod, bool_symbols, terms, seen);
+                visit(&body, field_mod, terms, seen);
             }
             return;
         }
 
         if let Some(int_n) = n.as_int() {
             if n.kind() == AstKind::App {
-                let head = smt2::decl_name(&n.decl());
                 if let Some(p) = field_mod {
-                    if head == "mod"
+                    if n.decl().kind() == DeclKind::Mod
                         && n.num_children() == 2
                         && n
                             .nth_child(1)
@@ -174,15 +120,15 @@ fn collect_variables(
                             .unwrap_or(false)
                     {
                         if let Some(body) = n.nth_child(0) {
-                            visit(&body, field_mod, bool_symbols, terms, seen);
+                            visit(&body, field_mod, terms, seen);
                         }
                         return;
                     }
                 }
-                if is_combinator(&head) {
+                if is_combinator_kind(n.decl().kind()) {
                     for i in 0..n.num_children() {
                         if let Some(ch) = n.nth_child(i) {
-                            visit(&ch, field_mod, bool_symbols, terms, seen);
+                            visit(&ch, field_mod, terms, seen);
                         }
                     }
                     return;
@@ -192,25 +138,15 @@ fn collect_variables(
                 n.get_sort().kind() != SortKind::Bool,
                 "polynomial generator must not be Bool-sorted"
             );
-            if let Some(id) = symbol_id_dyn(n) {
-                debug_assert!(
-                    !bool_symbols.contains(&id)
-                        && smt2::symbol_name_dyn(n)
-                            .map(|name| !symbol_is_bool_name(&name))
-                            .unwrap_or(true),
-                    "Bool symbol registered as polynomial generator"
-                );
-            }
             terms.insert(int_n);
             return;
         }
 
         if n.kind() == AstKind::App {
-            let head = smt2::decl_name(&n.decl());
-            if is_bool_or_relation_head(&head) {
+            if is_bool_or_relation_kind(n.decl().kind()) {
                 for i in 0..n.num_children() {
                     if let Some(ch) = n.nth_child(i) {
-                        visit(&ch, field_mod, bool_symbols, terms, seen);
+                        visit(&ch, field_mod, terms, seen);
                     }
                 }
                 return;
@@ -218,14 +154,14 @@ fn collect_variables(
         }
         for i in 0..n.num_children() {
             if let Some(ch) = n.nth_child(i) {
-                visit(&ch, field_mod, bool_symbols, terms, seen);
+                visit(&ch, field_mod, terms, seen);
             }
         }
     }
 
     for cmd in assert_commands(script) {
         if let Some(b) = cmd.assert_bool() {
-            visit(&Dynamic::from_ast(b), field_mod, bool_symbols, &mut terms, &mut seen);
+            visit(&Dynamic::from_ast(b), field_mod, &mut terms, &mut seen);
         }
     }
 
@@ -251,23 +187,32 @@ fn sort_terms(terms: IntTermSet) -> IntTermSet {
     IntTermSet::from_sorted_unique(keyed.into_iter().map(|(_, t)| t).collect())
 }
 
-fn is_combinator(head: &str) -> bool {
-    matches!(head, "+" | "-" | "*")
+fn is_combinator_kind(kind: DeclKind) -> bool {
+    matches!(kind, DeclKind::Add | DeclKind::Sub | DeclKind::Mul)
 }
 
-fn is_bool_or_relation_head(head: &str) -> bool {
+fn is_bool_or_relation_kind(kind: DeclKind) -> bool {
     matches!(
-        head,
-        "and" | "or" | "not" | "=>" | "ite" | "=" | "<" | "<=" | ">" | ">=" | "distinct"
+        kind,
+        DeclKind::And
+            | DeclKind::Or
+            | DeclKind::Not
+            | DeclKind::Implies
+            | DeclKind::Ite
+            | DeclKind::Eq
+            | DeclKind::Lt
+            | DeclKind::Le
+            | DeclKind::Gt
+            | DeclKind::Ge
+            | DeclKind::Distinct
     )
 }
 
 fn field_mod_wrap(t: &Int, p: i128) -> bool {
-    let ast = Dynamic::from_ast(t);
-    ast.kind() == AstKind::App
-        && smt2::decl_name(&ast.decl()) == "mod"
-        && ast.num_children() == 2
-        && ast
+    t.kind() == AstKind::App
+        && t.decl().kind() == DeclKind::Mod
+        && t.num_children() == 2
+        && t
             .nth_child(1)
             .and_then(|m| int_value_dyn(&m))
             .map(|m| m == p)
@@ -278,8 +223,7 @@ fn unwrap_field_mod_body(t: &Int, p: i128) -> Int {
     if !field_mod_wrap(t, p) {
         return t.clone();
     }
-    Dynamic::from_ast(t)
-        .nth_child(0)
+    t.nth_child(0)
         .and_then(|c| c.as_int())
         .unwrap_or_else(|| t.clone())
 }
@@ -404,52 +348,50 @@ fn expr_to_poly(n: &Int, var_terms: &IntTermSet, modulo: Option<i128>) -> Option
         };
     }
 
-    let dyn_ = Dynamic::from_ast(n);
-    let head = if dyn_.kind() == AstKind::App {
-        smt2::decl_name(&dyn_.decl())
-    } else {
-        String::new()
-    };
-
-    match head.as_str() {
-        "+" => {
-            let mut acc = Poly::new();
-            for ch in dyn_.children() {
-                let q = expr_to_poly(&ch.as_int()?, var_terms, modulo)?;
-                acc = poly_add(acc, &q, 1, modulo);
-            }
-            Some(acc)
-        }
-        "-" if dyn_.num_children() == 1 => {
-            let ch = dyn_.nth_child(0)?.as_int()?;
-            expr_to_poly(&ch, var_terms, modulo).map(|mut p| {
-                for v in p.values_mut() {
-                    *v = -*v;
-                    if let Some(m) = modulo {
-                        *v = coeff_mod(*v, m);
-                    }
+    if n.kind() == AstKind::App {
+        match n.decl().kind() {
+            DeclKind::Add => {
+                let mut acc = Poly::new();
+                for i in 0..n.num_children() {
+                    let q = expr_to_poly(&n.nth_child(i)?.as_int()?, var_terms, modulo)?;
+                    acc = poly_add(acc, &q, 1, modulo);
                 }
-                p.retain(|_, v| *v != 0);
-                p
-            })
-        }
-        "-" if dyn_.num_children() == 2 => {
-            let pa = expr_to_poly(&dyn_.nth_child(0)?.as_int()?, var_terms, modulo)?;
-            let pb = expr_to_poly(&dyn_.nth_child(1)?.as_int()?, var_terms, modulo)?;
-            Some(poly_add(pa, &pb, -1, modulo))
-        }
-        "*" => {
-            let mut acc = Poly::from([(Vec::new(), 1i128)]);
-            for ch in dyn_.children() {
-                let q = expr_to_poly(&ch.as_int()?, var_terms, modulo)?;
-                acc = poly_mul(&acc, &q, modulo);
+                Some(acc)
             }
-            Some(acc)
+            DeclKind::Uminus if n.num_children() == 1 => {
+                let ch = n.nth_child(0)?.as_int()?;
+                expr_to_poly(&ch, var_terms, modulo).map(|mut p| {
+                    for v in p.values_mut() {
+                        *v = -*v;
+                        if let Some(m) = modulo {
+                            *v = coeff_mod(*v, m);
+                        }
+                    }
+                    p.retain(|_, v| *v != 0);
+                    p
+                })
+            }
+            DeclKind::Sub if n.num_children() == 2 => {
+                let pa = expr_to_poly(&n.nth_child(0)?.as_int()?, var_terms, modulo)?;
+                let pb = expr_to_poly(&n.nth_child(1)?.as_int()?, var_terms, modulo)?;
+                Some(poly_add(pa, &pb, -1, modulo))
+            }
+            DeclKind::Mul => {
+                let mut acc = Poly::from([(Vec::new(), 1i128)]);
+                for i in 0..n.num_children() {
+                    let q = expr_to_poly(&n.nth_child(i)?.as_int()?, var_terms, modulo)?;
+                    acc = poly_mul(&acc, &q, modulo);
+                }
+                Some(acc)
+            }
+            _ => {
+                let idx = var_terms.index_of(n)?;
+                Some(HashMap::from([(vec![idx as u32], 1)]))
+            }
         }
-        _ => {
-            let idx = var_terms.index_of(n)?;
-            Some(HashMap::from([(vec![idx as u32], 1)]))
-        }
+    } else {
+        let idx = var_terms.index_of(n)?;
+        Some(HashMap::from([(vec![idx as u32], 1)]))
     }
 }
 
@@ -669,23 +611,22 @@ fn normalize_term(term: &Bool, ctx: &NormalizeCtx<'_>) -> Bool {
         let new_body = normalize_term(&body, ctx);
         return smt2::rebuild_quantifier_dyn(is_forall, &bounds, &new_body);
     }
-    if ast.kind() == AstKind::App && ast.num_children() == 2 {
-        let head = smt2::decl_name(&ast.decl());
-        let lhs = ast.nth_child(0).and_then(|c| c.as_int());
-        let rhs = ast.nth_child(1).and_then(|c| c.as_int());
+    if term.kind() == AstKind::App && term.num_children() == 2 {
+        let lhs = term.nth_child(0).and_then(|c| c.as_int());
+        let rhs = term.nth_child(1).and_then(|c| c.as_int());
         if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
-            match head.as_str() {
-                "=" => {
+            match term.decl().kind() {
+                DeclKind::Eq => {
                     if let Some(rep) = normalize_equals(&lhs, &rhs, ctx) {
                         return rep;
                     }
                 }
-                "<" => {
+                DeclKind::Lt => {
                     if let Some(rep) = normalize_int_rel_gcd(&lhs, &rhs, ctx) {
                         return rep.lt(&int_from_i128(0));
                     }
                 }
-                "<=" => {
+                DeclKind::Le => {
                     if let Some(rep) = normalize_int_rel_gcd(&lhs, &rhs, ctx) {
                         return rep.le(&int_from_i128(0));
                     }

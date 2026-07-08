@@ -9,14 +9,14 @@ pub mod sexpr;
 pub mod z3_parse;
 
 pub use ast_build::{
-    bool_atom, free_variables_bool, int_atom, int_literal_dyn, is_symbol_dyn,
+    bool_atom, count_nodes_dyn, free_variables_bool, int_atom, int_literal_dyn, is_symbol_dyn,
     iter_nodes_dyn, list_bool, list_int, parse_bool_formula, parse_int_or_const, split_product_int,
     substitute_bool, substitute_dyn, substitute_int, symbol_name_dyn, wrap_mod_expr_int,
 };
 pub use ast_util::{
     and_parts, ast_hash_bool, ast_hash_dyn, ast_hash_int, bool_children, bool_decl_name, decl_name,
-    flatten_and, flatten_or, free_int_nodes, free_int_symbols, free_symbol_ids_bool,
-    free_uf_function_symbols, has_quantifier, int_const_name, int_from_i128, int_value, int_value_dyn,
+    flatten_and, flatten_or, free_int_nodes, free_int_symbol_ids,
+    free_symbol_ids_bool, free_uf_function_symbol_ids, has_quantifier, int_const_name, int_from_i128, int_value, int_value_dyn,
     IntTermSet,
     is_exists, is_forall,
     is_implies, is_int_const, is_int_literal_string, is_int_numeral, is_ite, is_not, map_bool_children,
@@ -26,21 +26,24 @@ pub use ast_util::{
     quantifier_bound_symbol_ids, quantifier_bounds, quantifier_bounds_de_bruijn,
     symbol_id_dyn, symbol_id_from_name, symbol_name_for_id, SymbolId,
     rebuild_app, rebuild_forall_dyn, rebuild_quantifier_dyn, resolve_bound_or_free_name,
-    strip_annotations, strip_annotations_deep,
-    scoped_free_int_symbols, strip_prefix, substitute_bound_vars_dyn, swap_prefix,
+    strip_annotations, strip_annotations_deep, strip_annotations_opt,
+    strip_prefix, substitute_bound_vars_dyn, swap_prefix,
     contains_bound_var_dyn, de_bruijn_bound_name, de_bruijn_bound_symbol_id,
     debug_assert_direct_int_operand,
     has_bool_sort_leaf_dyn, unwrap_zero_mod_eq,
 };
 pub use command::{
-    declare_fun_name_cmd, declare_fun_symbol, parse_single_command, SmtCommand,
+    declare_fun_name_cmd, declare_fun_symbol, declare_fun_symbol_id, parse_single_command,
+    SmtCommand,
 };
 pub use io::{dump_string, dump_writer, load_path, load_reader};
 pub use pretty::{pretty_print_command, pretty_print_script};
 pub use script::{
-    assert_commands, asserts_excluding_true, declared_symbol_names, ensure_declarations_for_asserts,
+    assert_commands, asserts_excluding_true, declared_symbol_ids, declared_symbol_names,
+    ensure_declarations_for_asserts,
     ensure_free_symbols_declared,
-    extra_declarations, map_asserts, seed_parser_context, splice_z3_result, Script, ScriptParts,
+    extra_declarations, map_asserts, map_asserts_opt, seed_parser_context, splice_z3_result,
+    Script, ScriptParts,
 };
 pub use sexpr::{strip_smtlib_annotations, SExpr, Span, Spanned};
 pub use z3_parse::ParseCtx;
