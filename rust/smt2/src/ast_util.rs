@@ -271,13 +271,6 @@ pub fn is_program_variable(name: &str) -> bool {
     strip_prefix(name).contains('@')
 }
 
-pub fn free_int_symbols(b: &Bool) -> HashSet<String> {
-    free_int_nodes(b)
-        .into_iter()
-        .map(|i| decl_name(&Dynamic::from_ast(&i).decl()))
-        .collect()
-}
-
 /// Free ``Int`` constant nodes in ``b`` (hash-consed; suitable as map/set keys).
 pub fn free_int_nodes(b: &Bool) -> HashSet<Int> {
     let mut out = HashSet::new();
@@ -370,11 +363,68 @@ fn collect_free_symbol_ids(ast: &Dynamic, bound: &HashSet<SymbolId>, out: &mut H
     }
 }
 
-/// Uninterpreted ``Int``-returning function symbols used in a formula (e.g. ``uf_and``).
-pub fn free_uf_function_symbols(b: &Bool) -> BTreeMap<String, usize> {
+pub fn free_int_symbol_ids(b: &Bool) -> HashSet<SymbolId> {
+    free_int_nodes(b)
+        .into_iter()
+        .filter_map(|i| symbol_id_dyn(&Dynamic::from_ast(&i)))
+        .collect()
+}
+
+/// Uninterpreted ``Int``-returning function symbol identities in a formula.
+pub fn free_uf_function_symbol_ids(b: &Bool) -> BTreeMap<SymbolId, usize> {
     let mut out = BTreeMap::new();
-    collect_uf_function_symbols(&Dynamic::from_ast(b), &HashSet::new(), &mut out);
+    collect_uf_function_symbol_ids(&Dynamic::from_ast(b), &HashSet::new(), &mut out);
     out
+}
+
+fn app_decl_symbol_id(ast: &Dynamic) -> Option<SymbolId> {
+    if ast.kind() != AstKind::App {
+        return None;
+    }
+    unsafe {
+        let z3 = ast.get_ctx().get_z3_context();
+        let app = Z3_to_app(z3, ast.get_z3_ast())?;
+        let decl = Z3_get_app_decl(z3, app)?;
+        let sym = Z3_get_decl_name(z3, decl)?;
+        Some(SymbolId(sym.as_ptr() as usize))
+    }
+}
+
+fn collect_uf_function_symbol_ids(
+    ast: &Dynamic,
+    bound: &HashSet<SymbolId>,
+    out: &mut BTreeMap<SymbolId, usize>,
+) {
+    match ast.kind() {
+        AstKind::Var => {}
+        AstKind::Quantifier => {
+            let mut next_bound = bound.clone();
+            next_bound.extend(quantifier_bound_symbol_ids(ast));
+            if let Some(body) = quantifier_body(ast) {
+                collect_uf_function_symbol_ids(&body, &next_bound, out);
+            }
+        }
+        AstKind::App => {
+            let decl = ast.decl();
+            let arity = decl.arity();
+            if arity > 0
+                && ast.get_sort().kind() == SortKind::Int
+                && !is_builtin_int_decl_kind(decl.kind())
+            {
+                if let Some(id) = app_decl_symbol_id(ast) {
+                    if !bound.contains(&id) {
+                        out.entry(id).or_insert(arity);
+                    }
+                }
+            }
+            for i in 0..ast.num_children() {
+                if let Some(ch) = ast.nth_child(i) {
+                    collect_uf_function_symbol_ids(&ch, bound, out);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn is_builtin_int_decl_kind(kind: DeclKind) -> bool {
@@ -402,51 +452,6 @@ fn is_builtin_int_decl_kind(kind: DeclKind) -> bool {
             | DeclKind::Anum
             | DeclKind::Agnum
     )
-}
-
-fn collect_uf_function_symbols(
-    ast: &Dynamic,
-    bound: &HashSet<String>,
-    out: &mut BTreeMap<String, usize>,
-) {
-    match ast.kind() {
-        AstKind::Var => {}
-        AstKind::Quantifier => {
-            let mut next_bound = bound.clone();
-            for name in quantifier_bound_names(ast) {
-                next_bound.insert(name);
-            }
-            if let Some(body) = quantifier_body(ast) {
-                collect_uf_function_symbols(&body, &next_bound, out);
-            }
-        }
-        AstKind::App => {
-            let decl = ast.decl();
-            let name = decl_name(&decl);
-            let arity = decl.arity();
-            if arity > 0
-                && ast.get_sort().kind() == SortKind::Int
-                && !is_builtin_int_decl_kind(decl.kind())
-                && !bound.contains(&name)
-            {
-                out.entry(name).or_insert(arity);
-            }
-            for i in 0..ast.num_children() {
-                if let Some(ch) = ast.nth_child(i) {
-                    collect_uf_function_symbols(&ch, bound, out);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-pub fn scoped_free_int_symbols(ast: &Dynamic, bound: &HashSet<String>) -> HashSet<String> {
-    let bound_ids: HashSet<SymbolId> = bound.iter().map(|n| symbol_id_from_name(n)).collect();
-    scoped_free_int_nodes(ast, &bound_ids)
-        .into_iter()
-        .map(|i| decl_name(&Dynamic::from_ast(&i).decl()))
-        .collect()
 }
 
 pub fn has_quantifier(b: &Bool) -> bool {
@@ -533,24 +538,6 @@ pub fn quantifier_bound_symbol_ids(ast: &Dynamic) -> Vec<SymbolId> {
         for i in 0..n {
             let sym = Z3_get_quantifier_bound_name(z3, ast.get_z3_ast(), i).unwrap();
             out.push(SymbolId(sym.as_ptr() as usize));
-        }
-        out
-    }
-}
-
-/// Z3 range sorts of quantifier binders (declaration order).
-pub fn quantifier_bound_sort_kinds(ast: &Dynamic) -> Vec<SortKind> {
-    if ast.kind() != AstKind::Quantifier {
-        return Vec::new();
-    }
-    let ctx = ast.get_ctx();
-    unsafe {
-        let z3 = ctx.get_z3_context();
-        let n = Z3_get_quantifier_num_bound(z3, ast.get_z3_ast());
-        let mut out = Vec::with_capacity(n as usize);
-        for i in 0..n {
-            let sort = Z3_get_quantifier_bound_sort(z3, ast.get_z3_ast(), i).unwrap();
-            out.push(Z3_get_sort_kind(z3, sort));
         }
         out
     }
@@ -1159,7 +1146,7 @@ mod tests {
     }
 
     #[test]
-    fn free_int_symbols_basic() {
+    fn free_int_symbol_ids_basic() {
         if !has_z3() {
             return;
         }
@@ -1169,8 +1156,8 @@ mod tests {
             .ingest_command("(assert (= x 1))")
             .unwrap()
             .unwrap();
-        let free = free_int_symbols(&b);
-        assert_eq!(free, HashSet::from(["x".to_string()]));
+        let free = free_int_symbol_ids(&b);
+        assert_eq!(free, HashSet::from([symbol_id_from_name("x")]));
     }
 
     #[test]

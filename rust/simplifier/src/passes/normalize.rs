@@ -6,10 +6,9 @@ use std::collections::{HashMap, HashSet};
 use smt2::command::SmtCommand;
 use smt2::{
     assert_commands, ast_hash_dyn, ast_hash_int, debug_assert_direct_int_operand,
-    declare_fun_is_bool, declare_fun_symbol_id, declared_symbol_names, ensure_free_symbols_declared, int_from_i128,
-    int_value, int_value_dyn, map_bool_children, quantifier_bound_symbol_ids,
-    quantifier_bound_sort_kinds, seed_parser_context,
-    symbol_id_dyn, IntTermSet, ParseCtx, Script, SymbolId,
+    declared_symbol_ids, ensure_free_symbols_declared, int_from_i128,
+    int_value, int_value_dyn, map_bool_children, seed_parser_context,
+    symbol_id_dyn, IntTermSet, ParseCtx, Script,
 };
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 use z3::{DeclKind, SortKind};
@@ -17,54 +16,9 @@ use z3::{DeclKind, SortKind};
 type Monomial = Vec<u32>;
 type Poly = HashMap<Monomial, i128>;
 
-fn collect_bool_symbols_from_ast(ast: &Dynamic, out: &mut HashSet<SymbolId>) {
-    if ast.kind() == AstKind::Quantifier {
-        for (id, kind) in quantifier_bound_symbol_ids(ast)
-            .into_iter()
-            .zip(quantifier_bound_sort_kinds(ast))
-        {
-            if kind == SortKind::Bool {
-                out.insert(id);
-            }
-        }
-    }
-    for n in smt2::iter_nodes_dyn(ast) {
-        if let Some(id) = symbol_id_dyn(&n) {
-            if n.get_sort().kind() == SortKind::Bool {
-                out.insert(id);
-            }
-        }
-    }
-}
-
-fn collect_bool_symbols(script: &Script) -> HashSet<SymbolId> {
-    let mut out = HashSet::new();
-    for cmd in &script.commands {
-        if cmd.name() == "declare-fun" {
-            if declare_fun_is_bool(cmd) {
-                if let Some(id) = declare_fun_symbol_id(cmd) {
-                    out.insert(id);
-                }
-            }
-            continue;
-        }
-        if let Some(b) = cmd.assert_bool() {
-            collect_bool_symbols_from_ast(&Dynamic::from_ast(b), &mut out);
-        }
-    }
-    out
-}
-
-pub fn field_mod() -> Option<i128> {
-    std::env::var("SIMPLIFIER_FIELD_MOD")
-        .ok()
-        .and_then(|s| s.parse().ok())
-}
-
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let p = field_mod();
-    let bool_symbols = collect_bool_symbols(script);
-    let var_terms = collect_variables(script, p, &bool_symbols);
+    let var_terms = collect_variables(script, p);
     let ctx = NormalizeCtx {
         var_terms: &var_terms,
         field_mod: p,
@@ -74,7 +28,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut changed = 0usize;
     let mut parse_ctx = ParseCtx::new();
     seed_parser_context(&mut parse_ctx, script)?;
-    let mut declared: HashSet<String> = declared_symbol_names(&script.commands).into_iter().collect();
+    let mut declared = declared_symbol_ids(&script.commands);
     let mut commands = Vec::with_capacity(script.commands.len());
     for cmd in &script.commands {
         match cmd {
@@ -105,6 +59,12 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     Ok((out, stats))
 }
 
+pub fn field_mod() -> Option<i128> {
+    std::env::var("SIMPLIFIER_FIELD_MOD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+}
+
 struct NormalizeCtx<'a> {
     var_terms: &'a IntTermSet,
     field_mod: Option<i128>,
@@ -115,18 +75,13 @@ fn int_literal_mod(t: &Int, modulo: Option<i128>) -> Option<i128> {
     int_value(t).map(|v| coeff_mod(v, m))
 }
 
-fn collect_variables(
-    script: &Script,
-    field_mod: Option<i128>,
-    bool_symbols: &HashSet<SymbolId>,
-) -> IntTermSet {
+fn collect_variables(script: &Script, field_mod: Option<i128>) -> IntTermSet {
     let mut terms = IntTermSet::new();
     let mut seen: HashSet<u64> = HashSet::new();
 
     fn visit(
         n: &Dynamic,
         field_mod: Option<i128>,
-        bool_symbols: &HashSet<SymbolId>,
         terms: &mut IntTermSet,
         seen: &mut HashSet<u64>,
     ) {
@@ -142,15 +97,13 @@ fn collect_variables(
             return;
         }
 
-        if let Some(id) = symbol_id_dyn(n) {
-            if bool_symbols.contains(&id) {
-                return;
-            }
+        if symbol_id_dyn(n).is_some() && n.get_sort().kind() == SortKind::Bool {
+            return;
         }
 
         if n.kind() == AstKind::Quantifier {
             if let Some(body) = smt2::quantifier_body(n) {
-                visit(&body, field_mod, bool_symbols, terms, seen);
+                visit(&body, field_mod, terms, seen);
             }
             return;
         }
@@ -167,7 +120,7 @@ fn collect_variables(
                             .unwrap_or(false)
                     {
                         if let Some(body) = n.nth_child(0) {
-                            visit(&body, field_mod, bool_symbols, terms, seen);
+                            visit(&body, field_mod, terms, seen);
                         }
                         return;
                     }
@@ -175,7 +128,7 @@ fn collect_variables(
                 if is_combinator_kind(n.decl().kind()) {
                     for i in 0..n.num_children() {
                         if let Some(ch) = n.nth_child(i) {
-                            visit(&ch, field_mod, bool_symbols, terms, seen);
+                            visit(&ch, field_mod, terms, seen);
                         }
                     }
                     return;
@@ -185,12 +138,6 @@ fn collect_variables(
                 n.get_sort().kind() != SortKind::Bool,
                 "polynomial generator must not be Bool-sorted"
             );
-            if let Some(id) = symbol_id_dyn(n) {
-                debug_assert!(
-                    !bool_symbols.contains(&id) && n.get_sort().kind() != SortKind::Bool,
-                    "Bool symbol registered as polynomial generator"
-                );
-            }
             terms.insert(int_n);
             return;
         }
@@ -199,7 +146,7 @@ fn collect_variables(
             if is_bool_or_relation_kind(n.decl().kind()) {
                 for i in 0..n.num_children() {
                     if let Some(ch) = n.nth_child(i) {
-                        visit(&ch, field_mod, bool_symbols, terms, seen);
+                        visit(&ch, field_mod, terms, seen);
                     }
                 }
                 return;
@@ -207,14 +154,14 @@ fn collect_variables(
         }
         for i in 0..n.num_children() {
             if let Some(ch) = n.nth_child(i) {
-                visit(&ch, field_mod, bool_symbols, terms, seen);
+                visit(&ch, field_mod, terms, seen);
             }
         }
     }
 
     for cmd in assert_commands(script) {
         if let Some(b) = cmd.assert_bool() {
-            visit(&Dynamic::from_ast(b), field_mod, bool_symbols, &mut terms, &mut seen);
+            visit(&Dynamic::from_ast(b), field_mod, &mut terms, &mut seen);
         }
     }
 

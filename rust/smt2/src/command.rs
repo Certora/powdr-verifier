@@ -277,10 +277,6 @@ pub fn declare_fun_symbol(form: &SExpr) -> Option<String> {
     declare_fun_symbol_name_from_form(form).map(|s| s.to_string())
 }
 
-pub fn declare_fun_symbol_name(cmd: &SmtCommand) -> Option<&str> {
-    declare_fun_symbol_name_from_form(declare_fun_form(cmd)?)
-}
-
 fn declare_fun_symbol_name_from_form(form: &SExpr) -> Option<&str> {
     form.args()?.first()?.node.as_atom()
 }
@@ -345,10 +341,6 @@ fn sexpr_to_z3_sort(sort: &SExpr) -> Sort {
     }
 }
 
-fn sort_kind_from_sexpr(sort: &SExpr) -> SortKind {
-    sexpr_to_z3_sort(sort).kind()
-}
-
 fn nullary_declare_fun_meta(form: &SExpr) -> Option<(SymbolId, SortKind)> {
     let args = form.args()?;
     let name = args.first()?.node.as_atom()?;
@@ -383,28 +375,6 @@ pub fn declare_fun_symbol_id(cmd: &SmtCommand) -> Option<SymbolId> {
             .and_then(nullary_declare_fun_meta)
             .map(|(id, _)| id),
     }
-}
-
-/// Cached nullary ``declare-fun`` range sort (see [`SmtCommand::DeclareFun`]).
-pub fn declare_fun_sort_kind(cmd: &SmtCommand) -> Option<SortKind> {
-    match cmd {
-        SmtCommand::DeclareFun { sort_kind, .. } => *sort_kind,
-        _ => declare_fun_form(cmd)
-            .and_then(nullary_declare_fun_meta)
-            .map(|(_, kind)| kind),
-    }
-}
-
-/// Return sort of a nullary ``declare-fun`` from its s-expression (``[name, params, sort]``).
-pub fn declare_fun_sort_atom(cmd: &SmtCommand) -> Option<&str> {
-    declare_fun_form(cmd)?
-        .args()?
-        .get(2)
-        .and_then(|sort| sort.node.as_atom())
-}
-
-pub fn declare_fun_is_bool(cmd: &SmtCommand) -> bool {
-    declare_fun_sort_kind(cmd) == Some(SortKind::Bool)
 }
 
 pub fn command_text<'a>(cmd: &SmtCommand, source: &'a str) -> &'a str {

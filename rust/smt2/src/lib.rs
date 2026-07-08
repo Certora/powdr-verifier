@@ -15,32 +15,32 @@ pub use ast_build::{
 };
 pub use ast_util::{
     and_parts, ast_hash_bool, ast_hash_dyn, ast_hash_int, bool_children, bool_decl_name, decl_name,
-    flatten_and, flatten_or, free_int_nodes, free_int_symbols, free_symbol_ids_bool,
-    free_uf_function_symbols, has_quantifier, int_const_name, int_from_i128, int_value, int_value_dyn,
+    flatten_and, flatten_or, free_int_nodes, free_int_symbol_ids,
+    free_symbol_ids_bool, free_uf_function_symbol_ids, has_quantifier, int_const_name, int_from_i128, int_value, int_value_dyn,
     IntTermSet,
     is_exists, is_forall,
     is_implies, is_int_const, is_int_literal_string, is_int_numeral, is_ite, is_not, map_bool_children,
     map_bool_children_opt,
     mod_int_literal_string, or_body_parts, or_parts, parse_int_literal, smtlib_decl_name, z3_if_to_ite,
     quantifier_body, quantifier_body_bool, quantifier_body_deps, quantifier_bound_names,
-    quantifier_bound_symbol_ids, quantifier_bound_sort_kinds, quantifier_bounds, quantifier_bounds_de_bruijn,
+    quantifier_bound_symbol_ids, quantifier_bounds, quantifier_bounds_de_bruijn,
     symbol_id_dyn, symbol_id_from_name, symbol_name_for_id, SymbolId,
     rebuild_app, rebuild_forall_dyn, rebuild_quantifier_dyn, resolve_bound_or_free_name,
     strip_annotations, strip_annotations_deep, strip_annotations_opt,
-    scoped_free_int_symbols, strip_prefix, substitute_bound_vars_dyn, swap_prefix,
+    strip_prefix, substitute_bound_vars_dyn, swap_prefix,
     contains_bound_var_dyn, de_bruijn_bound_name, de_bruijn_bound_symbol_id,
     debug_assert_direct_int_operand,
     has_bool_sort_leaf_dyn, unwrap_zero_mod_eq,
 };
 pub use command::{
-    declare_fun_is_bool, declare_fun_name_cmd, declare_fun_sort_atom, declare_fun_sort_kind,
-    declare_fun_symbol, declare_fun_symbol_id, declare_fun_symbol_name, parse_single_command,
+    declare_fun_name_cmd, declare_fun_symbol, declare_fun_symbol_id, parse_single_command,
     SmtCommand,
 };
 pub use io::{dump_string, dump_writer, load_path, load_reader};
 pub use pretty::{pretty_print_command, pretty_print_script};
 pub use script::{
-    assert_commands, asserts_excluding_true, declared_symbol_names, ensure_declarations_for_asserts,
+    assert_commands, asserts_excluding_true, declared_symbol_ids, declared_symbol_names,
+    ensure_declarations_for_asserts,
     ensure_free_symbols_declared,
     extra_declarations, map_asserts, map_asserts_opt, seed_parser_context, splice_z3_result,
     Script, ScriptParts,
