@@ -1,6 +1,6 @@
 //! Collapsed/expanded witness pass on Z3 AST.
 
-use smt2::ast_util::{decl_name, unwrap_zero_mod_eq};
+use smt2::ast_util::unwrap_zero_mod_eq;
 use smt2::{Script, SmtCommand};
 use z3::ast::{Ast, AstKind, Dynamic};
 
@@ -31,9 +31,6 @@ fn count_candidates(script: &Script, field: i128) -> usize {
                     }
                 }
                 if node.kind() == AstKind::Quantifier {
-                    continue;
-                }
-                if node.kind() == AstKind::App && decl_name(&node.decl()) == "forall" {
                     continue;
                 }
                 for ch in node.children() {

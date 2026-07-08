@@ -3,16 +3,17 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use smt2::ast_util::{
-    ast_hash_bool, bound_var_index, decl_name, flatten_or, is_forall, or_body_parts,
-    quantifier_body_bool, quantifier_body_deps, quantifier_bound_names, quantifier_bound_symbol_ids,
+    ast_hash_bool, bound_var_index, flatten_or, is_forall, or_body_parts,
+    quantifier_body_bool, quantifier_body_deps, quantifier_bound_symbol_ids,
     quantifier_bounds_de_bruijn, rebuild_forall_dyn, resolve_bound_or_free_name,
     substitute_bound_vars_dyn,
     contains_bound_var_dyn, de_bruijn_bound_symbol_id,
     free_symbol_ids_bool, symbol_id_dyn, symbol_id_from_name, symbol_name_for_id, SymbolId,
 };
-use smt2::ast_build::{iter_nodes_dyn, symbol_name_dyn};
+use smt2::ast_build::{count_nodes_dyn, iter_nodes_dyn, symbol_name_dyn};
 use smt2::{declare_fun_name_cmd, map_bool_children, parse_single_command, Script, SExpr, SmtCommand};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
+use z3::DeclKind;
 
 use crate::expr_util::AssertBuildCtx;
 
@@ -175,9 +176,9 @@ impl LiftWalker {
             // Size of the side most likely hoisted (the non-target side); a soft
             // "prefer smaller" preference only, never affecting correctness.
             let expr_size = if l_resolvable {
-                iter_nodes_dyn(&rhs).len()
+                count_nodes_dyn(&rhs)
             } else {
-                iter_nodes_dyn(&lhs).len()
+                count_nodes_dyn(&lhs)
             };
             cands.push(LiftCand {
                 d: d.clone(),
@@ -547,12 +548,11 @@ fn body_bound_refs(expr: &Dynamic, n_bounds: usize) -> Vec<usize> {
 }
 
 fn is_not_eq(d: &Bool) -> Option<Bool> {
-    let ast = Dynamic::from_ast(d);
-    if ast.kind() != AstKind::App || decl_name(&ast.decl()) != "not" || ast.num_children() != 1 {
+    if d.kind() != AstKind::App || d.decl().kind() != DeclKind::Not || d.num_children() != 1 {
         return None;
     }
-    let inner = ast.nth_child(0)?;
-    if inner.kind() != AstKind::App || decl_name(&inner.decl()) != "=" || inner.num_children() != 2 {
+    let inner = d.nth_child(0)?;
+    if inner.kind() != AstKind::App || inner.decl().kind() != DeclKind::Eq || inner.num_children() != 2 {
         return None;
     }
     inner.as_bool()
@@ -589,6 +589,7 @@ fn match_lift_pair(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use smt2::ast_util::quantifier_bound_names;
 
     fn script_assert(raw: &str) -> Script {
         Script::parse(&format!("(assert {raw})\n(check-sat)\n")).unwrap()
