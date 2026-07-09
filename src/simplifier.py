@@ -57,6 +57,12 @@ TACTIC_BUS_QE = "nnf:demod:isqf"
 # are skipped above the assert threshold but still pay setup cost.
 TACTIC_BUS_TAIL = ":bounds:demod:normalize:demod"
 
+# zero-is-model / invalid-all-mult-zero: need rewrite + z3 passes (pre-d918f09 DEFAULT).
+TACTIC_AUX = (
+    TACTIC_QEPREFIX
+    + ":bounds:demod:normalize:bitwise:rewrite:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod"
+)
+
 DEFAULT_TACTIC = TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:normalize:demod"
 
 STEP_TACTICS: dict[str, str] = {
@@ -109,6 +115,10 @@ def resolve_tactic(
     """Resolve ``default`` and per-step overrides to a colon-separated pipeline."""
     if tactic != "default":
         return tactic
+    if input_path is not None:
+        stem = Path(input_path).stem
+        if ".zero-is-model" in stem or ".invalid-all-mult-zero" in stem:
+            return TACTIC_AUX
     if optimization_step is not None and optimization_step in STEP_TACTICS:
         return STEP_TACTICS[optimization_step]
     return DEFAULT_TACTIC
