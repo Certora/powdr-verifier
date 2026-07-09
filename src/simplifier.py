@@ -48,26 +48,16 @@ from .simplify.rust import run_rust_pipeline, rust_step_action_props
 
 _T = TypeVar("_T")
 
+# Regular prefix to eliminate quantifiers
 TACTIC_QEPREFIX = "nnf:skolem:lift:witness:demod:isqf"
+# Bus-heavy powdr steps: bus encodings are already ground after nnf.
+TACTIC_BUS_QE = "nnf:demod:isqf"
 
 # Tail without rewrite/z3: on large keccak VCs rewrite is a no-op and z3 passes
 # are skipped above the assert threshold but still pay setup cost.
 TACTIC_BUS_TAIL = ":bounds:demod:normalize:demod"
 
-# Auxiliary soundness checks (zero-is-model / invalid-all-mult-zero): smaller formulas,
-# skip domain_probe and second normalize pass.
-TACTIC_AUX = "nnf:demod:isqf:bounds:demod:normalize:demod"
-
-# Very large SMT (>25MB): skip bitwise/mod_inv (encode already emitted bus structure).
-TACTIC_LARGE = TACTIC_QEPREFIX + ":bounds:demod:normalize:demod"
-
-_LARGE_SMT_BYTES = 25_000_000
-
 DEFAULT_TACTIC = TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:normalize:demod"
-
-# Custom colon-separated pipelines keyed by powdr optimization pass name (e.g. ``remove_free``).
-# Bus-heavy powdr steps: bus encodings are already ground after nnf.
-TACTIC_BUS_QE = "nnf:demod:isqf"
 
 STEP_TACTICS: dict[str, str] = {
     "exec_bus": TACTIC_BUS_QE + TACTIC_BUS_TAIL + ":z3-propagate-values:z3-solve-eqs",
@@ -82,8 +72,6 @@ STEP_TACTICS: dict[str, str] = {
     "range_constraints": TACTIC_QEPREFIX + TACTIC_BUS_TAIL,
     "trivial_simp": TACTIC_QEPREFIX + TACTIC_BUS_TAIL,
     "simplify_exhaustive": TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:normalize:demod",
-    # Final powdr step has no pass suffix; formula is already heavily simplified.
-    "": TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:normalize:demod",
 }
 
 
@@ -125,11 +113,6 @@ def resolve_tactic(
         stem = Path(input_path).stem
         if ".zero-is-model" in stem or ".invalid-all-mult-zero" in stem:
             return TACTIC_AUX
-        try:
-            if Path(input_path).stat().st_size >= _LARGE_SMT_BYTES:
-                return TACTIC_LARGE
-        except OSError:
-            pass
     if optimization_step is not None and optimization_step in STEP_TACTICS:
         return STEP_TACTICS[optimization_step]
     return DEFAULT_TACTIC
