@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from ..utils.args import ARGS
@@ -50,6 +51,14 @@ def _build_checker_cmd(
     return cmd
 
 
+def _emit_stderr(stderr: str | None) -> None:
+    if stderr:
+        sys.stderr.write(stderr)
+        if not stderr.endswith("\n"):
+            sys.stderr.write("\n")
+        sys.stderr.flush()
+
+
 def run_checker_subprocess(
     input_path: Path | str,
     *,
@@ -73,6 +82,7 @@ def run_checker_subprocess(
         text=True,
         check=False,
     )
+    _emit_stderr(proc.stderr)
     if proc.returncode != 0:
         raise RuntimeError(
             f"checker exited {proc.returncode}: {proc.stderr.strip()}"
@@ -107,6 +117,7 @@ def run_checker_subprocess_text(
         text=True,
         check=False,
     )
+    _emit_stderr(proc.stderr)
     if proc.returncode != 0:
         raise RuntimeError(
             f"checker exited {proc.returncode}: {proc.stderr.strip()}"

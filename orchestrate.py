@@ -200,6 +200,14 @@ def __cmd_arg(arg) -> str:
     return str(arg)
 
 
+def __emit_subprocess_stderr(stderr: str | None) -> None:
+    if stderr:
+        sys.stderr.write(stderr)
+        if not stderr.endswith("\n"):
+            sys.stderr.write("\n")
+        sys.stderr.flush()
+
+
 def __run_main(
     command,
     *args,
@@ -233,6 +241,7 @@ def __run_main(
             cwd=WORKSPACE_DIR,
         )
         stdout, stderr, timed_out = communicate_with_timeout(proc, timeout)
+        __emit_subprocess_stderr(stderr)
         if timed_out:
             logging.error(f"timed out running {cmdstr}")
             step = "encode" if command == "verify" else command
@@ -251,7 +260,7 @@ def __run_main(
                 error_message=stderr or str(proc.returncode),
             )
         try:
-            return load_json(StringIO(stdout or ""))
+            data = load_json(StringIO(stdout or ""))
         except json.JSONDecodeError:
             logging.error(f"failed to parse output of {cmdstr}:\n{stdout}")
             return Action(
@@ -259,8 +268,10 @@ def __run_main(
                 result="invalid-json",
                 error_message=(stdout[:400] if stdout else ""),
             )
+        return data
     proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True, cwd=WORKSPACE_DIR)
-    _, _, timed_out = communicate_with_timeout(proc, timeout)
+    _, stderr, timed_out = communicate_with_timeout(proc, timeout)
+    __emit_subprocess_stderr(stderr)
     if timed_out:
         logging.error(f"timed out running {cmdstr}")
     elif proc.returncode != 0:
