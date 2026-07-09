@@ -932,9 +932,11 @@ class PermutationCheckMixin:
             for j in range(n):
                 if mem_keys_statically_disjoint(i, j):
                     continue
+                # Pinned-disabled rows cannot be active/input/output on any key.
+                if is_disabled(j).is_true():
+                    continue
                 mke = mem_key_eq(i, j)
-                if not is_disabled(j).is_true():
-                    is_actives.append(And(Not(is_disabled(j)), *mke))
+                is_actives.append(And(Not(is_disabled(j)), *mke))
                 if not is_input(j).is_false():
                     has_inputs.append(And(is_input(j), *mke))
                 if not is_output(j).is_false():
