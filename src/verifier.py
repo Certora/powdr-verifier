@@ -11,6 +11,7 @@ from .encoding.utils import get_is_valid
 from .report.action import Action
 from .smt.conversion import SmtConverter
 from .smt.utils import *
+from .smt_backends.pysmt import disable_typecheck
 from .utils.basic_block import BasicBlock
 from .utils.io import load_apc_dump, load_json
 from .utils.stats import init_stats_run, set_stats_tag, stats_enabled
@@ -85,6 +86,9 @@ def verify():
 
     with Action("encode") as action:
         action += {"outputs": []}
+
+        # Encoding builds well-typed formulas programmatically; saves ~30% encode on 2099828 step 0.
+        disable_typecheck()
 
         before = load_apc_dump(ARGS().input_before)
         after = load_apc_dump(ARGS().input_after)
