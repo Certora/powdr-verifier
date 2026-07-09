@@ -135,26 +135,30 @@ def _parse_time(s: str | None) -> TimeInfo | None:
     return None
 
 
-def _ordered_ts_pairs(order_edges: list[dict]) -> set[frozenset[str]]:
+# Transitive closure over timestamp ordering; unordered pairs as sorted 2-tuples.
+def _ordered_ts_pairs(order_edges: list[dict]) -> set[tuple[str, str]]:
     nodes = sorted({e["lhs"] for e in order_edges} | {e["rhs"] for e in order_edges})
     if not nodes:
         return set()
     idx = {n: i for i, n in enumerate(nodes)}
     n = len(nodes)
-    before = [[False] * n for _ in range(n)]
+    # Bitset transitive closure: ~1.6s -> ~0.1s per side on 2099828 step 0 membus analysis.
+    reach = [0] * n
     for e in order_edges:
-        before[idx[e["lhs"]]][idx[e["rhs"]]] = True
+        reach[idx[e["lhs"]]] |= 1 << idx[e["rhs"]]
     for k in range(n):
+        bit_k = 1 << k
+        rk = reach[k]
+        if not rk:
+            continue
         for i in range(n):
-            if not before[i][k]:
-                continue
-            for j in range(n):
-                before[i][j] = before[i][j] or before[k][j]
+            if reach[i] & bit_k:
+                reach[i] |= rk
     return {
-        frozenset({nodes[i], nodes[j]})
+        (nodes[i], nodes[j])
         for i in range(n)
         for j in range(i + 1, n)
-        if before[i][j] or before[j][i]
+        if (reach[i] >> j) & 1 or (reach[j] >> i) & 1
     }
 
 
@@ -406,7 +410,7 @@ def _ingest_side(
     )
 
 
-def _rule_out_pairs(state: SideState, ordered_ts: set[frozenset[str]]) -> None:
+def _rule_out_pairs(state: SideState, ordered_ts: set[tuple[str, str]]) -> None:
     n = state.n
     for i, j in itertools.combinations(range(n), 2):
         a, b = state.facts[i], state.facts[j]
@@ -417,7 +421,7 @@ def _rule_out_pairs(state: SideState, ordered_ts: set[frozenset[str]]) -> None:
             _remove_match(state, i, j)
             continue
         tai, taj = a.abstract_ts, b.abstract_ts
-        if tai and taj and frozenset({tai, taj}) in ordered_ts:
+        if tai and taj and ((tai, taj) if tai < taj else (taj, tai)) in ordered_ts:
             _remove_match(state, i, j)
 
 
