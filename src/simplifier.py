@@ -109,10 +109,6 @@ def resolve_tactic(
     """Resolve ``default`` and per-step overrides to a colon-separated pipeline."""
     if tactic != "default":
         return tactic
-    if input_path is not None:
-        stem = Path(input_path).stem
-        if ".zero-is-model" in stem or ".invalid-all-mult-zero" in stem:
-            return TACTIC_AUX
     if optimization_step is not None and optimization_step in STEP_TACTICS:
         return STEP_TACTICS[optimization_step]
     return DEFAULT_TACTIC
