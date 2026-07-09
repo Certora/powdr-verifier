@@ -1,4 +1,5 @@
 """Mixins and formulas for multiset permutation invariants and timestamp monotonicity."""
+from collections import defaultdict
 from dataclasses import dataclass
 from itertools import batched, pairwise
 import itertools
@@ -735,6 +736,18 @@ class PermutationCheckMixin:
                 ptr.constant_value() % p if ptr.is_int_constant() else None,
             ))
 
+        _full_key_buckets: dict[tuple[int, int], list[int]] = defaultdict(list)
+        for idx in range(n):
+            ai, pi = mem_key_const[idx]
+            if ai is not None and pi is not None:
+                _full_key_buckets[(ai, pi)].append(idx)
+
+        def same_key_candidates(i: int) -> list[int]:
+            ai, pi = mem_key_const[i]
+            if ai is not None and pi is not None:
+                return _full_key_buckets[(ai, pi)]
+            return [j for j in range(n) if not mem_keys_statically_disjoint(i, j)]
+
         def mem_keys_statically_disjoint(ii: int, jj: int) -> bool:
             ai, pi = mem_key_const[ii]
             aj, pj = mem_key_const[jj]
@@ -929,10 +942,7 @@ class PermutationCheckMixin:
             is_actives = []
             has_inputs = []
             has_outputs = []
-            for j in range(n):
-                if mem_keys_statically_disjoint(i, j):
-                    continue
-                # Pinned-disabled rows cannot be active/input/output on any key.
+            for j in same_key_candidates(i):
                 if is_disabled(j).is_true():
                     continue
                 mke = mem_key_eq(i, j)
@@ -960,10 +970,8 @@ class PermutationCheckMixin:
         for i in range(n):
             if is_disabled(i).is_true():
                 continue
-            for j in range(n):
+            for j in same_key_candidates(i):
                 if i == j or m(i, j).is_false():
-                    continue
-                if mem_keys_statically_disjoint(i, j):
                     continue
                 if is_disabled(j).is_true():
                     continue
@@ -1070,7 +1078,6 @@ class PermutationCheckMixin:
             s = bool_simplify(c, bool_simp_memo)
             if not s.is_true():
                 simplified.append(keep_comment(s, c))
-        # ``simplified`` is already fully simplified, so skip BCP's presimplify pass.
         conjuncts = boolean_propagate(simplified, presimplify=False)
         self.plain_permutation_io = PlainPermutationIo(
             is_inputs=list(is_inputs),
