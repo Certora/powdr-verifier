@@ -7,6 +7,16 @@ edition.workspace = true
 name = "simplifier"
 path = "src/main.rs"
 
+[features]
+# FLINT backend selector for src/poly_factor/ffi.rs. flint-sys and flint3-sys
+# expose the same C API but both set links="flint", so Cargo allows only ONE
+# as a dependency at a time. The committed default is flint-sys (owners'
+# backend; what Linux/CI builds). macOS cannot compile flint-sys (its
+# Linux-baked bindgen layout tests fail on Darwin), so `just build-osx`
+# applies patches/flint3-macos.patch to swap the dependency to flint3-sys and
+# builds with `--features flint3`.
+flint3 = []
+
 [dependencies]
 smt2 = { path = "../smt2" }
 z3 = "0.20"

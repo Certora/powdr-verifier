@@ -1,5 +1,6 @@
 //! Multivariate polynomial factorization via FLINT, with Z3 expression I/O.
 
+mod ffi;
 mod flint;
 mod z3_poly;
 
