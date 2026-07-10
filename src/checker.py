@@ -12,6 +12,7 @@ from pathlib import Path
 from .report.action import Action, classify_expected_vs_result
 from .smt.utils import *
 from .utils.args import ARGS
+from .utils.io import SMT_ENCODING, load_smt_script
 from .utils.stats import init_stats_run, set_stats_tag, stats_enabled, stats_tag_from_path
 
 
@@ -252,10 +253,10 @@ def check_smt_script(
             resolve_checker_bin,
             run_checker_subprocess_text,
         )
-        from .simplify.utils import _script_to_string
+        from .simplify.utils import _script_to_bytes
 
         if resolve_checker_bin() is not None:
-            text = _script_to_string(smt_script)
+            text = _script_to_bytes(smt_script).decode(SMT_ENCODING)
             data = run_checker_subprocess_text(
                 text,
                 solve_chunked=ARGS().solve_chunked if hasattr(ARGS(), "solve_chunked") else True,
@@ -331,7 +332,7 @@ def check():
 
         with action.action("parse"):
             logging.info(f"loading from {ARGS().input}")
-            smt_script = list(SmtLibParser().get_script_fname(str(ARGS().input)))
+            smt_script = load_smt_script(ARGS().input)
 
         for cmd in smt_script:
             if cmd.name == "set-info" and cmd.args[0] == ":status":

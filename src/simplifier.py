@@ -17,7 +17,7 @@ from .report.action import Action
 from .smt.utils import *
 from .smt_backends.pysmt import write_smtlib_script
 from .utils.args import ARGS
-from .utils.io import open_file
+from .utils.io import open_file, SMT_ENCODING, load_smt_script
 from .utils.stats import init_stats_run, set_stats_tag, stats_enabled, stats_tag_from_path, clear_pass_action, set_pass_action
 
 from .simplify.witness import simplify_witnesses
@@ -135,10 +135,7 @@ def _pipeline_groups(
 
 
 def _load_script(path: Path) -> script.SmtLibScript:
-    with open_file(path, "r") as f:
-        parser = SmtLibParser()
-        logging.info(f"loading from {f.name}")
-        return parser.get_script(f)
+    return load_smt_script(path)
 
 
 class _PassTimeout(Exception):

@@ -10,8 +10,9 @@ from pathlib import Path
 from ..paths import DATA_DIR, POWDR_DUMPS_DIR, VERIFIER_DIR, data_path_for_dump
 from ..smt_backends.pysmt import script
 from ..utils.args import ARGS
+from ..utils.io import SMT_ENCODING
 from ..utils.stats import stats_dump
-from .utils import _script_to_string, _string_to_script
+from .utils import _bytes_to_script, _script_to_bytes, _string_to_script
 
 _last_rust_profile_path: Path | None = None
 
@@ -339,9 +340,9 @@ def run_rust_pipeline(
 
     use_file_input = input_path is not None
     use_file_output = output_path is not None
-    smt_in: str | None = None
+    smt_in: bytes | None = None
     if not use_file_input:
-        smt_in = _script_to_string(smt_script)
+        smt_in = _script_to_bytes(smt_script)
     dump_steps_enabled = getattr(ARGS(), "dump_steps", False) and (
         dump_steps_output or output_path
     ) is not None
@@ -369,13 +370,16 @@ def run_rust_pipeline(
         cmd,
         input=smt_in,
         capture_output=True,
-        text=True,
+        text=smt_in is None,
         check=False,
         env=env,
     )
     if proc.returncode != 0:
+        err = proc.stderr
+        if isinstance(err, bytes):
+            err = err.decode(SMT_ENCODING)
         raise RuntimeError(
-            f"simplifier exited {proc.returncode}: {proc.stderr.strip()}"
+            f"simplifier exited {proc.returncode}: {err.strip()}"
         )
 
     if profile_path is not None and profile_path.is_file():
@@ -387,7 +391,11 @@ def run_rust_pipeline(
         )
         emit_perf_profile_summary(profile_path)
 
-    steps = parse_rust_stats(proc.stderr)
+    steps = parse_rust_stats(
+        proc.stderr.decode(SMT_ENCODING)
+        if isinstance(proc.stderr, bytes)
+        else proc.stderr
+    )
     if profile_path is not None and profile_path.is_file():
         _emit_rust_pass_timings(steps)
 
@@ -429,6 +437,7 @@ def run_rust_pipeline(
     if not parse_output:
         return None, steps
     if use_file_output:
-        with open(output_path, encoding="utf-8") as out:
-            return _string_to_script(out.read()), steps
-    return _string_to_script(proc.stdout), steps
+        with open(output_path, "rb") as out:
+            return _bytes_to_script(out.read()), steps
+    assert proc.stdout is not None
+    return _bytes_to_script(proc.stdout), steps

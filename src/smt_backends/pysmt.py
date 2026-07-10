@@ -7,8 +7,9 @@ from pathlib import Path
 import re
 import semver
 import subprocess
-from typing import TextIO, Optional
+from typing import BinaryIO, Optional, TextIO
 
+from ..utils.io import SMT_ENCODING
 from pysmt import operators
 from pysmt import substituter
 
@@ -505,9 +506,10 @@ _PREFIX_OP = {
     operators.ARRAY_SELECT: "select",
     operators.ARRAY_STORE: "store",
 }
+_PREFIX_OP_BYTES = {k: v.encode(SMT_ENCODING) for k, v in _PREFIX_OP.items()}
 
 
-def _fast_serialize_assert(f: FNode, write, stream: TextIO, qcache: dict) -> None:
+def _fast_serialize_assert(f: FNode, write, qcache: dict) -> None:
     # Iterative, non-generator serializer for the tree (non-daggified) printing
     # ``serialize_smtlib`` needs. ``SmtPrinter``'s ``TreeWalker`` builds two
     # generators per node (the walk method plus the ``@write_annotations``
@@ -520,67 +522,70 @@ def _fast_serialize_assert(f: FNode, write, stream: TextIO, qcache: dict) -> Non
     # ``quote`` is pure in the symbol name, and symbols are declared once but
     # referenced millions of times, so we memoize quoted names in ``qcache``
     # (shared across all asserts of a script) -- worth ~20% of serialization.
-    prefix = _PREFIX_OP
+    prefix = _PREFIX_OP_BYTES
     SYMBOL = operators.SYMBOL
     INT_CONSTANT = operators.INT_CONSTANT
     BOOL_CONSTANT = operators.BOOL_CONSTANT
     FUNCTION = operators.FUNCTION
     FORALL = operators.FORALL
     EXISTS = operators.EXISTS
-    fallback = None
     stack = [f]
     while stack:
         item = stack.pop()
-        if type(item) is str:
+        if type(item) is bytes:
             write(item)
             continue
         nt = item.node_type()
         op = prefix.get(nt)
         if op is not None:
-            write("(" + op)
-            stack.append(")")
+            write(b"(" + op)
+            stack.append(b")")
             for a in reversed(item.args()):
                 stack.append(a)
-                stack.append(" ")
+                stack.append(b" ")
         elif nt == SYMBOL:
             n = item.symbol_name()
             s = qcache.get(n)
             if s is None:
-                s = qcache[n] = quote(n)
+                s = quote(n).encode(SMT_ENCODING)
+                qcache[n] = s
             write(s)
         elif nt == INT_CONSTANT:
             v = item.constant_value()
-            write(f"(- {-v})" if v < 0 else str(v))
+            write(f"(- {-v})".encode(SMT_ENCODING) if v < 0 else str(v).encode(SMT_ENCODING))
         elif nt == BOOL_CONSTANT:
-            write("true" if item.constant_value() else "false")
+            write(b"true" if item.constant_value() else b"false")
         elif nt == FUNCTION:
             n = item.function_name().symbol_name()
             s = qcache.get(n)
             if s is None:
-                s = qcache[n] = quote(n)
-            write("(" + s)
-            stack.append(")")
+                s = quote(n).encode(SMT_ENCODING)
+                qcache[n] = s
+            write(b"(" + s)
+            stack.append(b")")
             for a in reversed(item.args()):
                 stack.append(a)
-                stack.append(" ")
+                stack.append(b" ")
         elif nt == FORALL or nt == EXISTS:
-            write("(forall (" if nt == FORALL else "(exists (")
+            write(b"(forall (" if nt == FORALL else b"(exists (")
             for v in item.quantifier_vars():
                 n = v.symbol_name()
                 s = qcache.get(n)
                 if s is None:
-                    s = qcache[n] = quote(n)
-                write("(" + s + " " + v.symbol_type().as_smtlib(False) + ")")
-            write(") ")
-            stack.append(")")
+                    s = quote(n).encode(SMT_ENCODING)
+                    qcache[n] = s
+                type_s = v.symbol_type().as_smtlib(False)
+                write(b"(" + s + b" " + type_s.encode(SMT_ENCODING) + b")")
+            write(b") ")
+            stack.append(b")")
             stack.append(item.arg(0))
         else:
-            if fallback is None:
-                fallback = printers.SmtPrinter(stream)
-            fallback.printer(item)
+            buf = StringIO()
+            printers.SmtPrinter(buf).printer(item)
+            write(buf.getvalue().encode(SMT_ENCODING))
 
 
-def serialize_smtlib(smtlib: script.SmtLibScript, file: TextIO):
+def serialize_smtlib(smtlib: script.SmtLibScript, file: BinaryIO):
     # Asserts dominate the script; serialize them with the fast iterative walker
     # (byte-identical to ``SmtPrinter`` with ``annotations=None``). Non-assert
     # commands keep the daggified per-command path: a DAG printer shares let
@@ -589,12 +594,14 @@ def serialize_smtlib(smtlib: script.SmtLibScript, file: TextIO):
     qcache: dict = {}
     for cmd in smtlib.commands:
         if cmd.name == "assert":
-            write("(assert ")
-            _fast_serialize_assert(cmd.args[0], write, file, qcache)
-            write(")")
+            write(b"(assert ")
+            _fast_serialize_assert(cmd.args[0], write, qcache)
+            write(b")")
         else:
-            cmd.serialize(file, printer=None, daggify=True)
-        write("\n")
+            buf = StringIO()
+            cmd.serialize(buf, printer=None, daggify=True)
+            write(buf.getvalue().encode(SMT_ENCODING))
+        write(b"\n")
 
 
 def pretty_print_smtlib(smtlib: script.SmtLibScript, file: TextIO):
@@ -701,10 +708,12 @@ def convert_to_smt_script(f: FNode, status=None, pin_info=None) -> script.SmtLib
     return smtlib
 
 
-def write_smtlib_script(smtlib: script.SmtLibScript, file: TextIO) -> None:
+def write_smtlib_script(smtlib: script.SmtLibScript, file: BinaryIO) -> None:
     _touch_generated_source(smtlib)
     if ARGS().pretty:
-        pretty_print_smtlib(smtlib, file)
+        buf = StringIO()
+        pretty_print_smtlib(smtlib, buf)
+        file.write(buf.getvalue().encode(SMT_ENCODING))
     else:
         serialize_smtlib(smtlib, file)
 
