@@ -167,6 +167,39 @@ def test_eval_bool_with_addition_and_subtraction():
     )
 
 
+def _conjuncts(f: FNode) -> list[FNode]:
+    return list(f.args()) if f.is_and() else [f]
+
+
+def test_affine_ineq_neg_multivar_no_false_pass():
+    """Regression: the coeff<0 branch of _refine_affine_ineq must project a lower
+    bound from rest.lo, not rest.hi. On a >=2-variable inequality the two differ,
+    and using rest.hi over-tightens -- deriving y>=10 from (x<=y, x in [0,10])
+    instead of the sound y>=0 -- which collapses a satisfiable formula to `false`
+    (a false PASS). Single-variable cases have rest.lo == rest.hi and mask the bug.
+    """
+    asserts = _asserts_from_script(
+        """
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (declare-fun y () Int)
+        (assert (<= 0 x))
+        (assert (<= x 10))
+        (assert (<= x y))
+        (assert (<= y 5))
+        (check-sat)
+        """
+    )
+    # x=0,y=0 satisfies every assertion; the pass must NOT manufacture `false`.
+    assert not any(a.is_false() for a in asserts)
+
+    # And it must derive the SOUND lower bound y>=0, never the over-tight y>=10.
+    y = Symbol("y", INT)
+    all_conjuncts = [c for a in asserts for c in _conjuncts(a)]
+    assert LE(Int(0), y) in all_conjuncts
+    assert LE(Int(10), y) not in all_conjuncts
+
+
 def test_simplify_intervals_removes_mod_when_no_overflow():
     p = int(ARGS().field_type.value)
     asserts = _asserts_from_script(

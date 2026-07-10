@@ -334,10 +334,16 @@ class IntervalReasoner:
                     formula_ctx=formula_ctx,
                 )
             elif coeff < 0:
-                if h.hi is None:
+                # Dividing coeff*sym <= target_hi - rest by coeff < 0 flips the
+                # relation to sym >= (rest - target_hi)/den (den = -coeff). A lower
+                # bound valid for every feasible rest must use the SMALLEST rest,
+                # i.e. rest.lo -- using rest.hi over-tightens and drops models
+                # (a false PASS) whenever rest is not a singleton. The coeff > 0
+                # branch above symmetrically (and correctly) uses h.lo.
+                if h.lo is None:
                     continue
                 den = -coeff
-                num = h.hi - target_hi
+                num = h.lo - target_hi
                 lo = _ceil_div(num, den)
                 changed |= self._state_set(
                     state,
