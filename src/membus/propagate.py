@@ -298,6 +298,42 @@ def _refute_is_load(is_load: str, flag_cols: tuple[str, ...],
     return survivors[0] if len(survivors) == 1 else None
 
 
+def _surviving_flag_bits(
+    flag_cols: tuple[str, ...],
+    deciding: list[Any],
+    pin_values: dict[str, int],
+) -> list[tuple[int, ...]]:
+    envs: list[tuple[int, ...]] = []
+    for bits in iproduct((0, 1), repeat=len(flag_cols)):
+        trial = dict(pin_values)
+        for col, v in zip(flag_cols, bits):
+            trial[col] = v
+        if all(_eval_constraint(c, trial) == 0 for c in deciding):
+            envs.append(bits)
+    return envs
+
+
+def _refute_flag_value(
+    col: str,
+    flag_cols: tuple[str, ...],
+    deciding: list[Any],
+    pin_values: dict[str, int],
+) -> int | None:
+    survivors: list[int] = []
+    for v in (0, 1):
+        trial = dict(pin_values)
+        trial[col] = v
+        free = [c for c in flag_cols if c not in trial]
+        for bits in iproduct((0, 1), repeat=len(free)):
+            env = dict(trial)
+            for c, b in zip(free, bits):
+                env[c] = b
+            if all(_eval_constraint(c, env) == 0 for c in deciding):
+                survivors.append(v)
+                break
+    return survivors[0] if len(survivors) == 1 else None
+
+
 def _refute_is_load_pins(pins: dict[str, Pin], pin_values: dict[str, int],
                          an: Analysis, index: _DecodingIndex) -> None:
     cols = _all_constraint_cols(an.machine)
@@ -322,6 +358,37 @@ def _refute_is_load_pins(pins: dict[str, Pin], pin_values: dict[str, int],
             refute_flags=flag_cols,
         )
         pin_values[is_load] = v
+
+
+def _refute_flag_pins(pins: dict[str, Pin], pin_values: dict[str, int],
+                      an: Analysis, index: _DecodingIndex) -> None:
+    """Pin opcode flag bits once is_load and the mux cone fix their value."""
+    cols = _all_constraint_cols(an.machine)
+    flags = _flags_by_access(cols)
+    for is_load in sorted(c for c in pins if c.startswith("is_load_")):
+        m = _IS_LOAD_RE.match(is_load)
+        if m is None:
+            continue
+        flag_cols = flags.get(int(m.group(1)), ())
+        if not flag_cols:
+            continue
+        deciding = [c for _, c in index.deciding_constraints(is_load, flag_cols)]
+        if not deciding:
+            continue
+        sources = index.deciding_sources(is_load, flag_cols)
+        load_pin = pins[is_load]
+        changed = True
+        while changed:
+            changed = False
+            for col in flag_cols:
+                if col in pins:
+                    continue
+                v = _refute_flag_value(col, flag_cols, deciding, pin_values)
+                if v is None:
+                    continue
+                pins[col] = Pin(col, v, sources=sources, premises=(load_pin,))
+                pin_values[col] = v
+                changed = True
 
 
 def _accesses_in_expr(expr: Any) -> set[int]:
@@ -350,13 +417,13 @@ def surviving_envs(an: Analysis, prop: PropagationResult,
         if not flag_cols:
             continue
         deciding = [c for _, c in index.deciding_constraints(is_load, flag_cols)]
-        envs: list[dict[str, int]] = []
-        for bits in iproduct((0, 1), repeat=len(flag_cols)):
+        bits_list = _surviving_flag_bits(flag_cols, deciding, pin_values)
+        envs = []
+        for bits in bits_list:
             trial = dict(pin_values)
             for col, v in zip(flag_cols, bits):
                 trial[col] = v
-            if all(_eval_constraint(c, trial) == 0 for c in deciding):
-                envs.append(trial)
+            envs.append(trial)
         if envs:
             out[access] = envs
     return out
@@ -388,6 +455,7 @@ def propagate(an: Analysis) -> PropagationResult:
                 changed = True
 
     _refute_is_load_pins(pins, pin_values, an, decoding)
+    _refute_flag_pins(pins, pin_values, an, decoding)
 
     zeros: list[LinZero] = []
     for idx, lf_raw in raw:

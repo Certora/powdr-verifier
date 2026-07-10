@@ -23,6 +23,9 @@ _DUMP_2103992 = (Path(__file__).resolve().parents[2]
 _DUMP_2103993 = (Path(__file__).resolve().parents[2]
                  / "powdr-dumps/guest-keccak-selection"
                  / "apc_candidate_2103993_000_unopt.json")
+_DUMP_2099828 = (Path(__file__).resolve().parents[2]
+                 / "powdr-dumps/guest-keccak"
+                 / "apc_candidate_2099828_001_exec_bus.json")
 
 
 def _an(cons=(), bis=()):
@@ -253,3 +256,21 @@ def test_is_load_case_split_2103993():
         row = next(r for r in an.mem if r.ordinal == ord)
         assert row.ptr == 44
         assert keys.recover_key(an, row) == keys.Const(44)
+
+
+@pytest.mark.skipif(not _DUMP_2099828.is_file(), reason="regression dump not present")
+def test_2099828_access1_flags_pinned_and_drop_from_pointer():
+    data = json.loads(_DUMP_2099828.read_text())
+    an = Analysis(data, assume_is_valid=True)
+    prop = an._propagation
+    flag_cols = (
+        "flags__0_1@59",
+        "flags__1_1@60",
+        "flags__2_1@61",
+        "flags__3_1@62",
+    )
+    for col, val in zip(flag_cols, (0, 0, 0, 1)):
+        assert col in prop.pins
+        assert prop.pins[col].value == val
+    row10 = an.mem[10]
+    assert "flags__" not in json.dumps(row10.ptr)
