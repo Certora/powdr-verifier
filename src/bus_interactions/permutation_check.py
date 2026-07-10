@@ -736,18 +736,6 @@ class PermutationCheckMixin:
                 ptr.constant_value() % p if ptr.is_int_constant() else None,
             ))
 
-        _full_key_buckets: dict[tuple[int, int], list[int]] = defaultdict(list)
-        for idx in range(n):
-            ai, pi = mem_key_const[idx]
-            if ai is not None and pi is not None:
-                _full_key_buckets[(ai, pi)].append(idx)
-
-        def same_key_candidates(i: int) -> list[int]:
-            ai, pi = mem_key_const[i]
-            if ai is not None and pi is not None:
-                return _full_key_buckets[(ai, pi)]
-            return [j for j in range(n) if not mem_keys_statically_disjoint(i, j)]
-
         def mem_keys_statically_disjoint(ii: int, jj: int) -> bool:
             ai, pi = mem_key_const[ii]
             aj, pj = mem_key_const[jj]
@@ -801,6 +789,11 @@ class PermutationCheckMixin:
                 field_eq(args(ii)[0], args(jj)[0]),
                 field_eq(args(ii)[1], args(jj)[1]),
             )
+        
+        same_key_buckets: dict[tuple[FNode, FNode], list[int]] = defaultdict(list)
+        for i in range(n):
+            same_key_buckets[(args(i)[0], args(i)[1])].append(i)
+
         
         # multiplicity range constraints
         for i in range(n):
@@ -937,40 +930,47 @@ class PermutationCheckMixin:
                         f"inputs or outputs {i} and {j} have different address spaces or pointers"
                     )
                 )
-
-        for i in range(n):
+        
+        for ai, pi in same_key_buckets.keys():
             is_actives = []
             has_inputs = []
             has_outputs = []
-            for j in same_key_candidates(i):
-                if is_disabled(j).is_true():
+
+            for (aj, pj), jls in same_key_buckets.items():
+                if ai.is_constant() and aj.is_constant() and ai.constant_value() != aj.constant_value():
                     continue
-                mke = mem_key_eq(i, j)
-                is_actives.append(And(Not(is_disabled(j)), *mke))
-                if not is_input(j).is_false():
-                    has_inputs.append(And(is_input(j), *mke))
-                if not is_output(j).is_false():
-                    has_outputs.append(And(is_output(j), *mke))
+                if pi.is_constant() and pj.is_constant() and pi.constant_value() != pj.constant_value():
+                    continue
+                
+                mke = And(field_eq(ai, aj), field_eq(pi, pj)).simplify()
+                for j in jls:
+                    if is_disabled(j).is_true():
+                        continue
+                    is_actives.append(And(Not(is_disabled(j)), mke))
+                    if not is_input(j).is_false():
+                        has_inputs.append(And(is_input(j), mke))
+                    if not is_output(j).is_false():
+                        has_outputs.append(And(is_output(j), mke))
             is_active = Or(*is_actives)
             has_input = Or(*has_inputs)
             has_output = Or(*has_outputs)
             conjuncts.append(
                 with_comment(
                     Implies(is_active, has_input),
-                    f"key of interaction {i}: some input on that address_space/pointer",
+                    f"key {ai}/{pi}: some input on that address_space/pointer",
                 )
             )
             conjuncts.append(
                 with_comment(
                     Implies(is_active, has_output),
-                    f"key of interaction {i}: some output on that address_space/pointer",
+                    f"key {ai}/{pi}: some output on that address_space/pointer",
                 )
             )
 
         for i in range(n):
             if is_disabled(i).is_true():
                 continue
-            for j in same_key_candidates(i):
+            for j in range(n):
                 if i == j or m(i, j).is_false():
                     continue
                 if is_disabled(j).is_true():
