@@ -2,12 +2,29 @@ from io import StringIO
 from textwrap import dedent
 
 from src.simplify.normalize import collect_variables, relation_poly_diff, simplify_normalize
-from src.smt.utils import *
+from src.smt.utils import *  # noqa: F401,F403 - monkeypatches pysmt (MOD support) before shortcuts
 from src.utils.args import ARGS
+
+# Imported after ``src.smt.utils`` on purpose: that ``import *`` installs the
+# backend MOD operator; importing ``pysmt.shortcuts`` earlier breaks it.
+from pysmt.shortcuts import Iff, Not, Solver
 
 
 def _parse(s: str) -> script.SmtLibScript:
     return SmtLibParser().get_script(StringIO(dedent(s).strip() + "\n"))
+
+
+def _satisfiable(formula: FNode) -> bool:
+    with Solver(name="z3", logic=None) as s:
+        s.add_assertion(formula)
+        return s.solve()
+
+
+def _equivalent(f: FNode, g: FNode) -> bool:
+    """True iff ``f <=> g`` is valid (``Not(Iff(f, g))`` is unsat)."""
+    with Solver(name="z3", logic=None) as s:
+        s.add_assertion(Not(Iff(f, g)))
+        return not s.solve()
 
 
 def test_normalize_field_monic_scales_coeffs():
@@ -278,7 +295,11 @@ def test_normalize_weak_le_moves_to_diff():
     assert asserts == [LE(Plus(x, y), Int(0))]
 
 
-def test_normalize_weak_le_field_mod_vs_const():
+def test_normalize_weak_le_field_mod_vs_const_left_intact():
+    # (mod (x+y) P) <= 255 is a range check. Field reduction (mod P) preserves
+    # "= 0" but NOT order, so normalize must leave modular inequalities intact.
+    # The old code rewrote this to LE(wrap_mod(x+y-255), 0), i.e. the *equality*
+    # x+y == 255 (mod P) -- unsound (turned "<= 255" into "= 255").
     p = int(ARGS().field_type.value)
     smt = _parse(
         f"""
@@ -289,14 +310,19 @@ def test_normalize_weak_le_field_mod_vs_const():
         (check-sat)
         """
     )
-    x, y = Symbol("x", INT), Symbol("y", INT)
+    original = [c.args[0] for c in smt.commands if c.name == "assert"][0]
     simplify_normalize(smt)
     asserts = [c.args[0] for c in smt.commands if c.name == "assert"]
-    diff = Plus(x, y, Int((-255) % p))
-    assert asserts == [LE(wrap_mod(diff), Int(0))]
+    assert asserts == [original]  # declined -> unchanged
+    x, y = Symbol("x", INT), Symbol("y", INT)
+    buggy = LE(wrap_mod(Plus(x, y, Int((-255) % p))), Int(0))
+    assert not _equivalent(original, buggy)  # the old rewrite was not equivalent
 
 
-def test_normalize_weak_lt_both_field_mod():
+def test_normalize_weak_lt_both_field_mod_left_intact():
+    # (mod (y+x) P) < (mod x P): a genuine modular comparison. The old code
+    # rewrote it to the always-false (mod y P) < 0 -- the guest-keccak
+    # 2102932 034->035 vacuous-unsat bug. Must be left intact.
     p = int(ARGS().field_type.value)
     smt = _parse(
         f"""
@@ -307,10 +333,55 @@ def test_normalize_weak_lt_both_field_mod():
         (check-sat)
         """
     )
-    y = Symbol("y", INT)
+    original = [c.args[0] for c in smt.commands if c.name == "assert"][0]
     simplify_normalize(smt)
     asserts = [c.args[0] for c in smt.commands if c.name == "assert"]
-    assert asserts == [LT(wrap_mod(y), Int(0))]
+    assert asserts == [original]  # declined -> unchanged
+    assert _satisfiable(asserts[0])  # not vacuous
+    buggy = LT(wrap_mod(Symbol("y", INT)), Int(0))
+    assert not _satisfiable(buggy)  # the old form was always-false
+
+
+def test_normalize_modular_lt_not_vacuous():
+    # Regression for the timestamp IsLessThan comparison that made
+    # guest-keccak 2102932 034->035 vacuously unsat: (mod (a+1) P) < (mod b P)
+    # must stay satisfiable and equivalent to the input -- never collapse to
+    # the always-false (mod (a-b+1) P) < 0.
+    p = int(ARGS().field_type.value)
+    smt = _parse(
+        f"""
+        (set-logic ALL)
+        (declare-fun a () Int)
+        (declare-fun b () Int)
+        (assert (< (mod (+ a 1) {p}) (mod b {p})))
+        (check-sat)
+        """
+    )
+    original = [c.args[0] for c in smt.commands if c.name == "assert"][0]
+    simplify_normalize(smt)
+    asserts = [c.args[0] for c in smt.commands if c.name == "assert"]
+    assert _satisfiable(asserts[0])
+    assert _equivalent(asserts[0], original)
+
+
+def test_normalize_nonmodular_lt_preserves_sign():
+    # (3x < 5x) <=> x > 0. The gcd rescale negates when the leading coeff is
+    # negative (diff = -2x); for an inequality that flips the relation to the
+    # unsound x < 0. Sign must be preserved on the non-modular path.
+    smt = _parse(
+        """
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (assert (< (* 3 x) (* 5 x)))
+        (check-sat)
+        """
+    )
+    original = [c.args[0] for c in smt.commands if c.name == "assert"][0]
+    simplify_normalize(smt)
+    asserts = [c.args[0] for c in smt.commands if c.name == "assert"]
+    assert _equivalent(asserts[0], original)
+    # the would-be sign-flipped form must NOT be equivalent
+    assert not _equivalent(asserts[0], LT(Symbol("x", INT), Int(0)))
 
 
 def test_relation_poly_diff_plain_eq():
