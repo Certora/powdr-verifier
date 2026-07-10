@@ -609,7 +609,7 @@ def run_membus_analysis(
     align_ok = False
     present = _memory_address_spaces(before)
 
-    for addr_space in (1, 2):
+    for addr_space in (1, 2, 3):
         if present is not None and addr_space not in present:
             continue
         al = fetch_align_json(before_path, after_path, addr_space=addr_space)
@@ -622,6 +622,7 @@ def run_membus_analysis(
             bid = raw.get("before_id")
             if aid is not None and bid is not None and raw.get("status") == "kept":
                 before_to_after[bid] = aid
+        # TODO: align provides "local" for removed entries
 
     if not align_ok:
         before_to_after = _heuristic_before_to_after(before, after)
