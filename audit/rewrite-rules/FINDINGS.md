@@ -192,6 +192,28 @@ Highest-value first (active and/or reachable).
   dropped root would strengthen further.
 - **Validators:** `choice-quadratic-roots.smt2` → sat; `…with-range.smt2` → unsat.
 
+#### R1. `rewrite.rs` roots (RUST, LIVE on default path) — **STATUS: TO BE RESOLVED**
+- **This is the active counterpart of U1/U2.** With `--default-executor r` the
+  `rewrite` token runs Rust `rust/simplifier/src/passes/rewrite.rs`, not the Python
+  sympy rewriter. For `(mod expr p) = 0` with `expr` factoring into ≥2 factors, if
+  `solved_roots` finds a single variable with root set `R`, it emits
+  `roots_with_range(var, R)` = `(var=v₁ ∨ … ∨ var=v_k) ∧ min(R) ≤ var ≤ max(R)`
+  (rewrite.rs `:134-140`, `roots_with_range` `:172`).
+- **Crux (same range-class dependency as demod #1):** the disjunction pins `var` to
+  **exact** root values `v_i ∈ [0,p)`, dropping the congruent solutions `v_i + k·p`.
+  The `min≤var≤max` bound is over the root values, **not** `[0,p)`, so it is redundant
+  with the disjunction and does **not** supply the invariant that would make it sound.
+  Equivalence holds only when `var ∈ [0,p)`. Sound for range-checked flag/root columns;
+  latent false-PASS for any solved `var` lacking a `[0,p)` fact — and per U3, `bounds`
+  does not axiomatize the bus vars.
+- **Note:** the *fallback* path `or_terms([mod_zero_eq(f) …])` (when `solved_roots`
+  fails, rewrite.rs `:137-139`) keeps the **congruence** `(mod f p)=0` per factor and is
+  **sound**. Only the `solved_roots → roots_with_range` path drops to exact equalities.
+- **Resolve (same as demod #1):** emit the congruence `(mod var p) = v_i` in the
+  disjunction, or guard on a proven `var ∈ [0,p)`. Not fixed this session (no PR).
+- **Anchors:** `rust/simplifier/src/passes/rewrite.rs` `roots_with_range` `:172`,
+  `solved_roots`, dispatch `:130-142`.
+
 #### U3. `bounds` / `inject-field-range-axiom` — RESOLVED: SOUND
 - **Verdict (2026-07-10, revised): sound** (Arie). Injects `field_symbol(sym) =
   (0 ≤ sym ∧ sym < P)` (smt/utils.py:264) for Int **symbols** named `@<digits>` —
@@ -268,13 +290,20 @@ Highest-value first (active and/or reachable).
   latent unless an upstream pysmt transform materializes such a node.
 - **Validator:** `define_inner_array/const_default_drops_assignments.smt2` → sat.
 
-#### U8. `normalize` / `modular_eq_out_of_range_const` — latent, not currently reachable
-- **Contract:** equivalence · **Crux:** `(= (mod a P) C)` → `(a == C mod P)` accepts
-  **any** Int constant `C` with no `0≤C<P` guard. For `C` outside `[0,P)` the
-  original is unsatisfiable while the rewrite is satisfiable — non-equivalence,
-  polarity-unsafe for the full-DAG walker. Not reachable today (encoders only emit
-  RHS `Int(0)`), so `field_eq_monic` is sound as used. Recommend an explicit
-  `0≤C<P` (or RHS==0) guard.
+#### U8. `normalize` / `modular_eq_out_of_range_const` — latent · **STATUS: TO BE RESOLVED (guard C in range)**
+- **Contract:** equivalence · **Crux:** `walk_equals` (normalize.py:364) folds a
+  modular equality via `relation_poly_diff` and, on the modular branch (`:372-377`),
+  emits `field_eq(rescale_monic(a − C))` = `a ≡ C (mod P)`. It accepts **any** Int
+  constant `C` with no `0≤C<P` guard. For `C ∉ [0,P)` the original `(mod a P) = C` is
+  **unsatisfiable** (LHS ∈ `[0,P)`), while the rewrite `a ≡ C (mod P)` is satisfiable —
+  non-equivalence. Because this is a full-DAG walker (rewrites at all polarities), the
+  mismatch is polarity-unsafe → potential false PASS.
+- **Reachability:** **latent** — encoders emit RHS `Int(0)` only today, so
+  `field_eq_monic` is sound as used.
+- **Resolution (Arie): guard on `0 ≤ C < P`** before the monic rewrite; if `C` is out
+  of range the original atom is `false` (emit `false`), else proceed. **Same guard
+  needed in Rust `normalize.rs`.** Documented + to-be-resolved; **not on the critical
+  path**, no PR this session (enough PRs already).
 - **Validator:** `normalize/modular_eq_out_of_range_const.smt2` → sat (C=100, P=97).
 
 #### U9. `external-solvers` / `cvc5-preprocess-only-extract` — disabled/debug
@@ -367,16 +396,20 @@ skolem, witness). `intervals`, `*_store_eqs`, `solve_eqs`, `flatten/define_array
    `0≤x<P` for `@<digits>` field columns only, symbols-not-terms, declines under
    quantifiers. Nuance: only 262/838 Int symbols are `@<digits>` — bus data/mult vars
    are un-axiomatized, so it does NOT uniformly supply `[0,P)` for #1.
-3. **`rewrite.rs` roots (Rust)** — the Python `rewriter-sympy` roots (U1/U2) are
-   **off the default path**; the live equivalent is Rust `rewrite.rs::roots_with_range`
-   with the same `[0,p)` dependency. Audit the Rust rule; confirm every solved var
-   gets the `[0,p)` axiom, or have it require the congruence.
+3. **`rewrite.rs` roots (Rust, LIVE)** — ⚠️ **TO BE RESOLVED** (R1). The active
+   counterpart of U1/U2 (Python sympy rewriter is off-path). `roots_with_range` pins
+   `var` to exact root values (drops `v+kp`); same `[0,p)` dependency as #1. Resolve
+   with the congruence form or a `var∈[0,p)` guard. (Documented, no PR this session.)
+4. **`normalize` / `modular_eq_out_of_range_const`** — ⚠️ **TO BE RESOLVED** (U8).
+   Guard the modular-equality rewrite on `0≤C<P` (else emit `false`); mirror in Rust
+   `normalize.rs`. Latent (encoders emit RHS 0 today), **not on the critical path** —
+   documented, no PR this session.
 
 **Open — not on default path (fix before enabling):**
-4. **`rewrite_store_eqs` store-decomposition (4 rules)** — resolve reachability
+5. **`rewrite_store_eqs` store-decomposition (4 rules)** — resolve reachability
    (distinct symbolic bases surviving `solve_store_eqs`), then fix `base_eq` to
    "agree off the overwritten indices." Opt-in + no Rust port.
-5. Dormant/disabled sympy `modeq-c-plus-negs-raw-constant` and siblings — fix or
+6. Dormant/disabled sympy `modeq-c-plus-negs-raw-constant` and siblings — fix or
    delete before anyone wires `rewrite_mod_equality` / `rewrite_mod` into the active maps.
 
 ---
