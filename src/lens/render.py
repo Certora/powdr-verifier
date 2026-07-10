@@ -226,20 +226,50 @@ def _compare_rich(diff: DumpDiff, ta: Target, tb: Target) -> str:
 # --------------------------------------------------------------------------- #
 # sweep
 # --------------------------------------------------------------------------- #
+_STATUS_ABBR = {
+    "success": "ok", "timeout": "TO", "memout": "MO",
+    "wrong": "WR", "error": "err", "unknown": "?",
+}
+
+
+def _time_cell(t) -> str:
+    return f"{t:.1f}" if t is not None else "·"
+
+
+def _status_cell(st) -> str:
+    return _STATUS_ABBR.get(st, st) if st is not None else "·"
+
+
+def _status_rich(st) -> str:
+    cell = _status_cell(st)
+    if st == "success":
+        return f"[dim]{cell}[/]"
+    if st in ("timeout", "memout"):
+        return f"[yellow]{cell}[/]"
+    if st is None:
+        return f"[dim]{cell}[/]"
+    return f"[bold red]{cell}[/]"   # wrong / error / unknown
+
+
 def render_sweep(rows, group: str, block: str, mode: str,
-                 with_diff: bool = False) -> str:
+                 with_diff: bool = False, with_results: bool = False) -> str:
     from .sweep import abbrev_label
 
     if mode == JSON:
         steps = [r.as_dict() for r in rows]
-        if not with_diff:
-            for s in steps:
+        for s in steps:
+            if not with_diff:
                 s.pop("diff", None)
+            if not with_results:
+                s.pop("solve_time", None)
+                s.pop("solve_status", None)
         return json.dumps({"group": group, "block": block, "steps": steps},
                           indent=2)
     if mode == RICH:
-        return _sweep_rich(rows, group, block, abbrev_label, with_diff)
-    return _sweep_plain(rows, group, block, abbrev_label, with_diff)
+        return _sweep_rich(rows, group, block, abbrev_label, with_diff,
+                           with_results)
+    return _sweep_plain(rows, group, block, abbrev_label, with_diff,
+                        with_results)
 
 
 def _sym_cell(row, abbrev) -> str:
@@ -268,31 +298,38 @@ def _delta_cells(delta) -> tuple[str, str, str]:
     return (_rac(cons), _rac(mem), _rac(bus))
 
 
-def _sweep_plain(rows, group, block, abbrev, with_diff=False) -> str:
+def _sweep_plain(rows, group, block, abbrev, with_diff=False,
+                 with_results=False) -> str:
     legend = _FMT_LEGEND + ("   (d* = -rem+add~chg vs prev)"
                             if with_diff else "")
     out = [f"# {group}/{block}   {legend}"]
     pw = max((len(r.pass_name) for r in rows), default=4)
     dcol = f"{'dcons':>9} {'dmem':>7} {'dbus':>7} " if with_diff else ""
+    rcol = f"{'time':>8} {'st':>4} " if with_results else ""
     out.append(f"{'NNN':>3} {'pass':<{pw}} f {'cons':>4} {'bus':>4} "
                f"{'mem':>3} {'mkey':>4} {'der':>3} {'deg':>3} {'cols':>4} "
-               f"{dcol} sym-busses")
+               f"{rcol}{dcol} sym-busses")
     for r in rows:
         dcell = ""
         if with_diff:
             dcons, dmem, dbus = _delta_cells(r.delta)
             dcell = f"{dcons:>9} {dmem:>7} {dbus:>7} "
+        rcell = ""
+        if with_results:
+            rcell = (f"{_time_cell(r.solve_time):>8} "
+                     f"{_status_cell(r.solve_status):>4} ")
         out.append(
             f"{r.nnn:03d} {r.pass_name:<{pw}} {FMT_MARK.get(r.fmt, '?')} "
             f"{r.n_constraints:>4} {r.n_bus_interactions:>4} {r.n_memory:>3} "
             f"{_count_or_dot(r.mem_key_sym):>4} "
             f"{r.n_derived_columns:>3} {r.max_degree:>3} "
-            f"{r.distinct_columns:>4} {dcell} {_sym_cell(r, abbrev)}"
+            f"{r.distinct_columns:>4} {rcell}{dcell} {_sym_cell(r, abbrev)}"
         )
     return "\n".join(out)
 
 
-def _sweep_rich(rows, group, block, abbrev, with_diff=False) -> str:
+def _sweep_rich(rows, group, block, abbrev, with_diff=False,
+                with_results=False) -> str:
     from rich.console import Console
     from rich.table import Table
 
@@ -310,6 +347,9 @@ def _sweep_rich(rows, group, block, abbrev, with_diff=False) -> str:
         t.add_column("der", justify="right")
         t.add_column("deg", justify="right")
         t.add_column("cols", justify="right")
+        if with_results:
+            t.add_column("time", justify="right")
+            t.add_column("st", justify="center")
         if with_diff:
             t.add_column("dcons", justify="right")
             t.add_column("dmem", justify="right")
@@ -328,6 +368,9 @@ def _sweep_rich(rows, group, block, abbrev, with_diff=False) -> str:
                 str(r.n_derived_columns), str(r.max_degree),
                 str(r.distinct_columns),
             ]
+            if with_results:
+                cells.append(_time_cell(r.solve_time))
+                cells.append(_status_rich(r.solve_status))
             if with_diff:
                 cells.extend(_delta_cells(r.delta))
             cells.append(sym)
@@ -339,39 +382,54 @@ def _sweep_rich(rows, group, block, abbrev, with_diff=False) -> str:
 # --------------------------------------------------------------------------- #
 # sweep all (one row per block)
 # --------------------------------------------------------------------------- #
-def render_sweep_all(rows, group: str, sort: str, mode: str) -> str:
+def render_sweep_all(rows, group: str, sort: str, mode: str,
+                     with_results: bool = False) -> str:
     if mode == JSON:
+        blocks = [r.as_dict() for r in rows]
+        if not with_results:
+            for b in blocks:
+                for k in ("n_solved", "n_db_steps", "total_time"):
+                    b.pop(k, None)
         return json.dumps(
-            {"group": group, "sort": sort,
-             "blocks": [r.as_dict() for r in rows]},
+            {"group": group, "sort": sort, "blocks": blocks},
             indent=2,
         )
     if mode == RICH:
-        return _sweep_all_rich(rows, group, sort)
-    return _sweep_all_plain(rows, group, sort)
+        return _sweep_all_rich(rows, group, sort, with_results)
+    return _sweep_all_plain(rows, group, sort, with_results)
 
 
 def _red_str(r) -> str:
     return "·" if r.reduction_pct is None else f"{r.reduction_pct}%"
 
 
-def _sweep_all_plain(rows, group, sort) -> str:
+def _solved_str(r) -> str:
+    if r.n_solved is None or r.n_db_steps is None:
+        return "·"
+    return f"{r.n_solved}/{r.n_db_steps}"
+
+
+def _sweep_all_plain(rows, group, sort, with_results=False) -> str:
     out = [f"# {group} · sort={sort} desc · {len(rows)} blocks"]
+    rcol = f"{'solved':>7} {'time':>9} " if with_results else ""
     out.append(f"{'block':>8} {'steps':>5} {'cons0':>6} {'consF':>5} "
                f"{'red%':>4} {'mem0':>4} {'memF':>4} {'degF':>4} "
-               f"{'memSym':>6} {'memKey':>6} {'othSym':>6} {'kb':>8}")
+               f"{'memSym':>6} {'memKey':>6} {'othSym':>6} {'kb':>8} {rcol}")
     for r in rows:
+        rcell = ""
+        if with_results:
+            rcell = f"{_solved_str(r):>7} {_time_cell(r.total_time):>9} "
         out.append(
             f"{r.block:>8} {r.n_steps:>5} {r.cons0:>6} {r.consF:>5} "
             f"{_red_str(r):>4} {r.mem0:>4} {r.memF:>4} {r.max_degree_final:>4} "
             f"{('sym' if r.mem_sym_final else '·'):>6} "
             f"{('sym' if r.mem_key_sym_final else '·'):>6} "
-            f"{('sym' if r.other_sym_final else '·'):>6} {r.kb0:>8.1f}"
+            f"{('sym' if r.other_sym_final else '·'):>6} {r.kb0:>8.1f} {rcell}"
         )
     return "\n".join(out)
 
 
-def _sweep_all_rich(rows, group, sort) -> str:
+def _sweep_all_rich(rows, group, sort, with_results=False) -> str:
     from rich.console import Console
     from rich.table import Table
 
@@ -387,18 +445,32 @@ def _sweep_all_rich(rows, group, sort) -> str:
         t.add_column("memKey", justify="center")
         t.add_column("othSym", justify="center")
         t.add_column("kb", justify="right")
+        if with_results:
+            t.add_column("solved", justify="right")
+            t.add_column("time", justify="right")
 
         def flag(on):
             return "[yellow]sym[/]" if on else "[dim]·[/]"
 
+        def solved_rich(r):
+            s = _solved_str(r)
+            if r.n_solved is None or r.n_db_steps is None:
+                return f"[dim]{s}[/]"
+            return (f"[dim]{s}[/]" if r.n_solved == r.n_db_steps
+                    else f"[bold red]{s}[/]")
+
         for r in rows:
-            t.add_row(
+            cells = [
                 r.block, str(r.n_steps), str(r.cons0), str(r.consF),
                 _red_str(r), str(r.mem0), str(r.memF),
                 str(r.max_degree_final), flag(r.mem_sym_final),
                 flag(r.mem_key_sym_final), flag(r.other_sym_final),
                 f"{r.kb0:.1f}",
-            )
+            ]
+            if with_results:
+                cells.append(solved_rich(r))
+                cells.append(_time_cell(r.total_time))
+            t.add_row(*cells)
         console.print(t)
     return cap.get().rstrip("\n")
 
@@ -913,6 +985,7 @@ DECIDE (goal -> command)
   what each pass changed (counts)      -> sweep <g> <b> --diff
   exactly what one pass changed        -> diff <g> <b> <stepA> <stepB>
   which block is biggest / least-opt   -> sweep all [<g>] [--sort KEY]
+  how long each equivalence took       -> sweep ... --results REPORT.db
   how a variable was eliminated        -> subs <g> <b>
   raw count delta between two steps    -> compare <g> <b> <stepA> <stepB>
   feed another tool / script           -> add --json to any of the above
@@ -937,10 +1010,12 @@ TYPICAL SESSION
 SUBCOMMANDS
   show    <group> <block> <step>        stats for one dump
   compare <group> <block> <stepA> <stepB>   A->B deltas (same block)
-  sweep   <group> <block> [--from N] [--to N] [--diff]   per-step trail,
-            1 row/step (--diff adds dcons/dbus; slower on big blocks)
-  sweep   all [<group>] [--sort KEY]   1 row PER BLOCK (group auto-picked
-            if only one). KEY: cons0(default) consF steps mem0 memF size red
+  sweep   <group> <block> [--from N] [--to N] [--diff] [--results DB]
+            per-step trail, 1 row/step (--diff adds dcons/dbus, slower on
+            big blocks; --results adds per-step time+st from a report DB)
+  sweep   all [<group>] [--sort KEY] [--results DB]   1 row PER BLOCK
+            (group auto-picked if only one; --results adds solved ratio +
+            total time). KEY: cons0(default) consF steps mem0 memF size red
   subs    <group> <block>   list var -> definition (signed-normalized)
   memkeys <group> <block> <step> [--all] [--by-as] [--limit N]   list
             Memory interaction keys (address_space, pointer); symbolic-only
@@ -955,6 +1030,10 @@ SUBCOMMANDS
 
 GLOBAL FLAGS
   --root DIR     dumps root (default: powdr-dumps)
+  --results DB   benchmark report DB (report-*.db); sweep only. Adds
+                 verification time+status per step / solved+total per block.
+                 st: ok=success TO=timeout MO=memout WR=wrong err=error.
+                 Join = (block, NNN); base step 000 has no row -> "·".
   --plain        plain TSV-ish text, no color (default when not a TTY)
   --json         machine-readable JSON (schema below)
   --agent        print this guide and exit

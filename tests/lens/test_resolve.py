@@ -44,6 +44,22 @@ def test_index_block_sorted_and_scoped(tmp_path):
         resolve.index_block(d, "999")
 
 
+def test_index_block_includes_bare_nnn_final(tmp_path):
+    # the final compaction dump has no _<pass> suffix (..._051.json); it must
+    # still be indexed. _substitutions.json (no numeric NNN) must not.
+    group = tmp_path / "guest-keccak"
+    group.mkdir()
+    (group / "apc_candidate_111_000_unopt.json").write_text("{}")
+    (group / "apc_candidate_111_051.json").write_text("{}")
+    (group / "apc_candidate_111_substitutions.json").write_text("[]")
+    entries = resolve.index_block(resolve.group_dir("keccak", tmp_path), "111")
+    assert [e.nnn for e in entries] == [0, 51]
+    bare = entries[1]
+    assert bare.pass_name == "" and bare.label == "051"
+    # resolvable by its NNN
+    assert resolve.resolve_step(entries, "51").label == "051"
+
+
 def test_resolve_step_int_and_base(tmp_path):
     _make_dumps(tmp_path)
     d = resolve.group_dir("keccak", tmp_path)
