@@ -6,11 +6,12 @@ Two classes of finding here, and they warrant **different** responses:
 
 - **Non-range logic bugs** — wrong independent of any field invariant. These are
   the highest-signal items and where fixes should start: `intervals/affine_ineq_neg`
-  (pure-LIA `HI`/`LO` slip, one-token fix), `intervals/mod_zero_product`
-  (disjunction treated as conjunction), `lift_forall/cross_assertion_capture`
-  (no alpha-renaming), `skolem-core/contribute_free` (unenforced uniform-witness
-  invariant), and the `rewrite_store_eqs` store-decomposition family (full `(= A B)`
-  over-constrains overwritten slots).
+  (pure-LIA `HI`/`LO` slip — FIXED #36), `intervals/mod_zero_product`
+  (disjunction treated as conjunction — FIXED #37), and the `rewrite_store_eqs`
+  store-decomposition family (full `(= A B)` over-constrains overwritten slots).
+  (`skolem-core/contribute_free` **resolved sound**, see U5 — standard skolemization,
+  machine-checked by `../proofs/ZkvmProofs/Skolem.lean`; `lift_forall/cross_assertion_capture`
+  **deprioritized**, see U6 — bound vars are all distinct so the collision can't fire.)
 - **`[0,P)` range-invariant class** — rules that are unsound only if a solved/
   rewritten variable can leave `[0,P)`. **De-prioritised.** The pipeline does bound
   checking and this issue is known, so the likely reality is that *why* the
@@ -47,8 +48,8 @@ and a cluster of conditional/latent findings marked *uncertain*.
 | Verdict | Count | Notes |
 |---|---:|---|
 | **unsound** | 8 | 3 active+unconditional; 4 active-but-reachability-open; 1 dormant |
-| **uncertain** | 12 | conditional soundness, latent gaps, or unenforced invariants |
-| **sound** | 41 | verified by z3 and/or algebra |
+| **uncertain** | 10 | conditional soundness, latent gaps (was 12; `skolem-core/contribute_free` → **sound** per U5, `lift_forall/cross_assertion_capture` → n/a per U6) |
+| **sound** | 43 | verified by z3, algebra, or (contribute_free) a machine-checked skolemization proof |
 | **not-applicable** | 9 | pure plumbing / delegation, no semantic transform |
 | **total rules** | 70 | across 18 passes |
 
@@ -60,9 +61,9 @@ skolem-core, skolem-aux, external-solvers.
 Verdict counts by pass (unsound / uncertain / sound / n-a):
 rewriter-sympy 1/5/3/2 · normalize 0/1/5/0 · bitwise 0/0/13/0 · mod_inv 0/0/2/0 ·
 demod 1/0/6/0 · bounds 0/1/0/1 · intervals 2/2/6/0 · nnf 0/0/6/0 ·
-lift_forall 0/1/1/0 · flatten_outer_array 0/0/5/0 · define_inner_array 0/1/4/1 ·
+lift_forall 0/0/2/0 · flatten_outer_array 0/0/5/0 · define_inner_array 0/1/4/1 ·
 solve_eqs 0/0/2/0 · solve_store_eqs 0/0/2/0 · rewrite_store_eqs 4/0/4/0 ·
-witness 0/0/1/1 · domain_probe 0/0/1/0 · skolem-core 0/1/4/0 ·
+witness 0/0/1/1 · domain_probe 0/0/1/0 · skolem-core 0/0/5/0 ·
 skolem-aux 0/0/5/2 · external-solvers 0/1/0/1.
 
 ---
@@ -195,29 +196,43 @@ Highest-value first (active and/or reachable).
   domains from `affine_ineq_neg` and `mod_zero_product` — so it becomes **unsound in
   composition** with findings #2 and #3. No standalone validator (plumbing).
 
-#### U5. `skolem-core` / `contribute_free` — the one strengthening skolem path
-- **Contract:** unsat-preserving · **Crux:** the **only** skolem path that does
-  not append a disjunct to a positive forall — it inserts a **top-level**
-  `(assert (= v e))` on a *free* variable, which is a **strengthening**. Sound only
-  if `e` is a uniform witness (`v` genuinely unconstrained by, or determined by,
-  the remaining assertions); the code **assumes** this without checking, and
-  `swap_sym` can silently build a mixed before/after witness. Leans sound in
-  practice given the project invariant that bus matching is by (key,timestamp) not
-  data, but relies on an **unenforced** invariant. Recommended hardening focus.
-- **Validators:** `skolem-core/contribute-free-unsound-general.smt2` → sat (false
-  PASS when `v` constrained to `d≠e`); `…sound-when-unconstrained.smt2` → unsat.
+#### U5. `skolem-core` / `contribute_free` — RESOLVED: sound skolemization (NOT a soundness finding)
+- **Verdict (2026-07-10, revised): sound.** Downgraded from "leans unsound" after
+  review with Arie. `contribute_free` inserts a top-level `(assert (= v e))` pinning
+  a free `diff_val`/`diff_marker` var to a Skolem term `e`. This is **standard
+  skolemization**, not an unjustified strengthening: it is the canonical
+  refutation form `∃x,y. y = sk x ∧ ¬φ` from the machine-checked theorem
+  `flip_quant` in `../proofs/ZkvmProofs/Skolem.lean`
+  (`(∃ sk, ¬∃ x y, y = sk x ∧ ¬φ) ↔ ¬∃ x, ∀ y, ¬φ`). The forward direction gives
+  soundness for **any** Skolem term `sk` (a real counterexample is bad for all `y`,
+  hence at `y = sk x`), so the heuristic choice of `e` — computed by finding a
+  satisfying assignment / prefix-swapping the before-side witness — is a
+  **completeness** concern, never soundness.
+- **Standing premise (design intent, not an open risk):** soundness holds because
+  these vars occupy the skolemizable position — either universally closed in the
+  obligation (`flip_quant`'s `∀y`; then any `e` sound), or functionally determined
+  by the surviving constraints (then the recovered value is the unique one). Arie
+  confirms the encoding intent. The earlier "must be an implied/forced value"
+  framing only applies to the free-existential-non-unique case, which is not the
+  design here.
+- **Residual (non-soundness):** `swap_sym`'s silent fallback (returns the un-swapped
+  symbol when the counterpart isn't declared) can pick a worse Skolem term — a
+  **completeness** wart, not a soundness bug (any `sk` is sound).
+- **Validators:** `skolem-core/contribute-free-unsound-general.smt2` (sat) only
+  demonstrates the hazard for a hypothetical free-existential-non-unique var; it is
+  **not** exhibited by this pass under the skolemization argument above.
 
-#### U6. `lift_forall` / `cross_assertion_capture` — freshness/variable-capture
-- **Contract:** equisat · **Crux:** the one-point lift is sound, but the shared
-  `LiftForallWalker` keys `self.lifted` by the qvar FNode with no alpha-renaming.
-  Two forall assertions reusing the same bound-var symbol (pySMT interns bound
-  vars; skolem pins are same-name column vars) get conflated — the earlier pin is
-  overwritten, both bodies forced onto the last pin's value → SAT→UNSAT possible.
-  Reachability depends on whether the encoder reuses a bound-var name across
-  surviving forall assertions. Fix: alpha-rename / fresh global per lift, or abort
-  on collision.
-- **Validator:** `lift_forall/cross_assertion_capture.smt2` → sat (divergence
-  witness `e1=0,e2=1`).
+#### U6. `lift_forall` / `cross_assertion_capture` — DEPRIORITIZED: precondition doesn't hold
+- **Verdict (2026-07-10, revised): does not apply.** The concern was that
+  `LiftForallWalker` keys `self.lifted` by the qvar FNode with no alpha-renaming, so
+  two foralls **reusing the same bound-var symbol** would conflate pins → SAT→UNSAT.
+  Arie confirms the encoder emits **all bound variables distinct**, so the collision
+  precondition never arises. Not a live issue.
+- **Residual (optional, non-soundness):** an alpha-rename / abort-on-collision guard
+  would make the pass robust if the distinctness invariant ever changed — a cheap
+  defensive check, **not needed now**.
+- **Validator:** `lift_forall/cross_assertion_capture.smt2` (sat) only demonstrates
+  the hypothetical collision; it is not reachable given distinct bound vars.
 
 #### U7. `define_inner_array` / `const_to_default` — latent, parser-unreachable
 - **Contract:** equisat · **Crux:** `_build_body` returns only
@@ -305,34 +320,36 @@ contingent on trusting z3's tactic engine.)*
 
 ## Review queue (look here first)
 
-1. **`demod` / `eqmod-zero-solve`** — active, unconditional, no range guard;
-   the clearest live false-PASS risk. Decide: add a `0≤x<p` guard (mirror the
-   sibling `mod-elim-by-range`), or prove every reachable solved symbol is
-   range-bounded.
-2. **`intervals` / `affine_ineq_neg`** — one-line fix (`rest.HI` → `rest.LO` in
-   the `coeff<0` branch), active, untested, pure-LIA. Add a ≥2-variable test.
-3. **`intervals` / `mod_zero_product`** — restrict to the single-symbol case or
-   emit the disjunction; active, untested.
-4. **`rewrite_store_eqs` store-decomposition family (4 rules)** — resolve the
-   **reachability** question: can two distinct symbolic base arrays survive
-   `solve_store_eqs` into this pass? If yes, the `(= A B)` `base_eq` is a live
-   false-PASS; fix to "agree off the overwritten indices."
-5. **`skolem-core` / `contribute_free`** — highest-value uncertain: the only
-   strengthening skolem path, relies on an unenforced uniform-witness invariant;
-   `swap_sym`'s silent fallback can mix before/after symbols. Add a check that
-   `v` is unconstrained outside the removed constraints, or prove `e` is implied.
-6. **`bounds` / `inject-field-range-axiom`** — audit the `@<digits>` naming
-   convention: confirm every match is a canonical field column in `[0,P)`.
-7. **`lift_forall` / `cross_assertion_capture`** — alpha-rename bound vars or
-   abort on symbol collision; cheap defensive fix against a plausible encoder
-   pattern.
-8. **`rewriter-sympy` / `choice-solved-roots-range` + `choice-quadratic-roots`**
-   — active; confirm every solved variable receives the `[0,p)` axiom, or have
-   the rule assert/require it.
+"Active" = on the default pipeline (Rust backend running `DEFAULT_TACTIC`:
+bitwise, bounds, demod, domain_probe, isqf, lift, mod_inv, nnf, normalize, rewrite,
+skolem, witness). `intervals`, `*_store_eqs`, `solve_eqs`, `flatten/define_array`,
+`cvc5` are **opt-in and absent from Rust** → lower priority regardless of verdict.
 
-Dormant/disabled unsound rules (`modeq-c-plus-negs-raw-constant` and siblings)
-are lower priority but should be **fixed or deleted** before anyone wires
-`rewrite_mod_equality` / `rewrite_mod` into the active maps.
+**Done / resolved:**
+- ✅ **`intervals` / `affine_ineq_neg`** — FIXED (`rest.HI`→`rest.LO`), PR #36.
+- ✅ **`intervals` / `mod_zero_product`** — FIXED (single-var guard, decline else), PR #37.
+- ✅ **`skolem-core` / `contribute_free`** — RESOLVED as **sound** (standard
+  skolemization, machine-checked `../proofs/ZkvmProofs/Skolem.lean`); see U5.
+- ✅ **`lift_forall` / `cross_assertion_capture`** — DEPRIORITIZED (see U6): bound
+  vars are all distinct, so the collision precondition never holds. Optional
+  defensive check only.
+
+**Open — active pass, `[0,P)` range class (find end-to-end VC OR document invariant):**
+1. **`demod` / `eqmod-zero-solve`** — the only hard-unsound verdict on an active
+   pass; drops the modulus. Per Arie's steer: likely justified-but-undocumented —
+   need an end-to-end VC with an unbounded solved var to call it live, else add a
+   `0≤x<p` guard mirroring the sibling `mod-elim-by-range`.
+2. **`bounds` / `inject-field-range-axiom`** — audit the `@<digits>` naming
+   convention (underwrites #1 and the sympy roots).
+3. **`rewriter-sympy` / `choice-solved-roots-range` + `choice-quadratic-roots`** —
+   confirm every solved var receives the `[0,p)` axiom, or have the rule require it.
+
+**Open — not on default path (fix before enabling):**
+4. **`rewrite_store_eqs` store-decomposition (4 rules)** — resolve reachability
+   (distinct symbolic bases surviving `solve_store_eqs`), then fix `base_eq` to
+   "agree off the overwritten indices." Opt-in + no Rust port.
+5. Dormant/disabled sympy `modeq-c-plus-negs-raw-constant` and siblings — fix or
+   delete before anyone wires `rewrite_mod_equality` / `rewrite_mod` into the active maps.
 
 ---
 
