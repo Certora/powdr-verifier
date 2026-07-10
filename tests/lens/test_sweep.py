@@ -7,6 +7,7 @@ from src.lens.normalize import normalize_constants
 from src.lens.render import (
     JSON, PLAIN, render_subs, render_sweep, render_sweep_all,
 )
+from src.lens.results import BlockResult, StepResult
 from src.lens.sweep import abbrev_label, build_sweep, build_sweep_all
 
 
@@ -161,6 +162,46 @@ def test_render_sweep_plain(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# results join (--results DB): per-step time + status
+# --------------------------------------------------------------------------- #
+def test_build_sweep_results_join_by_nnn(tmp_path):
+    _make_block(tmp_path)
+    # DB rows exist for the transitions (NNN 1,2); the 000 base has none.
+    times = {
+        1: StepResult(12.5, "success", "unsat"),
+        2: StepResult(120.4, "timeout", "unknown-timeout"),
+    }
+    d = resolve.group_dir("keccak", tmp_path)
+    labels = load_bus_map(resolve.base_dump_path(d, "111"))
+    rows = build_sweep(resolve.index_block(d, "111"), labels, times=times)
+    assert rows[0].solve_time is None and rows[0].solve_status is None  # 000
+    assert rows[1].solve_time == 12.5 and rows[1].solve_status == "success"
+    assert rows[2].solve_time == 120.4 and rows[2].solve_status == "timeout"
+
+
+def test_render_sweep_results_columns(tmp_path):
+    _make_block(tmp_path)
+    times = {1: StepResult(12.5, "success", "unsat"),
+             2: StepResult(120.4, "timeout", None)}
+    d = resolve.group_dir("keccak", tmp_path)
+    labels = load_bus_map(resolve.base_dump_path(d, "111"))
+    rows = build_sweep(resolve.index_block(d, "111"), labels, times=times)
+    # columns absent without the flag, present with it
+    assert "time" not in render_sweep(rows, "keccak", "111", PLAIN)
+    text = render_sweep(rows, "keccak", "111", PLAIN, with_results=True)
+    assert "time" in text and " st " in text
+    assert "12.5" in text and "ok" in text and "TO" in text
+    assert "·" in text.splitlines()[2]  # 000 base has no time
+    # JSON gating
+    out = json.loads(render_sweep(rows, "keccak", "111", JSON,
+                                  with_results=True))
+    assert out["steps"][1]["solve_time"] == 12.5
+    assert out["steps"][1]["solve_status"] == "success"
+    off = json.loads(render_sweep(rows, "keccak", "111", JSON))
+    assert "solve_time" not in off["steps"][0]
+
+
+# --------------------------------------------------------------------------- #
 # sweep all
 # --------------------------------------------------------------------------- #
 def _bus(bid, mult, n):
@@ -258,6 +299,39 @@ def test_render_sweep_all_plain(tmp_path):
     assert "memKey" in text  # memory-key-symbolic column
     lines = text.splitlines()
     assert lines[2].split()[:4] == ["111", "2", "5", "1"]  # block steps cons0 consF
+
+
+def _all_rows_with_results(tmp_path, summaries, sort="cons0"):
+    d = resolve.group_dir("keccak", tmp_path)
+    labels = load_bus_map(resolve.base_dump_path(d, "111"))
+    return build_sweep_all(d, labels, sort, summaries)
+
+
+def test_build_sweep_all_results_join(tmp_path):
+    _make_multiblock(tmp_path)
+    summaries = {111: BlockResult(1, 1, 12.5),      # 1 step, all solved
+                 222: BlockResult(1, 0, 120.4)}     # 1 step, unsolved
+    rows = _all_rows_with_results(tmp_path, summaries)
+    assert (rows[0].n_solved, rows[0].n_db_steps, rows[0].total_time) == (1, 1, 12.5)
+    assert (rows[1].n_solved, rows[1].n_db_steps, rows[1].total_time) == (0, 1, 120.4)
+    # without summaries the fields stay None
+    plain_rows = _all_rows(tmp_path)
+    assert plain_rows[0].n_solved is None and plain_rows[0].total_time is None
+
+
+def test_render_sweep_all_results_columns(tmp_path):
+    _make_multiblock(tmp_path)
+    summaries = {111: BlockResult(1, 1, 12.5), 222: BlockResult(2, 1, 120.4)}
+    rows = _all_rows_with_results(tmp_path, summaries)
+    assert "solved" not in render_sweep_all(rows, "keccak", "cons0", PLAIN)
+    text = render_sweep_all(rows, "keccak", "cons0", PLAIN, with_results=True)
+    assert "solved" in text and "1/1" in text and "1/2" in text and "12.5" in text
+    out = json.loads(render_sweep_all(rows, "keccak", "cons0", JSON,
+                                      with_results=True))
+    assert out["blocks"][0]["n_solved"] == 1
+    assert out["blocks"][0]["total_time"] == 12.5
+    off = json.loads(render_sweep_all(rows, "keccak", "cons0", JSON))
+    assert "n_solved" not in off["blocks"][0]
 
 
 # --------------------------------------------------------------------------- #
