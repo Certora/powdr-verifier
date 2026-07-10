@@ -151,9 +151,11 @@ class _DecodingIndex:
         mux: dict[str, tuple[int, Any]] = {}
         nonlinear: dict[frozenset[str], list[tuple[int, Any]]] = {}
         for idx, c in enumerate(cons):
-            if (isinstance(c, list) and len(c) == 3 and c[1] == "-"
-                    and isinstance(c[0], str) and c[0] not in mux):
-                mux[c[0]] = (idx, c)
+            if isinstance(c, list) and len(c) == 3 and c[1] in ("-", "+"):
+                if c[1] == "-" and isinstance(c[0], str):
+                    mux.setdefault(c[0], (idx, c))
+                elif c[1] == "+" and isinstance(c[2], str):
+                    mux.setdefault(c[2], (idx, c))
             if linform(c) is None:
                 nonlinear.setdefault(frozenset(names(c)), []).append((idx, c))
         return cls(mux, {k: tuple(v) for k, v in nonlinear.items()})

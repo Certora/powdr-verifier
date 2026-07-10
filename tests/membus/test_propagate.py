@@ -164,6 +164,15 @@ def test_decoding_index_matches_naive_deciding():
         assert [c for _, c in indexed] == naive, is_load
 
 
+def test_decoding_index_flipped_mux_form():
+    is_load = "is_load_0@10"
+    poly = ["flags__0_0@5", "*", 2]
+    cons = [_add(poly, is_load)]
+    index = propagate._DecodingIndex.build(cons)
+    assert is_load in index.mux_by_is_load
+    assert index.mux_by_is_load[is_load][1] == cons[0]
+
+
 def test_fold_pins_algebraic_identities():
     col = "mem_ptr_limbs__0_1@52"
     assert propagate._fold_pins([0, "+", [1, "*", col]], {}) == col

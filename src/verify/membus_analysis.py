@@ -45,6 +45,7 @@ class IdFacts:
     abstract_ts: str | None = None
     mult_const: int | None = None
     solve_io: str | None = None
+    solve_forced: bool = False
     interior_partners: set[int] = field(default_factory=set)
 
 
@@ -288,6 +289,8 @@ def _merge_solve(f: IdFacts, raw: dict) -> None:
         f.key = parse_membus_key(raw["key"])
     if raw.get("forced") is False:
         return
+    if raw.get("forced") is True:
+        f.solve_forced = True
     if raw.get("io"):
         f.solve_io = raw["io"]
     vint = raw.get("vtime_int")
@@ -437,7 +440,7 @@ def _restrict_partners(state: SideState) -> None:
             continue
         self_ruled_out = f.mult_const is not None and f.mult_const % p != 0
         allowed = set(f.interior_partners)
-        if not self_ruled_out:
+        if not self_ruled_out and not f.solve_forced:
             allowed.add(i)
         drop = [j for j in state.matches[i] if j not in allowed]
         for j in drop:
