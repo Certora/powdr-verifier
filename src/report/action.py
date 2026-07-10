@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 import time
 
+from ..utils.process import is_memout_text
+
 _UNKNOWN_PREFIX = "unknown-"
 
 
@@ -129,6 +131,8 @@ class Action:
             )
         if r in ("timeout", "memout"):
             return r
+        if is_memout_text(self.error_message) or is_memout_text(r):
+            return "memout"
         if self.error_message:
             return "error"
         if r in ("invalid-json",) or (isinstance(r, str) and r.startswith("error")):

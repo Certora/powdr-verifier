@@ -4,6 +4,7 @@ from pathlib import Path
 
 from .action import Action
 from ..utils.io import dump_json
+from ..utils.process import is_memout_text
 
 BASE_REPORT_DIR = None
 def set_report_dir(report_dir: Path):
@@ -30,6 +31,10 @@ class ActionDumper(Action):
         if exc_type is not None and not issubclass(
             exc_type, (KeyboardInterrupt, SystemExit)
         ):
-            self += {"result": "error", "error_message": str(exc_value)}
+            msg = str(exc_value)
+            self += {
+                "result": "memout" if is_memout_text(msg) else "error",
+                "error_message": msg,
+            }
         inputs = [i.stem for i in self.inputs]
         self.dump_to(BASE_REPORT_DIR / self.test / f"{self.name}-{"-".join(inputs)}.json")
