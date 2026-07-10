@@ -205,10 +205,6 @@ pysmt.smtlib.solver.SmtLibSolver.assert_ = lambda self, formula: self.add_assert
 
 @clear_pending_pop
 def __smtlib_add_assertion_no_simplify(self, formula, named=None):
-    sorts = self.to.get_types(formula, custom_only=True)
-    for s in sorts:
-        if all(s not in ds for ds in self.declared_sorts):
-            self._declare_sort(s)
     deps = formula.get_free_variables()
     for d in deps:
         if all(d not in dv for dv in self.declared_vars):
@@ -333,6 +329,18 @@ def field_eq(a: FNode, b: FNode = None) -> FNode:
         result = Equals(wrap_mod(Minus(a, b)), Int(0))
     _field_eq_pair_cache[cache_key] = result
     return result
+
+
+def clear_encode_caches() -> None:
+    """Drop encode-phase caches so later steps do not retain stale AST keys or oracle memos."""
+    _field_eq_pair_cache.clear()
+    env = get_env()
+    for name in ("typeso", "fvo", "theoryo", "qfo", "substituter", "_sizeo", "stc"):
+        oracle = getattr(env, name, None)
+        memo = getattr(oracle, "memoization", None)
+        if memo is not None:
+            memo.clear()
+
 
 def field_lt(a: FNode, b: FNode) -> FNode:
     return LT(wrap_mod(a), wrap_mod(b))
@@ -654,7 +662,7 @@ def script_with_sorted_declarefuns(smtlib: script.SmtLibScript) -> script.SmtLib
     return smtlib
 
 def convert_to_smt_script(f: FNode, status=None, pin_info=None) -> script.SmtLibScript:
-    smtlib = script.smtlibscript_from_formula(f, "ALL")
+    smtlib = script.smtlibscript_from_formula(f, ALL)
     merged_decls = [p.node for p in pin_info.decls] if pin_info is not None else []
     if merged_decls:
         existing = {
