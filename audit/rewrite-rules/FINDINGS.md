@@ -77,8 +77,14 @@ Ranking principle: **active + unconditional + no guard** ranks above
 
 ---
 
-#### 1. `demod` / `eqmod-zero-solve` — ACTIVE, unconditional, no guard
-- **Contract:** unsat-preserving · **Verdict:** unsound
+#### 1. `demod` / `eqmod-zero-solve` — ACTIVE, unconditional, no guard — **STATUS: REQUIRES RESOLUTION**
+- **Contract:** unsat-preserving · **Verdict:** unsound (range-class) · **Decision
+  (Arie, 2026-07-10): must be resolved.** On the default path on BOTH backends
+  (`demod` runs 4× in `DEFAULT_TACTIC`; ported to Rust `demod.rs`), so if the `[0,p)`
+  invariant ever fails for an `x` this fires on, it is a live false PASS. Resolve by
+  one of: (1) emit the congruence `(= (mod x p) val)` (always sound), (2) guard on a
+  proven `0≤x<p` (mirror the sibling `mod-elim-by-range`), or (3) an end-to-end VC
+  probe proving every solved `x` is range-bounded (→ document invariant, downgrade).
 - **Crux:** `(= (mod (a*x+b) p) 0)` → `(= x val)` with `val = (-b)*a⁻¹ mod p`,
   applied **unconditionally at every `Equals` node**, with **no range guard on
   `x`**. The original constrains `x` only *modulo p* (the whole residue class
@@ -159,7 +165,14 @@ Ranking principle: **active + unconditional + no guard** ranks above
 
 Highest-value first (active and/or reachable).
 
-#### U1. `rewriter-sympy` / `choice-solved-roots-range` — ACTIVE key finding
+#### U1. `rewriter-sympy` / `choice-solved-roots-range` — **OFF DEFAULT PATH (Python rewriter not run)**
+- **Scope (2026-07-10):** the Python sympy rewriter (`src/rewriter/`) is **not** on
+  the default path — with `--default-executor r` (ed33584), the `rewrite` token
+  dispatches to Rust `rewrite.rs`, not `simplify_rewrite`. So U1/U2 are latent for the
+  Python backend only. **The live equivalent is Rust `rewrite.rs::roots_with_range`**,
+  which emits `(x=v1 ∨ … ∨ x=vk) ∧ min≤x≤max` — same range-class dependency (exact
+  root values, not a congruence). Audit the Rust rule alongside `demod` (#1); the
+  Python findings below are the reference, not the active surface.
 - **Contract:** equivalence · **Crux:** `Mod(e,p)=0` with every factor linear in
   one symbol `x` → exact integer equalities `x==r` **plus** `min≤x≤max`, dropping
   the modulus. Over ℤ this is **strictly stronger** than the congruence (it
@@ -335,14 +348,16 @@ skolem, witness). `intervals`, `*_store_eqs`, `solve_eqs`, `flatten/define_array
   defensive check only.
 
 **Open — active pass, `[0,P)` range class (find end-to-end VC OR document invariant):**
-1. **`demod` / `eqmod-zero-solve`** — the only hard-unsound verdict on an active
-   pass; drops the modulus. Per Arie's steer: likely justified-but-undocumented —
-   need an end-to-end VC with an unbounded solved var to call it live, else add a
-   `0≤x<p` guard mirroring the sibling `mod-elim-by-range`.
+1. **`demod` / `eqmod-zero-solve`** — ⚠️ **REQUIRES RESOLUTION** (Arie). The only
+   hard-unsound verdict on an active pass (default path, both backends); drops the
+   modulus. Resolve via congruence rewrite / range guard / end-to-end probe (see
+   finding #1).
 2. **`bounds` / `inject-field-range-axiom`** — audit the `@<digits>` naming
    convention (underwrites #1 and the sympy roots).
-3. **`rewriter-sympy` / `choice-solved-roots-range` + `choice-quadratic-roots`** —
-   confirm every solved var receives the `[0,p)` axiom, or have the rule require it.
+3. **`rewrite.rs` roots (Rust)** — the Python `rewriter-sympy` roots (U1/U2) are
+   **off the default path**; the live equivalent is Rust `rewrite.rs::roots_with_range`
+   with the same `[0,p)` dependency. Audit the Rust rule; confirm every solved var
+   gets the `[0,p)` axiom, or have it require the congruence.
 
 **Open — not on default path (fix before enabling):**
 4. **`rewrite_store_eqs` store-decomposition (4 rules)** — resolve reachability
