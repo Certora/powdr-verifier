@@ -200,6 +200,48 @@ def test_affine_ineq_neg_multivar_no_false_pass():
     assert LE(Int(10), y) not in all_conjuncts
 
 
+def test_mod_zero_product_multisym_no_false_pass():
+    """Regression: prime-field product reasoning for (u1*..*uk)==0 (mod p) yields a
+    DISJUNCTION (some factor == 0). A per-variable domain can only represent that as a
+    single-variable value set, so the narrowing is sound only when every factor is a
+    unit-affine term in ONE common symbol. For a genuine multi-symbol product the pass
+    must DECLINE, not narrow each symbol to its own root (which asserts the unsound
+    conjunction and can collapse a satisfiable formula to `false` -- a false PASS).
+    """
+    p = int(ARGS().field_type.value)
+    # x*y == 0 (mod p), x,y in [0,p), plus x=3: SAT (x=3, y=0). Must not manufacture false.
+    asserts = _asserts_from_script(
+        f"""
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (declare-fun y () Int)
+        (assert (and (<= 0 x) (< x {p})))
+        (assert (and (<= 0 y) (< y {p})))
+        (assert (= (mod (* x y) {p}) 0))
+        (assert (= x 3))
+        (check-sat)
+        """
+    )
+    assert not any(a.is_false() for a in asserts)
+
+
+def test_mod_zero_product_single_symbol_still_narrows():
+    """The intended single-variable case must keep working: x*(x-3)==0 (mod p) over
+    x in [0,p) narrows x to {0,3}, so adding x=5 is then infeasible (-> false)."""
+    p = int(ARGS().field_type.value)
+    asserts = _asserts_from_script(
+        f"""
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (assert (and (<= 0 x) (< x {p})))
+        (assert (= (mod (* x (- x 3)) {p}) 0))
+        (assert (= x 5))
+        (check-sat)
+        """
+    )
+    assert any(a.is_false() for a in asserts)
+
+
 def test_simplify_intervals_removes_mod_when_no_overflow():
     p = int(ARGS().field_type.value)
     asserts = _asserts_from_script(
