@@ -305,24 +305,46 @@ def _rescale_gcd(poly: Poly) -> Poly:
     return {e: c // g for e, c in poly.items() if c // g}
 
 
+def _rescale_gcd_keep_sign(poly: Poly) -> Poly:
+    """Divide all coefficients by their (positive) gcd, preserving the sign.
+
+    Unlike :func:`_rescale_gcd`, this never negates the polynomial. Sign is a
+    unit for ``= 0`` (so ``_rescale_gcd`` may flip it there), but it is
+    load-bearing for ``<`` / ``≤``: dividing ``diff < 0`` by a *negative* value
+    would flip the relation to ``diff' > 0``. Inequalities must divide by the
+    positive gcd only.
+    """
+    if not poly:
+        return poly
+    g = reduce(gcd, (abs(c) for c in poly.values()))
+    if g == 0:
+        return {}
+    return {e: c // g for e, c in poly.items() if c // g}
+
+
 def normalize_int_rel_gcd(
     lhs: FNode,
     rhs: FNode,
     var_index: dict[FNode, int],
     vars_: tuple[FNode, ...],
 ) -> FNode | None:
-    """Gcd-normalized ``lhs - rhs`` for inequalities (``wrap_mod`` when modular)."""
+    """Gcd-normalized ``lhs - rhs`` for a strict/non-strict integer inequality.
+
+    Returns ``None`` (decline) for **modular** relations: field reduction
+    (``mod P``) preserves ``= 0`` but not order, so ``(lhs - rhs) mod P`` is the
+    wrong representative under ``<`` / ``≤`` — ``mod`` is never negative, which
+    would make every modular inequality unconditionally false. Modular
+    comparisons are left exactly as the encoder emitted them.
+    """
     parsed = relation_poly_diff(lhs, rhs, var_index, vars_)
     if parsed is None:
         return None
     diff, modular = parsed
-    if not diff:
-        rep = Int(0)
-    else:
-        rep = _poly_to_expr(_rescale_gcd(diff), vars_)
     if modular:
-        return wrap_mod(rep)
-    return rep
+        return None
+    if not diff:
+        return Int(0)
+    return _poly_to_expr(_rescale_gcd_keep_sign(diff), vars_)
 
 
 class _NormalizeWalker(IdentityDagWalker):
