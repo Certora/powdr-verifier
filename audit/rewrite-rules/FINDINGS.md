@@ -48,8 +48,8 @@ and a cluster of conditional/latent findings marked *uncertain*.
 | Verdict | Count | Notes |
 |---|---:|---|
 | **unsound** | 8 | 3 active+unconditional; 4 active-but-reachability-open; 1 dormant |
-| **uncertain** | 10 | conditional soundness, latent gaps (was 12; `skolem-core/contribute_free` → **sound** per U5, `lift_forall/cross_assertion_capture` → n/a per U6) |
-| **sound** | 43 | verified by z3, algebra, or (contribute_free) a machine-checked skolemization proof |
+| **uncertain** | 9 | conditional soundness, latent gaps (was 12; contribute_free→sound U5, lift_forall→n/a U6, bounds→sound U3) |
+| **sound** | 44 | verified by z3, algebra, a skolemization proof (contribute_free), or a domain invariant (bounds: columns are field-valued) |
 | **not-applicable** | 9 | pure plumbing / delegation, no semantic transform |
 | **total rules** | 70 | across 18 passes |
 
@@ -60,7 +60,7 @@ skolem-core, skolem-aux, external-solvers.
 
 Verdict counts by pass (unsound / uncertain / sound / n-a):
 rewriter-sympy 1/5/3/2 · normalize 0/1/5/0 · bitwise 0/0/13/0 · mod_inv 0/0/2/0 ·
-demod 1/0/6/0 · bounds 0/1/0/1 · intervals 2/2/6/0 · nnf 0/0/6/0 ·
+demod 1/0/6/0 · bounds 0/0/1/1 · intervals 2/2/6/0 · nnf 0/0/6/0 ·
 lift_forall 0/0/2/0 · flatten_outer_array 0/0/5/0 · define_inner_array 0/1/4/1 ·
 solve_eqs 0/0/2/0 · solve_store_eqs 0/0/2/0 · rewrite_store_eqs 4/0/4/0 ·
 witness 0/0/1/1 · domain_probe 0/0/1/0 · skolem-core 0/0/5/0 ·
@@ -192,16 +192,27 @@ Highest-value first (active and/or reachable).
   dropped root would strengthen further.
 - **Validators:** `choice-quadratic-roots.smt2` → sat; `…with-range.smt2` → unsat.
 
-#### U3. `bounds` / `inject-field-range-axiom` — ACTIVE, whole-pass
-- **Contract:** unsat-preserving · **Crux:** prepends `0≤x<P` for every free Int
-  symbol named `@<digits>`. This is domain-hypothesis **injection**, not a rewrite;
-  monotone for UNSAT, but the dangerous SAT→UNSAT direction is exactly what
-  injecting a bound does. Sound **iff** the naming convention reliably identifies
-  canonical field columns in `[0,P)`; unsound for any matched symbol that can be
-  negative or `≥P`. Correctly declines to inject under quantifiers.
-- **Validators:** `bounds/range-axiom-adds-info.smt2` → sat (bound non-redundant,
-  x=-94); `…sat-to-unsat.smt2` → sat then unsat (false-PASS flip if invariant
-  violated); `…sound-under-invariant.smt2` → unsat.
+#### U3. `bounds` / `inject-field-range-axiom` — RESOLVED: SOUND
+- **Verdict (2026-07-10, revised): sound** (Arie). Injects `field_symbol(sym) =
+  (0 ≤ sym ∧ sym < P)` (smt/utils.py:264) for Int **symbols** named `@<digits>` —
+  never terms (`sym.is_symbol()` gate), never inside quantifiers (declines). All
+  circuit **columns are field-valued ∈ [0,P)** by construction; only compound *terms*
+  over them can exceed P, and terms are not symbols. So every injected bound is a
+  **true** fact → sound. Injecting a true fact for a subset can only remove spurious
+  (non-field) integer models, never a real counterexample.
+- **Coverage nuance (empirical, dump `…2099512_002→003.soundness`): only 262 of 838
+  Int symbols match `@<digits>`.** The other 576 (`after-memory-*-data*`, `*-mult`,
+  `-2`/`-new` bus vars) get **no** range axiom. Harmless for `bounds` (skipping =
+  completeness), but it means the `[0,P)` invariant is **NOT uniformly present** in
+  the SMT — `bounds` underwrites the APC columns, not the memory-bus data/mult vars.
+- **Implication for the range cluster:** `demod/eqmod-zero-solve` and the Rust roots
+  rule fire on *any* single symbol with no naming filter; if they hit a non-`@<digits>`
+  bus var, no `[0,P)` fact exists for it. → prefer the **congruence rewrite** for demod
+  (#1), which is sound regardless of whether the var was axiomatized.
+- **Validators:** `bounds/range-axiom-adds-info.smt2` (bound non-redundant),
+  `…sat-to-unsat.smt2` / `…sound-under-invariant.smt2` — these only show that *if* a
+  matched symbol could exceed P the injection would be unsound; that antecedent does
+  not hold for field columns.
 
 #### U4. `intervals` / `meta-eval_bool-inject_bounds-quantifier_injection`
 - **Contract:** other · **Crux:** the domain-consumption machinery (atom pruning,
@@ -352,8 +363,10 @@ skolem, witness). `intervals`, `*_store_eqs`, `solve_eqs`, `flatten/define_array
    hard-unsound verdict on an active pass (default path, both backends); drops the
    modulus. Resolve via congruence rewrite / range guard / end-to-end probe (see
    finding #1).
-2. **`bounds` / `inject-field-range-axiom`** — audit the `@<digits>` naming
-   convention (underwrites #1 and the sympy roots).
+2. ✅ **`bounds` / `inject-field-range-axiom`** — RESOLVED sound (U3): injects a true
+   `0≤x<P` for `@<digits>` field columns only, symbols-not-terms, declines under
+   quantifiers. Nuance: only 262/838 Int symbols are `@<digits>` — bus data/mult vars
+   are un-axiomatized, so it does NOT uniformly supply `[0,P)` for #1.
 3. **`rewrite.rs` roots (Rust)** — the Python `rewriter-sympy` roots (U1/U2) are
    **off the default path**; the live equivalent is Rust `rewrite.rs::roots_with_range`
    with the same `[0,p)` dependency. Audit the Rust rule; confirm every solved var
