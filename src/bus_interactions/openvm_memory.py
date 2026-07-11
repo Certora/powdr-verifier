@@ -264,9 +264,41 @@ class OpenVMMemoryEncoder(
             )
             for id, isinput in enumerate(isinputs)
         ]
+        # Every value exchanged on the memory bus is a field element, so its
+        # raw column is in [0, P) — for both sends and recvs, because the guest
+        # is field arithmetic and powdr optimizations preserve that (they cannot
+        # introduce a non-reduced value). Non-reduced values only ever arise
+        # from our own side: an incorrect demod, or modeling constraints we add
+        # beyond what the circuit expresses. Emitting the bound HERE, in the
+        # encoder on the original field-valued columns (before any simplifier
+        # pass), faithfully models that fact and lets demod discharge the
+        # (mod _ P) wrappers on memory data. Only unconditionally-active
+        # interactions (constant nonzero multiplicity) qualify; a
+        # possibly-disabled interaction has unconstrained data.
+        pval = ARGS().field_type.value
+
+        def _active_mult(idx: int) -> int | None:
+            m = wrap_mod(self._interactions[idx].mult).simplify()
+            return m.constant_value() % pval if m.is_int_constant() else None
+
+        field_bounds = [
+            with_comment(
+                And(
+                    *[
+                        And(LE(Int(0), d), LT(d, Int(pval)))
+                        for d in self._interactions[id].args[2]
+                    ]
+                ),
+                f"membus #{id}: exchanged values are field elements in [0,P)",
+            )
+            for id in range(len(self._interactions))
+            if _active_mult(id) not in (None, 0)
+        ]
         #yield with_comment(ts, f"{self.NAME} timestamp check")
         yield with_comment(And(*permutation_axioms), f"{self.NAME} permutation axioms")
         yield with_comment(And(*assume_bytes), f"{self.NAME} assume bytes")
+        if field_bounds:
+            yield with_comment(And(*field_bounds), f"{self.NAME} field bounds")
 
     def _bus_interactions(self) -> list[BusInteraction]:
         return [
