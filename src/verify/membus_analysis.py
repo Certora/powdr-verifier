@@ -66,6 +66,8 @@ class MembusAnalysis:
     after_matches: list[set[int]]
     before_status: list[Status]
     after_status: list[Status]
+    before_times: list["TimeInfo | None"] = field(default_factory=list)
+    after_times: list["TimeInfo | None"] = field(default_factory=list)
 
     @property
     def n_before(self) -> int:
@@ -92,6 +94,21 @@ class MembusAnalysis:
             f"path {path} is neither before {self.before_path} nor after {self.after_path}"
         )
         return self.after_status
+
+    def time_for(self, path: Path) -> list["TimeInfo | None"]:
+        """Per-interaction membus timestamp (`TimeInfo`, or ``None`` if unknown).
+
+        Sends carry an exact time (``kind="exact"``), recvs an upper bound
+        (``kind="upper"``); both as an integer offset from ``T``. Used to
+        restrict a recv to matching only strictly-earlier sends.
+        """
+        path = path.resolve()
+        if path == self.before_path.resolve():
+            return self.before_times
+        assert path == self.after_path.resolve(), (
+            f"path {path} is neither before {self.before_path} nor after {self.after_path}"
+        )
+        return self.after_times
 
 
 def _normalize_dump(data: dict[str, Any]) -> dict[str, Any]:
@@ -505,12 +522,15 @@ def _resolve_status(st: list[Tri]) -> None:
             break
 
 
-def _finalize_side(state: SideState) -> tuple[list[set[int]], list[Status]]:
+def _finalize_side(
+    state: SideState,
+) -> tuple[list[set[int]], list[Status], list[TimeInfo | None]]:
     for i in range(state.n):
         _resolve_status(state.status[i])
     matches = [set(s) for s in state.matches]
     status = [_status_tuple(st) for st in state.status]
-    return matches, status
+    times = [f.time for f in state.facts]
+    return matches, status, times
 
 
 def _analyze_side(
@@ -521,7 +541,7 @@ def _analyze_side(
     info: dict | None,
     extract: dict | None,
     order_edges: list[dict],
-) -> tuple[list[set[int]], list[Status]]:
+) -> tuple[list[set[int]], list[Status], list[TimeInfo | None]]:
     state = _ingest_side(data, path, solve=solve, info=info, extract=extract)
     ordered_ts = _ordered_ts_pairs(order_edges)
     _rule_out_pairs(state, ordered_ts)
@@ -572,7 +592,7 @@ def run_membus_analysis(
     before_edges = (before_extract or {}).get("order_edges") or []
     after_edges = (after_extract or {}).get("order_edges") or []
 
-    before_matches, before_status = _analyze_side(
+    before_matches, before_status, before_times = _analyze_side(
         before,
         before_path,
         solve=before_solve,
@@ -580,7 +600,7 @@ def run_membus_analysis(
         extract=before_extract,
         order_edges=before_edges,
     )
-    after_matches, after_status = _analyze_side(
+    after_matches, after_status, after_times = _analyze_side(
         after,
         after_path,
         solve=after_solve,
@@ -604,4 +624,6 @@ def run_membus_analysis(
         after_matches=after_matches,
         before_status=before_status,
         after_status=after_status,
+        before_times=before_times,
+        after_times=after_times,
     )
