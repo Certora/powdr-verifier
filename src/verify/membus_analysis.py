@@ -152,18 +152,44 @@ def _ordered_ts_pairs(order_edges: list[dict]) -> set[frozenset[str]]:
     }
 
 
+def _eval_const_expr(m: Any) -> int | None:
+    """Evaluate a powdr multiplicity expression to a constant, if it is one.
+
+    Inlining/substitution can present a constant multiplicity as an
+    expression tree rather than a literal — e.g. the recv multiplicity ``-1``
+    as ``["-", 1]`` instead of the field literal ``p-1``. Recognising only
+    bare ints here would classify such a multiplicity as unknown and defeat
+    the input/output/disabled forcing (isinput would stay symbolic, and the
+    read byte range would be lost). Fold the common arithmetic node forms.
+    """
+    if isinstance(m, bool):
+        return None
+    if isinstance(m, int):
+        return m
+    if isinstance(m, dict) and "Constant" in m:
+        return int(m["Constant"])
+    if isinstance(m, list) and m and isinstance(m[0], str):
+        op, operands = m[0], [_eval_const_expr(a) for a in m[1:]]
+        if any(o is None for o in operands):
+            return None
+        if op == "-":
+            return -operands[0] if len(operands) == 1 else operands[0] - operands[1]
+        if op == "+":
+            return sum(operands)
+        if op == "*":
+            r = 1
+            for o in operands:
+                r *= o
+            return r
+    return None
+
+
 def _json_mult_const(data: dict, mem_id: int) -> list[int | None]:
     out: list[int | None] = []
     for bi in data["machine"]["bus_interactions"]:
         if bi["id"] != mem_id:
             continue
-        m = bi["mult"]
-        if isinstance(m, int):
-            out.append(m)
-        elif isinstance(m, dict) and "Constant" in m:
-            out.append(int(m["Constant"]))
-        else:
-            out.append(None)
+        out.append(_eval_const_expr(bi["mult"]))
     return out
 
 
