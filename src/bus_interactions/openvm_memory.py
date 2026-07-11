@@ -351,9 +351,40 @@ class OpenVMMemoryEncoder(
         mults = [const_mult(i) for i in range(n)]
         datas = [self._interactions[i].args[2] for i in range(n)]
 
+        # Per-interaction membus timestamp offset (from T). Sends carry an
+        # exact offset, recvs an upper bound. Used to sever a recv from any
+        # send that is not strictly earlier: a read can only return a value
+        # written by a prior write. For symbolic-key (AS2) cells this is the
+        # only thing that severs recv<->send, turning the otherwise-cyclic
+        # "all sends must be bounded" dependency into a well-founded temporal
+        # order so the fixpoint can bound reads inductively. Relies on the
+        # membus TS_BOUND assumption (timestamps do not wrap mod p).
+        alignment = self._cur_state.memory_bus_alignment
+        source_path = self._cur_state.source_path
+        ts_off: list[int | None] = [None] * n
+        if alignment is not None and source_path is not None:
+            times = alignment.time_for(source_path)
+            if len(times) == n:
+                ts_off = [t.offset if t is not None else None for t in times]
+
         def flat_args(i: int) -> list[FNode]:
             a, ptr, data, t = self._interactions[i].args
             return [a, ptr, *data, t]
+
+        def _ts_severed(i: int, j: int) -> bool:
+            """True if a recv/send pair cannot match on timestamp order.
+
+            A recv (``mult == p-1``) can only match a send (``mult == 1``)
+            whose exact time is strictly before the recv's (upper-bound) time.
+            """
+            if mults[i] == p - 1 and mults[j] == 1:
+                recv, send = i, j
+            elif mults[i] == 1 and mults[j] == p - 1:
+                recv, send = j, i
+            else:
+                return False
+            r, s = ts_off[recv], ts_off[send]
+            return r is not None and s is not None and s >= r
 
         @lru_cache(maxsize=None)
         def cannot_match(i: int, j: int) -> bool:
@@ -363,9 +394,12 @@ class OpenVMMemoryEncoder(
             differs by a nonzero constant (distinct pointer constants, or
             ``T + c1`` vs ``T + c2`` timestamps), the case is dead. This
             is what severs a read from its own write-back half, whose
-            data is the same unranged column.
+            data is the same unranged column. A recv is also severed from
+            any send that is not strictly earlier in time (see ``_ts_severed``).
             """
             if mults[i] is not None and mults[j] is not None and (mults[i] + mults[j]) % p != 0:
+                return True
+            if _ts_severed(i, j):
                 return True
             for x, y in zip(flat_args(i), flat_args(j)):
                 d = wrap_mod(Minus(x, y)).simplify()
@@ -444,12 +478,23 @@ class OpenVMMemoryEncoder(
                     f"RANGE INFERENCE: {self.NAME} interaction {i} data limb {k}",
                 )
             )
+        read_total = sum(len(datas[i]) for i in range(n) if mults[i] == p - 1)
+        read_bounded = sum(
+            1
+            for i in range(n)
+            if mults[i] == p - 1
+            for k in range(len(datas[i]))
+            if bound[(i, k)] is not None
+        )
         logging.info(
-            "%s range inference: %d base bounds, %d/%d limbs bounded, %d facts emitted",
+            "%s range inference: %d base bounds, %d/%d limbs bounded, "
+            "%d/%d read limbs bounded, %d facts emitted",
             self.NAME,
             len(base),
             sum(1 for v in bound.values() if v is not None),
             len(bound),
+            read_bounded,
+            read_total,
             len(out),
         )
         for (i, k), hi in sorted(bound.items()):
