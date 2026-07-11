@@ -332,6 +332,43 @@ class OpenVMMemoryEncoder(
                             f"membus #{id} key {k.base}+{k.offset} (anchor +{aoff})",
                         )
                     )
+        # Timestamp reconstruction (analogous to key reconstruction). membus
+        # recovers each interaction's clock as base T + offset (`T+k` exact for
+        # sends, `<=T+k` upper for recvs). The circuit represents timestamps via
+        # nonlinear less-than-gadget decompositions (`timestamp_lt_aux__
+        # lower_decomp`), which z3 grinds. Relate each timestamp column to a
+        # common anchor (an EXACT-time interaction, base T): exact interactions
+        # get `ts_i == T_anchor + (off_i - off_anchor)`, upper (recv) ones
+        # `ts_i <= T_anchor + (off_i - off_anchor)`. Raw integer (not mod)
+        # comparison — sound under membus's TS_BOUND (timestamps < 2^29, no
+        # wraparound). This makes timestamp differences constant so the
+        # comparison-gadget constraints fold instead of z3 solving nonlinear
+        # modular limb equations.
+        ts_recon = []
+        if alignment is not None and source_path is not None:
+            times = alignment.time_for(source_path)
+            if len(times) == len(self._interactions):
+                ts_anchor: tuple[FNode, int] | None = None
+                for id in range(len(self._interactions)):
+                    ti = times[id]
+                    if ti is None or ti.offset is None or _active_mult(id) in (None, 0):
+                        continue
+                    tcol = self._interactions[id].args[3]
+                    if ts_anchor is None:
+                        if ti.kind == "exact":  # anchor must be an exact clock
+                            ts_anchor = (tcol, ti.offset)
+                        continue
+                    atcol, aoff = ts_anchor
+                    rhs = Plus(atcol, Int(ti.offset - aoff))
+                    if ti.kind == "exact":
+                        ts_recon.append(
+                            with_comment(field_eq(Minus(tcol, rhs)),
+                                         f"ts #{id} = T+{ti.offset}")
+                        )
+                    else:
+                        ts_recon.append(
+                            with_comment(LE(tcol, rhs), f"ts #{id} <= T+{ti.offset}")
+                        )
         #yield with_comment(ts, f"{self.NAME} timestamp check")
         yield with_comment(And(*permutation_axioms), f"{self.NAME} permutation axioms")
         yield with_comment(And(*assume_bytes), f"{self.NAME} assume bytes")
@@ -339,6 +376,8 @@ class OpenVMMemoryEncoder(
             yield with_comment(And(*field_bounds), f"{self.NAME} field bounds")
         if key_recon:
             yield with_comment(And(*key_recon), f"{self.NAME} key reconstruction")
+        if ts_recon:
+            yield with_comment(And(*ts_recon), f"{self.NAME} timestamp reconstruction")
 
     def _bus_interactions(self) -> list[BusInteraction]:
         return [
