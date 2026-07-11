@@ -304,7 +304,7 @@ fn rewrite_int(e: &Int, field_mod: Option<i128>, ranges: &Ranges, stats: &mut De
         let c1 = d.nth_child(1).and_then(|c| c.as_int());
         let expr_r = c0.as_ref().and_then(|i| rewrite_int(i, field_mod, ranges, stats));
         let modulus_r = c1.as_ref().and_then(|i| rewrite_int(i, field_mod, ranges, stats));
-        let expr = expr_r
+        let expr0 = expr_r
             .clone()
             .or_else(|| c0.clone())
             .unwrap_or_else(|| e.clone());
@@ -312,7 +312,15 @@ fn rewrite_int(e: &Int, field_mod: Option<i128>, ranges: &Ranges, stats: &mut De
             .clone()
             .or_else(|| c1.clone())
             .unwrap_or_else(|| int_from_i128(1));
-        if let Some(m) = int_lit(&Dynamic::from_ast(&modulus)) {
+        // Flatten nested same-modulus mods: (mod (…(mod E m)…) m) ≡ (mod (…E…) m).
+        // Removes the nonlinearity in range-decomposition consistency terms like
+        // 2^17 * (mod (15360*(x-2)) P) — where 2^17*15360 ≡ -1 (mod P) — leaving
+        // a linear identity z3 folds instead of grinding a nested-mod nonlinear
+        // equation.
+        let m_opt = int_lit(&Dynamic::from_ast(&modulus)).filter(|&m| m > 0);
+        let flat = m_opt.and_then(|m| strip_inner_mods(&expr0, m));
+        let expr = flat.clone().unwrap_or(expr0);
+        if let Some(m) = m_opt {
             if m > 0 {
                 if let Some(v) = int_lit(&Dynamic::from_ast(&expr)) {
                     stats.const_eval += 1;
@@ -340,13 +348,47 @@ fn rewrite_int(e: &Int, field_mod: Option<i128>, ranges: &Ranges, stats: &mut De
                 }
             }
         }
-        if expr_r.is_none() && modulus_r.is_none() {
+        if expr_r.is_none() && modulus_r.is_none() && flat.is_none() {
             return None;
         }
         return Some(expr.modulo(&modulus));
     }
     let (args, any) = rewrite_children(&d, field_mod, ranges, stats, false);
     if !any {
+        return None;
+    }
+    let refs: Vec<&dyn Ast> = args.iter().map(|a| a as &dyn Ast).collect();
+    rebuild_app(&d.decl(), &refs).as_int()
+}
+
+/// Under an outer `(mod _ m)`, replace nested same-modulus `(mod E m)` subterms
+/// with (the flattened) `E` — sound since `(mod E m) ≡ E (mod m)`. Returns
+/// `Some` only when something changed. A different modulus is left intact.
+fn strip_inner_mods(e: &Int, m: i128) -> Option<Int> {
+    let d = Dynamic::from_ast(e);
+    if d.kind() != AstKind::App {
+        return None;
+    }
+    if d.decl().kind() == DeclKind::Mod && d.num_children() == 2 {
+        if d.nth_child(1).and_then(|c| int_lit(&c)) == Some(m) {
+            let inner = d.nth_child(0)?.as_int()?;
+            return Some(strip_inner_mods(&inner, m).unwrap_or(inner));
+        }
+        return None;
+    }
+    let mut args: Vec<Dynamic> = Vec::new();
+    let mut changed = false;
+    for i in 0..d.num_children() {
+        let Some(ch) = d.nth_child(i) else { continue };
+        match ch.as_int().and_then(|ci| strip_inner_mods(&ci, m)) {
+            Some(x) => {
+                changed = true;
+                args.push(Dynamic::from_ast(&x));
+            }
+            None => args.push(ch),
+        }
+    }
+    if !changed {
         return None;
     }
     let refs: Vec<&dyn Ast> = args.iter().map(|a| a as &dyn Ast).collect();

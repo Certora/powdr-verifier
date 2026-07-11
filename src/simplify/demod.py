@@ -126,6 +126,15 @@ def _normalize_arith_under_mod(e: FNode, m: int) -> FNode:
             _normalize_arith_under_mod(thn, m),
             _normalize_arith_under_mod(els, m),
         )
+    if e.is_mod():
+        # Flatten a nested same-modulus mod: under an outer (mod _ m), an inner
+        # (mod E m) is congruent to E, so `k*(mod E m)` etc. collapse. Sound
+        # because (mod E m) ≡ E (mod m); lets the outer mod fold identities like
+        # `2^17 * (mod (15360*(x-2)) P)` where 2^17*15360 ≡ -1 (mod P) —
+        # the range-check-decomposition consistency constraints.
+        inner, mod_ = e.args()
+        if _int_constant(mod_) == m:
+            return _normalize_arith_under_mod(inner, m)
     return e
 
 
