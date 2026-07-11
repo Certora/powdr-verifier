@@ -154,73 +154,49 @@ fn collect_from_bool(b: &Bool, ranges: &mut Ranges) {
         (DeclKind::Ge, false) | (DeclKind::Lt, true) => ">=",
         _ => return,
     };
-    let ac = int_lit(&a);
-    let bc = int_lit(&b2);
-    let a_sym = is_int_const(&a);
-    let b_sym = is_int_const(&b2);
+    // Single-variable linear bound: fold `c1*x + c0 <op> 0` into a bound on x.
+    // Generalizes bare `x <op> const` to compound-LHS forms — e.g. the timestamp
+    // range check `not (4096 - decomp <= 0)` (i.e. `-decomp + 4096 > 0`) yields
+    // `decomp <= 4095` — which is what lets elim_by_range discharge those
+    // columns' mods. Localized here (not the unused intervals pass).
+    let (Some(ai), Some(bi)) = (a.as_int(), b2.as_int()) else {
+        return;
+    };
+    let mut terms: HashMap<Int, i128> = HashMap::new();
+    let mut c0: i128 = 0;
+    if !linear_add(1, &ai, &mut terms, &mut c0) || !linear_add(-1, &bi, &mut terms, &mut c0) {
+        return;
+    }
+    terms.retain(|_, c| *c != 0);
+    if terms.len() != 1 {
+        return;
+    }
+    let (x, c1) = terms.into_iter().next().unwrap();
+    // Normalize to c1 > 0 (flipping the relation if needed): x <op> t, t = -c0/c1.
+    let (op, c0, c1) = if c1 < 0 {
+        let flipped = match op {
+            "<=" => ">=",
+            ">=" => "<=",
+            "<" => ">",
+            ">" => "<",
+            o => o,
+        };
+        (flipped, -c0, -c1)
+    } else {
+        (op, c0, c1)
+    };
+    let num = -c0; // t = num / c1 with c1 > 0
+    let floor = num.div_euclid(c1);
+    let ceil = -((-num).div_euclid(c1));
     match op {
+        "<=" => intersect(ranges, x, NEG_INF, floor),
+        "<" => intersect(ranges, x, NEG_INF, ceil - 1),
+        ">=" => intersect(ranges, x, ceil, POS_INF),
+        ">" => intersect(ranges, x, floor + 1, POS_INF),
         "=" => {
-            if a_sym {
-                if let Some(v) = bc {
-                    if let Some(s) = a.as_int() {
-                        intersect(ranges, s, v, v);
-                    }
-                }
-            }
-            if b_sym {
-                if let Some(v) = ac {
-                    if let Some(s) = b2.as_int() {
-                        intersect(ranges, s, v, v);
-                    }
-                }
-            }
-        }
-        "<=" => {
-            if b_sym {
-                if let (Some(v), Some(s)) = (ac, b2.as_int()) {
-                    intersect(ranges, s, v, POS_INF);
-                }
-            }
-            if a_sym {
-                if let (Some(v), Some(s)) = (bc, a.as_int()) {
-                    intersect(ranges, s, NEG_INF, v);
-                }
-            }
-        }
-        "<" => {
-            if b_sym {
-                if let (Some(v), Some(s)) = (ac, b2.as_int()) {
-                    intersect(ranges, s, v + 1, POS_INF);
-                }
-            }
-            if a_sym {
-                if let (Some(v), Some(s)) = (bc, a.as_int()) {
-                    intersect(ranges, s, NEG_INF, v - 1);
-                }
-            }
-        }
-        ">=" => {
-            if a_sym {
-                if let (Some(v), Some(s)) = (bc, a.as_int()) {
-                    intersect(ranges, s, v, POS_INF);
-                }
-            }
-            if b_sym {
-                if let (Some(v), Some(s)) = (ac, b2.as_int()) {
-                    intersect(ranges, s, NEG_INF, v);
-                }
-            }
-        }
-        ">" => {
-            if a_sym {
-                if let (Some(v), Some(s)) = (bc, a.as_int()) {
-                    intersect(ranges, s, v + 1, POS_INF);
-                }
-            }
-            if b_sym {
-                if let (Some(v), Some(s)) = (ac, b2.as_int()) {
-                    intersect(ranges, s, NEG_INF, v - 1);
-                }
+            if num % c1 == 0 {
+                let v = num / c1;
+                intersect(ranges, x, v, v);
             }
         }
         _ => {}
