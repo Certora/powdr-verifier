@@ -14,6 +14,7 @@ from .single_interaction_encoder import BusInteraction, SingleInteractionEncoder
 
 from ..smt.utils import *
 from ..utils.utils import none_if
+from ..membus.facts import TS_MAX
 
 
 class MemoryAnalysis:
@@ -344,7 +345,18 @@ class OpenVMMemoryEncoder(
         # wraparound). This makes timestamp differences constant so the
         # comparison-gadget constraints fold instead of z3 solving nonlinear
         # modular limb equations.
+        # Timestamp bounds (TS_BOUND). Reconstruction alone anchors every
+        # recognized clock to a common base T, but leaves T itself free over the
+        # whole field — so the solver can pick T = p-1, wrapping `T+1` to 0 and
+        # satisfying the memory less-than gadget with a phantom ordering. That
+        # forges a soundness counterexample (out of every real execution, where
+        # timestamps are cycle counts < 2^29 and never wrap). Assert TS_BOUND,
+        # `0 <= ts < 2^29`, on each membus-recognized timestamp column — the same
+        # positional set ts_recon ties together, so bounding them (base included)
+        # bounds the whole clock web. Sound: it is the same assumption membus's
+        # own analysis grants ([[membus/facts.py]] Assumption.TS_BOUND).
         ts_recon = []
+        ts_bounds = []
         if alignment is not None and source_path is not None:
             times = alignment.time_for(source_path)
             if len(times) == len(self._interactions):
@@ -354,6 +366,16 @@ class OpenVMMemoryEncoder(
                     if ti is None or ti.offset is None or _active_mult(id) in (None, 0):
                         continue
                     tcol = self._interactions[id].args[3]
+                    # Bound every recognized clock independently: the field-only
+                    # tie to the anchor still admits `ts = anchor + off + p` (a
+                    # wrap), so bounding the anchor alone leaves phantom wrapped
+                    # clocks. A per-column `< 2^29` is the sound, complete bound.
+                    ts_bounds.append(
+                        with_comment(
+                            And(LE(Int(0), tcol), LT(tcol, Int(TS_MAX))),
+                            f"ts #{id} in [0, 2^29) (TS_BOUND)",
+                        )
+                    )
                     if ts_anchor is None:
                         if ti.kind == "exact":  # anchor must be an exact clock
                             ts_anchor = (tcol, ti.offset)
@@ -376,6 +398,8 @@ class OpenVMMemoryEncoder(
             yield with_comment(And(*field_bounds), f"{self.NAME} field bounds")
         if key_recon:
             yield with_comment(And(*key_recon), f"{self.NAME} key reconstruction")
+        if ts_bounds:
+            yield with_comment(And(*ts_bounds), f"{self.NAME} timestamp bounds")
         if ts_recon:
             yield with_comment(And(*ts_recon), f"{self.NAME} timestamp reconstruction")
 
