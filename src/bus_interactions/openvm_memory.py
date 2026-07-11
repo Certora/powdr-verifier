@@ -345,7 +345,7 @@ class OpenVMMemoryEncoder(
         INPUT_BOUND = 255  # assume_bytes: inputs are byte-decomposed
 
         def const_mult(i: int) -> int | None:
-            m = self._interactions[i].mult
+            m = wrap_mod(self._interactions[i].mult).simplify()
             return m.constant_value() % p if m.is_int_constant() else None
 
         mults = [const_mult(i) for i in range(n)]
