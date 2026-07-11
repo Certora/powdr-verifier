@@ -68,6 +68,8 @@ class MembusAnalysis:
     after_status: list[Status]
     before_times: list["TimeInfo | None"] = field(default_factory=list)
     after_times: list["TimeInfo | None"] = field(default_factory=list)
+    before_keys: list["MembusParsedKey | None"] = field(default_factory=list)
+    after_keys: list["MembusParsedKey | None"] = field(default_factory=list)
 
     @property
     def n_before(self) -> int:
@@ -94,6 +96,22 @@ class MembusAnalysis:
             f"path {path} is neither before {self.before_path} nor after {self.after_path}"
         )
         return self.after_status
+
+    def keys_for(self, path: Path) -> list["MembusParsedKey | None"]:
+        """Per-interaction parsed membus key (base+offset / const), or ``None``.
+
+        This is membus's *key reconstruction* (trusted — a syntactic reading of
+        the circuit), independent of its (guessed) solve. The encoder uses it to
+        assert ``pointer == base + offset`` so EUF/arith derives key
+        distinctness (``base+o1 != base+o2``) instead of nonlinear limb work.
+        """
+        path = path.resolve()
+        if path == self.before_path.resolve():
+            return self.before_keys
+        assert path == self.after_path.resolve(), (
+            f"path {path} is neither before {self.before_path} nor after {self.after_path}"
+        )
+        return self.after_keys
 
     def time_for(self, path: Path) -> list["TimeInfo | None"]:
         """Per-interaction membus timestamp (`TimeInfo`, or ``None`` if unknown).
@@ -524,13 +542,14 @@ def _resolve_status(st: list[Tri]) -> None:
 
 def _finalize_side(
     state: SideState,
-) -> tuple[list[set[int]], list[Status], list[TimeInfo | None]]:
+) -> tuple[list[set[int]], list[Status], list[TimeInfo | None], list[MembusParsedKey | None]]:
     for i in range(state.n):
         _resolve_status(state.status[i])
     matches = [set(s) for s in state.matches]
     status = [_status_tuple(st) for st in state.status]
     times = [f.time for f in state.facts]
-    return matches, status, times
+    keys = [f.key for f in state.facts]
+    return matches, status, times, keys
 
 
 def _analyze_side(
@@ -541,7 +560,7 @@ def _analyze_side(
     info: dict | None,
     extract: dict | None,
     order_edges: list[dict],
-) -> tuple[list[set[int]], list[Status], list[TimeInfo | None]]:
+) -> tuple[list[set[int]], list[Status], list[TimeInfo | None], list[MembusParsedKey | None]]:
     state = _ingest_side(data, path, solve=solve, info=info, extract=extract)
     ordered_ts = _ordered_ts_pairs(order_edges)
     _rule_out_pairs(state, ordered_ts)
@@ -592,7 +611,7 @@ def run_membus_analysis(
     before_edges = (before_extract or {}).get("order_edges") or []
     after_edges = (after_extract or {}).get("order_edges") or []
 
-    before_matches, before_status, before_times = _analyze_side(
+    before_matches, before_status, before_times, before_keys = _analyze_side(
         before,
         before_path,
         solve=before_solve,
@@ -600,7 +619,7 @@ def run_membus_analysis(
         extract=before_extract,
         order_edges=before_edges,
     )
-    after_matches, after_status, after_times = _analyze_side(
+    after_matches, after_status, after_times, after_keys = _analyze_side(
         after,
         after_path,
         solve=after_solve,
@@ -626,4 +645,6 @@ def run_membus_analysis(
         after_status=after_status,
         before_times=before_times,
         after_times=after_times,
+        before_keys=before_keys,
+        after_keys=after_keys,
     )
