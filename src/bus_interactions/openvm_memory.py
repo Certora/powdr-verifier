@@ -294,11 +294,51 @@ class OpenVMMemoryEncoder(
             for id in range(len(self._interactions))
             if _active_mult(id) not in (None, 0)
         ]
+        # Key reconstruction: membus identifies each key as base+offset (a
+        # trusted syntactic reading of the circuit, independent of its guessed
+        # solve). Relate interactions that share a base to a common anchor:
+        # `pointer_i == pointer_anchor + (offset_i - offset_anchor) (mod P)`.
+        # This is a true identity (both are `base + off`), and it lets EUF/arith
+        # derive key distinctness cheaply — for same-base i,j the pointers
+        # differ by the constant `offset_i - offset_j`, so `key_i = key_j` folds
+        # to a nonzero constant instead of z3 grinding the nonlinear limb
+        # reconstruction. We anchor to an EXISTING pointer (not a fresh symbol),
+        # else the fresh var gets universally quantified into a huge forall.
+        key_recon = []
+        alignment = self._cur_state.memory_bus_alignment
+        source_path = self._cur_state.source_path
+        if alignment is not None and source_path is not None:
+            keys = alignment.keys_for(source_path)
+            if len(keys) == len(self._interactions):
+                anchor: dict[str, tuple[FNode, int]] = {}
+                for id in range(len(self._interactions)):
+                    k = keys[id]
+                    if (
+                        k is None
+                        or k.kind != "base_offset"
+                        or k.base is None
+                        or k.offset is None
+                        or _active_mult(id) in (None, 0)
+                    ):
+                        continue
+                    ptr = self._interactions[id].args[1]
+                    if k.base not in anchor:
+                        anchor[k.base] = (ptr, k.offset)
+                        continue
+                    aptr, aoff = anchor[k.base]
+                    key_recon.append(
+                        with_comment(
+                            field_eq(Minus(Minus(ptr, aptr), Int(k.offset - aoff))),
+                            f"membus #{id} key {k.base}+{k.offset} (anchor +{aoff})",
+                        )
+                    )
         #yield with_comment(ts, f"{self.NAME} timestamp check")
         yield with_comment(And(*permutation_axioms), f"{self.NAME} permutation axioms")
         yield with_comment(And(*assume_bytes), f"{self.NAME} assume bytes")
         if field_bounds:
             yield with_comment(And(*field_bounds), f"{self.NAME} field bounds")
+        if key_recon:
+            yield with_comment(And(*key_recon), f"{self.NAME} key reconstruction")
 
     def _bus_interactions(self) -> list[BusInteraction]:
         return [
