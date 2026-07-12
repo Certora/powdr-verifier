@@ -139,6 +139,44 @@ def __build_parser(skip_subparsers=False):
     sub_check.add_argument(
         "--solve-chunked", action=argparse.BooleanOptionalAction, default=True
     )
+    sub_check.add_argument(
+        "--solve-sliced", action=argparse.BooleanOptionalAction, default=False
+    )
+    sub_check.add_argument(
+        "--boundary-regex",
+        type=str,
+        default=r"memory_(match|isinput|isoutput|isdisabled)",
+        metavar="REGEX",
+        help="variables matching this are the slice boundary (sliced mode)",
+    )
+    sub_check.add_argument("--sliced-arith-timeout", type=float, default=20.0, metavar="SEC")
+    sub_check.add_argument("--sliced-mem-timeout", type=float, default=40.0, metavar="SEC")
+    sub_check.add_argument("--sliced-full-timeout", type=float, default=60.0, metavar="SEC")
+    sub_check.add_argument("--sliced-cegar-iters", type=int, default=3, metavar="N")
+    sub_check.add_argument("--sliced-small-slice", type=int, default=500, metavar="N")
+    sub_check.add_argument("--sliced-gc-factor", type=float, default=4.0, metavar="X")
+    sub_check.add_argument(
+        "--sliced-tactic",
+        type=str,
+        default=None,
+        metavar="TACTIC",
+        help="check-sat-using retry tactic on unknown ('' disables; default: "
+        "simplify/propagate-values/solve-eqs/smt pipeline)",
+    )
+    sub_check.add_argument("--sliced-tactic-timeout", type=float, default=60.0, metavar="SEC")
+    sub_check.add_argument("--sliced-closed-timeout", type=float, default=60.0, metavar="SEC")
+    sub_check.add_argument(
+        "--collect-unknowns",
+        type=int,
+        nargs="?",
+        const=-1,
+        default=None,
+        metavar="N",
+        help="sliced mode: continue past unknown disjuncts, recording up to N (-1 = all)",
+    )
+    sub_check.add_argument("--sliced-debug", action="store_true")
+    sub_check.add_argument("--dump-slices", type=Path, default=None, metavar="DIR")
+    sub_check.add_argument("--dump-slices-all", action="store_true")
 
     sub_aliasing = sub.add_parser("aliasing")
     sub_aliasing.add_argument("input", type=Path)
