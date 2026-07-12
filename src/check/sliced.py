@@ -536,7 +536,8 @@ class _SlicedChecker:
 
     def _oneshot(self, k: int, rung: str, indices: frozenset[int], d: FNode, *,
                  label: str, budget_ms: int, tactic: str | None = None,
-                 extra: list[FNode] | None = None) -> bool | None:
+                 extra: list[FNode] | None = None,
+                 z3_args: list[str] | None = None) -> bool | None:
         """One-shot subprocess solve of ``indices ∧ extra ∧ d`` (optionally
         via ``(check-sat-using tactic)``). Used for the fallback strategies:
         check-sat-using degrades badly under an open push scope (measured 13s
@@ -560,7 +561,7 @@ class _SlicedChecker:
         with self.metrics.timed(f"solve_{rung}_{label}"):
             try:
                 proc = subprocess.run(
-                    [ARGS().solver, f"-T:{budget_s}", str(path)],
+                    [ARGS().solver, *(z3_args or []), f"-T:{budget_s}", str(path)],
                     capture_output=True,
                     text=True,
                     timeout=budget_s + 30,
@@ -595,8 +596,13 @@ class _SlicedChecker:
             indices = self._closed_slice(d)
             if not indices:
                 return None
+            # arith.solver=2 (legacy simplex) handles the mod-quotient
+            # case-splitting of these queries far better than the default:
+            # measured 87.6s -> 3.4s and 33s -> 1.4s on 2100224's deep
+            # witness chains, 0.3s -> 0.008s on 2102932's.
             return self._oneshot(k, rung, indices, d, label="closed",
-                                 budget_ms=self.budgets.closed_ms)
+                                 budget_ms=self.budgets.closed_ms,
+                                 z3_args=["smt.arith.solver=2"])
         return self._oneshot(k, rung, tactic_indices, d, label="tactic",
                              budget_ms=self.budgets.tactic_ms,
                              tactic=self.retry_tactic, extra=extra)
