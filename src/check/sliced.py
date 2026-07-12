@@ -186,6 +186,62 @@ def _parse_value(text: str) -> FNode | None:
     return None
 
 
+def _abstract_mods(formulas: list[FNode]) -> tuple[list[FNode], list[FNode]]:
+    """Rewrite every ``(mod a b)`` into an application of an uninterpreted
+    ``umod!abs`` and return quotient-free axioms for each application with a
+    positive constant divisor: range ``0 <= umod(a,b) < b`` and no-wrap
+    ``0 <= a < b -> umod(a,b) = a``.
+
+    Refutation-sound over-approximation: both axioms are true of real mod
+    (for b > 0), so every model of the original satisfies the abstraction --
+    unsat transfers, sat is inconclusive. The point is to keep z3's arith
+    solver away from quotient case-splitting: on the TS_BOUND obligation
+    closed slices this is 87.6s (default, interpreted) / 3.4s (arith2) ->
+    **0.5s** (default, abstracted). Pure EUF opacity WITHOUT the axioms is
+    too weak (measured sat)."""
+    umod = Symbol("umod!abs", FunctionType(INT, [INT, INT]))
+    mgr = get_env().formula_manager
+    memo: dict[FNode, FNode] = {}
+
+    def rewrite(root: FNode) -> FNode:
+        stack = [root]
+        while stack:
+            n = stack[-1]
+            if n in memo:
+                stack.pop()
+                continue
+            pending = [a for a in n.args() if a not in memo]
+            if pending:
+                stack.extend(pending)
+                continue
+            args = tuple(memo[a] for a in n.args())
+            if n.node_type() == operators.MOD:
+                memo[n] = Function(umod, list(args))
+            elif not n.args() or args == tuple(n.args()):
+                memo[n] = n
+            else:
+                memo[n] = mgr.create_node(
+                    node_type=n.node_type(), args=args, payload=n._content.payload
+                )
+            stack.pop()
+        return memo[root]
+
+    rewritten = [rewrite(f) for f in formulas]
+    apps = {
+        n
+        for f in rewritten
+        for n in iter_unique_subnodes(f)
+        if n.is_function_application() and n.function_name() == umod
+    }
+    axioms: list[FNode] = []
+    for u in apps:
+        a, b = u.arg(0), u.arg(1)
+        if b.is_int_constant() and b.constant_value() > 0:
+            axioms.append(And(LE(Int(0), u), LT(u, b)))
+            axioms.append(Implies(And(LE(Int(0), a), LT(a, b)), Equals(u, a)))
+    return rewritten, axioms
+
+
 def _declare_line(v: FNode) -> str:
     """A ``declare-fun`` for a symbol, handling uninterpreted FUNCTIONS
     (e.g. ``uf_and : Int Int -> Int``) as well as plain constants --
@@ -534,19 +590,17 @@ class _SlicedChecker:
         self.metrics.sample("closed_slice_size", len(sel))
         return sel
 
-    def _oneshot(self, k: int, rung: str, indices: frozenset[int], d: FNode, *,
+    def _oneshot(self, k: int, rung: str, formulas: list[FNode], *,
                  label: str, budget_ms: int, tactic: str | None = None,
-                 extra: list[FNode] | None = None,
-                 z3_args: list[str] | None = None) -> bool | None:
-        """One-shot subprocess solve of ``indices ∧ extra ∧ d`` (optionally
-        via ``(check-sat-using tactic)``). Used for the fallback strategies:
+                 z3_args: list[str] | None = None, slice_size: int = 0) -> bool | None:
+        """One-shot subprocess solve of ``formulas`` (optionally via
+        ``(check-sat-using tactic)``). Used for the fallback strategies:
         check-sat-using degrades badly under an open push scope (measured 13s
         one-shot vs 90s+ timeout under push -- z3 weakens solve-eqs when it
         must preserve incremental state), and the closed slice needs a fresh
         context anyway. Returns True/False/None for sat/unsat/anything-else.
         A sat carries no model (the subprocess is gone) -- callers treat it
         as inconclusive."""
-        formulas = [self.ctx[i] for i in sorted(indices)] + list(extra or []) + [d]
         name = f"d{k}_{rung}_{label}.smt2"
         path = (self.dumper.dump_dir if self.dumper is not None else self._scratch) / name
         with self.metrics.timed(f"{label}_serialize"):
@@ -577,7 +631,7 @@ class _SlicedChecker:
                     "file": name,
                     "rung": f"{rung}-{label}-oneshot",
                     "cegar_round": None,
-                    "slice_size": len(indices),
+                    "slice_size": slice_size,
                     "result": ans or "unknown",
                     "time_s": round(time.perf_counter() - t0, 4),
                 }
@@ -592,20 +646,32 @@ class _SlicedChecker:
                       tactic_indices: frozenset[int],
                       extra: list[FNode] | None) -> bool | None:
         """Run one fallback strategy; returns the _oneshot verdict."""
-        if strategy == "closed":
+        if strategy in ("closed", "closed_int"):
             indices = self._closed_slice(d)
             if not indices:
                 return None
-            # arith.solver=2 (legacy simplex) handles the mod-quotient
-            # case-splitting of these queries far better than the default:
-            # measured 87.6s -> 3.4s and 33s -> 1.4s on 2100224's deep
-            # witness chains, 0.3s -> 0.008s on 2102932's.
-            return self._oneshot(k, rung, indices, d, label="closed",
+            formulas = [self.ctx[i] for i in sorted(indices)] + [d]
+            if strategy == "closed":
+                # mod-abstracted flow: uninterpreted umod + quotient-free
+                # axioms -- fastest measured (0.5s where interpreted default
+                # needs 87.6s); sat is inconclusive, falls to closed_int.
+                with self.metrics.timed("mod_abstraction"):
+                    rewritten, axioms = _abstract_mods(formulas)
+                return self._oneshot(k, rung, axioms + rewritten, label="closed",
+                                     budget_ms=self.budgets.closed_ms,
+                                     slice_size=len(indices))
+            # interpreted flow: arith.solver=2 (legacy simplex) handles the
+            # quotient case-splitting far better than the default (87.6s ->
+            # 3.4s); decides what the abstraction leaves inconclusive.
+            return self._oneshot(k, rung, formulas, label="closed_int",
                                  budget_ms=self.budgets.closed_ms,
-                                 z3_args=["smt.arith.solver=2"])
-        return self._oneshot(k, rung, tactic_indices, d, label="tactic",
+                                 z3_args=["smt.arith.solver=2"],
+                                 slice_size=len(indices))
+        formulas = [self.ctx[i] for i in sorted(tactic_indices)] + list(extra or []) + [d]
+        return self._oneshot(k, rung, formulas, label="tactic",
                              budget_ms=self.budgets.tactic_ms,
-                             tactic=self.retry_tactic, extra=extra)
+                             tactic=self.retry_tactic,
+                             slice_size=len(tactic_indices))
 
     def _solve_under(self, s, k: int, d: FNode, *, rung: str,
                      considered: frozenset[int], full_ctx: bool = False,
@@ -628,7 +694,7 @@ class _SlicedChecker:
         previous disjunct in the batch) runs BEFORE touching the incremental
         solver at all."""
         tactic_indices = tactic_indices if tactic_indices is not None else considered
-        strategies = ["closed"] + (["tactic"] if self.retry_tactic else [])
+        strategies = ["closed", "closed_int"] + (["tactic"] if self.retry_tactic else [])
         tried: set[str] = set()
 
         if prefer in strategies:
