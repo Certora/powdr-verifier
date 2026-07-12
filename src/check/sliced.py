@@ -227,19 +227,53 @@ def _abstract_mods(formulas: list[FNode]) -> tuple[list[FNode], list[FNode]]:
         return memo[root]
 
     rewritten = [rewrite(f) for f in formulas]
-    apps = {
-        n
-        for f in rewritten
-        for n in iter_unique_subnodes(f)
-        if n.is_function_application() and n.function_name() == umod
-    }
-    axioms: list[FNode] = []
-    for u in apps:
-        a, b = u.arg(0), u.arg(1)
-        if b.is_int_constant() and b.constant_value() > 0:
-            axioms.append(And(LE(Int(0), u), LT(u, b)))
-            axioms.append(Implies(And(LE(Int(0), a), LT(a, b)), Equals(u, a)))
-    return rewritten, axioms
+    apps = sorted(
+        (
+            n
+            for f in rewritten
+            for n in iter_unique_subnodes(f)
+            if n.is_function_application() and n.function_name() == umod
+            and n.arg(1).is_int_constant() and n.arg(1).constant_value() > 0
+        ),
+        key=lambda n: n.size(),
+    )
+    return rewritten, apps
+
+
+def _mod_axioms(u: FNode) -> list[FNode]:
+    """The quotient-free axiom instances for one ``umod!abs`` application."""
+    a, b = u.arg(0), u.arg(1)
+    return [
+        And(LE(Int(0), u), LT(u, b)),
+        Implies(And(LE(Int(0), a), LT(a, b)), Equals(u, a)),
+    ]
+
+
+_GET_VALUE_PAIR = re.compile(r"\((?:appv|argv)!(\d+)\s+(?:\(-\s*(\d+)\)|(-?\d+))\)")
+
+
+def _violated_apps(apps: list[FNode], stdout: str) -> list[FNode] | None:
+    """Which applications' axioms does the model falsify?
+
+    The query names each application's value ``appv!i`` and its argument's
+    value ``argv!i``; the get-value response is regex-parsed. Returns None
+    if the response is unusable."""
+    values: dict[tuple[str, int], int] = {}
+    for m in _GET_VALUE_PAIR.finditer(stdout):
+        idx = int(m.group(1))
+        val = -int(m.group(2)) if m.group(2) is not None else int(m.group(3))
+        kind = "appv" if m.group(0).startswith("(appv") else "argv"
+        values[(kind, idx)] = val
+    violated = []
+    for i, u in enumerate(apps):
+        uv = values.get(("appv", i))
+        av = values.get(("argv", i))
+        if uv is None or av is None:
+            return None
+        bv = u.arg(1).constant_value()
+        if not (0 <= uv < bv) or (0 <= av < bv and uv != av):
+            violated.append(u)
+    return violated
 
 
 def _declare_line(v: FNode) -> str:
@@ -253,21 +287,36 @@ def _declare_line(v: FNode) -> str:
     return f"(declare-fun {quote(v.symbol_name())} () {_smt_type(t)})"
 
 
-def _write_query(path, formulas: list[FNode], check_line: str, comment: str = ""):
-    """Serialize a standalone SMT2 query: declares + asserts + check line."""
+def _write_query(path, formulas: list[FNode], check_line: str, comment: str = "",
+                 probes: list[tuple[str, FNode]] | None = None):
+    """Serialize a standalone SMT2 query: declares + asserts + check line.
+
+    ``probes`` are (name, term) pairs: each gets a fresh Int constant pinned
+    to the term, and a ``(get-value ...)`` over the names follows the check
+    line — a compact way to read model values of large terms back out."""
     decls = sorted(
-        {v for f in formulas for v in f.get_free_variables()},
+        {v for f in formulas for v in f.get_free_variables()}
+        | ({v for _, t in probes for v in t.get_free_variables()} if probes else set()),
         key=lambda v: v.symbol_name(),
     )
     with open(path, "w") as out:
         out.write("(set-logic ALL)\n")
+        if probes:
+            out.write("(set-option :produce-models true)\n")
         if comment:
             out.write(f"; {comment}\n")
         for v in decls:
             out.write(_declare_line(v) + "\n")
+        if probes:
+            for name, _ in probes:
+                out.write(f"(declare-fun {name} () Int)\n")
+            for name, t in probes:
+                out.write(f"(assert (= {name} {t.to_smtlib(daggify=True)}))\n")
         for f in formulas:
             out.write(f"(assert {f.to_smtlib(daggify=True)})\n")
         out.write(check_line + "\n")
+        if probes:
+            out.write(f"(get-value ({' '.join(name for name, _ in probes)}))\n")
 
 
 def _extract_model(s) -> list[tuple[FNode, FNode]]:
@@ -592,15 +641,18 @@ class _SlicedChecker:
 
     def _oneshot(self, k: int, rung: str, formulas: list[FNode], *,
                  label: str, budget_ms: int, tactic: str | None = None,
-                 z3_args: list[str] | None = None, slice_size: int = 0) -> bool | None:
+                 z3_args: list[str] | None = None, slice_size: int = 0,
+                 probes: list[tuple[str, FNode]] | None = None,
+                 ) -> tuple[bool | None, str]:
         """One-shot subprocess solve of ``formulas`` (optionally via
         ``(check-sat-using tactic)``). Used for the fallback strategies:
         check-sat-using degrades badly under an open push scope (measured 13s
         one-shot vs 90s+ timeout under push -- z3 weakens solve-eqs when it
         must preserve incremental state), and the closed slice needs a fresh
-        context anyway. Returns True/False/None for sat/unsat/anything-else.
-        A sat carries no model (the subprocess is gone) -- callers treat it
-        as inconclusive."""
+        context anyway. Returns ``(verdict, stdout)`` with verdict True/False/
+        None for sat/unsat/anything-else; ``probes`` values (if any) are in
+        the stdout. A sat carries no in-process model -- callers treat it as
+        inconclusive unless they read the probes."""
         name = f"d{k}_{rung}_{label}.smt2"
         path = (self.dumper.dump_dir if self.dumper is not None else self._scratch) / name
         with self.metrics.timed(f"{label}_serialize"):
@@ -609,6 +661,7 @@ class _SlicedChecker:
                 formulas,
                 f"(check-sat-using {tactic})" if tactic else "(check-sat)",
                 comment=f"one-shot {label} query, disjunct {k}, rung {rung}",
+                probes=probes,
             )
         budget_s = max(1, budget_ms // 1000)
         t0 = time.perf_counter()
@@ -620,9 +673,11 @@ class _SlicedChecker:
                     text=True,
                     timeout=budget_s + 30,
                 )
-                lines = (proc.stdout or "").strip().splitlines()
+                stdout = proc.stdout or ""
+                lines = stdout.strip().splitlines()
                 ans = lines[0] if lines else ""
             except (subprocess.TimeoutExpired, OSError):
+                stdout = ""
                 ans = ""
         if self.dumper is not None:
             self.dumper.records.append(
@@ -637,41 +692,88 @@ class _SlicedChecker:
                 }
             )
         if ans == "unsat":
-            return False
+            return False, stdout
         if ans == "sat":
-            return True
-        return None
+            return True, stdout
+        return None, stdout
 
     def _try_strategy(self, strategy: str, k: int, rung: str, d: FNode,
                       tactic_indices: frozenset[int],
                       extra: list[FNode] | None) -> bool | None:
-        """Run one fallback strategy; returns the _oneshot verdict."""
+        """Run one fallback strategy; returns False (refuted) / True / None."""
         if strategy in ("closed", "closed_int"):
             indices = self._closed_slice(d)
             if not indices:
                 return None
             formulas = [self.ctx[i] for i in sorted(indices)] + [d]
             if strategy == "closed":
-                # mod-abstracted flow: uninterpreted umod + quotient-free
-                # axioms -- fastest measured (0.5s where interpreted default
-                # needs 87.6s); sat is inconclusive, falls to closed_int.
-                with self.metrics.timed("mod_abstraction"):
-                    rewritten, axioms = _abstract_mods(formulas)
-                return self._oneshot(k, rung, axioms + rewritten, label="closed",
-                                     budget_ms=self.budgets.closed_ms,
-                                     slice_size=len(indices))
+                return self._closed_abstract(k, rung, formulas, len(indices))
             # interpreted flow: arith.solver=2 (legacy simplex) handles the
             # quotient case-splitting far better than the default (87.6s ->
             # 3.4s); decides what the abstraction leaves inconclusive.
-            return self._oneshot(k, rung, formulas, label="closed_int",
-                                 budget_ms=self.budgets.closed_ms,
-                                 z3_args=["smt.arith.solver=2"],
-                                 slice_size=len(indices))
+            res, _ = self._oneshot(k, rung, formulas, label="closed_int",
+                                   budget_ms=self.budgets.closed_ms,
+                                   z3_args=["smt.arith.solver=2"],
+                                   slice_size=len(indices))
+            return res
         formulas = [self.ctx[i] for i in sorted(tactic_indices)] + list(extra or []) + [d]
-        return self._oneshot(k, rung, formulas, label="tactic",
-                             budget_ms=self.budgets.tactic_ms,
-                             tactic=self.retry_tactic,
-                             slice_size=len(tactic_indices))
+        res, _ = self._oneshot(k, rung, formulas, label="tactic",
+                               budget_ms=self.budgets.tactic_ms,
+                               tactic=self.retry_tactic,
+                               slice_size=len(tactic_indices))
+        return res
+
+    def _closed_abstract(self, k: int, rung: str, formulas: list[FNode],
+                         slice_size: int) -> bool | None:
+        """Model-guided mod abstraction (CEGAR over the mod axioms).
+
+        Solve the pure-EUF abstraction; while sat, read the model values of
+        each ``umod`` application and its argument (named probes), add the
+        quotient-free axiom instances ONLY for the applications the model
+        falsifies, and re-solve. Axiom count is proof-driven, not
+        slice-size-driven. An axiom-consistent sat proves nothing about real
+        mod (only the no-wrap case is axiomatized) -- inconclusive, falls to
+        the interpreted strategy."""
+        with self.metrics.timed("mod_abstraction"):
+            rewritten, apps = _abstract_mods(formulas)
+        probes = [(f"appv!{i}", u) for i, u in enumerate(apps)] + [
+            (f"argv!{i}", u.arg(0)) for i, u in enumerate(apps)
+        ]
+        axiomatized: set[FNode] = set()
+        axioms: list[FNode] = []
+        # Eager instantiation when the instance set is small: the default UF
+        # model violates essentially EVERY application at once (measured
+        # 2689/2693), so model guidance degenerates to eager plus an extra
+        # solver round (0.5s eager vs 1.3s lazy on the worst specimen). The
+        # model-guided loop below remains the fallback for slices whose
+        # eager set would be too large.
+        if len(apps) * 2 <= 8000:
+            axiomatized.update(apps)
+            for u in apps:
+                axioms.extend(_mod_axioms(u))
+        for _round in range(self.budgets.cegar_iters + 1):
+            self.metrics.count("mod_cegar_rounds")
+            res, stdout = self._oneshot(
+                k, rung, axioms + rewritten, label="closed",
+                budget_ms=self.budgets.closed_ms, slice_size=slice_size,
+                probes=probes if apps else None,
+            )
+            if res is False:
+                self.metrics.count("mod_axioms_used", len(axioms))
+                return False
+            if res is not True or not apps:
+                return None
+            violated = _violated_apps(apps, stdout)
+            if not violated:
+                return None  # abstraction-consistent model: inconclusive
+            fresh = [u for u in violated if u not in axiomatized]
+            if not fresh:
+                return None
+            axiomatized.update(fresh)
+            for u in fresh:
+                axioms.extend(_mod_axioms(u))
+            self.metrics.count("mod_axioms_added", 2 * len(fresh))
+        return None
 
     def _solve_under(self, s, k: int, d: FNode, *, rung: str,
                      considered: frozenset[int], full_ctx: bool = False,
