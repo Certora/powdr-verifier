@@ -397,27 +397,28 @@ class OpenVMMemoryEncoder(
         yield with_comment(And(*assume_bytes), f"{self.NAME} assume bytes")
         if field_bounds:
             yield with_comment(And(*field_bounds), f"{self.NAME} field bounds")
-        # Key/timestamp reconstruction and TS_BOUND are granted assumptions
-        # (alignment analysis + membus's Assumption.TS_BOUND), not constraints
-        # the circuit commits to. Route them through the axioms channel:
-        # `encoding()` asserts axioms of BOTH sides at top level, so they stay
-        # available as premises, but they never join the negated obligation
-        # side of the check — as constraints, each goal-side copy became a
-        # per-interaction proof obligation in the goal disjunction (hundreds
-        # of mod-arithmetic disjuncts per block, the dominant solve cost).
-        self._granted = []
         if key_recon:
-            self._granted.append(
-                with_comment(And(*key_recon), f"{self.NAME} key reconstruction")
-            )
+            yield with_comment(And(*key_recon), f"{self.NAME} key reconstruction")
+        # TS_BOUND is a granted assumption (the same assumption membus's own
+        # analysis grants, [[membus/facts.py]] Assumption.TS_BOUND), not a
+        # constraint the circuit commits to. Route it through the axioms
+        # channel: `encoding()` asserts axioms of BOTH sides at top level, so
+        # the bounds stay available as premises, but they never join the
+        # negated obligation side of the check — as constraints, each
+        # goal-side copy became a per-interaction proof obligation in the
+        # goal disjunction (hundreds of mod-arithmetic disjuncts per block,
+        # the dominant solve cost on TS_BOUND-heavy blocks).
+        # Key/timestamp reconstruction stay committed: equally granted in
+        # principle, but routing them as axioms measurably regressed 2100224
+        # (3x assert blowup after propagate-values, unknowns on the
+        # pointer-distinctness family), and as obligations they are cheap.
+        self._granted = []
         if ts_bounds:
             self._granted.append(
                 with_comment(And(*ts_bounds), f"{self.NAME} timestamp bounds")
             )
         if ts_recon:
-            self._granted.append(
-                with_comment(And(*ts_recon), f"{self.NAME} timestamp reconstruction")
-            )
+            yield with_comment(And(*ts_recon), f"{self.NAME} timestamp reconstruction")
 
     def get_axioms(self) -> Iterable[FNode]:
         """Granted membus assumptions (populated by `encode_all`)."""
