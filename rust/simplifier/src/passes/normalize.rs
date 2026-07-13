@@ -534,6 +534,31 @@ fn rescale_gcd(poly: Poly) -> Poly {
         .collect()
 }
 
+/// Divide all coefficients by their (positive) gcd, preserving the sign.
+///
+/// Unlike [`rescale_gcd`], this never negates the polynomial. Sign is a unit
+/// for `= 0` (so `rescale_gcd` may flip it there), but it is load-bearing for
+/// `<` / `<=`: dividing `diff < 0` by a *negative* value would flip the
+/// relation to `diff' > 0`. Inequalities must divide by the positive gcd only.
+fn rescale_gcd_keep_sign(poly: Poly) -> Poly {
+    if poly.is_empty() {
+        return poly;
+    }
+    let mut g = 0i128;
+    for c in poly.values() {
+        g = gcd_i128(g, c.abs());
+    }
+    if g == 0 {
+        return Poly::new();
+    }
+    poly.into_iter()
+        .filter_map(|(e, c)| {
+            let v = c / g;
+            if v != 0 { Some((e, v)) } else { None }
+        })
+        .collect()
+}
+
 fn relation_poly_diff_plain(
     lhs: &Int,
     rhs: &Int,
@@ -568,16 +593,18 @@ fn normalize_int_rel_gcd(
     ctx: &NormalizeCtx<'_>,
 ) -> Option<Int> {
     let (diff, modular) = relation_poly_diff_plain(lhs, rhs, ctx)?;
-    let rep = if diff.is_empty() {
-        int_from_i128(0)
-    } else {
-        poly_to_expr(&rescale_gcd(diff), ctx.var_terms)
-    };
+    // Field reduction (mod P) preserves "= 0" but NOT order, so we must not
+    // build a modular representative for `<` / `<=`: `(mod _ P)` is never
+    // negative, which would make every modular inequality unconditionally
+    // false (the guest-keccak 2102932 034->035 vacuous-unsat bug). Decline and
+    // leave the encoder's comparison intact.
     if modular {
-        Some(wrap_mod_expr(rep, ctx.field_mod?))
-    } else {
-        Some(rep)
+        return None;
     }
+    if diff.is_empty() {
+        return Some(int_from_i128(0));
+    }
+    Some(poly_to_expr(&rescale_gcd_keep_sign(diff), ctx.var_terms))
 }
 
 fn normalize_equals(
@@ -813,5 +840,64 @@ mod tests {
         let (out, _) = apply(&script).unwrap();
         let s = smt2::dump_string(&out);
         assert!(s.contains("(= 0 0)"));
+    }
+
+    #[test]
+    fn modular_lt_left_intact() {
+        // (mod (y+x) P) < (mod x P): a genuine modular comparison. The old code
+        // rewrote it to the always-false (mod y P) < 0 -- the guest-keccak
+        // 2102932 034->035 vacuous-unsat bug. It must be left intact, because
+        // field reduction (mod P) does not preserve order.
+        let p = 2013265921i128;
+        std::env::set_var("SIMPLIFIER_FIELD_MOD", p.to_string());
+        let script = Script::parse(&format!(
+            "(declare-fun x () Int)\n\
+             (declare-fun y () Int)\n\
+             (assert (< (mod (+ y x) {p}) (mod x {p})))\n\
+             (check-sat)\n"
+        ))
+        .unwrap();
+        let (out, stats) = apply(&script).unwrap();
+        assert_eq!(stats["asserts_changed"], 0); // declined -> unchanged
+        let s = smt2::dump_string(&out);
+        assert!(s.contains(&format!("(mod x {p})"))); // RHS still a residue, not 0
+    }
+
+    #[test]
+    fn modular_le_range_check_left_intact() {
+        // (mod (x+y) P) <= 255 is a range check; the old code folded it into
+        // the equality x+y == 255 (mod P). It must be left intact.
+        let p = 2013265921i128;
+        std::env::set_var("SIMPLIFIER_FIELD_MOD", p.to_string());
+        let script = Script::parse(&format!(
+            "(declare-fun x () Int)\n\
+             (declare-fun y () Int)\n\
+             (assert (<= (mod (+ y x) {p}) 255))\n\
+             (check-sat)\n"
+        ))
+        .unwrap();
+        let (out, stats) = apply(&script).unwrap();
+        assert_eq!(stats["asserts_changed"], 0); // declined -> unchanged
+        let s = smt2::dump_string(&out);
+        assert!(s.contains("255")); // bound preserved, not folded into "= 0"
+    }
+
+    #[test]
+    fn nonmodular_lt_preserves_sign() {
+        // (3x < 5x) <=> x > 0. diff = -2x has a negative leading coeff; the old
+        // gcd rescale negated it, flipping the relation to the unsound (< x 0).
+        // Sign must be preserved on the non-modular path: expect (< (* -1 x) 0).
+        let script = Script::parse(
+            "(declare-fun x () Int)\n\
+             (assert (< (* 3 x) (* 5 x)))\n\
+             (check-sat)\n",
+        )
+        .unwrap();
+        let (out, _) = apply(&script).unwrap();
+        let s = smt2::dump_string(&out);
+        // -x < 0  <=>  x > 0, equivalent to 3x < 5x. The buggy sign-flip would
+        // have produced (< x 0) instead.
+        assert!(s.contains("(< (- x) 0)"));
+        assert!(!s.contains("(< x 0)"));
     }
 }

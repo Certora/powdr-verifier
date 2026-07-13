@@ -14,6 +14,7 @@ from .single_interaction_encoder import BusInteraction, SingleInteractionEncoder
 
 from ..smt.utils import *
 from ..utils.utils import none_if
+from ..membus.facts import TS_MAX
 
 
 class MemoryAnalysis:
@@ -264,9 +265,143 @@ class OpenVMMemoryEncoder(
             )
             for id, isinput in enumerate(isinputs)
         ]
+        # Every value exchanged on the memory bus is a field element, so its
+        # raw column is in [0, P) — for both sends and recvs, because the guest
+        # is field arithmetic and powdr optimizations preserve that (they cannot
+        # introduce a non-reduced value). Non-reduced values only ever arise
+        # from our own side: an incorrect demod, or modeling constraints we add
+        # beyond what the circuit expresses. Emitting the bound HERE, in the
+        # encoder on the original field-valued columns (before any simplifier
+        # pass), faithfully models that fact and lets demod discharge the
+        # (mod _ P) wrappers on memory data. Only unconditionally-active
+        # interactions (constant nonzero multiplicity) qualify; a
+        # possibly-disabled interaction has unconstrained data.
+        pval = ARGS().field_type.value
+
+        def _active_mult(idx: int) -> int | None:
+            m = wrap_mod(self._interactions[idx].mult).simplify()
+            return m.constant_value() % pval if m.is_int_constant() else None
+
+        field_bounds = [
+            with_comment(
+                And(
+                    *[
+                        And(LE(Int(0), d), LT(d, Int(pval)))
+                        for d in self._interactions[id].args[2]
+                    ]
+                ),
+                f"membus #{id}: exchanged values are field elements in [0,P)",
+            )
+            for id in range(len(self._interactions))
+            if _active_mult(id) not in (None, 0)
+        ]
+        # Key reconstruction: membus identifies each key as base+offset (a
+        # trusted syntactic reading of the circuit, independent of its guessed
+        # solve). Relate interactions that share a base to a common anchor:
+        # `pointer_i == pointer_anchor + (offset_i - offset_anchor) (mod P)`.
+        # This is a true identity (both are `base + off`), and it lets EUF/arith
+        # derive key distinctness cheaply — for same-base i,j the pointers
+        # differ by the constant `offset_i - offset_j`, so `key_i = key_j` folds
+        # to a nonzero constant instead of z3 grinding the nonlinear limb
+        # reconstruction. We anchor to an EXISTING pointer (not a fresh symbol),
+        # else the fresh var gets universally quantified into a huge forall.
+        key_recon = []
+        alignment = self._cur_state.memory_bus_alignment
+        source_path = self._cur_state.source_path
+        if alignment is not None and source_path is not None:
+            keys = alignment.keys_for(source_path)
+            if len(keys) == len(self._interactions):
+                anchor: dict[str, tuple[FNode, int]] = {}
+                for id in range(len(self._interactions)):
+                    k = keys[id]
+                    if (
+                        k is None
+                        or k.kind != "base_offset"
+                        or k.base is None
+                        or k.offset is None
+                        or _active_mult(id) in (None, 0)
+                    ):
+                        continue
+                    ptr = self._interactions[id].args[1]
+                    if k.base not in anchor:
+                        anchor[k.base] = (ptr, k.offset)
+                        continue
+                    aptr, aoff = anchor[k.base]
+                    key_recon.append(
+                        with_comment(
+                            field_eq(Minus(Minus(ptr, aptr), Int(k.offset - aoff))),
+                            f"membus #{id} key {k.base}+{k.offset} (anchor +{aoff})",
+                        )
+                    )
+        # Timestamp reconstruction (analogous to key reconstruction). membus
+        # recovers each interaction's clock as base T + offset (`T+k` exact for
+        # sends, `<=T+k` upper for recvs). The circuit represents timestamps via
+        # nonlinear less-than-gadget decompositions (`timestamp_lt_aux__
+        # lower_decomp`), which z3 grinds. Relate each timestamp column to a
+        # common anchor (an EXACT-time interaction, base T): exact interactions
+        # get `ts_i == T_anchor + (off_i - off_anchor)`, upper (recv) ones
+        # `ts_i <= T_anchor + (off_i - off_anchor)`. Raw integer (not mod)
+        # comparison — sound under membus's TS_BOUND (timestamps < 2^29, no
+        # wraparound). This makes timestamp differences constant so the
+        # comparison-gadget constraints fold instead of z3 solving nonlinear
+        # modular limb equations.
+        # Timestamp bounds (TS_BOUND). Reconstruction alone anchors every
+        # recognized clock to a common base T, but leaves T itself free over the
+        # whole field — so the solver can pick T = p-1, wrapping `T+1` to 0 and
+        # satisfying the memory less-than gadget with a phantom ordering. That
+        # forges a soundness counterexample (out of every real execution, where
+        # timestamps are cycle counts < 2^29 and never wrap). Assert TS_BOUND,
+        # `0 <= ts < 2^29`, on each membus-recognized timestamp column — the same
+        # positional set ts_recon ties together, so bounding them (base included)
+        # bounds the whole clock web. Sound: it is the same assumption membus's
+        # own analysis grants ([[membus/facts.py]] Assumption.TS_BOUND).
+        ts_recon = []
+        ts_bounds = []
+        if alignment is not None and source_path is not None:
+            times = alignment.time_for(source_path)
+            if len(times) == len(self._interactions):
+                ts_anchor: tuple[FNode, int] | None = None
+                for id in range(len(self._interactions)):
+                    ti = times[id]
+                    if ti is None or ti.offset is None or _active_mult(id) in (None, 0):
+                        continue
+                    tcol = self._interactions[id].args[3]
+                    # Bound every recognized clock independently: the field-only
+                    # tie to the anchor still admits `ts = anchor + off + p` (a
+                    # wrap), so bounding the anchor alone leaves phantom wrapped
+                    # clocks. A per-column `< 2^29` is the sound, complete bound.
+                    ts_bounds.append(
+                        with_comment(
+                            And(LE(Int(0), tcol), LT(tcol, Int(TS_MAX))),
+                            f"ts #{id} in [0, 2^29) (TS_BOUND)",
+                        )
+                    )
+                    if ts_anchor is None:
+                        if ti.kind == "exact":  # anchor must be an exact clock
+                            ts_anchor = (tcol, ti.offset)
+                        continue
+                    atcol, aoff = ts_anchor
+                    rhs = Plus(atcol, Int(ti.offset - aoff))
+                    if ti.kind == "exact":
+                        ts_recon.append(
+                            with_comment(field_eq(Minus(tcol, rhs)),
+                                         f"ts #{id} = T+{ti.offset}")
+                        )
+                    else:
+                        ts_recon.append(
+                            with_comment(LE(tcol, rhs), f"ts #{id} <= T+{ti.offset}")
+                        )
         #yield with_comment(ts, f"{self.NAME} timestamp check")
         yield with_comment(And(*permutation_axioms), f"{self.NAME} permutation axioms")
         yield with_comment(And(*assume_bytes), f"{self.NAME} assume bytes")
+        if field_bounds:
+            yield with_comment(And(*field_bounds), f"{self.NAME} field bounds")
+        if key_recon:
+            yield with_comment(And(*key_recon), f"{self.NAME} key reconstruction")
+        if ts_bounds:
+            yield with_comment(And(*ts_bounds), f"{self.NAME} timestamp bounds")
+        if ts_recon:
+            yield with_comment(And(*ts_recon), f"{self.NAME} timestamp reconstruction")
 
     def _bus_interactions(self) -> list[BusInteraction]:
         return [
@@ -345,15 +480,46 @@ class OpenVMMemoryEncoder(
         INPUT_BOUND = 255  # assume_bytes: inputs are byte-decomposed
 
         def const_mult(i: int) -> int | None:
-            m = self._interactions[i].mult
+            m = wrap_mod(self._interactions[i].mult).simplify()
             return m.constant_value() % p if m.is_int_constant() else None
 
         mults = [const_mult(i) for i in range(n)]
         datas = [self._interactions[i].args[2] for i in range(n)]
 
+        # Per-interaction membus timestamp offset (from T). Sends carry an
+        # exact offset, recvs an upper bound. Used to sever a recv from any
+        # send that is not strictly earlier: a read can only return a value
+        # written by a prior write. For symbolic-key (AS2) cells this is the
+        # only thing that severs recv<->send, turning the otherwise-cyclic
+        # "all sends must be bounded" dependency into a well-founded temporal
+        # order so the fixpoint can bound reads inductively. Relies on the
+        # membus TS_BOUND assumption (timestamps do not wrap mod p).
+        alignment = self._cur_state.memory_bus_alignment
+        source_path = self._cur_state.source_path
+        ts_off: list[int | None] = [None] * n
+        if alignment is not None and source_path is not None:
+            times = alignment.time_for(source_path)
+            if len(times) == n:
+                ts_off = [t.offset if t is not None else None for t in times]
+
         def flat_args(i: int) -> list[FNode]:
             a, ptr, data, t = self._interactions[i].args
             return [a, ptr, *data, t]
+
+        def _ts_severed(i: int, j: int) -> bool:
+            """True if a recv/send pair cannot match on timestamp order.
+
+            A recv (``mult == p-1``) can only match a send (``mult == 1``)
+            whose exact time is strictly before the recv's (upper-bound) time.
+            """
+            if mults[i] == p - 1 and mults[j] == 1:
+                recv, send = i, j
+            elif mults[i] == 1 and mults[j] == p - 1:
+                recv, send = j, i
+            else:
+                return False
+            r, s = ts_off[recv], ts_off[send]
+            return r is not None and s is not None and s >= r
 
         @lru_cache(maxsize=None)
         def cannot_match(i: int, j: int) -> bool:
@@ -363,9 +529,12 @@ class OpenVMMemoryEncoder(
             differs by a nonzero constant (distinct pointer constants, or
             ``T + c1`` vs ``T + c2`` timestamps), the case is dead. This
             is what severs a read from its own write-back half, whose
-            data is the same unranged column.
+            data is the same unranged column. A recv is also severed from
+            any send that is not strictly earlier in time (see ``_ts_severed``).
             """
             if mults[i] is not None and mults[j] is not None and (mults[i] + mults[j]) % p != 0:
+                return True
+            if _ts_severed(i, j):
                 return True
             for x, y in zip(flat_args(i), flat_args(j)):
                 if x == y:
@@ -452,12 +621,23 @@ class OpenVMMemoryEncoder(
                     f"RANGE INFERENCE: {self.NAME} interaction {i} data limb {k}",
                 )
             )
+        read_total = sum(len(datas[i]) for i in range(n) if mults[i] == p - 1)
+        read_bounded = sum(
+            1
+            for i in range(n)
+            if mults[i] == p - 1
+            for k in range(len(datas[i]))
+            if bound[(i, k)] is not None
+        )
         logging.info(
-            "%s range inference: %d base bounds, %d/%d limbs bounded, %d facts emitted",
+            "%s range inference: %d base bounds, %d/%d limbs bounded, "
+            "%d/%d read limbs bounded, %d facts emitted",
             self.NAME,
             len(base),
             sum(1 for v in bound.values() if v is not None),
             len(bound),
+            read_bounded,
+            read_total,
             len(out),
         )
         for (i, k), hi in sorted(bound.items()):

@@ -56,6 +56,46 @@ def _normalized_relation(formula: FNode) -> tuple[str, FNode, FNode] | None:
     return None
 
 
+def _single_var_linear_bound(
+    a: FNode, b: FNode, op: str
+) -> tuple[FNode, IntInterval] | None:
+    """Bound on ``x`` from a single-variable linear relation ``a <op> b``.
+
+    Generalizes the bare ``x <op> const`` cases to any ``c1*x + c0 <op> c2``
+    with a single symbol ``x`` — e.g. ``not (4096 - decomp <= 0)`` (encoded as
+    ``(-1)*decomp + 4096 > 0``) yields ``decomp <= 4095``. This is what lets
+    demod discharge ``mod(decomp, P)`` for timestamp range-decomposition columns
+    whose bound survives only in compound-LHS form. Localized here rather than
+    routed through the (unused) intervals pass.
+    """
+    from fractions import Fraction
+    import math
+
+    lf = linear_form(Minus(a, b))
+    if lf is None:
+        return None
+    terms, c0 = lf
+    terms = {s: c for s, c in terms.items() if c != 0}
+    if len(terms) != 1:
+        return None
+    x, c1 = next(iter(terms.items()))
+    # a <op> b  <=>  c1*x + c0 <op> 0  <=>  x <op'> t
+    t = Fraction(-c0, c1)
+    if c1 < 0:
+        op = {"<": ">", ">": "<", "<=": ">=", ">=": "<="}.get(op, op)
+    if op == "<=":
+        return x, IntInterval(INF, math.floor(t))
+    if op == "<":
+        return x, IntInterval(INF, math.ceil(t) - 1)
+    if op == ">=":
+        return x, IntInterval(math.ceil(t), INF)
+    if op == ">":
+        return x, IntInterval(math.floor(t) + 1, INF)
+    if op == "=" and t.denominator == 1:
+        return x, IntInterval.const(int(t))
+    return None
+
+
 def _intersect_range(
     ranges: dict[FNode, IntInterval], sym: FNode, interval: IntInterval
 ) -> None:
@@ -86,6 +126,15 @@ def _normalize_arith_under_mod(e: FNode, m: int) -> FNode:
             _normalize_arith_under_mod(thn, m),
             _normalize_arith_under_mod(els, m),
         )
+    if e.is_mod():
+        # Flatten a nested same-modulus mod: under an outer (mod _ m), an inner
+        # (mod E m) is congruent to E, so `k*(mod E m)` etc. collapse. Sound
+        # because (mod E m) ≡ E (mod m); lets the outer mod fold identities like
+        # `2^17 * (mod (15360*(x-2)) P)` where 2^17*15360 ≡ -1 (mod P) —
+        # the range-check-decomposition consistency constraints.
+        inner, mod_ = e.args()
+        if _int_constant(mod_) == m:
+            return _normalize_arith_under_mod(inner, m)
     return e
 
 
@@ -142,6 +191,10 @@ def extract_symbol_ranges(
             continue
 
         op, a, b = relation
+        # Single-variable linear bound (covers compound-LHS forms the bare
+        # cases below miss). Additive: _intersect_range only tightens.
+        if (lb := _single_var_linear_bound(a, b, op)) is not None:
+            _intersect_range(ranges, *lb)
         if op == "=":
             ac = _int_constant(a)
             bc = _int_constant(b)
