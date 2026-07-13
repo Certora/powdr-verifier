@@ -40,8 +40,14 @@ def __build_parser(skip_subparsers=False):
     parser.add_argument(
         "--memory-encoding",
         type=str,
-        choices=["array", "busat", "plain", "none"],
+        choices=["array", "busat", "plain", "interface", "none"],
         default="plain",
+    )
+    parser.add_argument(
+        "--interface-limb-split", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--interface-assume-bytes", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
         "--memory-presolve",
