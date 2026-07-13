@@ -50,12 +50,13 @@ _T = TypeVar("_T")
 
 # Regular prefix to eliminate quantifiers
 TACTIC_QEPREFIX = "nnf:skolem:lift:witness:demod:isqf"
-# Bus-heavy powdr steps: bus encodings are already ground after nnf.
-TACTIC_BUS_QE = "nnf:demod:isqf"
+# Bus-heavy powdr steps still need skolem/lift/witness: soundness VCs keep a
+# ForAll until those passes run (nnf alone does not make them ground).
+TACTIC_BUS_QE = "nnf:skolem:lift:witness:demod:isqf"
 
 # Tail without rewrite/z3: on large keccak VCs rewrite is a no-op and z3 passes
 # are skipped above the assert threshold but still pay setup cost.
-TACTIC_BUS_TAIL = ":bounds:demod:normalize:demod"
+TACTIC_BUS_TAIL = ":bounds:demod:normalize:bitwise:mod_inv:demod"
 
 # zero-is-model / invalid-all-mult-zero: need rewrite + z3 passes (pre-d918f09 DEFAULT).
 TACTIC_AUX = (
