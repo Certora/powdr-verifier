@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use smt2::ast_util::{symbol_id_from_name, symbol_name_for_id};
+use smt2::ast_util::{swap_prefix, symbol_id_from_name, symbol_name_for_id};
 use z3::ast::{Bool, Dynamic, Int};
 
 use super::map::SkolemMap;
@@ -11,7 +11,7 @@ use super::types::SortKind;
 
 pub fn contribute(
     map: &mut SkolemMap,
-    declared: &HashMap<String, String>,
+    declared: &HashMap<String, Vec<String>>,
     sorts: &HashMap<String, SortKind>,
 ) {
     for q in map.qvars.clone() {
@@ -25,13 +25,28 @@ pub fn contribute(
             continue;
         }
         let stripped = strip_prefix(&q_name).to_string();
-        let Some(other) = declared.get(&stripped) else {
+        let Some(candidates) = declared.get(&stripped) else {
+            continue;
+        };
+        // Prefer the opposite-side copy explicitly: granted membus axioms
+        // mention the quantified side's columns at top level, so BOTH sides'
+        // symbols can be declared and the qvar's own declaration must not
+        // shadow its partner.
+        let viable: Vec<&String> = candidates
+            .iter()
+            .filter(|n| {
+                n.as_str() != q_name && !map.qvars.contains(&symbol_id_from_name(n))
+            })
+            .collect();
+        let partner = swap_prefix(&q_name);
+        let Some(other) = viable
+            .iter()
+            .find(|n| Some(n.as_str()) == partner.as_deref())
+            .or_else(|| viable.first())
+        else {
             continue;
         };
         let other_name = other.as_str();
-        if other_name == q_name || map.qvars.contains(&symbol_id_from_name(other_name)) {
-            continue;
-        }
         let q_sort = sorts.get(&q_name).copied().unwrap_or(SortKind::Other);
         let o_sort = sorts.get(other_name).copied().unwrap_or(SortKind::Other);
         if q_sort != o_sort {

@@ -149,6 +149,32 @@ def _find_largest_or_goal(smt_script: list) -> FNode | None:
     return goal
 
 
+def _finalize_result(action: Action, attempt: Action) -> str:
+    """Fold ``attempt`` into ``action``: model dump, expected-vs-result logging,
+    and the final ``result`` property. Shared by the chunked and sliced paths."""
+    action += attempt
+    res = attempt.result
+    if res == "sat":
+        if getattr(ARGS(), "dump_model", None):
+            logging.info("dumping model to %s", ARGS().dump_model)
+            with open(ARGS().dump_model, "w") as f:
+                json.dump(attempt.model, f, indent=4)
+    if action.expected is not None:
+        o = classify_expected_vs_result(
+            name=action.name, expected=action.expected, result=res
+        )
+        if o == "wrong":
+            logging.error("expected %s but got %s", action.expected, res)
+        elif o == "timeout":
+            logging.warning(
+                "expected %s; solver timed out (result %s)", action.expected, res
+            )
+        elif o != "success":
+            logging.error("expected %s but got %s", action.expected, res)
+    action += {"result": res}
+    return res
+
+
 def check_smt_script_disjuncts(
     smt_script,
     goal,
@@ -216,27 +242,7 @@ def check_smt_script_disjuncts(
                     attempt += {"result": "unsat"}
         except BrokenPipeError:
             attempt += {"result": "error-broken-pipe"}
-    action += attempt
-    res = attempt.result
-    if res == "sat":
-        if ARGS().dump_model:
-            logging.info("dumping model to %s", ARGS().dump_model)
-            with open(ARGS().dump_model, "w") as f:
-                json.dump(attempt.model, f, indent=4)
-    if action.expected is not None:
-        o = classify_expected_vs_result(
-            name=action.name, expected=action.expected, result=res
-        )
-        if o == "wrong":
-            logging.error("expected %s but got %s", action.expected, res)
-        elif o == "timeout":
-            logging.warning(
-                "expected %s; solver timed out (result %s)", action.expected, res
-            )
-        elif o != "success":
-            logging.error("expected %s but got %s", action.expected, res)
-    action += {"result": res}
-    return res
+    return _finalize_result(action, attempt)
 
 
 def check_smt_script(
@@ -318,10 +324,13 @@ def check():
         init_stats_run(wipe=False)
         set_stats_tag(getattr(ARGS(), "stats_tag", None) or stats_tag_from_path(ARGS().input))
 
+    solve_sliced = getattr(ARGS(), "solve_sliced", False)
     try:
         from .check.rust import action_from_dict, resolve_checker_bin, run_checker_subprocess
 
-        if resolve_checker_bin() is not None:
+        # The sliced mode exists only in the Python checker for now; do not
+        # delegate to the Rust binary when it is requested.
+        if not solve_sliced and resolve_checker_bin() is not None:
             data = run_checker_subprocess(ARGS().input)
             return action_from_dict(data)
     except (FileNotFoundError, RuntimeError, json.JSONDecodeError) as e:
@@ -342,6 +351,27 @@ def check():
         with action.action("solve") as subaction:
             if action.expected is not None:
                 subaction += {"expected": action.expected}
+            if solve_sliced:
+                from .check.sliced import check_smt_script_sliced, flatten_script_conjuncts
+
+                ctx, goal = flatten_script_conjuncts(smt_script)
+                if goal is None:
+                    logging.warning(
+                        "no splittable Or-disjunction found, checking entire script"
+                    )
+                    check_smt_script(smt_script, subaction, input_for_log=ARGS().input)
+                    return action
+                check_smt_script_sliced(
+                    goal,
+                    ctx,
+                    subaction,
+                    input_for_log=ARGS().input,
+                    collect_unknowns=getattr(ARGS(), "collect_unknowns", None),
+                    debug=getattr(ARGS(), "sliced_debug", False),
+                    dump_dir=getattr(ARGS(), "dump_slices", None),
+                    dump_all=getattr(ARGS(), "dump_slices_all", False),
+                )
+                return action
             if not ARGS().solve_chunked:
                 check_smt_script(smt_script, subaction, input_for_log=ARGS().input)
                 return action
