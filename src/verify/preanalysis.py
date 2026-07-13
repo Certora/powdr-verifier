@@ -11,7 +11,10 @@ logger = logging.getLogger(__name__)
 
 
 def analyze_memory_bus_alignment(
-    before: dict[str, Any], after: dict[str, Any]
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    after_assume_is_valid: bool = False,
 ) -> MembusAnalysis | None:
     if ARGS().memory_encoding != "plain":
         return None
@@ -21,11 +24,13 @@ def analyze_memory_bus_alignment(
         after,
         Path(ARGS().input_before),
         Path(ARGS().input_after),
+        after_assume_is_valid=after_assume_is_valid,
     )
     logger.warning(
-        "membus alignment: %s to %s",
+        "membus alignment: %s to %s (after_assume_is_valid=%s)",
         analysis.before_path,
         analysis.after_path,
+        after_assume_is_valid,
     )
     return analysis
 

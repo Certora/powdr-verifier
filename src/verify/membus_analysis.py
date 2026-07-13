@@ -684,6 +684,8 @@ def run_membus_analysis(
     after: dict[str, Any],
     before_path: Path,
     after_path: Path,
+    *,
+    after_assume_is_valid: bool = False,
 ) -> MembusAnalysis:
     before = _normalize_dump(before)
     after = _normalize_dump(after)
@@ -719,7 +721,9 @@ def run_membus_analysis(
     before_extract = fetch_extract_json(before_path)
     after_extract = fetch_extract_json(after_path)
     before_solve = fetch_solve_json_all(before_path, present=present)
-    after_solve = fetch_solve_json_all(after_path, present=present)
+    after_solve = fetch_solve_json_all(
+        after_path, present=present, assume_is_valid=after_assume_is_valid
+    )
 
     before_state = _analyze_side(
         before,

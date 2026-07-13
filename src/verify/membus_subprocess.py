@@ -38,12 +38,20 @@ def _run_membus_json(args: list[str]) -> dict | None:
         return None
 
 
-def fetch_solve_json(dump_path: Path | None, *, addr_space: int = 1) -> dict | None:
+def fetch_solve_json(
+    dump_path: Path | None,
+    *,
+    addr_space: int = 1,
+    assume_is_valid: bool = False,
+) -> dict | None:
     if dump_path is None or not dump_path.is_file():
         return None
-    return _run_membus_json(
-        ["solve", "--json", "--file-a", str(dump_path), "--as", str(addr_space)]
-    )
+    args = ["solve", "--json", "--file-a", str(dump_path), "--as", str(addr_space)]
+    if assume_is_valid:
+        args.insert(1, "--assume-is-valid")
+    else:
+        args.insert(1, "--no-assume-is-valid")
+    return _run_membus_json(args)
 
 
 def fetch_solve_json_all(
@@ -51,6 +59,7 @@ def fetch_solve_json_all(
     *,
     present: set[int] | None = None,
     addr_spaces: tuple[int, ...] = (1, 2),
+    assume_is_valid: bool = False,
 ) -> dict | None:
     """Run ``solve`` for each address space and merge interaction rows."""
     if dump_path is None or not dump_path.is_file():
@@ -59,7 +68,9 @@ def fetch_solve_json_all(
     for addr_space in addr_spaces:
         if present is not None and addr_space not in present:
             continue
-        sol = fetch_solve_json(dump_path, addr_space=addr_space)
+        sol = fetch_solve_json(
+            dump_path, addr_space=addr_space, assume_is_valid=assume_is_valid
+        )
         if sol is None:
             continue
         if merged is None:
