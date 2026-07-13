@@ -118,6 +118,7 @@ class OpenVMMemoryEncoder(
         self.interactions = {}
         self.name_or_id = NameOrIdGenerator()
         self.analysis = None
+        self._granted: list[FNode] = []  # set by encode_all, read by get_axioms
 
     def _sorted_interactions(self) -> list[tuple[FNode, Any]]:
         """Return interactions sorted by syntactic size of `(address_space, pointer)`."""
@@ -396,12 +397,31 @@ class OpenVMMemoryEncoder(
         yield with_comment(And(*assume_bytes), f"{self.NAME} assume bytes")
         if field_bounds:
             yield with_comment(And(*field_bounds), f"{self.NAME} field bounds")
+        # Key/timestamp reconstruction and TS_BOUND are granted assumptions
+        # (alignment analysis + membus's Assumption.TS_BOUND), not constraints
+        # the circuit commits to. Route them through the axioms channel:
+        # `encoding()` asserts axioms of BOTH sides at top level, so they stay
+        # available as premises, but they never join the negated obligation
+        # side of the check — as constraints, each goal-side copy became a
+        # per-interaction proof obligation in the goal disjunction (hundreds
+        # of mod-arithmetic disjuncts per block, the dominant solve cost).
+        self._granted = []
         if key_recon:
-            yield with_comment(And(*key_recon), f"{self.NAME} key reconstruction")
+            self._granted.append(
+                with_comment(And(*key_recon), f"{self.NAME} key reconstruction")
+            )
         if ts_bounds:
-            yield with_comment(And(*ts_bounds), f"{self.NAME} timestamp bounds")
+            self._granted.append(
+                with_comment(And(*ts_bounds), f"{self.NAME} timestamp bounds")
+            )
         if ts_recon:
-            yield with_comment(And(*ts_recon), f"{self.NAME} timestamp reconstruction")
+            self._granted.append(
+                with_comment(And(*ts_recon), f"{self.NAME} timestamp reconstruction")
+            )
+
+    def get_axioms(self) -> Iterable[FNode]:
+        """Granted membus assumptions (populated by `encode_all`)."""
+        yield from self._granted
 
     def _bus_interactions(self) -> list[BusInteraction]:
         return [
