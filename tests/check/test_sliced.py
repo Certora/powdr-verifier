@@ -359,14 +359,15 @@ def test_dispatch_bypasses_rust(tmp_path, monkeypatch):
     assert solve.actions[0].properties.get("mode") == "sliced"
 
 
-def test_sticky_batch_preference(monkeypatch):
-    """A plain-rung win (via=None) between two family members must not wipe
-    the locality preference for the rest of the batch."""
-    prefs_seen = {}
+def test_preempt_and_sticky_fallback_preference(monkeypatch):
+    """The preempt preference reaches only the immediate neighbor (a stale
+    preempt makes every easy disjunct pay a one-shot subprocess), while the
+    sticky fallback-ordering memory survives interleaved plain wins."""
+    seen = {}
 
     def fake_ladder(self, group_solver, k, d, primary_rung,
-                    primary_considered, slice_idx, *, prefer=None):
-        prefs_seen[k] = prefer
+                    primary_considered, slice_idx, *, prefer=None, fallback=None):
+        seen[k] = (prefer, fallback)
         return "arith", _Outcome(_Kind.REFUTED, via="closed" if k == 0 else None)
 
     monkeypatch.setattr(_SlicedChecker, "_ladder", fake_ladder)
@@ -380,8 +381,13 @@ def test_sticky_batch_preference(monkeypatch):
         """
     )
     assert res == "unsat"
-    # d0 seeds the preference; d1's plain win must not erase it for d2
-    assert prefs_seen == {0: None, 1: "closed", 2: "closed"}
+    # d0 wins via closed -> d1 gets the preempt; d1's plain win clears the
+    # preempt for d2 but the sticky fallback survives.
+    assert seen == {
+        0: (None, None),
+        1: ("closed", "closed"),
+        2: (None, "closed"),
+    }
 
 
 def test_preference_hit_miss_counters(monkeypatch):

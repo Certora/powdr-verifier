@@ -779,6 +779,7 @@ class _SlicedChecker:
                      considered: frozenset[int], full_ctx: bool = False,
                      extra: list[FNode] | None = None,
                      prefer: str | None = None,
+                     fallback: str | None = None,
                      tactic_indices: frozenset[int] | None = None) -> _Outcome:
         """push; assert [extra +] d; solve; CEGAR on sat (inside the push
         scope); pop.
@@ -793,10 +794,17 @@ class _SlicedChecker:
         slice, plain z3, ~0.3s) then "tactic" (one-shot retry tactic over
         ``tactic_indices``, default ``considered``). ``prefer`` (locality
         heuristic: hard families cluster, so the strategy that refuted the
-        previous disjunct in the batch) runs BEFORE touching the incremental
-        solver at all."""
+        IMMEDIATELY preceding disjunct) runs BEFORE touching the incremental
+        solver at all — it must not be sticky: a stale preempt makes every
+        easy disjunct pay a one-shot subprocess instead of a ~ms incremental
+        solve (measured: stalls a 12k-disjunct batch). ``fallback`` (sticky
+        across interleaved easy wins) only reorders the on-unknown strategy
+        list, so a hard family member skips wrong strategies after paying
+        the primary-rung timeout."""
         tactic_indices = tactic_indices if tactic_indices is not None else considered
         strategies = ["closed", "closed_int"] + (["tactic"] if self.retry_tactic else [])
+        if fallback in strategies:
+            strategies = [fallback] + [st for st in strategies if st != fallback]
         tried: set[str] = set()
 
         if prefer in strategies:
@@ -999,7 +1007,8 @@ class _SlicedChecker:
                 group_solver = self.mem_solver()
                 primary_considered = slice_idx
 
-            prefer: str | None = None  # locality: hard families cluster in a batch
+            prefer: str | None = None  # preempt: strategy that won the previous disjunct
+            sticky: str | None = None  # fallback ordering: last non-default winner in batch
             for k in members:
                 n_processed += 1
                 if n_processed % 1000 == 0:
@@ -1019,14 +1028,17 @@ class _SlicedChecker:
                 t_disjunct = time.perf_counter()
                 tier, outcome = self._ladder(
                     group_solver, k, d, primary_rung, primary_considered, slice_idx,
-                    prefer=prefer,
+                    prefer=prefer, fallback=sticky,
                 )
-                # Sticky: a plain-rung win (via=None) between two family
-                # members must not erase the preference -- the interleaved
-                # easy disjunct costs one cheap preferred one-shot, while a
-                # wiped preference costs the full primary timeout on the next
-                # hard member. prefer_miss counts the wasted one-shots.
-                prefer = outcome.via or prefer
+                # Preempt (prefer) is NOT sticky: hard families cluster, so
+                # only the immediate neighbor gets the run-strategy-first
+                # shortcut; a stale preempt makes every easy disjunct pay a
+                # one-shot subprocess (measured: stalls a 12k batch). The
+                # sticky memory survives interleaved easy wins but only
+                # reorders the on-unknown fallback list. prefer_hit/miss
+                # count how the preempt guess performs.
+                prefer = outcome.via
+                sticky = outcome.via or sticky
                 if self.debug:
                     self.disjunct_rows.append(
                         {
@@ -1084,14 +1096,15 @@ class _SlicedChecker:
     def _ladder(self, group_solver, k: int, d: FNode, primary_rung: str,
                 primary_considered: frozenset[int],
                 slice_idx: frozenset[int], *,
-                prefer: str | None = None) -> tuple[str, _Outcome]:
+                prefer: str | None = None,
+                fallback: str | None = None) -> tuple[str, _Outcome]:
         """Primary rung (arith/mem), then escalation, then full context.
 
         ``primary_considered`` is what the primary solver actually holds
         (resident set, may exceed the exact ``slice_idx`` by pollution)."""
         outcome = self._solve_under(
             group_solver, k, d, rung=primary_rung, considered=primary_considered,
-            prefer=prefer,
+            prefer=prefer, fallback=fallback,
             # the one-shot uses the EXACT slice, not the (polluted) resident
             # set -- the standalone-win measurements were on exact slices
             tactic_indices=slice_idx,
