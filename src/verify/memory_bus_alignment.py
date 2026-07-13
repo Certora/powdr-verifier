@@ -99,6 +99,12 @@ def emit_memory_equalities(
             subs = _array_encoding_symbol_pairs(alignment, before_conv, after_conv)
         case "plain":
             subs = _plain_encoding_symbol_pairs(alignment, before_conv, after_conv)
+        case "interface":
+            # The interface encoding introduces no memory symbols (no xmatch /
+            # is_* booleans, no per-step arrays), so there is nothing of the
+            # MEMORY_BUS pin class to witness. Circuit columns are covered by
+            # the derived pins and the same-name skolem fallback.
+            subs = {}
         case "none":
             subs = {}
         case _:

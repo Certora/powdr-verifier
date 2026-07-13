@@ -119,6 +119,9 @@ class OpenVMMemoryEncoder(
         self.name_or_id = NameOrIdGenerator()
         self.analysis = None
         self._granted: list[FNode] = []  # set by encode_all, read by get_axioms
+        # syntactic upper bounds from the constraint set, stashed by
+        # `infer_unconditional_ranges` for the interface-mode limb split
+        self._syntactic_bounds: dict[FNode, int] = {}
 
     def _sorted_interactions(self) -> list[tuple[FNode, Any]]:
         """Return interactions sorted by syntactic size of `(address_space, pointer)`."""
@@ -205,6 +208,13 @@ class OpenVMMemoryEncoder(
     def encode_all(self) -> Iterable[FNode]:
         """Return timestamp + array-based permutation axioms for the memory bus."""
         ts = self.ordered_timestamp_check()
+        pval = ARGS().field_type.value
+
+        def _active_mult(idx: int) -> int | None:
+            m = wrap_mod(self._interactions[idx].mult).simplify()
+            return m.constant_value() % pval if m.is_int_constant() else None
+
+        interface = ARGS().memory_encoding == "interface"
         match ARGS().memory_encoding:
             case "array":
                 permutation_axioms, inputs, intermediates, outputs, isinputs = (
@@ -240,6 +250,27 @@ class OpenVMMemoryEncoder(
                 inputs = []
                 outputs = []
                 intermediates = []
+            case "interface":
+                # Uninterpreted-interface mode: memory semantics is not encoded
+                # at all. The cross-circuit io relation equates each aligned
+                # pair's full argument tuple instead (see
+                # `interface_io_relation`), so no per-side permutation
+                # machinery, status booleans, or match variables exist. Only
+                # sound when every interaction's activation is statically
+                # known — gated (is_valid) multiplicities would need status
+                # resolution we deliberately do not do here (v1).
+                for i in range(len(self._interactions)):
+                    if _active_mult(i) not in (0, 1, pval - 1):
+                        raise RuntimeError(
+                            "interface memory encoding: mult of memory "
+                            f"interaction #{i} is not const-evaluable to "
+                            f"-1/0/1: {self._interactions[i].mult}"
+                        )
+                permutation_axioms = []
+                inputs = []
+                outputs = []
+                intermediates = []
+                isinputs = []
             case "none":
                 permutation_axioms = []
                 inputs = []
@@ -277,12 +308,6 @@ class OpenVMMemoryEncoder(
         # (mod _ P) wrappers on memory data. Only unconditionally-active
         # interactions (constant nonzero multiplicity) qualify; a
         # possibly-disabled interaction has unconstrained data.
-        pval = ARGS().field_type.value
-
-        def _active_mult(idx: int) -> int | None:
-            m = wrap_mod(self._interactions[idx].mult).simplify()
-            return m.constant_value() % pval if m.is_int_constant() else None
-
         field_bounds = [
             with_comment(
                 And(
@@ -309,7 +334,7 @@ class OpenVMMemoryEncoder(
         key_recon = []
         alignment = self._cur_state.memory_bus_alignment
         source_path = self._cur_state.source_path
-        if alignment is not None and source_path is not None:
+        if not interface and alignment is not None and source_path is not None:
             keys = alignment.keys_for(source_path)
             if len(keys) == len(self._interactions):
                 anchor: dict[str, tuple[FNode, int]] = {}
@@ -358,7 +383,7 @@ class OpenVMMemoryEncoder(
         # own analysis grants ([[membus/facts.py]] Assumption.TS_BOUND).
         ts_recon = []
         ts_bounds = []
-        if alignment is not None and source_path is not None:
+        if not interface and alignment is not None and source_path is not None:
             times = alignment.time_for(source_path)
             if len(times) == len(self._interactions):
                 ts_anchor: tuple[FNode, int] | None = None
@@ -417,6 +442,36 @@ class OpenVMMemoryEncoder(
             self._granted.append(
                 with_comment(And(*ts_bounds), f"{self.NAME} timestamp bounds")
             )
+        # Interface mode: "memory holds bytes" is a VM environment assumption
+        # (like TS_BOUND), not a circuit commitment — each recv's data limbs
+        # are bytes because every value in memory was range-checked when
+        # written. Recvs are statically known here (const mult == p-1), so no
+        # isinput booleans are needed. Granted via the axioms channel: a
+        # premise for BOTH sides, never a proof obligation. The send-side
+        # counterpart ("every byte written is a byte") is a per-circuit
+        # property, independently recoverable by the deterministic bound
+        # algorithm (`infer_unconditional_ranges`) — it must not join the
+        # equivalence VC.
+        if interface and ARGS().interface_assume_bytes:
+            recv_bytes = [
+                with_comment(
+                    And(
+                        *[
+                            And(LE(Int(0), wrap_mod(d)), LE(wrap_mod(d), Int(255)))
+                            for d in self._interactions[id].args[2]
+                        ]
+                    ),
+                    f"membus #{id} recv data are bytes (granted)",
+                )
+                for id in range(len(self._interactions))
+                if _active_mult(id) == pval - 1
+            ]
+            if recv_bytes:
+                self._granted.append(
+                    with_comment(
+                        And(*recv_bytes), f"{self.NAME} recv byte assumption"
+                    )
+                )
         if ts_recon:
             yield with_comment(And(*ts_recon), f"{self.NAME} timestamp reconstruction")
 
@@ -564,6 +619,7 @@ class OpenVMMemoryEncoder(
             return False
 
         base = self._collect_syntactic_bounds(all_constraints)
+        self._syntactic_bounds = base
 
         def base_bound(d: FNode) -> int | None:
             b = base.get(wrap_mod(d), base.get(d))
@@ -665,6 +721,20 @@ class OpenVMMemoryEncoder(
     ) -> tuple[FNode, frozenset[FNode]]:
         if ARGS().memory_encoding == "none":
             return (TRUE(), frozenset())
+        if ARGS().memory_encoding == "interface":
+            alignment = self._cur_state.memory_bus_alignment
+            if alignment is None:
+                raise RuntimeError(
+                    "interface memory encoding requires a membus alignment"
+                )
+            return interface_io_relation(
+                f"IO RELATION for {self.NAME}",
+                self._bus_interactions(),
+                other._bus_interactions(),
+                alignment.before_to_after,
+                bounds_a=self._syntactic_bounds,
+                bounds_b=other._syntactic_bounds,
+            )
         if ARGS().memory_encoding == "plain":
             alignment = self._cur_state.memory_bus_alignment
             return keyed_io_relation(
@@ -681,3 +751,161 @@ class OpenVMMemoryEncoder(
                 ),
             )
         return super().build_io_relation(other)
+
+
+LIMB_BASE = 65536  # pointers are packed as l0 + 65536*l1 (two 16-bit limbs)
+
+
+def _bound_of(t: FNode, bounds: dict[FNode, int]) -> int | None:
+    """Proven upper bound for `t`'s FIELD VALUE, if any (cf. `base_bound`).
+
+    Besides direct facts on ``t`` / ``wrap_mod(t)``, recognizes SCALED range
+    checks ``(c*t mod P) <= hi`` (e.g. OpenVM's pointer-alignment check
+    ``(4^{-1}*ptr_lo mod P) < 2^14``): the only field values ``v`` with
+    ``(c*v mod P) <= hi`` are ``v = d*k`` for ``k <= hi`` where ``d = c^{-1}
+    mod P`` — provided ``d*hi < P`` (no wrap), so ``v <= d*hi``.
+
+    Raw (non-mod) facts ``t <= hi`` are trusted as field-value bounds; every
+    producer in the constraint set is a range-check encoder that emits the
+    two-sided ``0 <= t <= hi`` form.
+    """
+    if t.is_int_constant():
+        return t.constant_value()
+    best = bounds.get(wrap_mod(t), bounds.get(t))
+    p = ARGS().field_type.value
+    for key, hi in bounds.items():
+        if not key.is_mod():
+            continue
+        lf = linear_form(key.arg(0))
+        if lf is None:
+            continue
+        terms, const = lf
+        if const != 0 or len(terms) != 1:
+            continue
+        ((t_node, c_raw),) = terms.items()
+        if t_node != t:
+            continue
+        c = c_raw % p
+        if c == 0:
+            continue
+        d = pow(c, -1, p)
+        if d * hi < p:
+            best = d * hi if best is None else min(best, d * hi)
+    return best
+
+
+def _interface_pointer_eq(
+    x: FNode, y: FNode, bounds_a: dict[FNode, int], bounds_b: dict[FNode, int]
+) -> list[FNode] | None:
+    """Split a packed-pointer equality into per-limb equalities, if sound.
+
+    When both sides are syntactically ``l0 + LIMB_BASE*l1 + c`` (same constant
+    ``c``) and, ON EACH SIDE, the proven bounds give ``l0 < LIMB_BASE`` and
+    ``l0 + LIMB_BASE*l1 + c < P``, the packing is injective into ``[0, P)``,
+    so the packed mod-p equality is *equivalent* to ``l0 = l0' AND l1 = l1'``
+    — the replacement is sound in both proof directions. Note ``l0, l1 <
+    LIMB_BASE`` alone is NOT enough: a full 32-bit packed value exceeds
+    BabyBear P and wraps. Returns ``None`` when the shape or the bounds do
+    not justify the split (caller falls back to the packed equality).
+    """
+
+    def parse(e: FNode, bounds: dict[FNode, int]) -> tuple[FNode, FNode, int] | None:
+        lf = linear_form(e)
+        if lf is None:
+            return None
+        terms, const = lf
+        if len(terms) != 2 or sorted(terms.values()) != [1, LIMB_BASE]:
+            return None
+        lo = next(t for t, c in terms.items() if c == 1)
+        hi = next(t for t, c in terms.items() if c == LIMB_BASE)
+        b_lo, b_hi = _bound_of(lo, bounds), _bound_of(hi, bounds)
+        if b_lo is None or b_hi is None or b_lo >= LIMB_BASE:
+            return None
+        if b_lo + LIMB_BASE * b_hi + const >= ARGS().field_type.value:
+            return None
+        return lo, hi, const
+
+    px = parse(x, bounds_a)
+    py = parse(y, bounds_b)
+    if px is None or py is None or px[2] != py[2]:
+        return None
+    return [field_eq(px[0], py[0]), field_eq(px[1], py[1])]
+
+
+def interface_io_relation(
+    name: str,
+    interactions_a: list[BusInteraction],
+    interactions_b: list[BusInteraction],
+    aligned_pairs: dict[int, int],
+    *,
+    bounds_a: dict[FNode, int],
+    bounds_b: dict[FNode, int],
+) -> tuple[FNode, frozenset[FNode]]:
+    """Cross-circuit io relation for the uninterpreted-interface encoding.
+
+    Memory is treated as an external deterministic environment: two circuits
+    are equivalent iff they exchange identical traffic with it. For each
+    aligned pair, equate the multiplicity and the full argument tuple
+    (addr_space, pointer, data limbs, timestamp). In the ForAll-position of
+    the VC this yields exactly the rely/guarantee reading: equalities on free
+    columns (recv data) become skolem witness pins, equalities on computed
+    columns (send data) remain proof obligations. No memory semantics
+    (permutation, counting, ordering) is encoded — it is only ever needed to
+    justify interaction *removals*, and the perfect-alignment precondition
+    (checked in `preanalysis`) guarantees there are none.
+    """
+    p = ARGS().field_type.value
+    n, m = len(interactions_a), len(interactions_b)
+    if set(aligned_pairs.keys()) != set(range(n)) or sorted(
+        aligned_pairs.values()
+    ) != list(range(m)):
+        raise RuntimeError(
+            f"interface memory encoding: aligned pairs are not a total 1:1 "
+            f"map ({len(aligned_pairs)} pairs for {n} before / {m} after)"
+        )
+
+    def cmult(inter: BusInteraction) -> int | None:
+        w = wrap_mod(inter.mult).simplify()
+        return w.constant_value() % p if w.is_int_constant() else None
+
+    parts: list[FNode] = []
+    splits = applied = 0
+    for i, j in sorted(aligned_pairs.items()):
+        ia, ib = interactions_a[i], interactions_b[j]
+        ma, mb = cmult(ia), cmult(ib)
+        if ma is None or mb is None or ma != mb:
+            raise RuntimeError(
+                f"interface memory encoding: aligned pair ({i},{j}) mult "
+                f"mismatch or non-const: {ia.mult} vs {ib.mult}"
+            )
+        if ma == 0:
+            continue  # disabled pair: no traffic, args unconstrained
+        parts.append(
+            with_comment(field_eq(ia.mult, ib.mult), f"{name}: pair ({i},{j}) mult")
+        )
+        for k, (x, y) in enumerate(zip(ia.args, ib.args, strict=True)):
+            if k == 1 and ARGS().interface_limb_split:
+                splits += 1
+                limb_eqs = _interface_pointer_eq(x, y, bounds_a, bounds_b)
+                if limb_eqs is not None:
+                    applied += 1
+                    parts.extend(
+                        with_comment(eq, f"{name}: pair ({i},{j}) ptr limb {li}")
+                        for li, eq in enumerate(limb_eqs)
+                    )
+                    continue
+            parts.append(
+                with_comment(field_eq(x, y), f"{name}: pair ({i},{j}) arg {k}")
+            )
+    if ARGS().interface_limb_split:
+        logging.info(
+            "interface io relation: limb split applied on %d/%d pointers",
+            applied,
+            splits,
+        )
+        if splits and not applied and not bounds_a and not bounds_b:
+            logging.warning(
+                "interface limb split: no syntactic bounds available "
+                "(--skip-range-inference?); falling back to packed equalities"
+            )
+    return (And(*parts) if parts else TRUE(), frozenset())
