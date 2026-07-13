@@ -14,11 +14,11 @@ use super::types::{SkolemPin, SortKind};
 
 const SKOLEM_PREFIX: &str = ":skolem-";
 
-pub fn collect_declared_symbols(script: &Script) -> HashMap<String, String> {
-    let mut out = HashMap::new();
+pub fn collect_declared_symbols(script: &Script) -> HashMap<String, Vec<String>> {
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
     for cmd in &script.commands {
         if let Some(name) = declare_fun_name(cmd, &script.source) {
-            out.insert(strip_prefix(&name).to_string(), name);
+            out.entry(strip_prefix(&name).to_string()).or_default().push(name);
         }
     }
     out
