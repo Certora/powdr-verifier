@@ -12,7 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_ROOT = Path("powdr-dumps")
-_NAME_RE = re.compile(r"apc_candidate_(\d+)_(\d+)_(.+)\.json$")
+# ``apc_candidate_<id>_<NNN>[_<pass>].json``. The final compaction dump has no
+# ``_<pass>`` suffix (e.g. ``..._051.json``); we still index it so it appears in
+# sweeps/diffs. ``_substitutions.json`` has no numeric NNN, so it never matches.
+_NAME_RE = re.compile(r"apc_candidate_(\d+)_(\d+)(?:_(.+))?\.json$")
 _BASE_PASSES = {"unopt", "base"}
 
 
@@ -30,7 +33,7 @@ class StepEntry:
 
     @property
     def label(self) -> str:
-        return f"{self.nnn:03d}_{self.pass_name}"
+        return f"{self.nnn:03d}_{self.pass_name}" if self.pass_name else f"{self.nnn:03d}"
 
 
 def normalize_block(block: str) -> str:
@@ -75,7 +78,7 @@ def index_block(directory: Path, block: str) -> list[StepEntry]:
     for path in directory.glob(f"apc_candidate_{bid}_*.json"):
         m = _NAME_RE.match(path.name)
         if m and m.group(1) == bid:
-            entries.append(StepEntry(int(m.group(2)), m.group(3), path))
+            entries.append(StepEntry(int(m.group(2)), m.group(3) or "", path))
     if not entries:
         raise ResolveError(
             f"no dumps for block {bid} in {directory} "
