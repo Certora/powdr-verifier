@@ -703,10 +703,7 @@ def run_membus_analysis(
     before_solve = fetch_solve_json_all(before_path, present=present)
     after_solve = fetch_solve_json_all(after_path, present=present)
 
-    before_edges = (before_extract or {}).get("order_edges") or []
-    after_edges = (after_extract or {}).get("order_edges") or []
-
-    before_matches, before_status, before_times, before_keys = _analyze_side(
+    before_state = _analyze_side(
         before,
         before_path,
         solve=before_solve,
@@ -714,15 +711,15 @@ def run_membus_analysis(
         extract=before_extract,
         align_rows=before_align_rows,
     )
-    after_matches, after_status, after_times, after_keys = _analyze_side(
+    after_state = _analyze_side(
         after,
         after_path,
         solve=after_solve,
         info=after_info,
         extract=after_extract,
     )
-    before_matches, before_status = _finalize_side(before_state)
-    after_matches, after_status = _finalize_side(after_state)
+    before_matches, before_status, before_times, before_keys = _finalize_side(before_state)
+    after_matches, after_status, after_times, after_keys = _finalize_side(after_state)
 
     _LOG.info(
         "membus analysis: n_before=%d n_after=%d aligned_pairs=%d",
