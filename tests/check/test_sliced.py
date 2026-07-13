@@ -357,3 +357,75 @@ def test_dispatch_bypasses_rust(tmp_path, monkeypatch):
     solve = action.actions[-1]
     assert solve.result == "unsat"
     assert solve.actions[0].properties.get("mode") == "sliced"
+
+
+def test_sticky_batch_preference(monkeypatch):
+    """A plain-rung win (via=None) between two family members must not wipe
+    the locality preference for the rest of the batch."""
+    prefs_seen = {}
+
+    def fake_ladder(self, group_solver, k, d, primary_rung,
+                    primary_considered, slice_idx, *, prefer=None):
+        prefs_seen[k] = prefer
+        return "arith", _Outcome(_Kind.REFUTED, via="closed" if k == 0 else None)
+
+    monkeypatch.setattr(_SlicedChecker, "_ladder", fake_ladder)
+    res, _ = _run(
+        """
+        (set-logic ALL)
+        (declare-fun x () Int)
+        (assert (= x 0))
+        (assert (or (= x 1) (= x 2) (= x 3)))
+        (check-sat)
+        """
+    )
+    assert res == "unsat"
+    # d0 seeds the preference; d1's plain win must not erase it for d2
+    assert prefs_seen == {0: None, 1: "closed", 2: "closed"}
+
+
+def test_preference_hit_miss_counters(monkeypatch):
+    """prefer_hit / prefer_miss count whether the locality guess paid off,
+    so a noisy preference is visible in the report."""
+    from src.check.sliced import Metrics, SliceBudgets
+
+    ctx, goal = flatten_script_conjuncts(
+        _parse(
+            """
+            (set-logic ALL)
+            (declare-fun x () Int)
+            (assert (= x 0))
+            (assert (or (= x 1) (= x 2)))
+            (check-sat)
+            """
+        )
+    )
+    metrics = Metrics()
+    checker = _SlicedChecker(
+        ctx,
+        goal,
+        budgets=SliceBudgets(),
+        boundary_pattern=BOUNDARY,
+        metrics=metrics,
+        dumper=None,
+        collect_unknowns=None,
+        debug=False,
+    )
+    try:
+        d0, d1 = checker.disjuncts
+        s, considered = checker.grow_solver_for(frozenset({0}))
+        # preferred one-shot misses (returns unknown) -> incremental refutes
+        monkeypatch.setattr(_SlicedChecker, "_try_strategy", lambda self, *a: None)
+        out = checker._solve_under(s, 0, d0, rung="arith", considered=considered,
+                                   prefer="closed")
+        assert out.kind is _Kind.REFUTED and out.via is None
+        # preferred one-shot hits (returns unsat)
+        monkeypatch.setattr(_SlicedChecker, "_try_strategy", lambda self, *a: False)
+        out = checker._solve_under(s, 1, d1, rung="arith", considered=considered,
+                                   prefer="closed")
+        assert out.kind is _Kind.REFUTED and out.via == "closed"
+    finally:
+        checker.close()
+    counters = metrics.as_dict()["counters"]
+    assert counters["prefer_miss"] == 1
+    assert counters["prefer_hit"] == 1
