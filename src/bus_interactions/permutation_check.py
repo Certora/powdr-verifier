@@ -1,5 +1,4 @@
 """Mixins and formulas for multiset permutation invariants and timestamp monotonicity."""
-from collections import defaultdict
 from dataclasses import dataclass
 from itertools import batched, pairwise
 import itertools
@@ -790,11 +789,6 @@ class PermutationCheckMixin:
                 field_eq(args(ii)[1], args(jj)[1]),
             )
         
-        same_key_buckets: dict[tuple[FNode, FNode], list[int]] = defaultdict(list)
-        for i in range(n):
-            same_key_buckets[(args(i)[0], args(i)[1])].append(i)
-
-        
         # multiplicity range constraints
         for i in range(n):
             conjuncts.append(
@@ -930,48 +924,14 @@ class PermutationCheckMixin:
                         f"inputs or outputs {i} and {j} have different address spaces or pointers"
                     )
                 )
-        
-        for ai, pi in same_key_buckets.keys():
-            is_actives = []
-            has_inputs = []
-            has_outputs = []
-
-            for (aj, pj), jls in same_key_buckets.items():
-                if ai.is_constant() and aj.is_constant() and ai.constant_value() != aj.constant_value():
-                    continue
-                if pi.is_constant() and pj.is_constant() and pi.constant_value() != pj.constant_value():
-                    continue
-                
-                mke = And(field_eq(ai, aj), field_eq(pi, pj)).simplify()
-                for j in jls:
-                    if is_disabled(j).is_true():
-                        continue
-                    is_actives.append(And(Not(is_disabled(j)), mke))
-                    if not is_input(j).is_false():
-                        has_inputs.append(And(is_input(j), mke))
-                    if not is_output(j).is_false():
-                        has_outputs.append(And(is_output(j), mke))
-            is_active = Or(*is_actives)
-            has_input = Or(*has_inputs)
-            has_output = Or(*has_outputs)
-            conjuncts.append(
-                with_comment(
-                    Implies(is_active, has_input),
-                    f"key {ai}/{pi}: some input on that address_space/pointer",
-                )
-            )
-            conjuncts.append(
-                with_comment(
-                    Implies(is_active, has_output),
-                    f"key {ai}/{pi}: some output on that address_space/pointer",
-                )
-            )
 
         for i in range(n):
             if is_disabled(i).is_true():
                 continue
             for j in range(n):
                 if i == j or m(i, j).is_false():
+                    continue
+                if mem_keys_statically_disjoint(i, j):
                     continue
                 if is_disabled(j).is_true():
                     continue
