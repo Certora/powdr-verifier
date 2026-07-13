@@ -71,6 +71,12 @@ class MembusAnalysis:
     after_times: list["TimeInfo | None"] = field(default_factory=list)
     before_keys: list["MembusParsedKey | None"] = field(default_factory=list)
     after_keys: list["MembusParsedKey | None"] = field(default_factory=list)
+    # Whether `membus align` actually ran (False = heuristic fallback), and the
+    # before->after pairs sourced from genuine status=="kept" align rows,
+    # captured BEFORE any identity fill. The interface encoding trusts only
+    # these.
+    align_ok: bool = False
+    kept_pairs: dict[int, int] = field(default_factory=dict)
 
     @property
     def n_before(self) -> int:
@@ -694,9 +700,10 @@ def run_membus_analysis(
     align_ok = False
     present = _memory_address_spaces(before)
 
-    for addr_space in (1, 2, 3):
-        if present is not None and addr_space not in present:
-            continue
+    # Align every constant address space present (native AS3 blocks exist in
+    # guest-keccak); fall back to the register/memory pair when the set is
+    # unknown (symbolic address space).
+    for addr_space in sorted(present) if present is not None else (1, 2):
         al = fetch_align_json(before_path, after_path, addr_space=addr_space)
         if al is None:
             continue
@@ -711,6 +718,8 @@ def run_membus_analysis(
 
     if not align_ok:
         before_to_after = _heuristic_before_to_after(before, after)
+
+    kept_pairs = dict(before_to_after) if align_ok else {}
 
     n_before = _memory_interaction_count(before)
     n_after = _memory_interaction_count(after)
@@ -762,4 +771,6 @@ def run_membus_analysis(
         after_times=after_times,
         before_keys=before_keys,
         after_keys=after_keys,
+        align_ok=align_ok,
+        kept_pairs=kept_pairs,
     )
