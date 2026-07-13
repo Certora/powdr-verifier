@@ -806,7 +806,9 @@ class _SlicedChecker:
                 f"{prefer}_first_{'unsat' if res is False else 'sat' if res else 'unknown'}"
             )
             if res is False:
+                self.metrics.count("prefer_hit")
                 return _Outcome(_Kind.REFUTED, via=prefer)
+            self.metrics.count("prefer_miss")
 
         s.push()
         if extra:
@@ -1019,7 +1021,12 @@ class _SlicedChecker:
                     group_solver, k, d, primary_rung, primary_considered, slice_idx,
                     prefer=prefer,
                 )
-                prefer = outcome.via
+                # Sticky: a plain-rung win (via=None) between two family
+                # members must not erase the preference -- the interleaved
+                # easy disjunct costs one cheap preferred one-shot, while a
+                # wiped preference costs the full primary timeout on the next
+                # hard member. prefer_miss counts the wasted one-shots.
+                prefer = outcome.via or prefer
                 if self.debug:
                     self.disjunct_rows.append(
                         {
