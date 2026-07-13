@@ -200,14 +200,6 @@ def __cmd_arg(arg) -> str:
     return str(arg)
 
 
-def __emit_subprocess_stderr(stderr: str | None) -> None:
-    if stderr:
-        sys.stderr.write(stderr)
-        if not stderr.endswith("\n"):
-            sys.stderr.write("\n")
-        sys.stderr.flush()
-
-
 def __run_main(
     command,
     *args,
@@ -241,7 +233,6 @@ def __run_main(
             cwd=WORKSPACE_DIR,
         )
         stdout, stderr, timed_out = communicate_with_timeout(proc, timeout)
-        __emit_subprocess_stderr(stderr)
         if timed_out:
             logging.error(f"timed out running {cmdstr}")
             step = "encode" if command == "verify" else command
@@ -270,8 +261,7 @@ def __run_main(
             )
         return data
     proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True, cwd=WORKSPACE_DIR)
-    _, stderr, timed_out = communicate_with_timeout(proc, timeout)
-    __emit_subprocess_stderr(stderr)
+    _, _, timed_out = communicate_with_timeout(proc, timeout)
     if timed_out:
         logging.error(f"timed out running {cmdstr}")
     elif proc.returncode != 0:
