@@ -299,6 +299,21 @@ def _apply_boundary_io(status: list[list[Tri]], i: int, io: str | None) -> None:
             _set_flag(status[i], 3, False)
 
 
+def _apply_forced_io(status: list[list[Tri]], i: int, io: str | None) -> None:
+    """Pin I/O status from a forced membus solve row (``io`` is authoritative)."""
+    match io:
+        case "in":
+            _set_flag(status[i], 0, True)
+            _set_flag(status[i], 1, False)
+            _set_flag(status[i], 2, False)
+            _set_flag(status[i], 3, False)
+        case "out":
+            _set_flag(status[i], 0, False)
+            _set_flag(status[i], 1, True)
+            _set_flag(status[i], 2, False)
+            _set_flag(status[i], 3, False)
+
+
 def _apply_local_role(
     status: list[list[Tri]],
     i: int,
@@ -456,7 +471,10 @@ def _ingest_side(
                     _set_flag(status[i], 0, False)
 
         if f.solve_io:
-            _apply_boundary_io(status, i, f.solve_io)
+            if f.solve_forced:
+                _apply_forced_io(status, i, f.solve_io)
+            else:
+                _apply_boundary_io(status, i, f.solve_io)
 
     if unordered:
         _LOG.warning(
