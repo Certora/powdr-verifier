@@ -334,10 +334,16 @@ class IntervalReasoner:
                     formula_ctx=formula_ctx,
                 )
             elif coeff < 0:
-                if h.hi is None:
+                # Dividing coeff*sym <= target_hi - rest by coeff < 0 flips the
+                # relation to sym >= (rest - target_hi)/den (den = -coeff). A lower
+                # bound valid for every feasible rest must use the SMALLEST rest,
+                # i.e. rest.lo -- using rest.hi over-tightens and drops models
+                # (a false PASS) whenever rest is not a singleton. The coeff > 0
+                # branch above symmetrically (and correctly) uses h.lo.
+                if h.lo is None:
                     continue
                 den = -coeff
-                num = h.hi - target_hi
+                num = h.lo - target_hi
                 lo = _ceil_div(num, den)
                 changed |= self._state_set(
                     state,
@@ -513,39 +519,57 @@ class IntervalReasoner:
             )
 
         # Prime-field product reasoning:
-        #   (u1 * ... * uk) == 0 (mod p)  =>  ui == 0 (mod p) for some i.
-        # For affine unit-coefficient factors over canonical symbol ranges, each
-        # factor gives a concrete residue candidate.
+        #   (u1 * ... * uk) == 0 (mod p)  =>  ui == 0 (mod p) for SOME i.
+        # That conclusion is a DISJUNCTION. A per-variable interval domain can only
+        # represent a disjunction over a SINGLE variable's values (a set-valued
+        # domain), so this narrowing is sound ONLY when the whole product is an
+        # equation in one variable. We therefore require EVERY factor to be affine
+        # with a unit coefficient in the SAME symbol, range-confined to [0, p) (so
+        # each residue has a unique representative). If any factor fails that shape,
+        # or a second symbol appears, the fact spans variables -- or an
+        # uncharacterized factor might be the zero one -- and cannot be narrowed
+        # soundly. In that case we DECLINE: narrowing each symbol independently would
+        # assert the (unsound) conjunction "every factor is a root", which drops
+        # models and can turn a SAT VC UNSAT (a false PASS). Declining only costs
+        # precision. The intended target -- single-variable flag/root equations like
+        # cmp*(cmp-1) == 0 -- is preserved.
         if inner.is_times():
-            candidates: Dict[FNode, set[int]] = {}
+            common_sym: Optional[FNode] = None
+            roots: set[int] = set()
+            usable = True
             for factor in inner.args():
                 aff = _affine(factor)
                 if aff is None:
-                    continue
+                    usable = False
+                    break
                 c0, terms = aff
                 if len(terms) != 1:
-                    continue
+                    usable = False
+                    break
                 sym, coeff = next(iter(terms.items()))
                 if coeff not in (1, -1):
-                    continue
+                    usable = False
+                    break
                 if not sym.is_symbol() or not sym.get_type().is_int_type():
-                    continue
-                sym_dom = self._state_get(state, sym)
-                if not sym_dom.within_0_p(p):
-                    continue
-                if coeff == 1:
-                    cand = (-c0) % p
-                else:
-                    cand = c0 % p
-                candidates.setdefault(sym, set()).add(cand)
+                    usable = False
+                    break
+                if common_sym is None:
+                    common_sym = sym
+                elif sym != common_sym:
+                    usable = False
+                    break
+                if not self._state_get(state, sym).within_0_p(p):
+                    usable = False
+                    break
+                roots.add((-c0) % p if coeff == 1 else c0 % p)
 
-            for sym, vals in candidates.items():
-                if not vals:
-                    continue
-                dom = IntDomain.from_intervals(IntInterval.const(v) for v in sorted(vals))
+            if usable and common_sym is not None and roots:
+                dom = IntDomain.from_intervals(
+                    IntInterval.const(v) for v in sorted(roots)
+                )
                 logger.debug(f"refine_from_mod_zero: {f} -> {dom}")
                 changed |= self._state_set(
-                    state, sym, dom, step="mod_zero_product", formula_ctx=formula_ctx
+                    state, common_sym, dom, step="mod_zero_product", formula_ctx=formula_ctx
                 )
 
         return changed

@@ -9,6 +9,7 @@ from .diff import DiffError, build_diff
 from .metrics import DumpDiff, DumpStats
 from .normalize import normalize_constants
 from .render import Target
+from .results import ResultsDB
 from .sweep import build_sweep, build_sweep_all
 
 
@@ -21,6 +22,10 @@ def _add_common(parser: argparse.ArgumentParser, suppress: bool) -> None:
     default = argparse.SUPPRESS if suppress else None
     parser.add_argument("--root", type=Path, default=default,
                         help="dumps root directory (default: powdr-dumps)")
+    parser.add_argument("--results", type=Path, default=default, metavar="DB",
+                        help="benchmark report DB; adds solve time/status to "
+                             "sweep (single-block: per-step time+st; "
+                             "all: solved ratio + total time)")
     mode = parser.add_mutually_exclusive_group()
     flag_default = argparse.SUPPRESS if suppress else False
     mode.add_argument("-p", "--plain", action="store_true", default=flag_default,
@@ -134,28 +139,39 @@ def _stats_for(entry: resolve.StepEntry, directory: Path, block: str) -> DumpSta
 
 def _run_sweep(args, mode: str) -> None:
     """Dispatch `sweep all [<group>]` vs `sweep <group> <block>`."""
-    if args.target == "all":
-        directory = (resolve.group_dir(args.arg, args.root) if args.arg
-                     else resolve.sole_group_dir(args.root))
-        group = directory.name.removeprefix("guest-")
-        blocks = resolve.list_blocks(directory)
-        if not blocks:
-            raise resolve.ResolveError(f"no blocks under {directory}")
-        labels = load_bus_map(resolve.base_dump_path(directory, blocks[0]))
-        rows = build_sweep_all(directory, labels, args.sort)
-        print(render.render_sweep_all(rows, group, args.sort, mode))
-        return
+    rdb = ResultsDB(args.results) if args.results else None
+    with_results = rdb is not None
+    try:
+        if args.target == "all":
+            directory = (resolve.group_dir(args.arg, args.root) if args.arg
+                         else resolve.sole_group_dir(args.root))
+            group = directory.name.removeprefix("guest-")
+            blocks = resolve.list_blocks(directory)
+            if not blocks:
+                raise resolve.ResolveError(f"no blocks under {directory}")
+            labels = load_bus_map(resolve.base_dump_path(directory, blocks[0]))
+            summaries = rdb.block_summaries() if rdb else None
+            rows = build_sweep_all(directory, labels, args.sort, summaries)
+            print(render.render_sweep_all(rows, group, args.sort, mode,
+                                          with_results=with_results))
+            return
 
-    if args.arg is None:
-        raise resolve.ResolveError("sweep <group> <block>: block is required "
-                                   "(or use `sweep all`)")
-    group, block = args.target, args.arg
-    directory = resolve.group_dir(group, args.root)
-    entries = resolve.index_block(directory, block)
-    labels = load_bus_map(resolve.base_dump_path(directory, block))
-    rows = build_sweep(entries, labels, args.lo, args.hi, with_diff=args.diff)
-    print(render.render_sweep(rows, group, resolve.normalize_block(block),
-                              mode, with_diff=args.diff))
+        if args.arg is None:
+            raise resolve.ResolveError("sweep <group> <block>: block is required "
+                                       "(or use `sweep all`)")
+        group, block = args.target, args.arg
+        directory = resolve.group_dir(group, args.root)
+        entries = resolve.index_block(directory, block)
+        labels = load_bus_map(resolve.base_dump_path(directory, block))
+        times = rdb.step_times(block) if rdb else None
+        rows = build_sweep(entries, labels, args.lo, args.hi,
+                           with_diff=args.diff, times=times)
+        print(render.render_sweep(rows, group, resolve.normalize_block(block),
+                                  mode, with_diff=args.diff,
+                                  with_results=with_results))
+    finally:
+        if rdb is not None:
+            rdb.close()
 
 
 def _run_diff(args, mode: str) -> int:
@@ -250,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
             tb = Target(args.group, bid, eb.label, str(eb.path))
             print(render.render_compare(DumpDiff(sa, sb), ta, tb, mode))
 
-    except resolve.ResolveError as e:
+    except (resolve.ResolveError, FileNotFoundError) as e:
         print(f"lens: {e}", file=sys.stderr)
         return 2
     return 0

@@ -1,0 +1,42 @@
+# Build recipes for the Rust simplifier/checker workspace.
+#
+# FLINT backend: the committed Cargo.toml depends on flint-sys 0.9 (the code
+# owners' backend, and what Linux/CI builds). flint-sys does NOT compile on
+# macOS — its bindgen layout tests hard-code the Linux struct layout, which is
+# wrong on Darwin (pthread_mutex_t is 64 bytes vs 40). flint3-sys 3.6 exposes
+# the same C API with no layout tests and builds on macOS. Because both crates
+# declare links="flint", only one may be a dependency at a time, so macOS
+# swaps it in via a patch rather than a cfg toggle. src/poly_factor/ffi.rs is
+# the shim that maps either crate to one namespace, keyed on `--features flint3`.
+
+# Native build — Linux / the owners' flint-sys backend, no patch.
+build:
+    cargo build --release
+
+# macOS build against a custom z3: swap simplifier's FLINT dep to flint3-sys,
+# build, then restore the tree (Cargo.toml + Cargo.lock) so the repo stays on
+# the committed flint-sys default. FLINT 3.6 is compiled from source, so the
+# first run takes a few minutes. `z3dir` must contain libz3.dylib.
+build-osx z3dir:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # flint3-sys compiles FLINT 3.6 from source via autotools (bootstrap.sh).
+    command -v autoreconf >/dev/null || {
+        echo "error: autoreconf not found — flint3-sys builds FLINT from source." >&2
+        echo "       install autotools: brew install autoconf automake libtool" >&2
+        exit 1
+    }
+    [ -f "{{z3dir}}/libz3.dylib" ] || {
+        echo "error: {{z3dir}}/libz3.dylib not found (need a z3 build dir)." >&2
+        exit 1
+    }
+    revert() {
+        patch -R -p1 < patches/flint3-macos.patch >/dev/null 2>&1 || true
+        git checkout -- Cargo.lock >/dev/null 2>&1 || true
+    }
+    trap revert EXIT
+    patch -p1 < patches/flint3-macos.patch
+    Z3_LIB_DIR="{{z3dir}}" cargo build --release -p simplifier --features flint3
+
+# Arie's machine: custom z3 at ~/ag/z3/wt-master/build.
+build-ag: (build-osx (env_var('HOME') / "ag/z3/wt-master/build"))

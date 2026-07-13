@@ -1,21 +1,16 @@
 use std::collections::BTreeMap;
 use std::mem::MaybeUninit;
 
-use flint_sys::flint::fmpz;
-use flint_sys::fmpz::{
-    fmpz_add, fmpz_clear, fmpz_get_str, fmpz_init, fmpz_is_zero, fmpz_mul, fmpz_neg, fmpz_set_si,
-};
-use flint_sys::fmpz_mpoly::{
+use super::ffi::{
+    flint_free, fmpz, fmpz_add, fmpz_clear, fmpz_get_str, fmpz_init, fmpz_is_zero,
     fmpz_mpoly_clear, fmpz_mpoly_combine_like_terms, fmpz_mpoly_ctx_clear, fmpz_mpoly_ctx_init,
-    fmpz_mpoly_get_term_coeff_fmpz, fmpz_mpoly_get_term_exp_ui, fmpz_mpoly_init,
-    fmpz_mpoly_is_zero, fmpz_mpoly_length, fmpz_mpoly_push_term_fmpz_ui, fmpz_mpoly_sort_terms,
-    fmpz_mpoly_zero,
-};
-use flint_sys::fmpz_mpoly_factor::{
-    fmpz_mpoly_factor, fmpz_mpoly_factor_clear, fmpz_mpoly_factor_get_base,
+    fmpz_mpoly_ctx_struct, fmpz_mpoly_factor, fmpz_mpoly_factor_clear, fmpz_mpoly_factor_get_base,
     fmpz_mpoly_factor_get_exp_si, fmpz_mpoly_factor_init, fmpz_mpoly_factor_length,
+    fmpz_mpoly_factor_struct, fmpz_mpoly_get_term_coeff_fmpz, fmpz_mpoly_get_term_exp_ui,
+    fmpz_mpoly_init, fmpz_mpoly_is_zero, fmpz_mpoly_length, fmpz_mpoly_push_term_fmpz_ui,
+    fmpz_mpoly_sort_terms, fmpz_mpoly_struct, fmpz_mpoly_zero, fmpz_mul, fmpz_neg, fmpz_set_si,
+    ordering_t_ORD_LEX,
 };
-use flint_sys::mpoly_types::{fmpz_mpoly_ctx_struct, ordering_t_ORD_LEX};
 
 use super::FactorError;
 
@@ -104,7 +99,7 @@ pub(crate) struct BuiltMpoly {
     pub nvars: usize,
 }
 
-struct MpolyInner(flint_sys::fmpz_types::fmpz_mpoly_struct);
+struct MpolyInner(fmpz_mpoly_struct);
 
 impl BuiltMpoly {
     pub fn from_terms(terms: &TermMap, nvars: usize) -> Result<Self, FactorError> {
@@ -127,7 +122,7 @@ impl BuiltMpoly {
         self.ctx.as_ptr()
     }
 
-    fn poly(&self) -> *const flint_sys::fmpz_types::fmpz_mpoly_struct {
+    fn poly(&self) -> *const fmpz_mpoly_struct {
         self.poly.as_ptr()
     }
 }
@@ -142,18 +137,18 @@ impl Drop for BuiltMpoly {
 
 impl MpolyInner {
     fn new(ctx: &ZzCtx) -> Self {
-        let mut poly = MaybeUninit::<flint_sys::fmpz_types::fmpz_mpoly_struct>::uninit();
+        let mut poly = MaybeUninit::<fmpz_mpoly_struct>::uninit();
         unsafe {
             fmpz_mpoly_init(poly.as_mut_ptr(), ctx.as_ptr());
             Self(poly.assume_init())
         }
     }
 
-    fn as_ptr(&self) -> *const flint_sys::fmpz_types::fmpz_mpoly_struct {
+    fn as_ptr(&self) -> *const fmpz_mpoly_struct {
         &self.0
     }
 
-    fn as_mut(&mut self) -> *mut flint_sys::fmpz_types::fmpz_mpoly_struct {
+    fn as_mut(&mut self) -> *mut fmpz_mpoly_struct {
         &mut self.0
     }
 }
@@ -163,7 +158,7 @@ pub(crate) fn factor_mpoly(built: BuiltMpoly) -> Result<FlintFactorization, Fact
     let ctx_ptr = built.ctx_ptr();
     let poly_ptr = built.poly();
     unsafe {
-        let mut fac = MaybeUninit::<flint_sys::fmpz_types::fmpz_mpoly_factor_struct>::uninit();
+        let mut fac = MaybeUninit::<fmpz_mpoly_factor_struct>::uninit();
         fmpz_mpoly_factor_init(fac.as_mut_ptr(), ctx_ptr);
         let mut fac = fac.assume_init();
         if fmpz_mpoly_factor(&mut fac, poly_ptr, ctx_ptr) == 0 {
@@ -205,7 +200,7 @@ impl Drop for ZzCtx {
 }
 
 unsafe fn build_fmpz_mpoly_from_terms(
-    poly: *mut flint_sys::fmpz_types::fmpz_mpoly_struct,
+    poly: *mut fmpz_mpoly_struct,
     ctx: *const fmpz_mpoly_ctx_struct,
     nvars: usize,
     terms: &TermMap,
@@ -228,7 +223,7 @@ unsafe fn build_fmpz_mpoly_from_terms(
 }
 
 unsafe fn read_fmpz_mpoly_factor(
-    fac: &flint_sys::fmpz_types::fmpz_mpoly_factor_struct,
+    fac: &fmpz_mpoly_factor_struct,
     ctx: *const fmpz_mpoly_ctx_struct,
     nvars: usize,
 ) -> Result<FlintFactorization, FactorError> {
@@ -236,7 +231,7 @@ unsafe fn read_fmpz_mpoly_factor(
     let mut factors = Vec::with_capacity(len as usize);
     for i in 0..len {
         let exp = fmpz_mpoly_factor_get_exp_si(fac as *const _ as *mut _, i, ctx).max(0) as usize;
-        let mut base = MaybeUninit::<flint_sys::fmpz_types::fmpz_mpoly_struct>::uninit();
+        let mut base = MaybeUninit::<fmpz_mpoly_struct>::uninit();
         fmpz_mpoly_init(base.as_mut_ptr(), ctx);
         let mut base = base.assume_init();
         fmpz_mpoly_factor_get_base(&mut base, fac, i, ctx);
@@ -248,7 +243,7 @@ unsafe fn read_fmpz_mpoly_factor(
 }
 
 unsafe fn fmpz_mpoly_to_sparse(
-    poly: &flint_sys::fmpz_types::fmpz_mpoly_struct,
+    poly: &fmpz_mpoly_struct,
     ctx: *const fmpz_mpoly_ctx_struct,
     nvars: usize,
 ) -> Result<SparsePoly, FactorError> {
@@ -281,7 +276,7 @@ fn fmpz_to_string(x: &fmpz) -> String {
             return "0".to_string();
         }
         let s = CStr::from_ptr(ptr).to_string_lossy().into_owned();
-        flint_sys::flint::flint_free(ptr as *mut _);
+        flint_free(ptr as *mut _);
         s
     }
 }

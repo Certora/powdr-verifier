@@ -11,6 +11,7 @@ from .diff import counts_from_keys, dump_keys
 from .loader import load
 from .metrics import DumpStats
 from .resolve import StepEntry, index_block, list_blocks
+from .results import BlockResult, StepResult
 
 _WORD = re.compile(r"[A-Z][a-z0-9]*")
 
@@ -45,6 +46,10 @@ class StepRow:
     # diff vs the previous step: None (first), "xrep" (cross-representation,
     # not comparable), or (cons, mem, bus) each a (rem, add, chg) triple.
     delta: Any = None
+    # verification outcome for this step, from a report DB (None if no DB /
+    # no row — e.g. the 000 base step, which has no incoming transition).
+    solve_time: float | None = None
+    solve_status: str | None = None
 
     @staticmethod
     def _rac(t) -> dict:
@@ -76,6 +81,8 @@ class StepRow:
             "sym_busses": self.sym_busses,
             "mem_key_sym": self.mem_key_sym,
             "diff": self._delta_dict(),
+            "solve_time": self.solve_time,
+            "solve_status": self.solve_status,
         }
 
 
@@ -95,6 +102,12 @@ class BlockRow:
     other_sym_final: bool
     mem_key_sym_final: bool
     bytes0: int
+    # aggregate verification outcome from a report DB (None if no DB / no rows
+    # for this block). n_db_steps is transitions recorded, one fewer than the
+    # dump count in n_steps.
+    n_solved: int | None = None
+    n_db_steps: int | None = None
+    total_time: float | None = None
 
     @property
     def kb0(self) -> float:
@@ -115,6 +128,9 @@ class BlockRow:
             "mem_key_sym_final": self.mem_key_sym_final,
             "kb0": self.kb0,
             "bytes0": self.bytes0,
+            "n_solved": self.n_solved,
+            "n_db_steps": self.n_db_steps,
+            "total_time": self.total_time,
         }
 
 
@@ -133,10 +149,13 @@ def build_sweep_all(
     directory: Path,
     labels: dict[str, str],
     sort_key: str = "cons0",
+    summaries: dict[int, BlockResult] | None = None,
 ) -> list[BlockRow]:
     """One BlockRow per block in ``directory``, sorted by ``sort_key`` desc.
 
-    Parses only each block's first and last step (not the whole trail).
+    Parses only each block's first and last step (not the whole trail). When
+    ``summaries`` (from a report DB) is given, each row carries its solved
+    count and total verification time.
     """
     rows: list[BlockRow] = []
     for bid in list_blocks(directory):
@@ -146,6 +165,7 @@ def build_sweep_all(
         red = None if s0.n_constraints == 0 else round(
             100 * (1 - sf.n_constraints / s0.n_constraints))
         sym_labels = sf.sym_bus_labels()
+        summary = summaries.get(int(bid)) if summaries is not None else None
         rows.append(BlockRow(
             block=bid,
             n_steps=len(entries),
@@ -159,6 +179,9 @@ def build_sweep_all(
             other_sym_final=any(lbl != "Memory" for lbl in sym_labels),
             mem_key_sym_final=sf.memory_key_sym > 0,
             bytes0=entries[0].path.stat().st_size,
+            n_solved=summary.n_solved if summary else None,
+            n_db_steps=summary.n_steps if summary else None,
+            total_time=summary.total_time if summary else None,
         ))
     keyfn = _SORT_KEYS.get(sort_key, _SORT_KEYS["cons0"])
     rows.sort(key=keyfn, reverse=True)
@@ -171,12 +194,15 @@ def build_sweep(
     lo: int | None = None,
     hi: int | None = None,
     with_diff: bool = False,
+    times: dict[int, StepResult] | None = None,
 ) -> list[StepRow]:
     """Compute a StepRow per entry whose NNN is within ``[lo, hi]``.
 
     When ``with_diff`` is set, each emitted row carries a diff summary vs the
     previous emitted row (same representation only, else ``"xrep"``). Diffing is
-    off by default because it is expensive on large blocks.
+    off by default because it is expensive on large blocks. When ``times`` (from
+    a report DB, keyed by NNN) is given, each row carries its verification time
+    and status.
     """
     rows: list[StepRow] = []
     prev: tuple | None = None   # (keys, fmt) of the previous emitted step
@@ -192,6 +218,7 @@ def build_sweep(
             keys = dump_keys(data)              # canonicalize this step once
             delta = _step_delta(prev, keys, s.fmt)
             prev = (keys, s.fmt)
+        sr = times.get(e.nnn) if times is not None else None
         rows.append(StepRow(
             nnn=e.nnn,
             pass_name=e.pass_name,
@@ -205,6 +232,8 @@ def build_sweep(
             sym_busses=s.sym_bus_labels(),
             mem_key_sym=s.memory_key_sym,
             delta=delta,
+            solve_time=sr.running_time if sr else None,
+            solve_status=sr.status if sr else None,
         ))
     return rows
 

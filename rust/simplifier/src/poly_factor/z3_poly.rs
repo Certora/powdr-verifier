@@ -57,8 +57,8 @@ fn z3_to_fmpz_mpoly(
     BuiltMpoly::from_terms(&terms, gens.gens.len())
 }
 
-unsafe fn set_fmpz_from_z3(z: *mut flint_sys::flint::fmpz, expr: &Int) -> Result<(), FactorError> {
-    use flint_sys::fmpz::{fmpz_set_si, fmpz_set_str};
+unsafe fn set_fmpz_from_z3(z: *mut super::ffi::fmpz, expr: &Int) -> Result<(), FactorError> {
+    use super::ffi::{fmpz_set_si, fmpz_set_str};
 
     if let Some(v) = expr.as_i64() {
         fmpz_set_si(z, v);
