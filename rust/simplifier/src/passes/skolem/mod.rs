@@ -106,7 +106,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
 fn walk_assert(
     script: &Script,
     term: &Bool,
-    declared: &HashMap<String, String>,
+    declared: &HashMap<String, Vec<String>>,
     sorts: &HashMap<String, SortKind>,
     pins: &[types::SkolemPin],
     candidates: &[witness::WitnessCandidate],
@@ -134,7 +134,7 @@ fn walk_assert(
 fn walk_assert_opt(
     script: &Script,
     term: &Bool,
-    declared: &HashMap<String, String>,
+    declared: &HashMap<String, Vec<String>>,
     sorts: &HashMap<String, SortKind>,
     pins: &[types::SkolemPin],
     candidates: &[witness::WitnessCandidate],
@@ -164,7 +164,7 @@ fn walk_assert_opt(
 fn walk_assert_dyn_opt(
     script: &Script,
     term: &Dynamic,
-    declared: &HashMap<String, String>,
+    declared: &HashMap<String, Vec<String>>,
     sorts: &HashMap<String, SortKind>,
     pins: &[types::SkolemPin],
     candidates: &[witness::WitnessCandidate],
@@ -231,7 +231,7 @@ fn walk_assert_dyn_opt(
 fn walk_forall_opt(
     _script: &Script,
     term: &Dynamic,
-    declared: &HashMap<String, String>,
+    declared: &HashMap<String, Vec<String>>,
     sorts: &HashMap<String, SortKind>,
     pins: &[types::SkolemPin],
     candidates: &[witness::WitnessCandidate],
@@ -323,6 +323,26 @@ mod tests {
         let (out, stats) = apply(&script).unwrap();
         let s = smt2::dump_string(&out);
         assert!(s.contains("(not (= before-x@0"));
+        assert!(stats["pins_by_source"]["names"].as_u64().unwrap_or(0) >= 1);
+    }
+
+    #[test]
+    fn pins_same_name_prefers_partner_over_own_declaration() {
+        // Granted membus axioms declare the quantified side's columns at top
+        // level too; the qvar's own (later) declaration must not shadow the
+        // opposite-side partner in the stripped-name lookup.
+        let script = Script::parse(
+            "(declare-fun after-x@0 () Int)\n\
+             (declare-fun before-x@0 () Int)\n\
+             (assert (<= 0 before-x@0))\n\
+             (assert (forall ((before-x@0 Int)) (or (= before-x@0 0))))\n\
+             (check-sat)\n",
+        )
+        .unwrap();
+        std::env::set_var("SIMPLIFIER_FIELD_MOD", "2147483647");
+        let (out, stats) = apply(&script).unwrap();
+        let s = smt2::dump_string(&out);
+        assert!(s.contains("(not (= before-x@0 (mod after-x@0"), "{s}");
         assert!(stats["pins_by_source"]["names"].as_u64().unwrap_or(0) >= 1);
     }
 
