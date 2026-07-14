@@ -26,17 +26,23 @@ def _encoding_qvars(
     inner: FormulaWithAxioms,
     io_relation: FNode,
     globals: frozenset[FNode],
+    *,
+    side_prefix: str,
+    iorelvars: frozenset[FNode],
 ) -> frozenset[FNode]:
-    """Symbols quantified in ``encoding()``: live in the ``forall`` body only.
+    """Symbols quantified in ``encoding()``: live in the ``forall`` body on ``side_prefix``.
 
-    The body is ``Or(Not(inner.constraints), Not(io_relation))``. Symbols
-    registered on a converter for substitution skolem pins are not part of
-    ``inner`` and must not become qvars.
+    The body is ``Or(Not(inner.constraints), Not(io_relation))``. Only the inner
+    side's program variables (plus ``iorelvars``) are quantified; the other side
+    stays existentially bound at the top level.
     """
     live: set[FNode] = set()
     for f in (*inner.constraints, io_relation):
         live |= f.get_free_variables()
-    return frozenset(live - globals)
+    pref = f"{side_prefix}-"
+    return frozenset(
+        v for v in live if v.symbol_name().startswith(pref) or v in iorelvars
+    ) - globals
 
 
 def _filter_mirrored_constraints(before, after):
@@ -155,8 +161,14 @@ def verify():
             var1 = before_conv.symbols | iorelvars
             var2 = after_conv.symbols | iorelvars
             globals = before_smt.globals | after_smt.globals
-            completeness_qvars = _encoding_qvars(after_smt, io_relation, globals)
-            soundness_qvars = _encoding_qvars(before_smt, io_relation, globals)
+            completeness_qvars = _encoding_qvars(
+                after_smt, io_relation, globals,
+                side_prefix=AFTER_PREFIX, iorelvars=iorelvars,
+            )
+            soundness_qvars = _encoding_qvars(
+                before_smt, io_relation, globals,
+                side_prefix=BEFORE_PREFIX, iorelvars=iorelvars,
+            )
             auxiliaries = frozenset.union(
                 frozenset(),
                 *before_conv.bus_interaction_encoder.get_auxiliaries().values(),
