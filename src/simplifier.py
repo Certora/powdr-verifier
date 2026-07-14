@@ -42,6 +42,7 @@ from .simplify import (
     simplify_solve_eqs,
     simplify_solve_store_eqs,
     simplify_rewrite_store_eqs,
+    simplify_ufnorm,
     simplify_z3,
 )
 from .simplify.rust import run_rust_pipeline, rust_step_action_props
@@ -51,7 +52,7 @@ _T = TypeVar("_T")
 TACTIC_QEPREFIX = "nnf:skolem:lift:witness:demod:isqf"
 
 DEFAULT_TACTIC = (
-    TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:rewrite:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod"
+    TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:rewrite:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:p#ufnorm:normalize:demod"
 )
 
 # Custom colon-separated pipelines keyed by powdr optimization pass name (e.g. ``remove_free``).
@@ -370,6 +371,8 @@ def _apply_tactic_pass(
             return simplify_rewrite(smt_script, subaction)
         case "demod":
             return simplify_demod(smt_script, subaction)
+        case "ufnorm":
+            return simplify_ufnorm(smt_script, subaction)
         case "bitwise":
             return simplify_bitwise(smt_script, subaction)
         case "mod_inv":
