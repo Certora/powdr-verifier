@@ -230,7 +230,12 @@ pub fn contribute_free(
         return Vec::new();
     };
 
-    let qvar_results = find_and_build_witnesses(&forall_body, &qvar_diff_vals, field);
+    // `rows` maps each gadget to its data (`b__i_row`) row (derived from the
+    // constraints, not a fixed formula); `constrained` records which
+    // (side, gadget) still carry the comparison gadget's DiffMarkerConstraints.
+    let (rows, constrained) = gadget_scan(script, field);
+
+    let qvar_results = find_and_build_witnesses(&forall_body, &qvar_diff_vals, field, &rows);
     let mut stripped_to_match: HashMap<String, MatchBundle> = HashMap::new();
     for (dv, bundle) in qvar_results {
         stripped_to_match.insert(strip_prefix(&dv).to_string(), bundle);
@@ -238,6 +243,19 @@ pub fn contribute_free(
 
     let mut pins = Vec::new();
     for free_dv in free_diff_vals {
+        // Soundness: only witness genuinely-unconstrained *leftover* columns —
+        // those whose comparison gadget was rewritten away on this side. The
+        // free var is always on the assume side; if its DiffMarkerConstraints
+        // are still present there (`constrained`), pinning it to a witness
+        // would ADD a constraint to an already-constrained variable and could
+        // make the assume side unsatisfiable, i.e. a spurious UNSAT / false
+        // PASS. Pinning is sound only for the rewrite's leftovers.
+        let Some(g) = diff_val_gadget(&free_dv) else {
+            continue;
+        };
+        if constrained.contains(&(name_prefix(&free_dv).to_string(), g)) {
+            continue;
+        }
         let stripped = strip_prefix(&free_dv).to_string();
         let Some(bundle) = stripped_to_match.get(&stripped) else {
             continue;
@@ -253,6 +271,110 @@ pub fn contribute_free(
         }
     }
     pins
+}
+
+/// Prefix (`before-`/`after-`) of a two-circuit column name, or `""`.
+fn name_prefix(name: &str) -> &str {
+    for p in ["before-", "after-"] {
+        if name.starts_with(p) {
+            return p;
+        }
+    }
+    ""
+}
+
+/// Parse a ``diff_marker__<limb>_<gadget>@id`` name into ``(gadget, limb)``.
+fn parse_diff_marker(name: &str) -> Option<(u32, u32)> {
+    let rest = strip_prefix(name).strip_prefix("diff_marker__")?;
+    let (limb, suffix) = rest.split_once('_')?;
+    let g: u32 = suffix.split('@').next()?.parse().ok()?;
+    Some((g, limb.parse().ok()?))
+}
+
+/// Parse a ``cmp_result_<gadget>@id`` name into ``gadget``.
+fn parse_cmp_result(name: &str) -> Option<u32> {
+    strip_prefix(name)
+        .strip_prefix("cmp_result_")?
+        .split('@')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// Parse a ``b__<limb>_<row>@id`` name into ``(limb, row)``.
+fn parse_b_limb(name: &str) -> Option<(u32, u32)> {
+    let rest = strip_prefix(name).strip_prefix("b__")?;
+    let (limb, suffix) = rest.split_once('_')?;
+    let row: u32 = suffix.split('@').next()?.parse().ok()?;
+    Some((limb.parse().ok()?, row))
+}
+
+/// Scan the script for the two facts contribute_free needs:
+///   * `rows`: gadget -> data (`b__i_row`) row. Both the comparison gadget's
+///     DiffMarkerConstraint and the rewrite's inv_of_sum constraint bind
+///     `cmp_result_g` with a single `b__*_row` in one `(= (mod … p) 0)`, so
+///     the row is read off that co-occurrence rather than guessed from `g`.
+///   * `constrained`: `(prefix, gadget)` pairs whose DiffMarkerConstraints
+///     (single `diff_marker` factor) are still present — i.e. NOT a leftover.
+fn gadget_scan(script: &Script, field: i128) -> (HashMap<u32, u32>, HashSet<(String, u32)>) {
+    let mut rows: HashMap<u32, u32> = HashMap::new();
+    let mut constrained: HashSet<(String, u32)> = HashSet::new();
+    for cmd in &script.commands {
+        let Some(body) = cmd.assert_bool() else {
+            continue;
+        };
+        for node in iter_nodes_dyn(&Dynamic::from_ast(body)) {
+            let Some(b) = node.as_bool() else { continue };
+            let Some(sum) = smt2::ast_util::unwrap_zero_mod_eq(&b, field) else {
+                continue;
+            };
+            // rows: one gadget's cmp_result + one consistent data row.
+            let mut gadget: Option<u32> = None;
+            let mut row: Option<u32> = None;
+            let mut ok = true;
+            for nd in iter_nodes_dyn(&Dynamic::from_ast(&sum)) {
+                let Some(nm) = symbol_name_dyn(&nd) else {
+                    continue;
+                };
+                if let Some(g) = parse_cmp_result(&nm) {
+                    match gadget {
+                        None => gadget = Some(g),
+                        Some(x) if x != g => ok = false,
+                        _ => {}
+                    }
+                }
+                if let Some((_, r)) = parse_b_limb(&nm) {
+                    match row {
+                        None => row = Some(r),
+                        Some(x) if x != r => ok = false,
+                        _ => {}
+                    }
+                }
+            }
+            if ok {
+                if let (Some(g), Some(r)) = (gadget, row) {
+                    rows.entry(g).or_insert(r);
+                }
+            }
+            // constrained: a DiffMarkerConstraint has exactly one diff_marker
+            // top-level factor (the boolean `Σdm·(Σdm−1)=0` has them in sums).
+            let (_c, factors) = smt2::ast_build::split_product_int(&sum, field);
+            let mut marker: Option<(String, u32)> = None;
+            let mut count = 0;
+            for f in &factors {
+                if let Some(nm) = symbol_name_dyn(&Dynamic::from_ast(f)) {
+                    if let Some((g, _)) = parse_diff_marker(&nm) {
+                        count += 1;
+                        marker = Some((name_prefix(&nm).to_string(), g));
+                    }
+                }
+            }
+            if count == 1 {
+                constrained.insert(marker.unwrap());
+            }
+        }
+    }
+    (rows, constrained)
 }
 
 struct MatchBundle {
@@ -320,19 +442,25 @@ fn find_and_build_witnesses(
     body: &Bool,
     diff_val_vars: &[String],
     field: i128,
+    rows: &HashMap<u32, u32>,
 ) -> Vec<(String, MatchBundle)> {
     let mut results = Vec::new();
     for dv in diff_val_vars {
-        if let Some(bundle) = openvm_bundle_from_named_limbs(body, dv, field) {
+        if let Some(bundle) = openvm_bundle_from_named_limbs(body, dv, field, rows) {
             results.push((dv.clone(), bundle));
         }
     }
     results
 }
 
-fn openvm_bundle_from_named_limbs(body: &Bool, dv: &str, field: i128) -> Option<MatchBundle> {
+fn openvm_bundle_from_named_limbs(
+    body: &Bool,
+    dv: &str,
+    field: i128,
+    rows: &HashMap<u32, u32>,
+) -> Option<MatchBundle> {
     let g = diff_val_gadget(dv)?;
-    let row = b_row_suffix(g);
+    let row = *rows.get(&g)?;
     let cmp_prefix = format!("cmp_result_{g}@");
 
     let mut cmp_sym = None;
@@ -347,22 +475,14 @@ fn openvm_bundle_from_named_limbs(body: &Bool, dv: &str, field: i128) -> Option<
         if st.starts_with(&cmp_prefix) {
             cmp_sym = Some(name.clone());
         }
-        if let Some(rest) = st.strip_prefix("diff_marker__") {
-            if let Some((limb, suffix)) = rest.split_once('_') {
-                if suffix.starts_with(&format!("{g}@")) {
-                    if let Ok(i) = limb.parse::<u32>() {
-                        dms.insert(i, name.clone());
-                    }
-                }
+        if let Some((gg, i)) = parse_diff_marker(&name) {
+            if gg == g {
+                dms.insert(i, name.clone());
             }
         }
-        if let Some(rest) = st.strip_prefix("b__") {
-            if let Some((limb, suffix)) = rest.split_once('_') {
-                if suffix.starts_with(&format!("{row}@")) {
-                    if let Ok(i) = limb.parse::<u32>() {
-                        bs.insert(i, name.clone());
-                    }
-                }
+        if let Some((i, r)) = parse_b_limb(&name) {
+            if r == row {
+                bs.insert(i, name.clone());
             }
         }
     }
@@ -397,14 +517,6 @@ fn diff_val_gadget(sym: &str) -> Option<u32> {
     let rest = &n[start + "diff_val_".len()..];
     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     digits.parse().ok()
-}
-
-fn b_row_suffix(gadget: u32) -> u32 {
-    if gadget == 0 {
-        0
-    } else {
-        2 * (gadget - 1)
-    }
 }
 
 fn build_skolem(matches: &HashMap<u32, LimbMatch>, cmp: &str, p: i128) -> Dynamic {
