@@ -1,12 +1,123 @@
-//! OpenVM ``EqualZeroCheck`` free-variable pins (``contribute_free``).
+//! OpenVM ``EqualZeroCheck`` free-variable pins (``contribute_free``) and
+//! ``IsZero`` (``diff_inv_marker``) quantified-witness pins (``contribute``).
 
 use std::collections::{HashMap, HashSet};
 
 use smt2::ast_util::{int_from_i128, symbol_id_from_name, symbol_name_for_id, SymbolId};
+use smt2::wrap_mod_expr_int;
 use smt2::{iter_nodes_dyn, symbol_name_dyn, Script};
-use z3::ast::{Bool, Dynamic, Int};
+use z3::ast::{Ast, Bool, Dynamic, Int};
 
 use smt2::{strip_prefix, swap_prefix};
+
+use super::map::SkolemMap;
+
+/// Pin OpenVM ``IsZero`` (``diff_inv_marker``) witnesses on ``skolem`` from the
+/// forall ``body``.
+///
+/// powdr's ``FreeVariableCombinationCandidate`` rewrite (see
+/// `constraint-solver/src/rule_based_optimizer/rules.rs`) recognises the IsZero
+/// constraint ``Σ aᵢ·diff_inv_marker__i_g = cmp_result_g`` — where each
+/// ``diff_inv_marker__i_g`` occurs only in this one constraint — and replaces
+/// the markers with a single fresh ``free_var = QuotientOrZero(cmp_result, Σaᵢ)``
+/// (the after side is pinned via that substitution). On the side that keeps the
+/// markers they stay quantified with no same-name / substitution / derived pin,
+/// so lifting cannot eliminate the forall and the solver sees a spurious model.
+///
+/// Because each marker occurs only in that constraint, a valid witness for
+/// *every* marker of a gadget is the same ``QuotientOrZero(cmp_result, Σaᵢ)``
+/// value — identical to the after ``free_var``. We render it exactly like the
+/// encoder's free_var substitution:
+///   ``ite(mod(Σaᵢ)=0, 0, mod(cmp_result)·uf_mod_inv(mod(Σaᵢ)))``
+/// Instantiating a universally-quantified variable is always sound, so an
+/// imperfect witness can only fail to close a case, never cause a false PASS.
+pub fn contribute(skolem: &mut SkolemMap, body: &Bool, field: i128) {
+    // Names of the quantified diff_inv_marker variables we may witness.
+    let marker_names: HashMap<String, SymbolId> = skolem
+        .qvars
+        .iter()
+        .filter_map(|id| symbol_name_for_id(*id).map(|n| (n, *id)))
+        .filter(|(n, _)| strip_prefix(n).contains("diff_inv_marker__"))
+        .collect();
+    if marker_names.is_empty() {
+        return;
+    }
+    let marker_set: HashSet<&String> = marker_names.keys().collect();
+
+    // Find each constraint `(= (mod SUM p) 0)` whose SUM has marker factors;
+    // for each, witness every marker in it with QuotientOrZero(-r, factor),
+    // where `factor` is the sum of the markers' cofactors and `r` is the rest.
+    for node in iter_nodes_dyn(&Dynamic::from_ast(body)) {
+        let Some(b) = node.as_bool() else { continue };
+        let Some(sum) = smt2::ast_util::unwrap_zero_mod_eq(&b, field) else {
+            continue;
+        };
+        let summands = smt2::ast_build::flatten_op_int("+", &sum);
+        let mut factor_terms: Vec<Int> = Vec::new();
+        let mut rest_terms: Vec<Int> = Vec::new();
+        let mut markers_here: Vec<SymbolId> = Vec::new();
+        let mut bail = false;
+        for s in &summands {
+            let (coeff, factors) = smt2::ast_build::split_product_int(s, field);
+            let mut marker_idx = None;
+            for (i, f) in factors.iter().enumerate() {
+                if let Some(fname) = symbol_name_dyn(&Dynamic::from_ast(f)) {
+                    if marker_set.contains(&fname) {
+                        if marker_idx.is_some() {
+                            bail = true; // two markers in one product: unexpected
+                        }
+                        marker_idx = Some((i, fname));
+                    }
+                }
+            }
+            match marker_idx {
+                None => rest_terms.push(s.clone()),
+                Some((mi, mname)) => {
+                    // cofactor of the marker = coeff * (other factors)
+                    let mut cof = int_from_i128(coeff);
+                    for (i, f) in factors.iter().enumerate() {
+                        if i != mi {
+                            cof = Int::mul(&[&cof, f]);
+                        }
+                    }
+                    factor_terms.push(cof);
+                    if let Some(id) = marker_names.get(&mname) {
+                        markers_here.push(*id);
+                    }
+                }
+            }
+        }
+        if bail || markers_here.is_empty() {
+            continue;
+        }
+
+        let factor = wrap_mod_expr_int(sum_or_zero(&factor_terms), field);
+        let r = sum_or_zero(&rest_terms);
+        // -r mod p
+        let neg_r = wrap_mod_expr_int(Int::sub(&[&int_from_i128(0), &r]), field);
+        // QuotientOrZero(-r, factor) = ite(factor==0, 0, (-r) * uf_mod_inv(factor))
+        let prod = Int::mul(&[&neg_r, &uf_mod_inv(&factor)]);
+        let witness = factor.eq(&int_from_i128(0)).ite(&int_from_i128(0), &prod);
+        let witness = Dynamic::from_ast(&witness);
+        for id in markers_here {
+            skolem.pin(id, witness.clone(), "rules-inv-marker");
+        }
+    }
+}
+
+fn sum_or_zero(terms: &[Int]) -> Int {
+    if terms.is_empty() {
+        int_from_i128(0)
+    } else {
+        Int::add(&terms.iter().collect::<Vec<_>>())
+    }
+}
+
+fn uf_mod_inv(arg: &Int) -> Int {
+    let s = arg.get_sort();
+    let decl = z3::FuncDecl::new("uf_mod_inv", &[&s], &s);
+    decl.apply(&[arg]).as_int().unwrap_or_else(|| arg.clone())
+}
 
 pub fn contribute_free(
     script: &Script,
@@ -182,7 +293,11 @@ fn openvm_bundle_from_named_limbs(body: &Bool, dv: &str, field: i128) -> Option<
     }
     let mut matches = HashMap::new();
     for i in 0..4 {
-        let off = if i == 0 { (field - 1).rem_euclid(field) } else { 0 };
+        let off = if i == 0 {
+            (field - 1).rem_euclid(field)
+        } else {
+            0
+        };
         matches.insert(
             i,
             LimbMatch {
