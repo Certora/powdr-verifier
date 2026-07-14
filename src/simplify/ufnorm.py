@@ -105,12 +105,15 @@ def _canon_arg(arg: FNode, p: int) -> FNode | None:
 
 
 def simplify_ufnorm(
-    smt_script: script.SmtLibScript, subaction=None, *, axioms_only: bool = False
+    smt_script: script.SmtLibScript, subaction=None, *, axioms_only: bool = True
 ) -> script.SmtLibScript:
-    """``axioms_only`` (tactic ``ufnorm-axioms``): assert the connection
-    axioms but keep the original occurrences — the ablation separating
-    "terms identical at parse time" from "e-classes merged by congruence at
-    solve time"."""
+    """Default is AXIOMS-ONLY (measured identical to full rewrite: the
+    ground connection axioms carry the whole effect; congruence merges the
+    e-classes at assert time and the canonical term is just the shared
+    meeting point). Tactic ``ufnorm-rewrite`` selects the legacy
+    rewrite-occurrences mode for ablation. The rust pipeline implements the
+    axioms-only mode natively (``passes/ufnorm.rs``); this is the python
+    fallback/ablation implementation."""
     p = ARGS().field_type.value
     mgr = get_env().formula_manager
     memo: dict[FNode, FNode] = {}

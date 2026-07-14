@@ -11,5 +11,6 @@ pub mod normalize;
 pub mod pretty;
 pub mod rewrite;
 pub mod skolem;
+pub mod ufnorm;
 pub mod witness;
 pub mod z3;
