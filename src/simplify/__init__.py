@@ -13,6 +13,7 @@ from .rewrite_store_eqs import simplify_rewrite_store_eqs
 from .cvc5 import simplify_cvc5
 from .bounds import simplify_bounds
 from .demod import simplify_demod
+from .ufnorm import simplify_ufnorm
 from .intervals import simplify_intervals
 from .z3 import simplify_z3
 from .nnf import simplify_nnf

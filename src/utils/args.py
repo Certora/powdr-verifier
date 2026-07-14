@@ -56,6 +56,9 @@ def __build_parser(skip_subparsers=False):
         "--varrange-axioms", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
+        "--sliced-class-routing", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
         "--memory-presolve",
         type=MemoryPresolve,
         default=MemoryPresolve.NONE,
