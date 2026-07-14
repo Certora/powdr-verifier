@@ -362,6 +362,7 @@ def run_trace(*files):
                         "--dump-model",
                         rewritten.with_suffix(".model"),
                         parse_output=True,
+                        extra_args=["--timeout", str(TIMEOUT_CHECK_SEC)],
                         timeout=TIMEOUT_CHECK_SEC,
                     )
 
@@ -456,6 +457,7 @@ def run_verify(a, b):
                     rewritten,
                     "--dump-model", file.with_suffix(".model"),
                     parse_output=True,
+                    extra_args=["--timeout", str(TIMEOUT_CHECK_SEC)],
                     timeout=TIMEOUT_CHECK_SEC,
                     stats_args=__stats_extra(stats_run_id, rewritten),
                 )

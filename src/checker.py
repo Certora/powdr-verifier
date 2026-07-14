@@ -253,6 +253,8 @@ def check_smt_script(
     check_timeout: float | None = None,
 ) -> str:
     """Run the same solver grid as :func:`check`; return ``sat`` / ``unsat`` / inconclusive."""
+    if check_timeout is None:
+        check_timeout = getattr(ARGS(), "timeout", None)
     try:
         from .check.rust import (
             merge_solve_action,
@@ -331,7 +333,9 @@ def check():
         # The sliced mode exists only in the Python checker for now; do not
         # delegate to the Rust binary when it is requested.
         if not solve_sliced and resolve_checker_bin() is not None:
-            data = run_checker_subprocess(ARGS().input)
+            data = run_checker_subprocess(
+                ARGS().input, check_timeout=ARGS().timeout
+            )
             return action_from_dict(data)
     except (FileNotFoundError, RuntimeError, json.JSONDecodeError) as e:
         logging.debug("rust checker fallback: %s", e)

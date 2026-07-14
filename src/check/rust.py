@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from ..utils.args import ARGS
+from ..utils.process import communicate_with_timeout
 
 
 def _verifier_root() -> Path:
@@ -59,6 +60,63 @@ def _emit_stderr(stderr: str | None) -> None:
         sys.stderr.flush()
 
 
+def _effective_check_timeout(check_timeout: float | None) -> float | None:
+    if check_timeout is not None:
+        return check_timeout
+    return getattr(ARGS(), "timeout", None)
+
+
+def _timeout_action() -> dict:
+    return {"name": "check", "result": "timeout"}
+
+
+def _run_checker_proc(
+    cmd: list[str],
+    *,
+    stdin: str | None = None,
+    check_timeout: float | None = None,
+) -> dict:
+    timeout = _effective_check_timeout(check_timeout)
+    if timeout is not None:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE if stdin is not None else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if stdin is not None and proc.stdin is not None:
+            proc.stdin.write(stdin)
+            proc.stdin.close()
+        stdout, stderr, timed_out = communicate_with_timeout(proc, timeout)
+        _emit_stderr(stderr)
+        if timed_out:
+            logging.warning("checker subprocess timed out after %.1fs", timeout)
+            return _timeout_action()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"checker exited {proc.returncode}: {(stderr or '').strip()}"
+            )
+        data = json.loads(stdout or "")
+    else:
+        proc = subprocess.run(
+            cmd,
+            input=stdin,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        _emit_stderr(proc.stderr)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"checker exited {proc.returncode}: {proc.stderr.strip()}"
+            )
+        data = json.loads(proc.stdout)
+    if isinstance(data, dict) and "__Action" in data:
+        return data["__Action"]
+    return data
+
+
 def run_checker_subprocess(
     input_path: Path | str,
     *,
@@ -69,28 +127,15 @@ def run_checker_subprocess(
     bin_path = resolve_checker_bin()
     if bin_path is None:
         raise FileNotFoundError("checker binary not found")
+    timeout = _effective_check_timeout(check_timeout)
     cmd = _build_checker_cmd(
         bin_path,
         str(input_path),
         dump_model=dump_model or getattr(ARGS(), "dump_model", None),
         solve_chunked=solve_chunked,
-        timeout=check_timeout,
+        timeout=timeout,
     )
-    proc = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    _emit_stderr(proc.stderr)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"checker exited {proc.returncode}: {proc.stderr.strip()}"
-        )
-    data = json.loads(proc.stdout)
-    if isinstance(data, dict) and "__Action" in data:
-        return data["__Action"]
-    return data
+    return _run_checker_proc(cmd, check_timeout=timeout)
 
 
 def run_checker_subprocess_text(
@@ -103,29 +148,15 @@ def run_checker_subprocess_text(
     bin_path = resolve_checker_bin()
     if bin_path is None:
         raise FileNotFoundError("checker binary not found")
+    timeout = _effective_check_timeout(check_timeout)
     cmd = _build_checker_cmd(
         bin_path,
         "-",
         dump_model=dump_model,
         solve_chunked=solve_chunked,
-        timeout=check_timeout,
+        timeout=timeout,
     )
-    proc = subprocess.run(
-        cmd,
-        input=smt_text,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    _emit_stderr(proc.stderr)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"checker exited {proc.returncode}: {proc.stderr.strip()}"
-        )
-    data = json.loads(proc.stdout)
-    if isinstance(data, dict) and "__Action" in data:
-        return data["__Action"]
-    return data
+    return _run_checker_proc(cmd, stdin=smt_text, check_timeout=timeout)
 
 
 def merge_solve_action(python_action, rust_data: dict) -> str:
