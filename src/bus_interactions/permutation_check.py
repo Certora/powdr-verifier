@@ -103,7 +103,7 @@ def _match_var_from_analysis(
 def _plain_build_match_vars(
     interactions: list,
     symbol: Callable[[int, int], FNode],
-    analysis_matches: list[set[int]],
+    analysis_matches: list[list[int]],
     *,
     log_prefix: str | None = None,
 ) -> dict[tuple[int, int], FNode]:
@@ -117,7 +117,7 @@ def _plain_build_match_vars(
     symbols = 0
 
     for i in range(n):
-        m_i = analysis_matches[i]
+        m_i = set(analysis_matches[i])
         for j in range(i, n):
             key = (i, j)
             forced: FNode | None = None
@@ -748,7 +748,7 @@ class PermutationCheckMixin:
         analysis_matches = (
             alignment.matches_for(source_path)
             if have_analysis
-            else [set(range(n))] * n
+            else [list(range(n))] * n
         )
         match_vars = _plain_build_match_vars(
             interactions,
@@ -770,6 +770,14 @@ class PermutationCheckMixin:
             if i > j:
                 i, j = j, i
             return match_vars[(i, j)]
+
+        def cand(i: int) -> list[int]:
+            # Candidate match partners from the membus analysis (a sorted list).
+            # m(i, j) is preset FALSE for every j outside analysis_matches[i], so
+            # iterating this list (instead of range(n)) emits exactly the same
+            # non-false constraints in O(n·k) rather than O(n^2). With no analysis
+            # it is range(n) (unchanged).
+            return analysis_matches[i]
 
 
         def is_input(i: int) -> FNode:
@@ -861,8 +869,8 @@ class PermutationCheckMixin:
             )
 
         for i in range(n):
-            for j in range(i + 1, n):
-                if m(i, j).is_false():
+            for j in cand(i):
+                if j <= i or m(i, j).is_false():
                     continue
                 # pairwise match: mul_i + mul_j == 0 and mul_i != 0 and mul_j != 0
                 conjuncts.append(
@@ -895,7 +903,7 @@ class PermutationCheckMixin:
         for i in range(n):
             conjuncts.append(
                 with_comment(
-                    _plain_exactly_one_match([m(i, j) for j in range(n)]),
+                    _plain_exactly_one_match([m(i, j) for j in cand(i)]),
                     f"interaction {i} has exactly one match"
                 )
             )
@@ -928,7 +936,7 @@ class PermutationCheckMixin:
         for i in range(n):
             if is_disabled(i).is_true():
                 continue
-            for j in range(n):
+            for j in cand(i):
                 if i == j or m(i, j).is_false():
                     continue
                 if mem_keys_statically_disjoint(i, j):
