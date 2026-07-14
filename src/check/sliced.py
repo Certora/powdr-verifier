@@ -467,6 +467,91 @@ class _SliceDumper:
             json.dump(self.records, out, indent=2)
 
 
+def _structure_key(d: FNode) -> tuple[str, ...] | None:
+    """Cheap structural class of a disjunct, for strategy routing.
+
+    Slow disjuncts are not the big ones — they are the structurally severed
+    ones (measured on 2100224: 6/530 overlap between the 530 slowest and 530
+    largest): refutations that need facts outside the arith slice, signalled
+    by uninterpreted bitwise/mod applications, especially with COMPOSITE
+    arguments (demod's ``+P*mod!`` witnesses inside uf args defeat
+    congruence). Returns a marker tuple, or ``None`` for plain arithmetic
+    disjuncts (never routed).
+
+    Markers: ``ufc`` — uf/umod application with a composite (non-symbol,
+    non-constant) argument; ``uf`` — any uf/umod application; ``modw`` — a
+    ``mod!`` quotient-witness variable occurs.
+    """
+    markers: set[str] = set()
+    stack = [d]
+    seen: set[int] = set()
+    while stack:
+        f = stack.pop()
+        if id(f) in seen:
+            continue
+        seen.add(id(f))
+        if f.is_function_application():
+            name = f.function_name().symbol_name()
+            if name.startswith("uf_") or name.startswith("umod"):
+                markers.add("uf")
+                if any(
+                    not (a.is_symbol() or a.is_int_constant()) for a in f.args()
+                ):
+                    markers.add("ufc")
+        elif f.is_symbol() and f.symbol_name().startswith("mod!"):
+            markers.add("modw")
+        stack.extend(f.args())
+    return tuple(sorted(markers)) if markers else None
+
+
+class _ClassRouter:
+    """Structure-keyed strategy preference table (learning, self-disabling).
+
+    Generalizes the neighbor preempt: when a fallback strategy refutes a
+    disjunct, remember it per structure class; later members of the class run
+    that strategy FIRST, skipping the primary-rung timeout (the dominant cost
+    of hard families: ~5s toll per member). Routing only starts after a real
+    win, and a class whose routed attempts keep losing to the primary rung is
+    disabled — the measured failure mode of a stale preempt (easy disjuncts
+    paying a one-shot subprocess each) stays bounded.
+    """
+
+    DISABLE_MIN_MISSES = 8
+
+    def __init__(self, metrics: Metrics):
+        self.metrics = metrics
+        self.pref: dict[tuple, str] = {}
+        self.hits: defaultdict = defaultdict(int)
+        self.misses: defaultdict = defaultdict(int)
+        self.disabled: set[tuple] = set()
+
+    def route(self, key: tuple | None) -> str | None:
+        if key is None or key in self.disabled:
+            return None
+        return self.pref.get(key)
+
+    def learn(self, key: tuple | None, via: str | None, *, routed: bool, hit: bool) -> None:
+        if key is None:
+            return
+        if via:
+            self.pref[key] = via
+        if not routed:
+            return
+        if hit:
+            self.hits[key] += 1
+            self.metrics.count("class_route_hit")
+            return
+        self.misses[key] += 1
+        self.metrics.count("class_route_miss")
+        if (
+            self.misses[key] >= self.DISABLE_MIN_MISSES
+            and self.misses[key] > 2 * self.hits[key]
+        ):
+            self.disabled.add(key)
+            self.metrics.count("class_route_disabled")
+            logging.info("class routing disabled for %s (misses dominate)", key)
+
+
 class _SlicedChecker:
     def __init__(
         self,
@@ -513,6 +598,9 @@ class _SlicedChecker:
         self._grow_resident: set[int] = set()
         self._scratch_tmp = tempfile.TemporaryDirectory(prefix="sliced-tactic-")
         self._scratch = Path(self._scratch_tmp.name)
+        self.router = (
+            _ClassRouter(metrics) if ARGS().sliced_class_routing else None
+        )
 
     # ---------------- solver management ----------------
 
@@ -1026,10 +1114,25 @@ class _SlicedChecker:
                     n_refuted += 1
                     continue
                 t_disjunct = time.perf_counter()
+                # Class routing: structure-keyed preference (learned from
+                # earlier wins) fills in when there is no fresher neighbor
+                # preempt — hard families are structural, not positional, so
+                # interleaved members no longer pay the primary-rung toll.
+                ckey = _structure_key(d) if self.router is not None else None
+                class_prefer = self.router.route(ckey) if self.router else None
+                effective_prefer = prefer or class_prefer
                 tier, outcome = self._ladder(
                     group_solver, k, d, primary_rung, primary_considered, slice_idx,
-                    prefer=prefer, fallback=sticky,
+                    prefer=effective_prefer, fallback=sticky,
                 )
+                if self.router is not None:
+                    self.router.learn(
+                        ckey,
+                        outcome.via,
+                        routed=prefer is None and class_prefer is not None,
+                        hit=outcome.via is not None
+                        and outcome.via == class_prefer,
+                    )
                 # Preempt (prefer) is NOT sticky: hard families cluster, so
                 # only the immediate neighbor gets the run-strategy-first
                 # shortcut; a stale preempt makes every easy disjunct pay a
