@@ -52,7 +52,7 @@ _T = TypeVar("_T")
 TACTIC_QEPREFIX = "nnf:skolem:lift:witness:demod:isqf"
 
 DEFAULT_TACTIC = (
-    TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:rewrite:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:p#ufnorm:normalize:demod"
+    TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:rewrite:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:ufnorm:normalize:demod"
 )
 
 # Custom colon-separated pipelines keyed by powdr optimization pass name (e.g. ``remove_free``).
@@ -373,7 +373,7 @@ def _apply_tactic_pass(
             return simplify_demod(smt_script, subaction)
         case "ufnorm":
             return simplify_ufnorm(
-                smt_script, subaction, axioms_only=dash_suffix == ["axioms"]
+                smt_script, subaction, axioms_only=dash_suffix != ["rewrite"]
             )
         case "bitwise":
             return simplify_bitwise(smt_script, subaction)
