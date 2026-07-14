@@ -53,6 +53,9 @@ def __build_parser(skip_subparsers=False):
         "--bitwise-lift-axioms", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
+        "--varrange-axioms", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
         "--memory-presolve",
         type=MemoryPresolve,
         default=MemoryPresolve.NONE,
