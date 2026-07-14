@@ -37,12 +37,13 @@ def analyze_memory_bus_alignment(
         _require_perfect_alignment(analysis)
     elif ARGS().memory_encoding == "auto":
         # Pick the interface encoding when the analysis certifies a perfect
-        # 1:1 kept alignment, else fall back to the always-sound plain
-        # encoding. Resolve the global once so every downstream reader (encode
-        # / io-relation / pins) sees a concrete mode; a later call (e.g. the
-        # is_valid-inactive analysis) re-checks its own alignment under the
-        # resolved mode.
+        # 1:1 kept alignment AND the interface v1 precondition holds (every
+        # memory multiplicity is const-evaluable to {0, +-1}); else fall back
+        # to the always-sound plain encoding. Resolve the global once so every
+        # downstream reader (encode / io-relation / pins) sees a concrete mode.
         problems = _alignment_problems(analysis)
+        if not problems and not _interface_mults_const(before, after):
+            problems = ["memory multiplicities are not const-evaluable (is_valid/flag-gated); interface v1 aborts"]
         resolved = "plain" if problems else "interface"
         logger.warning(
             "auto memory-encoding -> %s (%s)",
@@ -76,6 +77,49 @@ def _alignment_problems(analysis: MembusAnalysis) -> list[str]:
     elif sorted(kept.values()) != list(range(analysis.n_after)):
         problems.append("kept pairs are not a bijection onto the after side")
     return problems
+
+
+def _memory_bus_id(dump: dict[str, Any]) -> int:
+    """Numeric id of the memory bus, from the dump's ``bus_map`` (default 1)."""
+    bus_ids = (dump.get("bus_map") or {}).get("bus_ids") or {}
+    for name, val in bus_ids.items():
+        if "mem" in str(name).lower():
+            if isinstance(val, int):
+                return val
+            if isinstance(val, dict) and isinstance(val.get("id"), int):
+                return val["id"]
+    return 1
+
+
+def _expr_references_variable(expr: Any) -> bool:
+    """True if a dumped algebraic expression references any (witness) column.
+
+    Dumped expressions are ints, variable-name strings, or ``[lhs, op, rhs]``
+    lists with ``op`` in ``{+,-,*}``. A bare string in operand position is a
+    column reference."""
+    if isinstance(expr, str):
+        return expr not in ("+", "-", "*")
+    if isinstance(expr, list):
+        return any(_expr_references_variable(x) for x in expr)
+    return False
+
+
+def _interface_mults_const(before: dict[str, Any], after: dict[str, Any]) -> bool:
+    """Mirror the interface encoding's precondition (openvm_memory.encode_all):
+    every memory-bus multiplicity must const-evaluate to {0, +-1}. Conservative
+    and syntactic — a multiplicity that references any column (e.g. the
+    ``is_valid``- or flag-gated ``0 - is_valid``) is treated as non-const, so
+    ``auto`` falls back to the always-sound plain encoding instead of letting
+    the interface encoder abort with a hard error."""
+    for dump in (before, after):
+        machine = dump.get("machine", dump)
+        mem_id = _memory_bus_id(dump)
+        for bi in machine.get("bus_interactions", []):
+            if bi.get("id") != mem_id:
+                continue
+            if _expr_references_variable(bi.get("mult")):
+                return False
+    return True
 
 
 def _require_perfect_alignment(analysis: MembusAnalysis) -> None:
