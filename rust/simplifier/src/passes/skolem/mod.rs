@@ -197,7 +197,7 @@ fn walk_assert_dyn_opt(
 
 #[allow(clippy::too_many_arguments)]
 fn walk_forall_opt(
-    _script: &Script,
+    script: &Script,
     term: &Dynamic,
     declared: &HashMap<String, Vec<String>>,
     sorts: &HashMap<String, SortKind>,
@@ -234,7 +234,7 @@ fn walk_forall_opt(
     // markers that no earlier contributor (same-name / derived / witness /
     // isolate) could handle.
     if let Some(p) = field {
-        rules::contribute(&mut skolem, &body, p);
+        rules::contribute(&mut skolem, script, &body, p);
     }
 
     for src in skolem.sources.values() {

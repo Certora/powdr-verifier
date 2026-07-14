@@ -26,12 +26,20 @@ use super::map::SkolemMap;
 ///
 /// Because each marker occurs only in that constraint, a valid witness for
 /// *every* marker of a gadget is the same ``QuotientOrZero(cmp_result, Σaᵢ)``
-/// value — identical to the after ``free_var``. We render it exactly like the
-/// encoder's free_var substitution:
+/// value — identical to the after ``free_var``.
+///
+/// We prefer to pin the markers to the after-side ``free_var`` *variable*
+/// itself: it survives as a declared, range-bounded variable that the after
+/// constraints pin via ``Σ(after-aᵢ)·free_var = after-cmp``. Since the a-limbs
+/// and cmp are same-name-pinned (before==after), that makes the before-side
+/// constraint ``Σ(before-aᵢ)·marker = before-cmp`` provably hold — with no
+/// unconstrained ``uf_mod_inv`` for the solver to exploit. If we cannot locate
+/// the after ``free_var`` (e.g. it was substituted away), we fall back to
+/// rendering the value directly like the encoder's free_var substitution:
 ///   ``ite(mod(Σaᵢ)=0, 0, mod(cmp_result)·uf_mod_inv(mod(Σaᵢ)))``
-/// Instantiating a universally-quantified variable is always sound, so an
-/// imperfect witness can only fail to close a case, never cause a false PASS.
-pub fn contribute(skolem: &mut SkolemMap, body: &Bool, field: i128) {
+/// Instantiating a universally-quantified variable is always sound, so either
+/// witness can only fail to close a case, never cause a false PASS.
+pub fn contribute(skolem: &mut SkolemMap, script: &Script, body: &Bool, field: i128) {
     // Names of the quantified diff_inv_marker variables we may witness.
     let marker_names: HashMap<String, SymbolId> = skolem
         .qvars
@@ -56,6 +64,11 @@ pub fn contribute(skolem: &mut SkolemMap, body: &Bool, field: i128) {
         let mut factor_terms: Vec<Int> = Vec::new();
         let mut rest_terms: Vec<Int> = Vec::new();
         let mut markers_here: Vec<SymbolId> = Vec::new();
+        // a-limb symbol names that each multiply a marker (i.e. products
+        // `a__i_g · marker_i` with a single non-marker symbol factor). These
+        // let us locate the after-side `free_var` that multiplies the same
+        // a-limbs on the constrained side.
+        let mut a_limb_names: Vec<String> = Vec::new();
         let mut bail = false;
         for s in &summands {
             let (coeff, factors) = smt2::ast_build::split_product_int(s, field);
@@ -75,10 +88,18 @@ pub fn contribute(skolem: &mut SkolemMap, body: &Bool, field: i128) {
                 Some((mi, mname)) => {
                     // cofactor of the marker = coeff * (other factors)
                     let mut cof = int_from_i128(coeff);
+                    let mut other_syms: Vec<String> = Vec::new();
                     for (i, f) in factors.iter().enumerate() {
                         if i != mi {
                             cof = Int::mul(&[&cof, f]);
+                            if let Some(nm) = symbol_name_dyn(&Dynamic::from_ast(f)) {
+                                other_syms.push(nm);
+                            }
                         }
+                    }
+                    // Pure `a__i_g · marker_i`: cofactor is exactly one symbol.
+                    if coeff == 1 && factors.len() == 2 && other_syms.len() == 1 {
+                        a_limb_names.push(other_syms.into_iter().next().unwrap());
                     }
                     factor_terms.push(cof);
                     if let Some(id) = marker_names.get(&mname) {
@@ -91,16 +112,32 @@ pub fn contribute(skolem: &mut SkolemMap, body: &Bool, field: i128) {
             continue;
         }
 
-        let factor = wrap_mod_expr_int(sum_or_zero(&factor_terms), field);
-        let r = sum_or_zero(&rest_terms);
-        // -r mod p
-        let neg_r = wrap_mod_expr_int(Int::sub(&[&int_from_i128(0), &r]), field);
-        // QuotientOrZero(-r, factor) = ite(factor==0, 0, (-r) * uf_mod_inv(factor))
-        let prod = Int::mul(&[&neg_r, &uf_mod_inv(&factor)]);
-        let witness = factor.eq(&int_from_i128(0)).ite(&int_from_i128(0), &prod);
-        let witness = Dynamic::from_ast(&witness);
+        // Prefer the constrained after-side `free_var` variable (no
+        // unconstrained inverse). Any a-limb identifies the gadget's free_var,
+        // since it multiplies every after-a-limb on the constrained side.
+        let free_var = a_limb_names
+            .first()
+            .and_then(|n| swap_prefix(n))
+            .and_then(|after_a| find_after_free_var(script, &after_a, field));
+
+        let (witness, source) = match free_var {
+            Some(fv) => (
+                Dynamic::from_ast(&Int::new_const(fv.as_str())),
+                "rules-inv-marker-freevar",
+            ),
+            None => {
+                let factor = wrap_mod_expr_int(sum_or_zero(&factor_terms), field);
+                let r = sum_or_zero(&rest_terms);
+                // -r mod p
+                let neg_r = wrap_mod_expr_int(Int::sub(&[&int_from_i128(0), &r]), field);
+                // QuotientOrZero(-r, factor) = ite(factor==0, 0, (-r)·uf_mod_inv(factor))
+                let prod = Int::mul(&[&neg_r, &uf_mod_inv(&factor)]);
+                let w = factor.eq(&int_from_i128(0)).ite(&int_from_i128(0), &prod);
+                (Dynamic::from_ast(&w), "rules-inv-marker")
+            }
+        };
         for id in markers_here {
-            skolem.pin(id, witness.clone(), "rules-inv-marker");
+            skolem.pin(id, witness.clone(), source);
         }
     }
 }
@@ -117,6 +154,49 @@ fn uf_mod_inv(arg: &Int) -> Int {
     let s = arg.get_sort();
     let decl = z3::FuncDecl::new("uf_mod_inv", &[&s], &s);
     decl.apply(&[arg]).as_int().unwrap_or_else(|| arg.clone())
+}
+
+/// Find the after-side ``free_var`` symbol introduced by powdr's
+/// ``FreeVariableCombinationCandidate`` rewrite for this gadget.
+///
+/// The rewrite replaces the marker constraint with ``Σ(after-aᵢ)·free_var =
+/// after-cmp`` (plus a ``0 ≤ free_var < p`` range bound). We locate that
+/// constraint by the given after-a-limb: a product with a single-symbol factor
+/// named ``free_var…`` whose remaining factors reference ``a_limb_after``. This
+/// matches both the factored ``free_var·(Σ aᵢ)`` shape (raw input) and the
+/// distributed ``Σ (aᵢ·free_var)`` shape (post-simplify). Because ``free_var``
+/// is genuinely constrained (not a substituted ``uf_mod_inv`` term), pinning the
+/// markers to it yields a witness the solver cannot cheat.
+fn find_after_free_var(script: &Script, a_limb_after: &str, field: i128) -> Option<String> {
+    for cmd in &script.commands {
+        let Some(body) = cmd.assert_bool() else {
+            continue;
+        };
+        for node in iter_nodes_dyn(&Dynamic::from_ast(body)) {
+            let Some(b) = node.as_bool() else { continue };
+            let Some(sum) = smt2::ast_util::unwrap_zero_mod_eq(&b, field) else {
+                continue;
+            };
+            for s in smt2::ast_build::flatten_op_int("+", &sum) {
+                let (_coeff, factors) = smt2::ast_build::split_product_int(&s, field);
+                // A single-symbol `free_var…` factor.
+                let fv = factors.iter().find_map(|f| {
+                    symbol_name_dyn(&Dynamic::from_ast(f))
+                        .filter(|n| strip_prefix(n).starts_with("free_var"))
+                });
+                let Some(fv) = fv else { continue };
+                // The a-limb must appear somewhere else in this product.
+                let refs_a = factors.iter().any(|f| {
+                    iter_nodes_dyn(&Dynamic::from_ast(f))
+                        .any(|nd| symbol_name_dyn(&nd).as_deref() == Some(a_limb_after))
+                });
+                if refs_a {
+                    return Some(fv);
+                }
+            }
+        }
+    }
+    None
 }
 
 pub fn contribute_free(
