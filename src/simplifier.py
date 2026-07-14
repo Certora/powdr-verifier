@@ -372,7 +372,9 @@ def _apply_tactic_pass(
         case "demod":
             return simplify_demod(smt_script, subaction)
         case "ufnorm":
-            return simplify_ufnorm(smt_script, subaction)
+            return simplify_ufnorm(
+                smt_script, subaction, axioms_only=dash_suffix == ["axioms"]
+            )
         case "bitwise":
             return simplify_bitwise(smt_script, subaction)
         case "mod_inv":

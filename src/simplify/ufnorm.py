@@ -104,12 +104,18 @@ def _canon_arg(arg: FNode, p: int) -> FNode | None:
     return None if canon == arg else canon
 
 
-def simplify_ufnorm(smt_script: script.SmtLibScript, subaction=None) -> script.SmtLibScript:
+def simplify_ufnorm(
+    smt_script: script.SmtLibScript, subaction=None, *, axioms_only: bool = False
+) -> script.SmtLibScript:
+    """``axioms_only`` (tactic ``ufnorm-axioms``): assert the connection
+    axioms but keep the original occurrences — the ablation separating
+    "terms identical at parse time" from "e-classes merged by congruence at
+    solve time"."""
     p = ARGS().field_type.value
     mgr = get_env().formula_manager
     memo: dict[FNode, FNode] = {}
     axioms: dict[FNode, FNode] = {}
-    stats = {"apps_seen": 0, "apps_canonicalized": 0}
+    stats = {"apps_seen": 0, "apps_canonicalized": 0, "axioms_only": axioms_only}
 
     def rewrite(root: FNode) -> FNode:
         stack = [root]
@@ -147,7 +153,7 @@ def simplify_ufnorm(smt_script: script.SmtLibScript, subaction=None) -> script.S
                             Equals(base, new_app),
                             "UFNORM: table mod-P invariance (granted)",
                         )
-                    memo[n] = new_app
+                    memo[n] = base if axioms_only else new_app
                     continue
                 memo[n] = base
             elif not n.args() or args == tuple(n.args()):
