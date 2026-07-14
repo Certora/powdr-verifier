@@ -16,7 +16,7 @@ def analyze_memory_bus_alignment(
     *,
     after_assume_is_valid: bool = False,
 ) -> MembusAnalysis | None:
-    if ARGS().memory_encoding not in ("plain", "interface"):
+    if ARGS().memory_encoding not in ("plain", "interface", "auto"):
         return None
 
     analysis = run_membus_analysis(
@@ -33,18 +33,36 @@ def analyze_memory_bus_alignment(
         after_assume_is_valid,
     )
     if ARGS().memory_encoding == "interface":
+        # Explicit request: a non-perfect alignment is a hard error.
         _require_perfect_alignment(analysis)
+    elif ARGS().memory_encoding == "auto":
+        # Pick the interface encoding when the analysis certifies a perfect
+        # 1:1 kept alignment, else fall back to the always-sound plain
+        # encoding. Resolve the global once so every downstream reader (encode
+        # / io-relation / pins) sees a concrete mode; a later call (e.g. the
+        # is_valid-inactive analysis) re-checks its own alignment under the
+        # resolved mode.
+        problems = _alignment_problems(analysis)
+        resolved = "plain" if problems else "interface"
+        logger.warning(
+            "auto memory-encoding -> %s (%s)",
+            resolved,
+            "; ".join(problems) if problems else "perfect 1:1 kept alignment",
+        )
+        ARGS().memory_encoding = resolved
     return analysis
 
 
-def _require_perfect_alignment(analysis: MembusAnalysis) -> None:
-    """The interface encoding assumes recv equalities across aligned pairs, so a
+def _alignment_problems(analysis: MembusAnalysis) -> list[str]:
+    """Reasons the alignment is not a perfect 1:1 kept map, or ``[]`` if it is.
+
+    The interface encoding assumes recv equalities across aligned pairs, so a
     wrong or partial pairing is a soundness risk (vacuous premises = false
-    PASS). Accept only a total 1:1 map sourced from genuine ``membus align``
-    "kept" rows — never the heuristic fallback or identity fill."""
+    PASS). Only a total 1:1 map sourced from genuine ``membus align`` "kept"
+    rows qualifies — never the heuristic fallback or identity fill."""
     n = analysis.n_before
     kept = analysis.kept_pairs
-    problems = []
+    problems: list[str] = []
     if not analysis.align_ok:
         problems.append("membus align did not run (heuristic fallback)")
     if analysis.n_after != n:
@@ -57,6 +75,13 @@ def _require_perfect_alignment(analysis: MembusAnalysis) -> None:
         )
     elif sorted(kept.values()) != list(range(analysis.n_after)):
         problems.append("kept pairs are not a bijection onto the after side")
+    return problems
+
+
+def _require_perfect_alignment(analysis: MembusAnalysis) -> None:
+    """Raise unless ``analysis`` is a perfect 1:1 kept alignment (see
+    :func:`_alignment_problems`). Used by the explicit ``interface`` mode."""
+    problems = _alignment_problems(analysis)
     if problems:
         raise RuntimeError(
             "interface memory encoding requires a perfect 1:1 kept alignment: "
