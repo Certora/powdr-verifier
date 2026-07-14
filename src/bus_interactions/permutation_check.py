@@ -920,6 +920,13 @@ class PermutationCheckMixin:
             for j in range(i + 1, n):
                 if is_input(j).is_false() and is_output(j).is_false():
                     continue
+                # Skip when the antecedent Or(both-input, both-output) is
+                # statically False -- neither pair can both be inputs nor both be
+                # outputs -- so the conjunct would be trivially true.
+                if (is_input(i).is_false() or is_input(j).is_false()) and (
+                    is_output(i).is_false() or is_output(j).is_false()
+                ):
+                    continue
                 if mem_keys_statically_disjoint(i, j):
                     continue
                 conjuncts.append(
@@ -1023,7 +1030,11 @@ class PermutationCheckMixin:
             if is_input(i).is_false() and is_output(i).is_false():
                 continue
             for j in range(i + 1, n):
-                if (is_input(i).is_false() and is_input(j).is_false()) or (is_output(i).is_false() and is_output(j).is_false()):
+                # Same statically-False antecedent guard as the key-distinctness
+                # loop: skip unless i and j can both be inputs or both be outputs.
+                if (is_input(i).is_false() or is_input(j).is_false()) and (
+                    is_output(i).is_false() or is_output(j).is_false()
+                ):
                     continue
                 conjuncts.append(
                     with_comment(
