@@ -98,12 +98,39 @@ def _drain_pipes(
             break
 
 
+def _process_tree(root_pid: int) -> list[psutil.Process]:
+    try:
+        root = psutil.Process(root_pid)
+    except psutil.NoSuchProcess:
+        return []
+    try:
+        return root.children(recursive=True) + [root]
+    except psutil.NoSuchProcess:
+        return []
+
+
+def _signal_process_tree(proc: subprocess.Popen, *, kill: bool = False) -> None:
+    if proc.pid is None:
+        return
+    for p in _process_tree(proc.pid):
+        try:
+            if kill:
+                p.kill()
+            else:
+                p.terminate()
+        except psutil.NoSuchProcess:
+            pass
+
+
 def communicate_with_timeout(
     proc: subprocess.Popen,
     timeout: float,
     term_grace: float = 5.0,
 ) -> tuple[str | None, str | None, bool]:
-    """Wait for ``proc`` up to ``timeout`` seconds, then SIGTERM (with grace) before SIGKILL."""
+    """Wait for ``proc`` up to ``timeout`` seconds, then SIGTERM (with grace) before SIGKILL.
+
+    On timeout, signals are sent to the full process tree (root plus descendants).
+    """
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
     timed_out = False
@@ -113,11 +140,11 @@ def communicate_with_timeout(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             timed_out = True
-            proc.terminate()
+            _signal_process_tree(proc)
             try:
                 proc.wait(timeout=term_grace)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                _signal_process_tree(proc, kill=True)
                 proc.wait()
             break
         _pump_pipes(proc, stdout_chunks, stderr_chunks, wait=min(0.2, remaining))
