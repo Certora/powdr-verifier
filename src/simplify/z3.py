@@ -33,6 +33,19 @@ def _declares_from_z3_not_in_prefix(
     return out
 
 
+def _mk_tactic(t: str):
+    """Tactic by name, with parameterized variants.
+
+    ``solve-eqs-nomod`` = ``(using-params solve-eqs :eliminate_mod false)``:
+    disables ``solve_mod`` (z3 ``extract_eqs.cpp:233``), the rewrite
+    ``(= (mod u P) y) => u := P*mod!k + y`` that mints the ``mod!``
+    quotient witnesses goal-wide — including inside uf arguments.
+    """
+    if t == "solve-eqs-nomod":
+        return z3.With("solve-eqs", eliminate_mod=False)
+    return z3.Tactic(t)
+
+
 def simplify_z3(
     smt_script: script.SmtLibScript, args: list, subaction=None
 ) -> script.SmtLibScript:
@@ -49,9 +62,9 @@ def simplify_z3(
                 )
             )
         case [t]:
-            tactic = z3.Tactic(t)
+            tactic = _mk_tactic(t)
         case [*t]:
-            tactic = z3.Then(*t)
+            tactic = z3.Then(*[_mk_tactic(x) for x in t])
 
     s = tactic.solver()
     conv = Z3Converter(get_env(), s.ctx)
