@@ -396,8 +396,6 @@ class OpenVMMemoryEncoder(
         #yield with_comment(ts, f"{self.NAME} timestamp check")
         yield with_comment(And(*permutation_axioms), f"{self.NAME} permutation axioms")
         yield with_comment(And(*assume_bytes), f"{self.NAME} assume bytes")
-        if field_bounds:
-            yield with_comment(And(*field_bounds), f"{self.NAME} field bounds")
         if key_recon:
             yield with_comment(And(*key_recon), f"{self.NAME} key reconstruction")
         # TS_BOUND is a granted assumption (the same assumption membus's own
