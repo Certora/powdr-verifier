@@ -1,5 +1,6 @@
 """Unit tests for the interface memory encoding: `interface_io_relation`,
-`_interface_pointer_eq`, and the preanalysis perfect-alignment abort."""
+`_interface_pointer_eq`, internal forced recv<->send pairs, and the
+preanalysis alignment abort."""
 import pytest
 
 from src.utils.args import parse_args, ARGS
@@ -8,11 +9,16 @@ from src.bus_interactions.openvm_memory import (
     _bound_of,
     _interface_pointer_eq,
     interface_io_relation,
+    internal_pair_equalities,
 )
 from src.bus_interactions.single_interaction_encoder import BusInteraction
 from src.smt.utils import *
-from src.verify.membus_analysis import MembusAnalysis
-from src.verify.preanalysis import _require_perfect_alignment
+from src.verify.membus_analysis import (
+    InternalPair,
+    MembusAnalysis,
+    _collect_internal_pairs,
+)
+from src.verify.preanalysis import _require_interface_alignment
 
 P = 2013265921
 
@@ -62,8 +68,37 @@ class TestInterfaceIoRelation:
         _args()
         a = [_inter(1, [1, 8, _sym("x"), 5]), _inter(1, [1, 4, _sym("z"), 6])]
         b = [_inter(1, [1, 8, _sym("y"), 5]), _inter(1, [1, 4, _sym("w"), 6])]
-        with pytest.raises(RuntimeError, match="total 1:1"):
+        with pytest.raises(RuntimeError, match="disjoint cover"):
             interface_io_relation("t", a, b, {0: 0}, bounds_a={}, bounds_b={})
+
+    def test_partial_map_with_internal_legs_accepted(self):
+        """A before-side internal pair (ordinals 1,2) is excused from the kept
+        map when declared via ``internal_a``; its equalities live on its own
+        side, not in the io relation."""
+        _args()
+        a = [
+            _inter(1, [1, 8, _sym("x"), 5]),
+            _inter(P - 1, [1, 4, _sym("r"), _sym("rt")]),
+            _inter(1, [1, 4, _sym("s"), 6]),
+        ]
+        b = [_inter(1, [1, 8, _sym("y"), 5])]
+        rel, _ = interface_io_relation(
+            "t", a, b, {0: 0}, bounds_a={}, bounds_b={},
+            internal_a=frozenset({1, 2}),
+        )
+        free = {str(v) for v in rel.get_free_variables()}
+        assert {"x", "y"} <= free
+        assert not {"r", "s", "rt"} & free
+
+    def test_internal_leg_overlapping_kept_aborts(self):
+        _args()
+        a = [_inter(1, [1, 8, _sym("x"), 5])]
+        b = [_inter(1, [1, 8, _sym("y"), 5])]
+        with pytest.raises(RuntimeError, match="disjoint cover"):
+            interface_io_relation(
+                "t", a, b, {0: 0}, bounds_a={}, bounds_b={},
+                internal_a=frozenset({0}),
+            )
 
     def test_disabled_pair_skips_args(self):
         _args()
@@ -188,7 +223,15 @@ class TestLimbSplit:
         assert len(eqs) == 1 and hi in eqs[0].get_free_variables()
 
 
-def _analysis(n: int, kept: dict[int, int], *, align_ok=True, n_after=None) -> MembusAnalysis:
+def _analysis(
+    n: int,
+    kept: dict[int, int],
+    *,
+    align_ok=True,
+    n_after=None,
+    internal_pairs=(),
+    inert=frozenset(),
+) -> MembusAnalysis:
     from pathlib import Path
 
     m = n if n_after is None else n_after
@@ -205,38 +248,229 @@ def _analysis(n: int, kept: dict[int, int], *, align_ok=True, n_after=None) -> M
         after_status=[None] * m,
         align_ok=align_ok,
         kept_pairs=kept,
+        internal_pairs_before=[InternalPair(r, s, 1) for r, s in internal_pairs],
+        inert_removed_before=frozenset(inert),
     )
 
 
-class TestPerfectAlignmentAbort:
+class TestInterfaceAlignmentAbort:
     def test_perfect_alignment_accepted(self):
         _args()
-        _require_perfect_alignment(_analysis(3, {0: 0, 1: 1, 2: 2}))
+        _require_interface_alignment(_analysis(3, {0: 0, 1: 1, 2: 2}))
 
     def test_permuted_bijection_accepted(self):
         _args()
-        _require_perfect_alignment(_analysis(2, {0: 1, 1: 0}))
+        _require_interface_alignment(_analysis(2, {0: 1, 1: 0}))
 
     def test_heuristic_fallback_aborts(self):
         _args()
         with pytest.raises(RuntimeError, match="membus align did not run"):
-            _require_perfect_alignment(
+            _require_interface_alignment(
                 _analysis(2, {}, align_ok=False)
             )
 
     def test_partial_kept_aborts(self):
         _args()
-        with pytest.raises(RuntimeError, match="not total"):
-            _require_perfect_alignment(_analysis(2, {0: 0}))
+        with pytest.raises(RuntimeError, match="not fully accounted"):
+            _require_interface_alignment(_analysis(2, {0: 0}))
 
     def test_count_mismatch_aborts(self):
         _args()
-        with pytest.raises(RuntimeError, match="counts differ"):
-            _require_perfect_alignment(
+        with pytest.raises(RuntimeError, match="bijection"):
+            _require_interface_alignment(
                 _analysis(2, {0: 0, 1: 1}, n_after=3)
             )
 
     def test_non_bijection_aborts(self):
         _args()
         with pytest.raises(RuntimeError, match="bijection"):
-            _require_perfect_alignment(_analysis(2, {0: 0, 1: 0}))
+            _require_interface_alignment(_analysis(2, {0: 0, 1: 0}))
+
+    def test_internal_pairs_cover_removed(self):
+        """The 2099600 010->011 shape: 10 before, 6 kept, pairs (6,5), (8,7)."""
+        _args()
+        kept = {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 9: 5}
+        _require_interface_alignment(
+            _analysis(10, kept, n_after=6, internal_pairs=[(6, 5), (8, 7)])
+        )
+
+    def test_uncovered_removed_ordinal_aborts(self):
+        _args()
+        kept = {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 9: 5}
+        with pytest.raises(RuntimeError, match="not fully accounted"):
+            _require_interface_alignment(
+                _analysis(10, kept, n_after=6, internal_pairs=[(6, 5)])
+            )
+
+    def test_inert_removed_accepted(self):
+        _args()
+        _require_interface_alignment(
+            _analysis(3, {0: 0, 1: 1}, n_after=2, inert={2})
+        )
+
+    def test_leg_overlapping_kept_aborts(self):
+        _args()
+        with pytest.raises(RuntimeError, match="overlap"):
+            _require_interface_alignment(
+                _analysis(3, {0: 0, 1: 1, 2: 2}, internal_pairs=[(1, 2)])
+            )
+
+    def test_duplicate_leg_aborts(self):
+        _args()
+        kept = {0: 0}
+        with pytest.raises(RuntimeError, match="pairwise distinct"):
+            _require_interface_alignment(
+                _analysis(4, kept, n_after=1, internal_pairs=[(1, 2), (3, 2)])
+            )
+
+    def test_strict_mode_rejects_internal_pairs(self):
+        _args("--no-interface-internal-pairs")
+        kept = {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 9: 5}
+        with pytest.raises(RuntimeError, match="no-interface-internal-pairs"):
+            _require_interface_alignment(
+                _analysis(10, kept, n_after=6, internal_pairs=[(6, 5), (8, 7)])
+            )
+
+
+class TestInternalPairEqualities:
+    def _pair_interactions(self):
+        """2099600-shaped internal pair: send #5 writes data [148, 9, 32, 0] at
+        ts, recv #6 reads free columns with a free prev_timestamp."""
+        send = _inter(1, [1, 4, Int(148), Int(9), Int(32), Int(0), _sym("ts")])
+        recv = _inter(
+            P - 1,
+            [1, 4, _sym("d0"), _sym("d1"), _sym("d2"), _sym("d3"), _sym("prev_ts")],
+        )
+        return [send, recv]
+
+    def test_full_tuple_equalities(self):
+        _args()
+        inters = self._pair_interactions()
+        eqs = internal_pair_equalities("t", inters, [InternalPair(1, 0, 1)])
+        assert len(eqs) == 7  # addr_space, ptr, 4 data limbs, timestamp
+        # positional: the last equality relates prev_ts and ts
+        last_free = {str(v) for v in eqs[-1].get_free_variables()}
+        assert last_free == {"prev_ts", "ts"}
+        d0_eqs = [e for e in eqs if "d0" in {str(v) for v in e.get_free_variables()}]
+        assert len(d0_eqs) == 1
+
+    def test_field_equality_shape(self):
+        """Equalities are mod-P (field), not syntactic Int `=`."""
+        _args()
+        inters = self._pair_interactions()
+        eqs = internal_pair_equalities("t", inters, [InternalPair(1, 0, 1)])
+        ts_eq = eqs[-1]
+        assert ts_eq.is_equals()
+        mods = [a for a in ts_eq.args() if a.is_mod()]
+        assert mods, "expected a wrap_mod((recv - send)) == 0 shape"
+
+    def test_no_limb_split(self):
+        """Pointer args are equated packed — keys are just data here."""
+        _args()
+        lo, hi = _sym("lo"), _sym("hi")
+        lo2, hi2 = _sym("lo2"), _sym("hi2")
+        send = _inter(1, [2, Plus(lo, Times(Int(LIMB_BASE), hi)), Int(0), Int(9)])
+        recv = _inter(
+            P - 1, [2, Plus(lo2, Times(Int(LIMB_BASE), hi2)), _sym("d"), _sym("pt")]
+        )
+        eqs = internal_pair_equalities("t", [send, recv], [InternalPair(1, 0, 1)])
+        ptr_eqs = [e for e in eqs if lo in e.get_free_variables()]
+        assert len(ptr_eqs) == 1 and hi in ptr_eqs[0].get_free_variables()
+
+    def test_swapped_mults_abort(self):
+        _args()
+        send = _inter(1, [1, 4, Int(0), Int(9)])
+        recv = _inter(P - 1, [1, 4, _sym("d"), _sym("pt")])
+        with pytest.raises(RuntimeError, match="not \\(recv -1, send \\+1\\)"):
+            internal_pair_equalities("t", [send, recv], [InternalPair(0, 1, 1)])
+
+    def test_nonconst_mult_aborts(self):
+        _args()
+        send = _inter(1, [1, 4, Int(0), Int(9)])
+        recv = BusInteraction(_sym("is_valid"), [Int(1), Int(4), _sym("d"), _sym("pt")])
+        with pytest.raises(RuntimeError, match="not \\(recv -1, send \\+1\\)"):
+            internal_pair_equalities("t", [send, recv], [InternalPair(1, 0, 1)])
+
+    def test_arity_mismatch_aborts(self):
+        _args()
+        send = _inter(1, [1, 4, Int(0), Int(9)])
+        recv = _inter(P - 1, [1, 4, _sym("d0"), _sym("d1"), _sym("pt")])
+        with pytest.raises(ValueError):
+            internal_pair_equalities("t", [send, recv], [InternalPair(1, 0, 1)])
+
+
+def _align_row(bid, kind, status, role, partners, after_id=None):
+    return {
+        "before_id": bid,
+        "kind": kind,
+        "key": "const 4",
+        "status": status,
+        "after_id": after_id,
+        "local_role": role,
+        "local_partners": partners,
+        "io": "in" if role == "input" else "out" if role == "output" else "",
+        "vtime": "",
+    }
+
+
+class TestCollectInternalPairs:
+    def _rows_2099600(self):
+        """Shape of the 2099600 010->011 AS1 align: 6 kept, pairs (6,5), (8,7)."""
+        rows = [
+            _align_row(i, "recv" if i % 2 == 0 else "send", "kept", "input", [], i)
+            for i in range(5)
+        ]
+        rows += [
+            _align_row(5, "send", "removed", "interior", [6]),
+            _align_row(6, "recv", "removed", "interior", [5]),
+            _align_row(7, "send", "removed", "interior", [8]),
+            _align_row(8, "recv", "removed", "interior", [7]),
+            _align_row(9, "send", "kept", "output", [], 5),
+        ]
+        return rows
+
+    def test_pairs_collected(self):
+        pairs, inert = _collect_internal_pairs(self._rows_2099600(), 1)
+        assert {(p.recv, p.send) for p in pairs} == {(6, 5), (8, 7)}
+        assert all(p.addr_space == 1 for p in pairs)
+        assert inert == set()
+
+    def test_disabled_removed_is_inert(self):
+        rows = [
+            _align_row(0, "recv", "kept", "input", [], 0),
+            _align_row(1, "disabled", "removed", "inert", []),
+        ]
+        pairs, inert = _collect_internal_pairs(rows, 1)
+        assert pairs == [] and inert == {1}
+
+    def test_recv_without_partner_aborts(self):
+        rows = [_align_row(0, "recv", "removed", "interior", [])]
+        with pytest.raises(RuntimeError, match="not a forced interior"):
+            _collect_internal_pairs(rows, 1)
+
+    def test_partner_kept_aborts(self):
+        rows = [
+            _align_row(0, "send", "kept", "interior", [1], 0),
+            _align_row(1, "recv", "removed", "interior", [0]),
+        ]
+        with pytest.raises(RuntimeError, match="not a matching removed interior send"):
+            _collect_internal_pairs(rows, 1)
+
+    def test_partner_not_backlinked_aborts(self):
+        rows = [
+            _align_row(0, "send", "removed", "interior", [2]),
+            _align_row(1, "recv", "removed", "interior", [0]),
+            _align_row(2, "recv", "removed", "interior", [0]),
+        ]
+        with pytest.raises(RuntimeError, match="claimed by more than one|not a matching"):
+            _collect_internal_pairs(rows, 1)
+
+    def test_unclaimed_send_aborts(self):
+        rows = [_align_row(0, "send", "removed", "interior", [1])]
+        with pytest.raises(RuntimeError, match="not\\s+claimed by any removed recv"):
+            _collect_internal_pairs(rows, 1)
+
+    def test_boundary_removed_aborts(self):
+        rows = [_align_row(0, "recv", "removed", "input", [])]
+        with pytest.raises(RuntimeError, match="not a forced interior"):
+            _collect_internal_pairs(rows, 1)
