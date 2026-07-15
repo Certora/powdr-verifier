@@ -15,6 +15,13 @@ from .smt.utils import *
 def trace():
     """Encode to check for a satisfying trace of the given dump."""
 
+    if ARGS().memory_encoding == "auto":
+        # The tracer is single-sided, so the two-sided "auto" alignment
+        # decision (resolved in verify's preanalysis) never runs here. The
+        # interface encoding requires an aligned before/after pair, so fall
+        # back to the always-sound plain encoding.
+        ARGS().memory_encoding = "plain"
+
     filename = ARGS().input
     input = load_apc_dump(filename)
     out_dir = ARGS().output.parent if ARGS().output is not None else filename.parent

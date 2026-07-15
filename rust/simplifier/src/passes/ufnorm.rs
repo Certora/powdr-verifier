@@ -243,7 +243,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         canonicalized += 1;
         let refs: Vec<&dyn Ast> = new_args.iter().map(|a| a as &dyn Ast).collect();
         let canon_app = rebuild_app(&app.decl(), &refs);
-        axioms.push(app._eq(&canon_app));
+        axioms.push(app.eq(&canon_app));
     }
 
     let n_apps = apps.len();
