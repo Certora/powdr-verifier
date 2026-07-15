@@ -8,7 +8,9 @@ from .sanity import sanity_mult_values, sanity_satisfies_derived, sanity_statefu
 
 @as_script("sat")
 def encode_trace(formula: FormulaWithAxioms) -> script.SmtLibScript:
-    return And(*formula.constraints, *formula.axioms)
+    # Single circuit: constraints and their consequences both hold for a valid
+    # trace (the before/after asymmetry only matters for equivalence encoding).
+    return And(*formula.constraints, *formula.consequences, *formula.axioms)
 
 @as_script("unsat")
 def encode_trace_sanity(conv: SmtConverter, formula: FormulaWithAxioms) -> script.SmtLibScript:
@@ -38,6 +40,7 @@ def encode_trace_sanity(conv: SmtConverter, formula: FormulaWithAxioms) -> scrip
     )
     return And(
         *formula.constraints,
+        *formula.consequences,
         *formula.axioms,
         Or(*checks),
     )

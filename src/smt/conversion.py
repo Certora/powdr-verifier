@@ -15,13 +15,22 @@ from .utils import *
 
 FormulaWithAxioms = collections.namedtuple(
     "FormulaWithAxioms",
-    ["constraints", "axioms", "derived", "globals"],
+    ["constraints", "consequences", "axioms", "derived", "globals"],
 )
 FormulaWithAxioms.__doc__ = """Structured PySMT bundle produced by ``SmtConverter``.
 
-``constraints`` and ``axioms`` are lists of ``FNode``; ``derived`` maps column
-symbols to lists of defining formulas (a symbol may have more than one);
-``globals`` collects symbols treated as rigid across quantifier prefixes.
+``constraints`` are the statements the circuit commits to (algebraic
+constraints and bus-interaction semantics). ``consequences`` are statements
+*derived from* the constraints (e.g. inferred variable ranges, "exchanged
+memory values are field elements") — true whenever the constraints hold, but
+NOT themselves circuit commitments. ``encoding()`` adds the constraints of both
+programs but the consequences of the reference (before) program only, so a
+derived fact never becomes a proof obligation on the checked (after) side.
+
+``axioms`` are granted environment assumptions (asserted for both sides).
+``derived`` maps column symbols to lists of defining formulas (a symbol may
+have more than one); ``globals`` collects symbols treated as rigid across
+quantifier prefixes.
 """
 
 
@@ -210,18 +219,25 @@ class SmtConverter:
         logging.debug(f"{self.name}: converting")
         self.convert_manual(data)
         logging.debug(f"{self.name}: assemble")
+        # `encode()` yields the circuit's committed constraints; it must be
+        # consumed before `consequences()` (which reads the derived facts each
+        # encoder stashes while encoding).
         constraints = list(itertools.chain(
             without_trues(self.constraints),
             without_trues(self.bus_interaction_encoder.encode())
         ))
+        consequences = list(without_trues(self.bus_interaction_encoder.consequences()))
         if not ARGS().skip_range_inference:
-            constraints += self.bus_interaction_encoder.memory.infer_unconditional_ranges(
+            # Ranges inferred from the constraints are derived facts, not
+            # circuit commitments -> consequences, not constraints.
+            consequences += self.bus_interaction_encoder.memory.infer_unconditional_ranges(
                 constraints
             )
         axioms = list(without_trues(self.bus_interaction_encoder.get_axioms()))
         derived = {k: list(v) for k, v in self.derived_columns.items()}
         fwa = FormulaWithAxioms(
             constraints=constraints,
+            consequences=consequences,
             axioms=axioms,
             derived=derived,
             globals=self.bus_interaction_encoder.get_globals() | frozenset([self.UF_MOD_INV]),

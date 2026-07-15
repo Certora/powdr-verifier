@@ -71,6 +71,16 @@ class SingleInteractionEncoder:
         return
         yield
 
+    def consequences(self) -> Iterable[FNode]:
+        """Statements *derived from* this encoder's constraints (as opposed to
+        constraints the circuit commits to).
+
+        These are added to the encoding as premises for the reference (before)
+        program only, never as proof obligations for the checked (after)
+        program — see ``verifier.encoding()``. Populated by ``encode`` runs
+        that stash derived facts on ``self._consequences``. Default: none."""
+        yield from getattr(self, "_consequences", [])
+
     def get_globals(self) -> frozenset[FNode]:
         """Returns the global symbols that should not be part of any quantifier."""
         return getattr(self, "globals", frozenset())
