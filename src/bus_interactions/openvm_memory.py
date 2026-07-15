@@ -449,7 +449,7 @@ class OpenVMMemoryEncoder(
                 if _active_mult(id) == pval - 1
             ]
             if recv_bytes:
-                self.axioms.append(
+                self.consequences.append(
                     with_comment(
                         And(*recv_bytes), f"{self.NAME} recv byte assumption"
                     )

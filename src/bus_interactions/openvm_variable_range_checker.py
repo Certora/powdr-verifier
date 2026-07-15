@@ -42,7 +42,7 @@ class OpenVMVariableRangeCheckerEncoder(SingleInteractionEncoder):
         # (uf_xor-threaded on keccak) — practically unprovable. Grant it
         # through the axioms channel instead (cf. TS_BOUND, bitwise lift).
         if ARGS().varrange_axioms:
-            self.axioms.append(
+            self.consequences.append(
                 with_comment(fact, f"{self.NAME} table semantics (granted)")
             )
             return TRUE()

@@ -212,7 +212,7 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
                     # goal-side copy becomes an `xor = x+y-2and` obligation
                     # over uf terms that solve-eqs/demod rewrite apart —
                     # practically unprovable (cf. TS_BOUND, PR #40).
-                    self.axioms.append(
+                    self.consequences.append(
                         with_comment(
                             Implies(
                                 Not(Equals(wrap_mod(mult), Int(0))),
