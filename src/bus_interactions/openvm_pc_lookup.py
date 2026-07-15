@@ -71,21 +71,22 @@ class OpenVMPCLookupEncoder(SingleInteractionEncoder):
     ) -> FNode:
         """Constrain `(op,a..g)` to match the instruction at program counter `pc` (when enabled)."""
         self.needs_axioms = True
+        # All args are stored reduced mod P.
         return Implies(
-            Not(Equals(wrap_mod(mult), Int(0))),
+            Not(Equals(mult, Int(0))),
             And(
                 Or(
                     Equals(pc, Int(k))
                     for k in self.basic_block.instructions.keys()
                 ),
-                Equals(Function(self.UF_OPCODE, [pc]), wrap_mod(op)),
-                Equals(Function(self.UF_A, [pc]), wrap_mod(a)),
-                Equals(Function(self.UF_B, [pc]), wrap_mod(b)),
-                Equals(Function(self.UF_C, [pc]), wrap_mod(c)),
-                Equals(Function(self.UF_D, [pc]), wrap_mod(d)),
-                Equals(Function(self.UF_E, [pc]), wrap_mod(e)),
-                Equals(Function(self.UF_F, [pc]), wrap_mod(f)),
-                Equals(Function(self.UF_G, [pc]), wrap_mod(g)),
+                Equals(Function(self.UF_OPCODE, [pc]), op),
+                Equals(Function(self.UF_A, [pc]), a),
+                Equals(Function(self.UF_B, [pc]), b),
+                Equals(Function(self.UF_C, [pc]), c),
+                Equals(Function(self.UF_D, [pc]), d),
+                Equals(Function(self.UF_E, [pc]), e),
+                Equals(Function(self.UF_F, [pc]), f),
+                Equals(Function(self.UF_G, [pc]), g),
             ),
         )
 

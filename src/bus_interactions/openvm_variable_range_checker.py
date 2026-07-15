@@ -26,13 +26,14 @@ class OpenVMVariableRangeCheckerEncoder(SingleInteractionEncoder):
         if bits.is_int_constant() and bits.constant_value() <= 25:
             curbits = bits.constant_value()
 
-        x = wrap_mod(x)
-
+        # `x` and `mult` are stored already reduced mod P (see
+        # SingleInteractionEncoder._wrap_field), so plain relational operators
+        # apply directly.
         if mult.is_int_constant() and mult.constant_value() != 0:
             fact = LT(x, Int(2**curbits))
         else:
             fact = Implies(
-                Not(field_eq(mult)),
+                Not(Equals(mult, Int(0))),
                 LT(x, Int(2**curbits)),
             )
         # The range is table semantics — the lookup table only contains

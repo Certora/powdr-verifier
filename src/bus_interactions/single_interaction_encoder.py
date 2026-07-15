@@ -45,12 +45,32 @@ class SingleInteractionEncoder:
     def _symbol(self, name: str, sort, **kwargs) -> FNode:
         return self._cur_state._symbol(name, sort, **kwargs)
 
+    @staticmethod
+    def _wrap_field(x: Any) -> Any:
+        """Reduce every field (Int) leaf modulo P so stored interactions hold
+        canonical field elements. Every bus-interaction argument is a field
+        value, so a leaf is asserted to be Int. Constants fold to their
+        canonical representative in [0,P) (keeping ``is_int_constant``);
+        non-constants are wrapped as ``(x mod P)``. List/tuple structure (e.g. a
+        memory interaction's data limbs) is preserved. Consumers can then
+        compare stored args with a plain ``Equals``/``LT`` — no per-use
+        ``wrap_mod`` needed."""
+        if isinstance(x, (list, tuple)):
+            return [SingleInteractionEncoder._wrap_field(e) for e in x]
+        assert x.get_type().is_int_type(), f"bus interaction field must be Int, got {x.get_type()}: {x}"
+        folded = x.simplify()
+        if folded.is_int_constant():
+            return Int(folded.constant_value() % ARGS().field_type.value)
+        return wrap_mod(x)
+
     def add(self, mult: FNode, *args: Any) -> FNode:
-        """Add a single interaction (skipping it if `mult` is provably zero)."""
+        """Add a single interaction, storing all field values reduced mod P."""
         #if self.solver().check_is_valid(Equals(mult, Int(0))):
         #    logging.debug("dropping interaction with mult = 0")
         #    return
-        self._interactions.append(BusInteraction(mult, args))
+        self._interactions.append(
+            BusInteraction(self._wrap_field(mult), tuple(self._wrap_field(a) for a in args))
+        )
     
     def encode_all(self) -> Iterable[FNode]:
         """Encode the relationships between the bus interactions."""
