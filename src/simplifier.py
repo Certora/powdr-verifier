@@ -62,7 +62,7 @@ TACTIC_BUS_TAIL = ":bounds:demod:normalize:bitwise:mod_inv:demod"
 # zero-is-model / invalid-all-mult-zero: need rewrite + z3 passes (pre-d918f09 DEFAULT).
 TACTIC_AUX = (
     TACTIC_QEPREFIX
-    + ":bounds:demod:normalize:bitwise:rewrite:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:ufnorm:normalize:demod""
+    + ":bounds:demod:normalize:bitwise:rewrite:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:ufnorm:normalize:demod"
 )
 
 DEFAULT_TACTIC = TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:normalize:demod"

@@ -56,15 +56,6 @@ def __build_parser(skip_subparsers=False):
         "--interface-assume-bytes", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
-        "--interface-limb-split", action=argparse.BooleanOptionalAction, default=True
-    )
-    parser.add_argument(
-        "--interface-assume-bytes", action=argparse.BooleanOptionalAction, default=True
-    )
-    parser.add_argument(
-        "--bitwise-lift-axioms", action=argparse.BooleanOptionalAction, default=True
-    )
-    parser.add_argument(
         "--varrange-axioms", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
