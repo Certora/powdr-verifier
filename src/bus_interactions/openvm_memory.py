@@ -297,30 +297,6 @@ class OpenVMMemoryEncoder(
             )
             for id, isinput in enumerate(isinputs)
         ]
-        # Every value exchanged on the memory bus is a field element, so its
-        # raw column is in [0, P) — for both sends and recvs, because the guest
-        # is field arithmetic and powdr optimizations preserve that (they cannot
-        # introduce a non-reduced value). Non-reduced values only ever arise
-        # from our own side: an incorrect demod, or modeling constraints we add
-        # beyond what the circuit expresses. Emitting the bound HERE, in the
-        # encoder on the original field-valued columns (before any simplifier
-        # pass), faithfully models that fact and lets demod discharge the
-        # (mod _ P) wrappers on memory data. Only unconditionally-active
-        # interactions (constant nonzero multiplicity) qualify; a
-        # possibly-disabled interaction has unconstrained data.
-        field_bounds = [
-            with_comment(
-                And(
-                    *[
-                        And(LE(Int(0), d), LT(d, Int(pval)))
-                        for d in self._interactions[id].args[2]
-                    ]
-                ),
-                f"membus #{id}: exchanged values are field elements in [0,P)",
-            )
-            for id in range(len(self._interactions))
-            if _active_mult(id) not in (None, 0)
-        ]
         # Key reconstruction: membus identifies each key as base+offset (a
         # trusted syntactic reading of the circuit, independent of its guessed
         # solve). Relate interactions that share a base to a common anchor:
