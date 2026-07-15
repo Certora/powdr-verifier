@@ -361,11 +361,33 @@ class OpenVMMemoryEncoder(
         if not interface and alignment is not None and source_path is not None:
             times = alignment.time_for(source_path)
             if len(times) == len(self._interactions):
-                ts_anchor: tuple[FNode, int] | None = None
+                # An interaction is active exactly when its multiplicity is
+                # nonzero; the timestamp facts hold only while it is active. We
+                # guard each fact by `mult != 0` -- a plain term over the stored
+                # multiplicity, whatever it is -- instead of requiring the
+                # multiplicity to const-evaluate. For a constant +-1 mult this
+                # folds to TRUE (facts stay unguarded, unchanged); for a
+                # flag-gated `+-is_valid` mult it becomes the activation
+                # condition, WITHOUT the encoder having to identify or evaluate
+                # the gating column. This is what makes the `is_valid` (after)
+                # program emit the same ts_recon/ts_bounds the constant-mult
+                # (before) program does, so soundness (which asserts is_valid=1)
+                # sees a symmetric timestamp story on both sides. The send/recv
+                # kind still comes from the membus analysis (`ti.kind`).
+                def _active_guard(idx: int) -> FNode:
+                    return Not(field_eq(self._interactions[idx].mult))
+
+                def _guarded(guard: FNode, fact: FNode) -> FNode:
+                    g = guard.simplify()
+                    return fact if g.is_true() else Implies(g, fact)
+
+                ts_anchor: tuple[FNode, int, int] | None = None
                 for id in range(len(self._interactions)):
                     ti = times[id]
-                    if ti is None or ti.offset is None or _active_mult(id) in (None, 0):
+                    if ti is None or ti.offset is None:
                         continue
+                    if field_eq(self._interactions[id].mult).simplify().is_true():
+                        continue  # multiplicity is identically 0 (disabled)
                     tcol = self._interactions[id].args[3]
                     # Bound every recognized clock independently: the field-only
                     # tie to the anchor still admits `ts = anchor + off + p` (a
@@ -373,24 +395,31 @@ class OpenVMMemoryEncoder(
                     # clocks. A per-column `< 2^29` is the sound, complete bound.
                     ts_bounds.append(
                         with_comment(
-                            And(LE(Int(0), tcol), LT(tcol, Int(TS_MAX))),
+                            _guarded(
+                                _active_guard(id),
+                                And(LE(Int(0), tcol), LT(tcol, Int(TS_MAX))),
+                            ),
                             f"ts #{id} in [0, 2^29) (TS_BOUND)",
                         )
                     )
                     if ts_anchor is None:
                         if ti.kind == "exact":  # anchor must be an exact clock
-                            ts_anchor = (tcol, ti.offset)
+                            ts_anchor = (tcol, ti.offset, id)
                         continue
-                    atcol, aoff = ts_anchor
+                    atcol, aoff, aidx = ts_anchor
                     rhs = Plus(atcol, Int(ti.offset - aoff))
+                    # The relation ties ts_i to the anchor, so it is meaningful
+                    # only when BOTH interactions are active -- guard by both.
+                    guard = And(_active_guard(id), _active_guard(aidx))
                     if ti.kind == "exact":
                         ts_recon.append(
-                            with_comment(field_eq(Minus(tcol, rhs)),
+                            with_comment(_guarded(guard, field_eq(Minus(tcol, rhs))),
                                          f"ts #{id} = T+{ti.offset}")
                         )
                     else:
                         ts_recon.append(
-                            with_comment(LE(tcol, rhs), f"ts #{id} <= T+{ti.offset}")
+                            with_comment(_guarded(guard, LE(tcol, rhs)),
+                                         f"ts #{id} <= T+{ti.offset}")
                         )
         #yield with_comment(ts, f"{self.NAME} timestamp check")
         yield with_comment(And(*permutation_axioms), f"{self.NAME} permutation axioms")
