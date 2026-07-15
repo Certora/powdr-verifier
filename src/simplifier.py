@@ -42,6 +42,7 @@ from .simplify import (
     simplify_solve_eqs,
     simplify_solve_store_eqs,
     simplify_rewrite_store_eqs,
+    simplify_ufnorm,
     simplify_z3,
 )
 from .simplify.rust import run_rust_pipeline, rust_step_action_props
@@ -61,7 +62,7 @@ TACTIC_BUS_TAIL = ":bounds:demod:normalize:bitwise:mod_inv:demod"
 # zero-is-model / invalid-all-mult-zero: need rewrite + z3 passes (pre-d918f09 DEFAULT).
 TACTIC_AUX = (
     TACTIC_QEPREFIX
-    + ":bounds:demod:normalize:bitwise:rewrite:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod"
+    + ":bounds:demod:normalize:bitwise:rewrite:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:ufnorm:normalize:demod""
 )
 
 DEFAULT_TACTIC = TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:normalize:demod"
@@ -396,6 +397,10 @@ def _apply_tactic_pass(
             return simplify_rewrite(smt_script, subaction)
         case "demod":
             return simplify_demod(smt_script, subaction)
+        case "ufnorm":
+            return simplify_ufnorm(
+                smt_script, subaction, axioms_only=dash_suffix != ["rewrite"]
+            )
         case "bitwise":
             return simplify_bitwise(smt_script, subaction)
         case "mod_inv":
