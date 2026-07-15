@@ -226,7 +226,7 @@ class SmtConverter:
             without_trues(self.constraints),
             without_trues(self.bus_interaction_encoder.encode())
         ))
-        consequences = list(without_trues(self.bus_interaction_encoder.consequences()))
+        consequences = list(without_trues(self.bus_interaction_encoder.get_consequences()))
         if not ARGS().skip_range_inference:
             # Ranges inferred from the constraints are derived facts, not
             # circuit commitments -> consequences, not constraints.

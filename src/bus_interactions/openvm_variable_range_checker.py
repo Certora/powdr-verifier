@@ -17,7 +17,6 @@ class OpenVMVariableRangeCheckerEncoder(SingleInteractionEncoder):
 
     def __init__(self) -> None:
         super().__init__()
-        self._granted: list[FNode] = []  # filled by encode_pointwise
 
     @none_if(lambda: ARGS().no_varrange)
     def encode_pointwise(self, mult: Any, x: Any, bits: Any) -> FNode:
@@ -43,12 +42,8 @@ class OpenVMVariableRangeCheckerEncoder(SingleInteractionEncoder):
         # (uf_xor-threaded on keccak) — practically unprovable. Grant it
         # through the axioms channel instead (cf. TS_BOUND, bitwise lift).
         if ARGS().varrange_axioms:
-            self._granted.append(
+            self.axioms.append(
                 with_comment(fact, f"{self.NAME} table semantics (granted)")
             )
             return TRUE()
         return fact
-
-    def get_axioms(self) -> Iterable[FNode]:
-        """Granted range-table assumptions (populated by `encode_pointwise`)."""
-        yield from self._granted

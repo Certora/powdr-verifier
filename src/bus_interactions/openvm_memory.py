@@ -118,7 +118,6 @@ class OpenVMMemoryEncoder(
         self.interactions = {}
         self.name_or_id = NameOrIdGenerator()
         self.analysis = None
-        self._granted: list[FNode] = []  # set by encode_all, read by get_axioms
         # syntactic upper bounds from the constraint set, stashed by
         # `infer_unconditional_ranges` for the interface-mode limb split
         self._syntactic_bounds: dict[FNode, int] = {}
@@ -398,22 +397,31 @@ class OpenVMMemoryEncoder(
         yield with_comment(And(*assume_bytes), f"{self.NAME} assume bytes")
         if key_recon:
             yield with_comment(And(*key_recon), f"{self.NAME} key reconstruction")
-        # TS_BOUND is a granted assumption (the same assumption membus's own
-        # analysis grants, [[membus/facts.py]] Assumption.TS_BOUND), not a
-        # constraint the circuit commits to. Route it through the axioms
-        # channel: `encoding()` asserts axioms of BOTH sides at top level, so
-        # the bounds stay available as premises, but they never join the
-        # negated obligation side of the check — as constraints, each
-        # goal-side copy became a per-interaction proof obligation in the
-        # goal disjunction (hundreds of mod-arithmetic disjuncts per block,
-        # the dominant solve cost on TS_BOUND-heavy blocks).
-        # Key/timestamp reconstruction stay committed: equally granted in
-        # principle, but routing them as axioms measurably regressed 2100224
-        # (3x assert blowup after propagate-values, unknowns on the
+        # TS_BOUND (0 <= ts < 2^29, the same fact membus's own analysis grants,
+        # [[membus/facts.py]] Assumption.TS_BOUND) is a *derived consequence* of
+        # the circuit, not a commitment it makes. Route it through the
+        # consequences channel, NOT the axioms channel:
+        #
+        #   * As a constraint it became a per-interaction proof obligation in
+        #     the goal disjunction (hundreds of mod-arithmetic disjuncts, the
+        #     dominant solve cost on TS_BOUND-heavy blocks) — must stay off the
+        #     obligation side.
+        #   * As an *axiom* it was asserted for BOTH sides at top level, i.e.
+        #     OUTSIDE the ForAll. On the quantified side that binds a FREE copy
+        #     of the timestamp column while the checked constraints (inside the
+        #     ForAll) use the BOUND copy — the two shadow/decouple, so the bound
+        #     never reaches the quantified vars, yet the free copy floats and
+        #     z3 can pick it adversarially (spurious sat on is_valid soundness).
+        #   * As a *consequence* it is asserted for the reference (premise) side
+        #     only: it binds the timestamps that genuinely appear as free
+        #     premises and introduces no free shadow copy on the checked side.
+        #
+        # Key/timestamp reconstruction stay committed (yielded above): equally
+        # granted in principle, but routing them off-goal measurably regressed
+        # 2100224 (3x assert blowup after propagate-values, unknowns on the
         # pointer-distinctness family), and as obligations they are cheap.
-        self._granted = []
         if ts_bounds:
-            self._granted.append(
+            self.consequences.append(
                 with_comment(And(*ts_bounds), f"{self.NAME} timestamp bounds")
             )
         # Interface mode: "memory holds bytes" is a VM environment assumption
@@ -441,17 +449,13 @@ class OpenVMMemoryEncoder(
                 if _active_mult(id) == pval - 1
             ]
             if recv_bytes:
-                self._granted.append(
+                self.axioms.append(
                     with_comment(
                         And(*recv_bytes), f"{self.NAME} recv byte assumption"
                     )
                 )
         if ts_recon:
             yield with_comment(And(*ts_recon), f"{self.NAME} timestamp reconstruction")
-
-    def get_axioms(self) -> Iterable[FNode]:
-        """Granted membus assumptions (populated by `encode_all`)."""
-        yield from self._granted
 
     def _bus_interactions(self) -> list[BusInteraction]:
         return [

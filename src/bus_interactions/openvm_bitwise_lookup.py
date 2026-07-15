@@ -102,7 +102,6 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
         """Initialize the encoder and mark bitwise lookup UFs as global symbols."""
         super().__init__()
         self.globals = frozenset([self.UF_XOR, self.UF_AND, self.UF_OR])
-        self._granted: list[FNode] = []  # filled by encode_pointwise, read by get_axioms
     
     def __XOR(self, x: Any, y: Any) -> FNode:
         match ARGS().xor:
@@ -213,7 +212,7 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
                     # goal-side copy becomes an `xor = x+y-2and` obligation
                     # over uf terms that solve-eqs/demod rewrite apart —
                     # practically unprovable (cf. TS_BOUND, PR #40).
-                    self._granted.append(
+                    self.axioms.append(
                         with_comment(
                             Implies(
                                 Not(Equals(wrap_mod(mult), Int(0))),
@@ -231,7 +230,3 @@ class OpenVMBitwiseLookupEncoder(SingleInteractionEncoder):
         else:
             logging.error(f"Unsupported bitwise operation: {op}")
             return None
-
-    def get_axioms(self) -> Iterable[FNode]:
-        """Granted bitwise-table assumptions (populated by `encode_pointwise`)."""
-        yield from self._granted
