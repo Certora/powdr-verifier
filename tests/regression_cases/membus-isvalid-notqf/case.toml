@@ -14,9 +14,14 @@ qf, and completeness is still (correctly) unsat.
 
 Delta-debugged from guest-keccak block 2099512, pass 039_trivial_simp -> 040
 (constraints, columns, optimistic constraints and all non-memory interactions
-removed). This is a characterization test: if the after-side membus booleans
-ever get pinned (making completeness qf), the isqf assertion below will flip to
-qf and should be updated.
+removed). NOTE: the reduction also stripped the membus alignment, so this
+minimal pair has NO kept alignment (kept_pairs=0) -- the cross-alignment
+transfer (`_exchange_across_alignment`) has nothing to transfer from and this
+stays not-qf. It is the degenerate no-alignment residual; the positive,
+alignment-preserving counterpart that the transfer fixes to qf lives in
+`membus-isvalid-aligned-qf`. Characterization test: if the after-side booleans
+ever get pinned WITHOUT an alignment (e.g. per-side role inference), this flips
+to qf and should be updated.
 """
 
 [inputs]
