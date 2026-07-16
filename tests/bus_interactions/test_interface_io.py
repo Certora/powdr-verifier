@@ -14,7 +14,7 @@ from src.bus_interactions.openvm_memory import (
 from src.bus_interactions.single_interaction_encoder import BusInteraction
 from src.smt.utils import *
 from src.verify.membus_analysis import (
-    InternalPair,
+    Info,
     MembusAnalysis,
     _collect_internal_pairs,
 )
@@ -227,7 +227,6 @@ def _analysis(
     n: int,
     kept: dict[int, int],
     *,
-    align_ok=True,
     n_after=None,
     internal_pairs=(),
     inert=frozenset(),
@@ -238,18 +237,27 @@ def _analysis(
     full = dict(kept)
     for i in range(min(n, m)):
         full.setdefault(i, i)
+    legs = {x for pair in internal_pairs for x in pair}
+    removed = legs | set(inert)
+    # Encode the forced interior pairs as mutual match-singletons, exactly as
+    # the worklist would leave them; mark inert ordinals disabled. `removed` is
+    # the per-interaction classification the precondition now reads.
+    before_matches: list[list[int]] = [[] for _ in range(n)]
+    for r, s in internal_pairs:
+        before_matches[r] = [s]
+        before_matches[s] = [r]
+    before_info = [
+        Info(None, None, i in inert, None, i in removed) for i in range(n)
+    ]
     return MembusAnalysis(
         before_path=Path("b"),
         after_path=Path("a"),
         before_to_after=full,
-        before_matches=[set() for _ in range(n)],
-        after_matches=[set() for _ in range(m)],
-        before_status=[None] * n,
-        after_status=[None] * m,
-        align_ok=align_ok,
+        before_matches=before_matches,
+        after_matches=[[] for _ in range(m)],
+        before_info=before_info,
+        after_info=[Info(None, None, False, None, False) for _ in range(m)],
         kept_pairs=kept,
-        internal_pairs_before=[InternalPair(r, s, 1) for r, s in internal_pairs],
-        inert_removed_before=frozenset(inert),
     )
 
 
@@ -263,11 +271,11 @@ class TestInterfaceAlignmentAbort:
         _require_interface_alignment(_analysis(2, {0: 1, 1: 0}))
 
     def test_heuristic_fallback_aborts(self):
+        # No align ran => empty kept map and nothing marked removed, so the
+        # coverage check (not the removed align_ok flag) rejects it.
         _args()
-        with pytest.raises(RuntimeError, match="membus align did not run"):
-            _require_interface_alignment(
-                _analysis(2, {}, align_ok=False)
-            )
+        with pytest.raises(RuntimeError, match="not fully accounted for"):
+            _require_interface_alignment(_analysis(2, {}))
 
     def test_partial_kept_aborts(self):
         _args()
@@ -318,7 +326,7 @@ class TestInterfaceAlignmentAbort:
     def test_duplicate_leg_aborts(self):
         _args()
         kept = {0: 0}
-        with pytest.raises(RuntimeError, match="pairwise distinct"):
+        with pytest.raises(RuntimeError, match="forced mutual singleton"):
             _require_interface_alignment(
                 _analysis(4, kept, n_after=1, internal_pairs=[(1, 2), (3, 2)])
             )
@@ -346,7 +354,7 @@ class TestInternalPairEqualities:
     def test_full_tuple_equalities(self):
         _args()
         inters = self._pair_interactions()
-        eqs = internal_pair_equalities("t", inters, [InternalPair(1, 0, 1)])
+        eqs = internal_pair_equalities("t", inters, [(0, 1)])
         assert len(eqs) == 7  # addr_space, ptr, 4 data limbs, timestamp
         # positional: the last equality relates prev_ts and ts
         last_free = {str(v) for v in eqs[-1].get_free_variables()}
@@ -358,7 +366,7 @@ class TestInternalPairEqualities:
         """Equalities are mod-P (field), not syntactic Int `=`."""
         _args()
         inters = self._pair_interactions()
-        eqs = internal_pair_equalities("t", inters, [InternalPair(1, 0, 1)])
+        eqs = internal_pair_equalities("t", inters, [(0, 1)])
         ts_eq = eqs[-1]
         assert ts_eq.is_equals()
         mods = [a for a in ts_eq.args() if a.is_mod()]
@@ -373,30 +381,41 @@ class TestInternalPairEqualities:
         recv = _inter(
             P - 1, [2, Plus(lo2, Times(Int(LIMB_BASE), hi2)), _sym("d"), _sym("pt")]
         )
-        eqs = internal_pair_equalities("t", [send, recv], [InternalPair(1, 0, 1)])
+        eqs = internal_pair_equalities("t", [send, recv], [(0, 1)])
         ptr_eqs = [e for e in eqs if lo in e.get_free_variables()]
         assert len(ptr_eqs) == 1 and hi in ptr_eqs[0].get_free_variables()
 
-    def test_swapped_mults_abort(self):
+    def test_order_independent(self):
+        """Pair ordinals are unordered; recv/send are recovered from the mults,
+        so either ordering yields the same tuple of equalities."""
+        _args()
+        inters = self._pair_interactions()
+        for pair in [(0, 1), (1, 0)]:
+            eqs = internal_pair_equalities("t", inters, [pair])
+            assert len(eqs) == 7
+            assert {str(v) for v in eqs[-1].get_free_variables()} == {"prev_ts", "ts"}
+
+    def test_two_sends_abort(self):
+        """Neither leg has the recv multiplicity (-1) — no recv/send split."""
         _args()
         send = _inter(1, [1, 4, Int(0), Int(9)])
-        recv = _inter(P - 1, [1, 4, _sym("d"), _sym("pt")])
+        send2 = _inter(1, [1, 4, _sym("d"), _sym("pt")])
         with pytest.raises(RuntimeError, match="not \\(recv -1, send \\+1\\)"):
-            internal_pair_equalities("t", [send, recv], [InternalPair(0, 1, 1)])
+            internal_pair_equalities("t", [send, send2], [(0, 1)])
 
     def test_nonconst_mult_aborts(self):
         _args()
         send = _inter(1, [1, 4, Int(0), Int(9)])
         recv = BusInteraction(_sym("is_valid"), [Int(1), Int(4), _sym("d"), _sym("pt")])
         with pytest.raises(RuntimeError, match="not \\(recv -1, send \\+1\\)"):
-            internal_pair_equalities("t", [send, recv], [InternalPair(1, 0, 1)])
+            internal_pair_equalities("t", [send, recv], [(0, 1)])
 
     def test_arity_mismatch_aborts(self):
         _args()
         send = _inter(1, [1, 4, Int(0), Int(9)])
         recv = _inter(P - 1, [1, 4, _sym("d0"), _sym("d1"), _sym("pt")])
         with pytest.raises(ValueError):
-            internal_pair_equalities("t", [send, recv], [InternalPair(1, 0, 1)])
+            internal_pair_equalities("t", [send, recv], [(0, 1)])
 
 
 def _align_row(bid, kind, status, role, partners, after_id=None):

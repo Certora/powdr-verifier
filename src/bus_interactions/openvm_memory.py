@@ -310,11 +310,11 @@ class OpenVMMemoryEncoder(
         alignment = self._cur_state.memory_bus_alignment
         source_path = self._cur_state.source_path
         if not interface and alignment is not None and source_path is not None:
-            keys = alignment.keys_for(source_path)
-            if len(keys) == len(self._interactions):
+            info = alignment.info_for(source_path)
+            if len(info) == len(self._interactions):
                 anchor: dict[str, tuple[FNode, int]] = {}
                 for id in range(len(self._interactions)):
-                    k = keys[id]
+                    k = info[id].key
                     if (
                         k is None
                         or k.kind != "base_offset"
@@ -359,8 +359,8 @@ class OpenVMMemoryEncoder(
         ts_recon = []
         ts_bounds = []
         if not interface and alignment is not None and source_path is not None:
-            times = alignment.time_for(source_path)
-            if len(times) == len(self._interactions):
+            info = alignment.info_for(source_path)
+            if len(info) == len(self._interactions):
                 # An interaction is active exactly when its multiplicity is
                 # nonzero; the timestamp facts hold only while it is active. We
                 # guard each fact by `mult != 0` -- a plain term over the stored
@@ -383,7 +383,7 @@ class OpenVMMemoryEncoder(
 
                 ts_anchor: tuple[FNode, int, int] | None = None
                 for id in range(len(self._interactions)):
-                    ti = times[id]
+                    ti = info[id].time
                     if ti is None or ti.offset is None:
                         continue
                     if field_eq(self._interactions[id].mult).simplify().is_true():
@@ -620,9 +620,11 @@ class OpenVMMemoryEncoder(
         source_path = self._cur_state.source_path
         ts_off: list[int | None] = [None] * n
         if alignment is not None and source_path is not None:
-            times = alignment.time_for(source_path)
-            if len(times) == n:
-                ts_off = [t.offset if t is not None else None for t in times]
+            info = alignment.info_for(source_path)
+            if len(info) == n:
+                ts_off = [
+                    x.time.offset if x.time is not None else None for x in info
+                ]
 
         def flat_args(i: int) -> list[FNode]:
             a, ptr, data, t = self._interactions[i].args
@@ -782,14 +784,10 @@ class OpenVMMemoryEncoder(
                     "interface memory encoding requires a membus alignment"
                 )
             # kept_pairs, not before_to_after: only the genuine align "kept"
-            # rows (never the identity fill). The internal-pair legs and inert
-            # rows are the certified remainder — their equalities live on
-            # their own side (see `internal_pair_equalities`).
-            internal_a = frozenset(
-                {p.recv for p in alignment.internal_pairs_before}
-                | {p.send for p in alignment.internal_pairs_before}
-                | alignment.inert_removed_before
-            )
+            # rows (never the identity fill). The removed interactions (internal
+            # pair legs + inert rows) are the certified remainder — their
+            # equalities live on their own side (see `internal_pair_equalities`).
+            internal_a = alignment.removed_for(alignment.before_path)
             return interface_io_relation(
                 f"IO RELATION for {self.NAME}",
                 self._bus_interactions(),
@@ -899,7 +897,7 @@ def _interface_pointer_eq(
 def internal_pair_equalities(
     name: str,
     interactions: list[BusInteraction],
-    pairs: list["InternalPair"],  # noqa: F821 — src.verify.membus_analysis
+    pairs: list[tuple[int, int]],
 ) -> list[FNode]:
     """Equalities compiling away a circuit's internal forced recv<->send pairs.
 
@@ -911,6 +909,10 @@ def internal_pair_equalities(
     holds its prev_timestamp, so recv.prev_ts == send.ts is the positional
     equality. Field equalities throughout: the expressions feeding the membus
     are not normalized, so syntactic Int `=` would be unsound.
+
+    ``pairs`` are unordered ordinal pairs (the recv/send roles are erased once
+    the match analysis resolves both legs); recv (mult -1) and send (mult +1)
+    are recovered here from the multiplicities, which doubles as the guard.
     """
     p = ARGS().field_type.value
 
@@ -919,19 +921,23 @@ def internal_pair_equalities(
         return w.constant_value() % p if w.is_int_constant() else None
 
     parts: list[FNode] = []
-    for pair in pairs:
-        recv, send = interactions[pair.recv], interactions[pair.send]
-        mr, ms = cmult(recv), cmult(send)
-        if (mr, ms) != (p - 1, 1):
+    for a, b in pairs:
+        ia, ib = interactions[a], interactions[b]
+        ma, mb = cmult(ia), cmult(ib)
+        if (ma, mb) == (p - 1, 1):
+            recv, send = ia, ib
+        elif (mb, ma) == (p - 1, 1):
+            recv, send = ib, ia
+        else:
             raise RuntimeError(
-                f"interface internal pair ({pair.recv},{pair.send}): mults are "
-                f"not (recv -1, send +1): {recv.mult} vs {send.mult}"
+                f"interface internal pair ({a},{b}): mults are "
+                f"not (recv -1, send +1): {ia.mult} vs {ib.mult}"
             )
         for k, (x, y) in enumerate(zip(recv.args, send.args, strict=True)):
             parts.append(
                 with_comment(
                     field_eq(x, y),
-                    f"{name}: internal pair ({pair.recv},{pair.send}) arg {k}",
+                    f"{name}: internal pair ({a},{b}) arg {k}",
                 )
             )
     return parts

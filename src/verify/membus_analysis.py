@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import itertools
 import logging
-from collections import namedtuple
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -27,7 +26,32 @@ from .membus_types import MembusParsedKey, parse_membus_key
 _LOG = logging.getLogger(__name__)
 
 Tri = bool | None
-Status = namedtuple("Status", ("input", "output", "disabled", "match"))
+
+
+@dataclass(frozen=True)
+class Info:
+    """Everything the analysis resolves about a single interaction.
+
+    `matches` stays separate: it is a relation (per-interaction match sets),
+    not a scalar attribute, so it does not belong in this per-interaction
+    record.
+    """
+
+    # Worklist-inferred role flags (tri-valued: True / False / None=unknown).
+    input: Tri = None
+    output: Tri = None
+    disabled: Tri = None
+    match: Tri = None
+    # Classification: present in ONE circuit only (align status=="removed");
+    # never set on the after side. The recv<->send pairing among removed legs is
+    # recovered from `matches`, not stored (see `internal_pairs_for`).
+    removed: bool = False
+    # Trusted parsed timestamp: exact for sends, upper bound for recvs (offset
+    # from T), or None. Restricts a recv to matching only earlier sends.
+    time: TimeInfo | None = None
+    # Trusted parsed membus key (base+offset / const), or None — a syntactic
+    # reading of the circuit, used to anchor `pointer == base + offset`.
+    key: MembusParsedKey | None = None
 
 
 @dataclass(frozen=True)
@@ -65,6 +89,7 @@ class SideState:
     facts: list[IdFacts]
     matches: list[set[int]]
     status: list[list[Tri]]
+    removed: list[bool] = field(default_factory=list)
     order_edges: list[dict] = field(default_factory=list)
 
 
@@ -75,24 +100,12 @@ class MembusAnalysis:
     before_to_after: dict[int, int]
     before_matches: list[list[int]]
     after_matches: list[list[int]]
-    before_status: list[Status]
-    after_status: list[Status]
-    before_times: list["TimeInfo | None"] = field(default_factory=list)
-    after_times: list["TimeInfo | None"] = field(default_factory=list)
-    before_keys: list["MembusParsedKey | None"] = field(default_factory=list)
-    after_keys: list["MembusParsedKey | None"] = field(default_factory=list)
-    # Whether `membus align` actually ran (False = heuristic fallback), and the
+    before_info: list[Info]
+    after_info: list[Info]
     # before->after pairs sourced from genuine status=="kept" align rows,
-    # captured BEFORE any identity fill. The interface encoding trusts only
-    # these.
-    align_ok: bool = False
+    # captured BEFORE any identity fill and left empty on the heuristic fallback
+    # (no align ran). The interface encoding trusts only these.
     kept_pairs: dict[int, int] = field(default_factory=dict)
-    # Forced interior recv<->send pairs among the removed (single-circuit)
-    # interactions, per side, plus the inert (mult==0) removed ordinals. The
-    # after side stays empty in v1: align aborts on 'added' rows.
-    internal_pairs_before: list[InternalPair] = field(default_factory=list)
-    internal_pairs_after: list[InternalPair] = field(default_factory=list)
-    inert_removed_before: frozenset[int] = frozenset()
 
     @property
     def n_before(self) -> int:
@@ -111,56 +124,60 @@ class MembusAnalysis:
         )
         return self.after_matches
 
-    def status_for(self, path: Path) -> list[Status]:
+    def info_for(self, path: Path) -> list[Info]:
+        """Per-interaction `Info` records (role flags, removed bit, parsed
+        time/key) for the given side. See `Info` for field semantics."""
         path = path.resolve()
         if path == self.before_path.resolve():
-            return self.before_status
+            return self.before_info
         assert path == self.after_path.resolve(), (
             f"path {path} is neither before {self.before_path} nor after {self.after_path}"
         )
-        return self.after_status
+        return self.after_info
 
-    def keys_for(self, path: Path) -> list["MembusParsedKey | None"]:
-        """Per-interaction parsed membus key (base+offset / const), or ``None``.
+    def removed_for(self, path: Path) -> frozenset[int]:
+        """Ordinals of this side's removed interactions (present in ONE circuit
+        only): the union of the forced interior pair legs and the inert rows.
+        Empty when no align ran (and always empty on the after side in v1)."""
+        return frozenset(i for i, st in enumerate(self.info_for(path)) if st.removed)
 
-        This is membus's *key reconstruction* (trusted — a syntactic reading of
-        the circuit), independent of its (guessed) solve. The encoder uses it to
-        assert ``pointer == base + offset`` so EUF/arith derives key
-        distinctness (``base+o1 != base+o2``) instead of nonlinear limb work.
-        """
-        path = path.resolve()
-        if path == self.before_path.resolve():
-            return self.before_keys
-        assert path == self.after_path.resolve(), (
-            f"path {path} is neither before {self.before_path} nor after {self.after_path}"
-        )
-        return self.after_keys
-
-    def internal_pairs_for(self, path: Path) -> list[InternalPair]:
+    def internal_pairs_for(self, path: Path) -> list[tuple[int, int]]:
         """Forced interior recv<->send pairs among this side's removed
-        interactions (membus ordinals). Empty unless ``align_ok``."""
-        path = path.resolve()
-        if path == self.before_path.resolve():
-            return self.internal_pairs_before
-        assert path == self.after_path.resolve(), (
-            f"path {path} is neither before {self.before_path} nor after {self.after_path}"
-        )
-        return self.internal_pairs_after
+        interactions, recovered from the match analysis as mutual singletons.
 
-    def time_for(self, path: Path) -> list["TimeInfo | None"]:
-        """Per-interaction membus timestamp (`TimeInfo`, or ``None`` if unknown).
-
-        Sends carry an exact time (``kind="exact"``), recvs an upper bound
-        (``kind="upper"``); both as an integer offset from ``T``. Used to
-        restrict a recv to matching only strictly-earlier sends.
-        """
-        path = path.resolve()
-        if path == self.before_path.resolve():
-            return self.before_times
-        assert path == self.after_path.resolve(), (
-            f"path {path} is neither before {self.before_path} nor after {self.after_path}"
-        )
-        return self.after_times
+        The pairing is not stored: a removed, non-inert interaction is (by the
+        ``local_partners`` fed into ``_restrict_partners``) a match-singleton
+        with its one partner, so ``matches[i] == {j}`` and ``matches[j] == {i}``.
+        Returned unordered (``i < j``) — recv/send roles are erased once the
+        worklist resolves both legs to ``match``; the consumer
+        (``internal_pair_equalities``) re-derives them from the multiplicities.
+        Raises if a removed leg is not a clean mutual singleton (the align-shape
+        gate in ``_collect_internal_pairs`` runs at construction, but these feed
+        SMT equalities, so a corrupted ``matches`` must never pass silently)."""
+        status = self.info_for(path)
+        matches = self.matches_for(path)
+        pairs: list[tuple[int, int]] = []
+        seen: set[int] = set()
+        for i, st in enumerate(status):
+            if i in seen or not st.removed or st.disabled:
+                continue
+            cand = [j for j in matches[i] if j != i]
+            partner = cand[0] if len(cand) == 1 else None
+            if (
+                partner is None
+                or partner in seen
+                or not status[partner].removed
+                or status[partner].disabled
+                or [x for x in matches[partner] if x != partner] != [i]
+            ):
+                raise RuntimeError(
+                    f"internal pair recovery: removed interaction #{i} is not a "
+                    f"forced mutual singleton (match={matches[i]})"
+                )
+            seen.add(i)
+            seen.add(partner)
+            pairs.append((i, partner) if i < partner else (partner, i))
+        return pairs
 
 
 def _normalize_dump(data: dict[str, Any]) -> dict[str, Any]:
@@ -318,8 +335,8 @@ def _set_flag(st: list[Tri], idx: int, val: Tri) -> bool:
     return True
 
 
-def _status_tuple(st: list[Tri]) -> Status:
-    return Status(st[0], st[1], st[2], st[3])
+def _make_info(st: list[Tri], removed: bool, fact: IdFacts) -> Info:
+    return Info(st[0], st[1], st[2], st[3], removed, fact.time, fact.key)
 
 
 def _apply_boundary_io(status: list[list[Tri]], i: int, io: str | None) -> None:
@@ -461,12 +478,15 @@ def _ingest_side(
 
     matches = [set(range(n)) for _ in range(n)]
     status = [[None, None, None, None] for _ in range(n)]
+    removed = [False] * n
 
     if align_rows:
         for raw in align_rows:
             o = raw.get("before_id")
             if o is None or o >= n:
                 continue
+            if raw.get("status") == "removed":
+                removed[o] = True
             if raw.get("kind") and not facts[o].kind:
                 facts[o].kind = raw["kind"]
             if raw.get("key") and not facts[o].key:
@@ -521,6 +541,7 @@ def _ingest_side(
         facts=facts,
         matches=matches,
         status=status,
+        removed=removed,
         order_edges=order_edges,
     )
 
@@ -676,16 +697,18 @@ def _resolve_status(st: list[Tri]) -> None:
             break
 
 
-def _finalize_side(
-    state: SideState,
-) -> tuple[list[list[int]], list[Status], list[TimeInfo | None], list[MembusParsedKey | None]]:
+def _finalize_side(state: SideState) -> tuple[list[list[int]], list[Info]]:
     for i in range(state.n):
         _resolve_status(state.status[i])
     matches = [sorted(s) for s in state.matches]
-    status = [_status_tuple(st) for st in state.status]
-    times = [f.time for f in state.facts]
-    keys = [f.key for f in state.facts]
-    return matches, status, times, keys
+    # One `Info` per interaction: resolved role flags + removed bit + parsed
+    # time/key. `removed` is index-guarded so a hand-built state that omits it
+    # (shorter list) finalizes as not-removed instead of truncating the output.
+    info = [
+        _make_info(st, i < len(state.removed) and bool(state.removed[i]), f)
+        for i, (st, f) in enumerate(zip(state.status, state.facts))
+    ]
+    return matches, info
 
 
 def _analyze_side(
@@ -793,9 +816,7 @@ def run_membus_analysis(
     after = _normalize_dump(after)
     before_to_after: dict[int, int] = {}
     before_align_rows: list[dict] = []
-    align_ok = False
-    internal_pairs: list[InternalPair] = []
-    inert_removed: set[int] = set()
+    align_ran = False
     present = _memory_address_spaces(before)
 
     # Align every constant address space present (native AS3 blocks exist in
@@ -805,7 +826,7 @@ def run_membus_analysis(
         al = fetch_align_json(before_path, after_path, addr_space=addr_space)
         if al is None:
             continue
-        align_ok = True
+        align_ran = True
         rows = al.get("interactions") or []
         before_align_rows.extend(rows)
         for raw in rows:
@@ -813,9 +834,12 @@ def run_membus_analysis(
             bid = raw.get("before_id")
             if aid is not None and bid is not None and raw.get("status") == "kept":
                 before_to_after[bid] = aid
+        # Validation gate only: raises on any malformed removed-interaction shape
+        # (unclaimed send, non-mutual partner, non-interior removed row). The
+        # `removed` classification is stamped per-interaction in `_ingest_side`
+        # and the pairing is recovered downstream from `matches`; we keep this
+        # trusted align-side check because those pairs become SMT equalities.
         pairs, inert = _collect_internal_pairs(rows, addr_space)
-        internal_pairs.extend(pairs)
-        inert_removed |= inert
         if pairs or inert:
             _LOG.info(
                 "membus align as=%d: %d internal recv<->send pair(s), %d inert removed",
@@ -824,17 +848,20 @@ def run_membus_analysis(
                 len(inert),
             )
 
-    if not align_ok:
-        before_to_after = _heuristic_before_to_after(before, after)
+    # Snapshot the genuine kept map (align "kept" rows only) before the fallback
+    # and identity fill mutate/replace before_to_after; empty when no align ran.
+    # The interface encoding trusts only this.
+    kept_pairs = dict(before_to_after)
 
-    kept_pairs = dict(before_to_after) if align_ok else {}
+    if not align_ran:
+        before_to_after = _heuristic_before_to_after(before, after)
 
     n_before = _memory_interaction_count(before)
     n_after = _memory_interaction_count(after)
     _fill_identity_map(before_to_after, n_before, n_after)
 
-    before_info = fetch_info_json(before_path)
-    after_info = fetch_info_json(after_path)
+    before_info_json = fetch_info_json(before_path)
+    after_info_json = fetch_info_json(after_path)
     before_extract = fetch_extract_json(before_path)
     after_extract = fetch_extract_json(after_path)
     before_solve = fetch_solve_json_all(before_path, present=present)
@@ -846,7 +873,7 @@ def run_membus_analysis(
         before,
         before_path,
         solve=before_solve,
-        info=before_info,
+        info=before_info_json,
         extract=before_extract,
         align_rows=before_align_rows,
     )
@@ -854,11 +881,11 @@ def run_membus_analysis(
         after,
         after_path,
         solve=after_solve,
-        info=after_info,
+        info=after_info_json,
         extract=after_extract,
     )
-    before_matches, before_status, before_times, before_keys = _finalize_side(before_state)
-    after_matches, after_status, after_times, after_keys = _finalize_side(after_state)
+    before_matches, before_info = _finalize_side(before_state)
+    after_matches, after_info = _finalize_side(after_state)
 
     _LOG.info(
         "membus analysis: n_before=%d n_after=%d aligned_pairs=%d",
@@ -873,14 +900,7 @@ def run_membus_analysis(
         before_to_after=before_to_after,
         before_matches=before_matches,
         after_matches=after_matches,
-        before_status=before_status,
-        after_status=after_status,
-        before_times=before_times,
-        after_times=after_times,
-        before_keys=before_keys,
-        after_keys=after_keys,
-        align_ok=align_ok,
+        before_info=before_info,
+        after_info=after_info,
         kept_pairs=kept_pairs,
-        internal_pairs_before=internal_pairs if align_ok else [],
-        inert_removed_before=frozenset(inert_removed) if align_ok else frozenset(),
     )

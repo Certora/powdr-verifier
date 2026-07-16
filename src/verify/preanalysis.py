@@ -62,33 +62,37 @@ def _alignment_problems(analysis: MembusAnalysis) -> list[str]:
     forced interior pairs among the removed interactions), so a wrong or
     partial pairing is a soundness risk (vacuous premises = false PASS). Accept
     only a map sourced from genuine ``membus align`` rows — never the heuristic
-    fallback or identity fill — in which every before interaction is kept, one
-    leg of a forced internal pair, or inert, and the kept pairs are a bijection
-    onto the after side."""
+    fallback or identity fill — in which the before side partitions into kept
+    interactions and removed ones (each removed interaction inert or one leg of
+    a forced interior pair), and the kept pairs are a bijection onto the after
+    side."""
     n = analysis.n_before
     kept = analysis.kept_pairs
-    pairs = analysis.internal_pairs_before
-    inert = analysis.inert_removed_before
+    removed = analysis.removed_for(analysis.before_path)
     problems: list[str] = []
-    if not analysis.align_ok:
-        problems.append("membus align did not run (heuristic fallback)")
-    if not ARGS().interface_internal_pairs and (pairs or inert):
+    # No explicit "align ran?" check: on the heuristic fallback (any-or-all
+    # address spaces missing) the unaligned interactions land in neither `kept`
+    # nor `removed`, so the coverage check below rejects them anyway.
+    if not ARGS().interface_internal_pairs and removed:
         problems.append(
-            f"{len(pairs)} internal pair(s) / {len(inert)} inert removed present "
-            "but --no-interface-internal-pairs is set"
+            f"{len(removed)} removed interaction(s) present but "
+            "--no-interface-internal-pairs is set"
         )
-    legs = {p.recv for p in pairs} | {p.send for p in pairs}
-    if len(legs) != 2 * len(pairs):
-        problems.append("internal pair legs are not pairwise distinct")
-    if legs & set(kept) or legs & inert or set(kept) & inert:
-        problems.append("kept pairs, internal pair legs, and inert rows overlap")
-    if set(kept) | legs | inert != set(range(n)):
+    if set(kept) & removed:
+        problems.append("kept pairs and removed interactions overlap")
+    if set(kept) | removed != set(range(n)):
         problems.append(
-            f"before interactions not fully accounted for ({len(kept)} kept, "
-            f"{len(legs)} internal-pair legs, {len(inert)} inert, of {n})"
+            f"before interactions not fully accounted for "
+            f"({len(kept)} kept, {len(removed)} removed, of {n})"
         )
     if sorted(kept.values()) != list(range(analysis.n_after)):
         problems.append("kept pairs are not a bijection onto the after side")
+    # The non-inert removed interactions must pair up as forced mutual
+    # match-singletons — the recovered recv==send equalities depend on it.
+    try:
+        analysis.internal_pairs_for(analysis.before_path)
+    except RuntimeError as exc:
+        problems.append(str(exc))
     return problems
 
 

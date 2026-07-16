@@ -708,14 +708,14 @@ class PermutationCheckMixin:
         if skip_matches:
             logging.info("skipping matches for %s", self.NAME)
 
-        membus_status = alignment.status_for(source_path) if have_analysis else None
-        if membus_status is not None:
-            assert len(membus_status) == n
+        membus_info = alignment.info_for(source_path) if have_analysis else None
+        if membus_info is not None:
+            assert len(membus_info) == n
 
         is_inputs, is_outputs, is_disableds = [], [], []
         _pinning = {True: TRUE(), False: FALSE(), None: None}
         for i in range(n):
-            st = membus_status[i] if membus_status is not None else None
+            st = membus_info[i] if membus_info is not None else None
             isin = _pinning[st.input] if st is not None else None
             isout = _pinning[st.output] if st is not None else None
             isdis = _pinning[st.disabled] if st is not None else None
