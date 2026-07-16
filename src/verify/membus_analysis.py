@@ -735,6 +735,84 @@ def _analyze_side(
     return state
 
 
+def _exchange_across_alignment(
+    before: SideState, after: SideState, before_to_after: dict[int, int]
+) -> None:
+    """Transfer resolved role/match knowledge across a genuine 1:1 kept
+    alignment, then re-run each side's worklist once (a single pass suffices --
+    see the note at the transfer below).
+
+    For a kept pair ``(i_b, i_a)`` the two interactions are the SAME memory
+    operation up to ``is_valid`` gating, so under ``is_valid==1`` they share
+    roles and matches. Filling an unresolved status flag / narrowing a match set
+    on one side from the other is a sound *instantiation* of that side's
+    quantified permutation variables: instantiating a forall-bound variable can
+    only fail to close a proof, never cause a false PASS, and the transferred
+    value is exactly the ``is_valid==1`` witness (which is also the determined
+    value on the ``is_valid``-asserting soundness side). The symbolic-mult side
+    (typically ``after``, whose multiplicities are ``+-is_valid``) thus inherits
+    the constant side's resolution and its permutation booleans stop being free
+    -- eliminating the residual ``forall`` that made completeness not-qf.
+
+    No explicit ``is_valid`` guard is needed: the alignment already carries the
+    ``is_valid==1`` assumption (see ``keyed_io_relation``'s aligned-pair I/O
+    ``Iff``s), and forall-instantiation is unconditionally sound regardless."""
+    pairs = {
+        b: a
+        for b, a in before_to_after.items()
+        if b < before.n and a < after.n
+    }
+    if not pairs:
+        return
+    inverse = {a: b for b, a in pairs.items()}
+
+    def xfer_status(src: SideState, dst: SideState, src2dst: dict[int, int]) -> bool:
+        changed = False
+        for si, di in src2dst.items():
+            for k in range(4):
+                if src.status[si][k] is not None and dst.status[di][k] is None:
+                    dst.status[di][k] = src.status[si][k]
+                    changed = True
+        return changed
+
+    def xfer_matches(src: SideState, dst: SideState, src2dst: dict[int, int]) -> bool:
+        changed = False
+        for si, di in src2dst.items():
+            # image of src's candidate partners in dst's index space
+            image = {src2dst[j] for j in src.matches[si] if j in src2dst}
+            # only narrow when the resolved partner is still reachable, so we
+            # never empty di's own match set on a (rare) misaligned pair
+            if not (image & dst.matches[di]):
+                continue
+            for k in [x for x in dst.matches[di] if x not in image]:
+                # don't strand the partner `k` either: on a misaligned pair k's
+                # only candidate can be di, and `_remove_match` would leave k
+                # with an empty match set (which crashes downstream recovery).
+                # Skip such a removal -- an over-matched di is harmless (at worst
+                # a residual unpinned var); an empty match set is not.
+                if dst.matches[k] == {di}:
+                    continue
+                _remove_match(dst, di, k)  # keeps matches symmetric
+                changed = True
+        return changed
+
+    # A single pass suffices: `before` is fully resolved by its constant
+    # multiplicities, so the transfer is one-directional (before -> after). One
+    # pass fills every aligned `after` slot, the worklist propagates it, and a
+    # second pass would move nothing new -- `before` is unchanged and after's
+    # newly-resolved vars map only back to already-resolved `before`
+    # interactions. (Verified: `_040` blocks need exactly one round, interface
+    # zero.) A missed transfer would only leave a var unpinned (residual
+    # not-qf), never be unsound, so dropping the fixpoint loop is safe.
+    changed = xfer_status(before, after, pairs)
+    changed |= xfer_status(after, before, inverse)
+    changed |= xfer_matches(before, after, pairs)
+    changed |= xfer_matches(after, before, inverse)
+    if changed:
+        _run_worklist(before)
+        _run_worklist(after)
+
+
 def _collect_internal_pairs(
     rows: list[dict[str, Any]], addr_space: int
 ) -> tuple[list[InternalPair], set[int]]:
@@ -884,6 +962,13 @@ def run_membus_analysis(
         info=after_info_json,
         extract=after_extract,
     )
+    # With a genuine kept alignment, share resolved roles/matches across the
+    # aligned pairs so the symbolic-mult (is_valid) side inherits the constant
+    # side's pins -- otherwise its permutation booleans stay free and make the
+    # completeness VC not-qf. Only the genuine kept map (never the heuristic
+    # fill) is trusted here.
+    if align_ran and kept_pairs:
+        _exchange_across_alignment(before_state, after_state, kept_pairs)
     before_matches, before_info = _finalize_side(before_state)
     after_matches, after_info = _finalize_side(after_state)
 
