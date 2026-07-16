@@ -1,0 +1,39 @@
+{
+ "constraints": [],
+ "bus_interactions": [
+  {
+   "id": 1,
+   "mult": [
+    "-",
+    1
+   ],
+   "args": [
+    1,
+    32,
+    "read_data__0_2@106",
+    "read_data__1_2@107",
+    "read_data__2_2@108",
+    "read_data__3_2@109",
+    "read_data_aux__base__prev_timestamp_2@88"
+   ]
+  },
+  {
+   "id": 1,
+   "mult": 1,
+   "args": [
+    1,
+    32,
+    "read_data__0_2@106",
+    "read_data__1_2@107",
+    "read_data__2_2@108",
+    "read_data__3_2@109",
+    [
+     "from_state__timestamp_0@1",
+     "+",
+     7
+    ]
+   ]
+  }
+ ],
+ "derived_columns": []
+}

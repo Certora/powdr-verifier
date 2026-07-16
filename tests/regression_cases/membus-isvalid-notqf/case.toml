@@ -1,0 +1,75 @@
+[case]
+tags = ["dumps", "verify", "isqf", "membus", "is_valid", "not-qf"]
+description = """
+Minimal reproducer of the is_valid (_040) not-qf class.
+
+A balanced 2-interaction memory recv/send pair (addr_space 1, ptr 32) whose
+multiplicities are constant +/-1 on the before side but +/-is_valid on the
+after side. Because the after mults are symbolic, the membus analysis cannot
+resolve the interactions' roles, so permutation_check mints unpinned after-side
+memory permutation booleans (memory_isinput/isoutput/isdisabled/match). The
+completeness VC quantifies over the after side, so those booleans survive as
+forall-bound variables => completeness is NOT quantifier-free. Soundness stays
+qf, and completeness is still (correctly) unsat.
+
+Delta-debugged from guest-keccak block 2099512, pass 039_trivial_simp -> 040
+(constraints, columns, optimistic constraints and all non-memory interactions
+removed). This is a characterization test: if the after-side membus booleans
+ever get pinned (making completeness qf), the isqf assertion below will flip to
+qf and should be updated.
+"""
+
+[inputs]
+type = "dumps"
+base = "apc_candidate_2099512_000_unopt.json"
+substitutions = "apc_candidate_2099512_substitutions.json"
+before = "apc_candidate_2099512_039_trivial_simp.json"
+after = "apc_candidate_2099512_040.json"
+
+# 1) Encode the equivalence VC (produces v.completeness.smt2 / v.soundness.smt2).
+[[steps]]
+script = "main.py"
+args = [
+  "--base-dump", "{base}",
+  "--substitutions", "{substitutions}",
+  "verify", "{before}", "{after}", "{work}/v.smt2",
+  "--optimization-step", "",
+]
+timeout = 60
+capture_json = true
+
+[[assert]]
+kind = "exit_ok"
+
+# 2) Simplify the completeness VC; isqf must report not-qf (the repro).
+[[steps]]
+script = "main.py"
+args = [
+  "simplify",
+  "{work}/v.completeness.smt2",
+  "nnf:skolem:lift:witness:demod:z3-propagate-values:isqf:bounds:demod",
+  "{work}/comp.rewrite.smt2",
+]
+timeout = 60
+capture_json = true
+
+[[assert]]
+kind = "exit_ok"
+
+[[assert]]
+kind = "isqf"
+result = "not-qf"
+
+# 3) Despite being not-qf, completeness is still correctly unsat.
+[[steps]]
+script = "main.py"
+args = ["check", "{work}/comp.rewrite.smt2", "--dump-model", "{work}/comp.model"]
+timeout = 60
+capture_json = true
+
+[[assert]]
+kind = "exit_ok"
+
+[[assert]]
+kind = "check_result"
+result = "unsat"
