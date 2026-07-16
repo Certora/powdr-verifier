@@ -36,6 +36,16 @@ class TimeInfo:
     offset: int
 
 
+@dataclass(frozen=True)
+class InternalPair:
+    """A forced interior recv<->send connection between two interactions that
+    exist in only ONE circuit (align status=="removed"), in membus ordinals."""
+
+    recv: int
+    send: int
+    addr_space: int
+
+
 @dataclass
 class IdFacts:
     kind: str | None = None
@@ -77,6 +87,12 @@ class MembusAnalysis:
     # these.
     align_ok: bool = False
     kept_pairs: dict[int, int] = field(default_factory=dict)
+    # Forced interior recv<->send pairs among the removed (single-circuit)
+    # interactions, per side, plus the inert (mult==0) removed ordinals. The
+    # after side stays empty in v1: align aborts on 'added' rows.
+    internal_pairs_before: list[InternalPair] = field(default_factory=list)
+    internal_pairs_after: list[InternalPair] = field(default_factory=list)
+    inert_removed_before: frozenset[int] = frozenset()
 
     @property
     def n_before(self) -> int:
@@ -119,6 +135,17 @@ class MembusAnalysis:
             f"path {path} is neither before {self.before_path} nor after {self.after_path}"
         )
         return self.after_keys
+
+    def internal_pairs_for(self, path: Path) -> list[InternalPair]:
+        """Forced interior recv<->send pairs among this side's removed
+        interactions (membus ordinals). Empty unless ``align_ok``."""
+        path = path.resolve()
+        if path == self.before_path.resolve():
+            return self.internal_pairs_before
+        assert path == self.after_path.resolve(), (
+            f"path {path} is neither before {self.before_path} nor after {self.after_path}"
+        )
+        return self.internal_pairs_after
 
     def time_for(self, path: Path) -> list["TimeInfo | None"]:
         """Per-interaction membus timestamp (`TimeInfo`, or ``None`` if unknown).
@@ -685,6 +712,75 @@ def _analyze_side(
     return state
 
 
+def _collect_internal_pairs(
+    rows: list[dict[str, Any]], addr_space: int
+) -> tuple[list[InternalPair], set[int]]:
+    """Extract the forced interior recv<->send pairs among ``status=="removed"``
+    align rows, plus the inert (disabled) removed ordinals.
+
+    align already certifies every non-inert removed row is one leg of a forced
+    interior pair wholly inside the removed set (it aborts otherwise); this
+    re-verifies that shape cheaply and raises on anything else — the pairs
+    become recv==send circuit equalities downstream, so a malformed row must
+    never be silently skipped.
+    """
+    by_id = {row["before_id"]: row for row in rows}
+    removed = [row for row in rows if row.get("status") == "removed"]
+    pairs: list[InternalPair] = []
+    inert: set[int] = set()
+    claimed_sends: set[int] = set()
+    for row in removed:
+        bid = row["before_id"]
+        kind = row.get("kind")
+        if kind == "disabled" or row.get("local_role") == "inert":
+            inert.add(bid)
+            continue
+        if kind == "send":
+            continue  # claimed via its recv; verified below
+        if kind != "recv":
+            raise RuntimeError(
+                f"membus internal pairs: removed interaction #{bid} has "
+                f"unexpected kind {kind!r}"
+            )
+        partners = row.get("local_partners") or []
+        if row.get("local_role") != "interior" or len(partners) != 1:
+            raise RuntimeError(
+                f"membus internal pairs: removed recv #{bid} is not a forced "
+                f"interior connection (role={row.get('local_role')!r}, "
+                f"partners={partners})"
+            )
+        send = by_id.get(partners[0])
+        if (
+            send is None
+            or send.get("status") != "removed"
+            or send.get("kind") != "send"
+            or send.get("local_role") != "interior"
+            or bid not in (send.get("local_partners") or [])
+        ):
+            raise RuntimeError(
+                f"membus internal pairs: removed recv #{bid} claims send "
+                f"#{partners[0]}, which is not a matching removed interior send"
+            )
+        if partners[0] in claimed_sends:
+            raise RuntimeError(
+                f"membus internal pairs: removed send #{partners[0]} claimed "
+                f"by more than one recv"
+            )
+        claimed_sends.add(partners[0])
+        pairs.append(InternalPair(recv=bid, send=partners[0], addr_space=addr_space))
+    unclaimed = {
+        row["before_id"]
+        for row in removed
+        if row.get("kind") == "send" and row["before_id"] not in claimed_sends
+    }
+    if unclaimed:
+        raise RuntimeError(
+            f"membus internal pairs: removed send(s) {sorted(unclaimed)} not "
+            f"claimed by any removed recv"
+        )
+    return pairs, inert
+
+
 def run_membus_analysis(
     before: dict[str, Any],
     after: dict[str, Any],
@@ -698,6 +794,8 @@ def run_membus_analysis(
     before_to_after: dict[int, int] = {}
     before_align_rows: list[dict] = []
     align_ok = False
+    internal_pairs: list[InternalPair] = []
+    inert_removed: set[int] = set()
     present = _memory_address_spaces(before)
 
     # Align every constant address space present (native AS3 blocks exist in
@@ -708,13 +806,23 @@ def run_membus_analysis(
         if al is None:
             continue
         align_ok = True
-        before_align_rows.extend(al.get("interactions") or [])
-        for raw in al.get("interactions") or []:
+        rows = al.get("interactions") or []
+        before_align_rows.extend(rows)
+        for raw in rows:
             aid = raw.get("after_id")
             bid = raw.get("before_id")
             if aid is not None and bid is not None and raw.get("status") == "kept":
                 before_to_after[bid] = aid
-        # TODO: align provides "local" for removed entries
+        pairs, inert = _collect_internal_pairs(rows, addr_space)
+        internal_pairs.extend(pairs)
+        inert_removed |= inert
+        if pairs or inert:
+            _LOG.info(
+                "membus align as=%d: %d internal recv<->send pair(s), %d inert removed",
+                addr_space,
+                len(pairs),
+                len(inert),
+            )
 
     if not align_ok:
         before_to_after = _heuristic_before_to_after(before, after)
@@ -773,4 +881,6 @@ def run_membus_analysis(
         after_keys=after_keys,
         align_ok=align_ok,
         kept_pairs=kept_pairs,
+        internal_pairs_before=internal_pairs if align_ok else [],
+        inert_removed_before=frozenset(inert_removed) if align_ok else frozenset(),
     )

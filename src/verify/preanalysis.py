@@ -34,7 +34,7 @@ def analyze_memory_bus_alignment(
     )
     if ARGS().memory_encoding == "interface":
         # Explicit request: a non-perfect alignment is a hard error.
-        _require_perfect_alignment(analysis)
+        _require_interface_alignment(analysis)
     elif ARGS().memory_encoding == "auto":
         # Pick the interface encoding when the analysis certifies a perfect
         # 1:1 kept alignment AND the interface v1 precondition holds (every
@@ -57,24 +57,37 @@ def analyze_memory_bus_alignment(
 def _alignment_problems(analysis: MembusAnalysis) -> list[str]:
     """Reasons the alignment is not a perfect 1:1 kept map, or ``[]`` if it is.
 
-    The interface encoding assumes recv equalities across aligned pairs, so a
-    wrong or partial pairing is a soundness risk (vacuous premises = false
-    PASS). Only a total 1:1 map sourced from genuine ``membus align`` "kept"
-    rows qualifies — never the heuristic fallback or identity fill."""
+    The interface encoding assumes recv equalities across aligned pairs (and,
+    with ``--interface-internal-pairs``, grants recv==send equalities for the
+    forced interior pairs among the removed interactions), so a wrong or
+    partial pairing is a soundness risk (vacuous premises = false PASS). Accept
+    only a map sourced from genuine ``membus align`` rows — never the heuristic
+    fallback or identity fill — in which every before interaction is kept, one
+    leg of a forced internal pair, or inert, and the kept pairs are a bijection
+    onto the after side."""
     n = analysis.n_before
     kept = analysis.kept_pairs
+    pairs = analysis.internal_pairs_before
+    inert = analysis.inert_removed_before
     problems: list[str] = []
     if not analysis.align_ok:
         problems.append("membus align did not run (heuristic fallback)")
-    if analysis.n_after != n:
+    if not ARGS().interface_internal_pairs and (pairs or inert):
         problems.append(
-            f"interaction counts differ (before={n}, after={analysis.n_after})"
+            f"{len(pairs)} internal pair(s) / {len(inert)} inert removed present "
+            "but --no-interface-internal-pairs is set"
         )
-    if set(kept) != set(range(n)):
+    legs = {p.recv for p in pairs} | {p.send for p in pairs}
+    if len(legs) != 2 * len(pairs):
+        problems.append("internal pair legs are not pairwise distinct")
+    if legs & set(kept) or legs & inert or set(kept) & inert:
+        problems.append("kept pairs, internal pair legs, and inert rows overlap")
+    if set(kept) | legs | inert != set(range(n)):
         problems.append(
-            f"kept pairs are not total on the before side ({len(kept)}/{n} kept)"
+            f"before interactions not fully accounted for ({len(kept)} kept, "
+            f"{len(legs)} internal-pair legs, {len(inert)} inert, of {n})"
         )
-    elif sorted(kept.values()) != list(range(analysis.n_after)):
+    if sorted(kept.values()) != list(range(analysis.n_after)):
         problems.append("kept pairs are not a bijection onto the after side")
     return problems
 
@@ -122,14 +135,15 @@ def _interface_mults_const(before: dict[str, Any], after: dict[str, Any]) -> boo
     return True
 
 
-def _require_perfect_alignment(analysis: MembusAnalysis) -> None:
-    """Raise unless ``analysis`` is a perfect 1:1 kept alignment (see
-    :func:`_alignment_problems`). Used by the explicit ``interface`` mode."""
+def _require_interface_alignment(analysis: MembusAnalysis) -> None:
+    """Raise unless ``analysis`` is a kept alignment covering all interactions
+    (modulo forced internal pairs; see :func:`_alignment_problems`). Used by the
+    explicit ``interface`` mode."""
     problems = _alignment_problems(analysis)
     if problems:
         raise RuntimeError(
-            "interface memory encoding requires a perfect 1:1 kept alignment: "
-            + "; ".join(problems)
+            "interface memory encoding requires a kept alignment covering all "
+            "interactions (modulo forced internal pairs): " + "; ".join(problems)
         )
 
 

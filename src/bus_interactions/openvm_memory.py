@@ -483,6 +483,45 @@ class OpenVMMemoryEncoder(
                         And(*recv_bytes), f"{self.NAME} recv byte assumption"
                     )
                 )
+        # Internal (single-circuit) forced recv<->send pairs: memory is a
+        # deterministic environment, so a recv whose forced source is a local
+        # send reads exactly what that send wrote — equate the full argument
+        # tuples (the recv's ts slot holds prev_timestamp, so recv.prev_ts ==
+        # send.ts falls out positionally). Justified by membus align's
+        # certification that the connection is FORCED — entailed under every
+        # aliasing resolution — and re-verified in `preanalysis`.
+        #
+        # Emitted as circuit CONSTRAINTS (a circuit transformation: C' = C AND
+        # eqs, after which the pair is compiled away and the busses align),
+        # NOT through the granted-axioms channel. Polarity: as a constraint,
+        # the equality is a premise when this circuit sits in the outer
+        # (forall) position and an obligation at the skolem witness when it
+        # sits in the inner (exists) position — a corrupted dump whose
+        # substituted values disagree with the pair fails the obligation and
+        # the check comes back SAT. As a granted axiom it instead contradicted
+        # the other side's constraints through the same-name pins AT TOP LEVEL,
+        # making the whole soundness artifact vacuously unsat — a false PASS
+        # (measured on 2099600 010->011 with a corrupted send literal).
+        if (
+            interface
+            and ARGS().interface_internal_pairs
+            and alignment is not None
+            and source_path is not None
+        ):
+            pairs = alignment.internal_pairs_for(source_path)
+            if pairs:
+                eqs = internal_pair_equalities(
+                    self.NAME, self._bus_interactions(), pairs
+                )
+                logging.info(
+                    "%s interface internal pairs: %d pair(s) -> %d equalities",
+                    self.NAME,
+                    len(pairs),
+                    len(eqs),
+                )
+                yield with_comment(
+                    And(*eqs), f"{self.NAME} internal pair equalities"
+                )
         if ts_recon:
             yield with_comment(And(*ts_recon), f"{self.NAME} timestamp reconstruction")
 
@@ -742,13 +781,23 @@ class OpenVMMemoryEncoder(
                 raise RuntimeError(
                     "interface memory encoding requires a membus alignment"
                 )
+            # kept_pairs, not before_to_after: only the genuine align "kept"
+            # rows (never the identity fill). The internal-pair legs and inert
+            # rows are the certified remainder — their equalities live on
+            # their own side (see `internal_pair_equalities`).
+            internal_a = frozenset(
+                {p.recv for p in alignment.internal_pairs_before}
+                | {p.send for p in alignment.internal_pairs_before}
+                | alignment.inert_removed_before
+            )
             return interface_io_relation(
                 f"IO RELATION for {self.NAME}",
                 self._bus_interactions(),
                 other._bus_interactions(),
-                alignment.before_to_after,
+                alignment.kept_pairs,
                 bounds_a=self._syntactic_bounds,
                 bounds_b=other._syntactic_bounds,
+                internal_a=internal_a,
             )
         if ARGS().memory_encoding == "plain":
             alignment = self._cur_state.memory_bus_alignment
@@ -847,6 +896,47 @@ def _interface_pointer_eq(
     return [field_eq(px[0], py[0]), field_eq(px[1], py[1])]
 
 
+def internal_pair_equalities(
+    name: str,
+    interactions: list[BusInteraction],
+    pairs: list["InternalPair"],  # noqa: F821 — src.verify.membus_analysis
+) -> list[FNode]:
+    """Equalities compiling away a circuit's internal forced recv<->send pairs.
+
+    Both legs live in ONE circuit; their multiplicities cancel numerically
+    (1 + (P-1) == 0 mod P), so no mult equality is needed — instead the mults
+    are re-checked here as a guard. Every argument is equated positionally
+    over the full tuple [addr_space, pointer, *data, timestamp] — the memkeys
+    are just data from the bus perspective, and the recv's timestamp slot
+    holds its prev_timestamp, so recv.prev_ts == send.ts is the positional
+    equality. Field equalities throughout: the expressions feeding the membus
+    are not normalized, so syntactic Int `=` would be unsound.
+    """
+    p = ARGS().field_type.value
+
+    def cmult(inter: BusInteraction) -> int | None:
+        w = wrap_mod(inter.mult).simplify()
+        return w.constant_value() % p if w.is_int_constant() else None
+
+    parts: list[FNode] = []
+    for pair in pairs:
+        recv, send = interactions[pair.recv], interactions[pair.send]
+        mr, ms = cmult(recv), cmult(send)
+        if (mr, ms) != (p - 1, 1):
+            raise RuntimeError(
+                f"interface internal pair ({pair.recv},{pair.send}): mults are "
+                f"not (recv -1, send +1): {recv.mult} vs {send.mult}"
+            )
+        for k, (x, y) in enumerate(zip(recv.args, send.args, strict=True)):
+            parts.append(
+                with_comment(
+                    field_eq(x, y),
+                    f"{name}: internal pair ({pair.recv},{pair.send}) arg {k}",
+                )
+            )
+    return parts
+
+
 def interface_io_relation(
     name: str,
     interactions_a: list[BusInteraction],
@@ -855,6 +945,7 @@ def interface_io_relation(
     *,
     bounds_a: dict[FNode, int],
     bounds_b: dict[FNode, int],
+    internal_a: frozenset[int] = frozenset(),
 ) -> tuple[FNode, frozenset[FNode]]:
     """Cross-circuit io relation for the uninterpreted-interface encoding.
 
@@ -866,17 +957,22 @@ def interface_io_relation(
     columns (recv data) become skolem witness pins, equalities on computed
     columns (send data) remain proof obligations. No memory semantics
     (permutation, counting, ordering) is encoded — it is only ever needed to
-    justify interaction *removals*, and the perfect-alignment precondition
-    (checked in `preanalysis`) guarantees there are none.
+    justify interaction *removals*, and the alignment precondition (checked in
+    `preanalysis`) guarantees the only unaligned interactions are the internal
+    forced pairs in ``internal_a`` (compiled away by
+    `internal_pair_equalities` on their own side) plus inert rows.
     """
     p = ARGS().field_type.value
     n, m = len(interactions_a), len(interactions_b)
-    if set(aligned_pairs.keys()) != set(range(n)) or sorted(
-        aligned_pairs.values()
-    ) != list(range(m)):
+    if (
+        set(aligned_pairs.keys()) & internal_a
+        or set(aligned_pairs.keys()) | internal_a != set(range(n))
+        or sorted(aligned_pairs.values()) != list(range(m))
+    ):
         raise RuntimeError(
-            f"interface memory encoding: aligned pairs are not a total 1:1 "
-            f"map ({len(aligned_pairs)} pairs for {n} before / {m} after)"
+            f"interface memory encoding: aligned pairs + internal legs are not "
+            f"a disjoint cover with a 1:1 kept map ({len(aligned_pairs)} pairs "
+            f"+ {len(internal_a)} internal for {n} before / {m} after)"
         )
 
     def cmult(inter: BusInteraction) -> int | None:
