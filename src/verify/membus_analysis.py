@@ -967,7 +967,15 @@ def run_membus_analysis(
     # side's pins -- otherwise its permutation booleans stay free and make the
     # completeness VC not-qf. Only the genuine kept map (never the heuristic
     # fill) is trusted here.
-    if align_ran and kept_pairs:
+    #
+    # Gated on `after_assume_is_valid`: the transfer asserts after == before,
+    # which only holds under is_valid==1. The is_valid special-soundness path
+    # runs a SECOND, inactive analysis (after_assume_is_valid=False) for its
+    # is_valid==0 sub-checks (zero-is-model / invalid-all-mult-zero); pinning
+    # after == before there would force is_valid==1 into after.C and wrongly
+    # flip the "all-zero is a model" check unsat. Non-is_valid steps have
+    # constant mults on both sides, so the transfer is a no-op there anyway.
+    if align_ran and kept_pairs and after_assume_is_valid:
         _exchange_across_alignment(before_state, after_state, kept_pairs)
     before_matches, before_info = _finalize_side(before_state)
     after_matches, after_info = _finalize_side(after_state)
