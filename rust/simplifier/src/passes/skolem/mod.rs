@@ -1,4 +1,5 @@
 pub(crate) mod ast_build;
+mod cross_side;
 mod derived;
 mod isolate;
 mod map;
@@ -236,6 +237,9 @@ fn walk_forall_opt(
     if let Some(p) = field {
         rules::contribute(&mut skolem, script, &body, p);
     }
+    // Last-resort fallback: witness any still-unpinned quantified gadget column
+    // from the other side's derived definition (prefix-swapped). See cross_side.
+    cross_side::contribute(&mut skolem, pins, sorts);
 
     for src in skolem.sources.values() {
         *applied.entry(src.clone()).or_insert(0) += 1;
