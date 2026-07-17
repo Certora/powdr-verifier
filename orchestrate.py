@@ -367,7 +367,9 @@ def run_trace(*files):
             trace_smt2 = data_path_for_dump(f, f"trace-{f.stem}.smt2")
             res_trace = __run_main("trace", f, trace_smt2, parse_output=True)
             dump += res_trace
-            for file in sorted(res_trace.outputs):
+            # `or []`: a failed trace has no outputs; match run_verify and skip
+            # rather than crash orchestrate with `sorted(None)`.
+            for file in sorted(res_trace.outputs or []):
                 res_simp = __do_simplify(file, file.with_suffix(".rewrite.smt2"))
                 dump += res_simp
                 for rewritten in res_simp.outputs:
