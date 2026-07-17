@@ -5,11 +5,15 @@ from ..smt.conversion import FormulaWithAxioms, SmtConverter
 from ..smt.utils import *
 
 def sanity_satisfies_derived(formula: FormulaWithAxioms) -> Iterable[FNode]:
-    for v, constraint in formula.derived.items():
-        yield with_comment(
-            Not(constraint),
-            f"derived {v}"
-        )
+    # `derived` maps each column symbol to a LIST of defining formulas (a
+    # column may have several -- e.g. remove_free emits multiple rows), so
+    # negate each one; the caller ORs the checks together.
+    for v, constraints in formula.derived.items():
+        for constraint in constraints:
+            yield with_comment(
+                Not(constraint),
+                f"derived {v}"
+            )
 
 def sanity_mult_values(conv: SmtConverter, formula: FormulaWithAxioms) -> Iterable[FNode]:
     mults = {}
