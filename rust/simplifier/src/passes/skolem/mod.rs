@@ -216,6 +216,13 @@ fn walk_forall_opt(
         crate::passes::lift::name_debruijn_bool(&body, term).unwrap_or_else(|_| body.clone());
 
     let mut skolem = SkolemMap::new(&qvars);
+    // Cross-side derived transfer runs FIRST: when a rule_based rewrite defines a
+    // comparison gadget column (diff_marker) as derived on one side but keeps it a
+    // plain constrained witness on the checked side, the canonical witness is the
+    // other side's (prefix-swapped) derived definition. `names` would otherwise pin
+    // it to an underconstrained same-name symbol, yielding a spurious sat. See
+    // cross_side. (IsZero diff_inv_markers are skipped there — left to `rules`.)
+    cross_side::contribute(&mut skolem, pins, sorts);
     names::contribute(&mut skolem, declared, sorts);
     derived::contribute(&mut skolem, pins);
     if let Some(p) = field {
@@ -237,9 +244,6 @@ fn walk_forall_opt(
     if let Some(p) = field {
         rules::contribute(&mut skolem, script, &body, p);
     }
-    // Last-resort fallback: witness any still-unpinned quantified gadget column
-    // from the other side's derived definition (prefix-swapped). See cross_side.
-    cross_side::contribute(&mut skolem, pins, sorts);
 
     for src in skolem.sources.values() {
         *applied.entry(src.clone()).or_insert(0) += 1;

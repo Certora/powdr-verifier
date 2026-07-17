@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use smt2::ast_build::{int_literal_dyn, iter_nodes_dyn, parse_bool_formula, symbol_name_dyn};
 use smt2::ast_util::{
     free_symbol_ids_bool, int_value_dyn, quantifier_bounds, quantifier_body_bool, strip_prefix,
-    symbol_id_dyn, symbol_id_from_name, SymbolId,
+    swap_prefix, symbol_id_dyn, symbol_id_from_name, symbol_name_for_id, SymbolId,
 };
 use smt2::{declare_fun_name_cmd, seed_parser_context, ParseCtx, Script, SmtCommand};
 use z3::ast::{Ast, AstKind, Bool, Dynamic};
@@ -259,6 +259,20 @@ fn filter_live_pins(
     live: &HashSet<SymbolId>,
     ufs: &HashSet<SymbolId>,
 ) -> (Vec<SkolemPin>, usize) {
+    // A var counts as live if it, OR its before-/after- prefix-swapped
+    // counterpart, is live. A rule_based rewrite can define a gadget column
+    // (diff_marker, …) as derived on one side while the *other* side keeps it a
+    // live constrained witness; the derived pin `<other>-X = expr` is then needed
+    // to witness the checked-side `<swap>-X` (via cross_side) even though
+    // `<other>-X` is not itself live. Dropping it leaves the checked column
+    // unwitnessed => spurious sat.
+    let live_or_swapped = |id: SymbolId| -> bool {
+        live.contains(&id)
+            || symbol_name_for_id(id)
+                .and_then(|n| swap_prefix(&n))
+                .map(|s| live.contains(&symbol_id_from_name(&s)))
+                .unwrap_or(false)
+    };
     let mut out = Vec::with_capacity(pins.len());
     let mut dropped = 0usize;
     for pin in pins {
@@ -270,7 +284,7 @@ fn filter_live_pins(
             dropped += 1;
             continue;
         }
-        if vars.iter().all(|id| live.contains(id)) {
+        if vars.iter().all(|id| live_or_swapped(*id)) {
             out.push(pin);
         } else {
             dropped += 1;
