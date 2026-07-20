@@ -42,11 +42,7 @@ def _build_checker_cmd(
         cmd.extend(["--dump-model", str(dump_model)])
     if timeout is not None:
         cmd.extend(["--timeout", str(timeout)])
-    chunked = (
-        solve_chunked
-        if solve_chunked is not None
-        else getattr(ARGS(), "solve_chunked", True)
-    )
+    chunked = solve_chunked if solve_chunked is not None else True
     cmd.append("--solve-chunked" if chunked else "--no-solve-chunked")
     cmd.append(input_path)
     return cmd
@@ -136,65 +132,6 @@ def run_checker_subprocess(
         timeout=timeout,
     )
     return _run_checker_proc(cmd, check_timeout=timeout)
-
-
-def run_checker_subprocess_text(
-    smt_text: str,
-    *,
-    dump_model: Path | None = None,
-    solve_chunked: bool | None = None,
-    check_timeout: float | None = None,
-) -> dict:
-    bin_path = resolve_checker_bin()
-    if bin_path is None:
-        raise FileNotFoundError("checker binary not found")
-    timeout = _effective_check_timeout(check_timeout)
-    cmd = _build_checker_cmd(
-        bin_path,
-        "-",
-        dump_model=dump_model,
-        solve_chunked=solve_chunked,
-        timeout=timeout,
-    )
-    return _run_checker_proc(cmd, stdin=smt_text, check_timeout=timeout)
-
-
-def merge_solve_action(python_action, rust_data: dict) -> str:
-    """Copy solve attempts/result from a Rust checker action into ``python_action``."""
-    solve = next(
-        (a for a in rust_data.get("actions", []) if a.get("name") == "solve"),
-        rust_data,
-    )
-    for child in solve.get("actions", []):
-        python_action += action_from_dict(child)
-    res = solve.get("result") or rust_data.get("result") or "unknown"
-    if res == "sat":
-        model = solve.get("model")
-        if model is not None:
-            python_action += {"model": model}
-        dump_model = getattr(ARGS(), "dump_model", None)
-        if dump_model:
-            logging.info("dumping model to %s", dump_model)
-            with open(dump_model, "w") as f:
-                json.dump(model or {}, f, indent=4)
-    if python_action.expected is not None:
-        from ..report.action import classify_expected_vs_result
-
-        o = classify_expected_vs_result(
-            name=python_action.name, expected=python_action.expected, result=res
-        )
-        if o == "wrong":
-            logging.error("expected %s but got %s", python_action.expected, res)
-        elif o == "timeout":
-            logging.warning(
-                "expected %s; solver timed out (result %s)",
-                python_action.expected,
-                res,
-            )
-        elif o != "success":
-            logging.error("expected %s but got %s", python_action.expected, res)
-    python_action += {"result": res}
-    return res
 
 
 def action_from_dict(data: dict):

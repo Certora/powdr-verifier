@@ -325,7 +325,7 @@ def test_metrics_consistency():
 
 
 def test_dispatch_bypasses_rust(tmp_path, monkeypatch):
-    """--solve-sliced must never delegate to the Rust checker binary."""
+    """--strategy sliced must never delegate to the Rust checker binary."""
     from src import checker as checker_mod
     from src.check import rust as rust_mod
 
@@ -348,8 +348,8 @@ def test_dispatch_bypasses_rust(tmp_path, monkeypatch):
         rust_mod, "resolve_checker_bin", lambda: calls.append("resolve") or None
     )
     saved = args_mod.__dict__.get("__ARGS")
-    # Disable the monolithic pre-try so the sliced dispatch is what runs here.
-    args_mod.parse_args(["check", str(vc), "--solve-sliced", "--no-monolithic-pretry"])
+    # Disable the plain pre-try so the sliced dispatch is what runs here.
+    args_mod.parse_args(["check", str(vc), "--strategy", "sliced", "--no-pretry-plain"])
     try:
         action = checker_mod.check()
     finally:

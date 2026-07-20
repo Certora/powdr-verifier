@@ -1283,7 +1283,7 @@ def check_smt_script_sliced(
     retry_tactic: str | None = None,
 ) -> str:
     """Prove ``ctx ∧ goal`` unsat disjunct-by-disjunct via boundary-stopped
-    COI slices (see module docstring). Wired to ``main.py check --solve-sliced``."""
+    COI slices (see module docstring). Wired to ``main.py check --strategy sliced``."""
     from ..checker import _display_path, _finalize_result
 
     budgets = budgets if budgets is not None else SliceBudgets.from_args()

@@ -35,11 +35,32 @@ def _get_reason_unknown(solver):
         return None
 
 
-# Splitting the goal ``Or`` into per-disjunct incremental solves (the chunked
-# path) defeats z3's monolithic QF_NIA/nlsat tactic, which frequently refutes
-# the entire script in a fraction of a second. Spend this long on a cheap
-# whole-script solve before paying for chunking.
-MONOLITHIC_PRETRY_SEC = 5.0
+# Budget for the cheap ``check_plain`` pre-try run before the chunked/sliced
+# strategies. Splitting the goal ``Or`` into per-disjunct incremental solves
+# defeats z3's whole-script QF_NIA/nlsat tactic, which frequently refutes the
+# script in a fraction of a second; try that briefly before paying for chunking.
+PLAIN_PRETRY_SEC = 5.0
+
+# Check strategies (selected by ``--strategy`` or per-pass below):
+#   plain   -- shell out to the z3 binary directly on the input file, whole
+#              script, full check budget; no chunking fallback.
+#   chunked -- rust checker in per-disjunct chunked mode (python fallback).
+#   sliced  -- python COI/CEGAR sliced checker.
+CHECK_PLAIN = "plain"
+CHECK_CHUNKED = "chunked"
+CHECK_SLICED = "sliced"
+CHECK_STRATEGY_CHOICES = (CHECK_PLAIN, CHECK_CHUNKED, CHECK_SLICED)
+DEFAULT_CHECK_STRATEGY = CHECK_CHUNKED
+
+# Per-pass strategy overrides, mirroring the simplifier's ``STEP_TACTICS``.
+# Passes not listed use ``DEFAULT_CHECK_STRATEGY``; an explicit ``--strategy``
+# overrides both. ``exec_bus`` VCs solve whole in a few seconds but their
+# chunked disjunct solve stalls (benchmark: every successful exec_bus check
+# finished plain in <4s and not one was solved by chunking, yet VCs solvable
+# whole in 5-14s timed out once chunking took over), so run them plain.
+CHECK_STRATEGIES: dict[str, str] = {
+    "exec_bus": CHECK_PLAIN,
+}
 
 
 def _solver_configs(*, check_timeout: float | None = None):
@@ -262,27 +283,10 @@ def check_smt_script(
     input_for_log: Path | None = None,
     check_timeout: float | None = None,
 ) -> str:
-    """Run the same solver grid as :func:`check`; return ``sat`` / ``unsat`` / inconclusive."""
+    """Whole-script pysmt ``Solver`` grid (the python fallback for the ``chunked``
+    and ``sliced`` strategies); returns ``sat`` / ``unsat`` / inconclusive."""
     if check_timeout is None:
         check_timeout = getattr(ARGS(), "timeout", None)
-    try:
-        from .check.rust import (
-            merge_solve_action,
-            resolve_checker_bin,
-            run_checker_subprocess_text,
-        )
-        from .simplify.utils import _script_to_bytes
-
-        if resolve_checker_bin() is not None:
-            text = _script_to_bytes(smt_script).decode(SMT_ENCODING)
-            data = run_checker_subprocess_text(
-                text,
-                solve_chunked=ARGS().solve_chunked if hasattr(ARGS(), "solve_chunked") else True,
-                check_timeout=check_timeout,
-            )
-            return merge_solve_action(action, data)
-    except (FileNotFoundError, RuntimeError, json.JSONDecodeError) as e:
-        logging.debug("rust checker fallback: %s", e)
 
     last_attempt = None
     log_key = _display_path(input_for_log)
@@ -420,16 +424,18 @@ def _parse_z3_model(stdout: str | None) -> dict[str, Any] | None:
     return model
 
 
-def _monolithic_pretry() -> Action | None:
-    """Cheap whole-script solve by invoking the z3 binary on the ``.smt2`` file.
+def check_plain(budget_sec: float = PLAIN_PRETRY_SEC) -> Action | None:
+    """Solve the whole script by invoking the z3 binary directly on the ``.smt2``
+    file (no pysmt parse, no disjunct chunking).
 
-    The chunked strategy (Python or Rust) splits the goal ``Or`` and solves the
-    disjuncts incrementally, which defeats z3's monolithic QF_NIA/nlsat tactic
-    and can stall for minutes on a formula z3 resolves whole in a fraction of a
-    second. Run z3 directly (no pysmt parse) with a short soft timeout and take
-    whatever it decides -- ``sat`` or ``unsat``. When a model dump is requested
-    the ``sat`` model is read back via ``(get-model)``; if it cannot be parsed,
-    fall through so the chunked path can produce the authoritative model.
+    This is the ``plain`` strategy (run with the full check budget) and also the
+    cheap pre-try run before the ``chunked``/``sliced`` strategies (short
+    ``budget_sec``): z3's whole-script QF_NIA/nlsat tactic often refutes the
+    script in a fraction of a second, whereas splitting the goal ``Or`` into
+    incremental per-disjunct solves can stall for minutes. Takes whatever z3
+    decides -- ``sat`` or ``unsat``. When a model dump is requested the ``sat``
+    model is read back via ``(get-model)``; if it cannot be parsed, returns
+    ``None`` so the caller can fall through to a path that produces the model.
     Returns a finished ``check`` Action if z3 decided, else ``None``.
     """
     z3 = _resolve_pretry_z3()
@@ -437,7 +443,7 @@ def _monolithic_pretry() -> Action | None:
         return None
     input_path = ARGS().input
     log_key = _display_path(input_path)
-    logging.warning("check %s monolithic pre-try (<= %gs)", log_key, MONOLITHIC_PRETRY_SEC)
+    logging.warning("check %s plain (z3, <= %gs)", log_key, budget_sec)
 
     want_model = bool(getattr(ARGS(), "dump_model", None))
     try:
@@ -445,7 +451,7 @@ def _monolithic_pretry() -> Action | None:
     except OSError:
         return None
 
-    timeout_ms = int(MONOLITHIC_PRETRY_SEC * 1000)
+    timeout_ms = int(budget_sec * 1000)
     options = {"timeout": timeout_ms, "smt.random_seed": 0, "sat.random_seed": 0}
     cmd = [str(z3), "-smt2", "-in", f"-t:{timeout_ms}", "smt.random_seed=0", "sat.random_seed=0"]
     stdin_text = smt_text if not want_model else (
@@ -474,7 +480,7 @@ def _monolithic_pretry() -> Action | None:
                 except BrokenPipeError:
                     pass
                 stdout, _stderr, timed_out = communicate_with_timeout(
-                    proc, MONOLITHIC_PRETRY_SEC + 5.0
+                    proc, budget_sec + 5.0
                 )
                 result = None if timed_out else _parse_z3_result(stdout)
                 if result == "sat" and want_model:
@@ -487,7 +493,7 @@ def _monolithic_pretry() -> Action | None:
             # let the chunked path take over (it dumps the authoritative model).
             if result not in ("sat", "unsat") or (result == "sat" and want_model and model is None):
                 logging.warning(
-                    "check %s monolithic pre-try inconclusive (%s); falling back to chunking",
+                    "check %s plain solve inconclusive (%s)",
                     log_key,
                     attempt.result,
                 )
@@ -515,36 +521,88 @@ def _dump_model_if_requested(model: dict[str, Any] | None) -> None:
             json.dump(model, f, indent=4)
 
 
+_PASSNAME_RE = re.compile(r"_\d+_([a-z][a-z_]*)\.(?:soundness|completeness)")
+
+
+def _passname_from_input(path: Path) -> str | None:
+    """Best-effort pass name from a ``...<step>_<pass>.<kind>.smt2`` filename."""
+    m = _PASSNAME_RE.search(Path(path).name)
+    return m.group(1) if m else None
+
+
+def _resolve_check_strategy() -> str:
+    """Resolve the check strategy: explicit ``--strategy`` wins, else the per-pass
+    override (see ``CHECK_STRATEGIES``), else ``DEFAULT_CHECK_STRATEGY``.
+
+    The pass is taken from ``--optimization-step`` when given, else parsed from
+    the input filename so a standalone ``check`` picks the same strategy.
+    """
+    explicit = getattr(ARGS(), "strategy", None)
+    if explicit:
+        return explicit
+    step = getattr(ARGS(), "optimization_step", None) or _passname_from_input(ARGS().input)
+    return CHECK_STRATEGIES.get(step, DEFAULT_CHECK_STRATEGY)
+
+
+def _plain_timeout_action() -> Action:
+    """A finished ``check`` Action reporting ``timeout`` (plain z3 gave up)."""
+    with Action("check") as action:
+        action += {"inputs": [ARGS().input]}
+        expected = _read_status_from_file(ARGS().input)
+        with action.action("solve") as subaction:
+            if expected is not None:
+                subaction += {"expected": expected}
+            subaction += {"result": "timeout", "status": "timeout"}
+    return action
+
+
 def check():
-    """Check the smt2 file."""
+    """Check the smt2 file using the resolved per-pass :func:`_resolve_check_strategy`."""
 
     if stats_enabled():
         init_stats_run(wipe=False)
         set_stats_tag(getattr(ARGS(), "stats_tag", None) or stats_tag_from_path(ARGS().input))
 
-    solve_sliced = getattr(ARGS(), "solve_sliced", False)
+    strategy = _resolve_check_strategy()
 
-    # Cheap whole-script solve before anything else. Runs independently of the
-    # solve_sliced / solve_chunked strategy: whichever the caller picked only
-    # matters as the fallback when this quick solve is inconclusive.
-    if getattr(ARGS(), "monolithic_pretry", True):
-        pre = _monolithic_pretry()
+    # ``plain``: shell out to the z3 binary directly on the input file with the
+    # full check budget; no chunking fallback (report timeout if z3 can't
+    # decide). Falls back to the chunked path only if the z3 binary is missing.
+    if strategy == CHECK_PLAIN:
+        if _resolve_pretry_z3() is not None:
+            pre = check_plain(ARGS().timeout)
+            return pre if pre is not None else _plain_timeout_action()
+        logging.warning("plain check requested but no z3 binary; falling back to chunked")
+        strategy = CHECK_CHUNKED
+
+    # ``chunked`` / ``sliced``: a cheap whole-script z3 pre-try first (it often
+    # refutes the script in milliseconds), then the richer checker.
+    if getattr(ARGS(), "pretry_plain", True):
+        pre = check_plain()
         if pre is not None:
             return pre
 
-    try:
-        from .check.rust import action_from_dict, resolve_checker_bin, run_checker_subprocess
+    # ``chunked`` prefers the rust checker (python chunked is the fallback).
+    # ``sliced`` is python-only and never delegates to the rust binary.
+    if strategy == CHECK_CHUNKED:
+        try:
+            from .check.rust import action_from_dict, resolve_checker_bin, run_checker_subprocess
 
-        # The sliced mode exists only in the Python checker for now; do not
-        # delegate to the Rust binary when it is requested.
-        if not solve_sliced and resolve_checker_bin() is not None:
-            data = run_checker_subprocess(
-                ARGS().input, check_timeout=ARGS().timeout
-            )
-            return action_from_dict(data)
-    except (FileNotFoundError, RuntimeError, json.JSONDecodeError) as e:
-        logging.debug("rust checker fallback: %s", e)
+            if resolve_checker_bin() is not None:
+                data = run_checker_subprocess(
+                    ARGS().input, check_timeout=ARGS().timeout, solve_chunked=True
+                )
+                return action_from_dict(data)
+        except (FileNotFoundError, RuntimeError, json.JSONDecodeError) as e:
+            logging.debug("rust checker fallback: %s", e)
 
+    return _check_python(strategy)
+
+
+def _check_python(strategy: str) -> Action:
+    """Python fallback checker: parse the script and solve per ``strategy``
+    (``sliced`` COI/CEGAR, or ``chunked`` per-disjunct with a whole-script
+    fallback when the goal has no splittable ``Or``)."""
     with Action("check") as action:
         action += {"inputs": [ARGS().input]}
 
@@ -560,7 +618,8 @@ def check():
         with action.action("solve") as subaction:
             if action.expected is not None:
                 subaction += {"expected": action.expected}
-            if solve_sliced:
+
+            if strategy == CHECK_SLICED:
                 from .check.sliced import check_smt_script_sliced, flatten_script_conjuncts
 
                 ctx, goal = flatten_script_conjuncts(smt_script)
@@ -569,34 +628,26 @@ def check():
                         "no splittable Or-disjunction found, checking entire script"
                     )
                     check_smt_script(smt_script, subaction, input_for_log=ARGS().input)
-                    return action
-                check_smt_script_sliced(
-                    goal,
-                    ctx,
-                    subaction,
-                    input_for_log=ARGS().input,
-                    collect_unknowns=getattr(ARGS(), "collect_unknowns", None),
-                    debug=getattr(ARGS(), "sliced_debug", False),
-                    dump_dir=getattr(ARGS(), "dump_slices", None),
-                    dump_all=getattr(ARGS(), "dump_slices_all", False),
-                )
-                return action
-            if not ARGS().solve_chunked:
-                check_smt_script(smt_script, subaction, input_for_log=ARGS().input)
-                return action
-
-            goal = _find_largest_or_goal(smt_script)
-            if goal is None:
-                logging.warning(
-                    "no splittable Or-disjunction found, checking entire script"
-                )
-                check_smt_script(smt_script, subaction, input_for_log=ARGS().input)
-                return action
-            
-            check_smt_script_disjuncts(
-                smt_script,
-                goal,
-                subaction,
-                input_for_log=ARGS().input,
-            )
+                else:
+                    check_smt_script_sliced(
+                        goal,
+                        ctx,
+                        subaction,
+                        input_for_log=ARGS().input,
+                        collect_unknowns=getattr(ARGS(), "collect_unknowns", None),
+                        debug=getattr(ARGS(), "sliced_debug", False),
+                        dump_dir=getattr(ARGS(), "dump_slices", None),
+                        dump_all=getattr(ARGS(), "dump_slices_all", False),
+                    )
+            else:
+                goal = _find_largest_or_goal(smt_script)
+                if goal is None:
+                    logging.warning(
+                        "no splittable Or-disjunction found, checking entire script"
+                    )
+                    check_smt_script(smt_script, subaction, input_for_log=ARGS().input)
+                else:
+                    check_smt_script_disjuncts(
+                        smt_script, goal, subaction, input_for_log=ARGS().input
+                    )
         return action

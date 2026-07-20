@@ -459,7 +459,10 @@ def run_verify(a, b):
                     rewritten,
                     "--dump-model", file.with_suffix(".model"),
                     parse_output=True,
-                    extra_args=["--timeout", str(TIMEOUT_CHECK_SEC)],
+                    extra_args=[
+                        "--timeout", str(TIMEOUT_CHECK_SEC),
+                        "--optimization-step", optimization_step,
+                    ],
                     timeout=TIMEOUT_CHECK_SEC,
                     stats_args=__stats_extra(stats_run_id, rewritten),
                 )
