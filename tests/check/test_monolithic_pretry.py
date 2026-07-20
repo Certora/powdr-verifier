@@ -7,6 +7,10 @@ whole-script solve refutes in milliseconds (observed on ~55/61 guest-keccak
 ``001_exec_bus`` steps). The pre-try must resolve those without ever chunking,
 and must still fall back to chunking when the monolithic solve is inconclusive.
 """
+import subprocess
+import sys
+from pathlib import Path
+
 import src.checker as checker_mod
 from src.checker import MONOLITHIC_PRETRY_SEC, _monolithic_pretry, check
 from src.utils.args import parse_args
@@ -173,3 +177,24 @@ def test_pretry_runs_regardless_of_strategy(tmp_path, monkeypatch):
         res = check()
         assert calls["n"] == 1, extra
         assert _solve_action(res).result == "unsat", extra
+
+
+def test_importing_checker_does_not_break_mod_typecheck():
+    """main.py imports src.checker before src.smt_backends.pysmt; a stray
+    top-level pysmt.smtlib import in checker initializes the env before the
+    custom MOD operator is registered, breaking MOD type-checking in the encode
+    path. Run in a fresh interpreter with main.py's import order to guard that.
+    """
+    root = Path(__file__).resolve().parents[2]
+    code = (
+        "import src.checker\n"  # exactly what main.py imports first
+        "from pysmt.shortcuts import Int, Equals, get_env\n"
+        "m = get_env().formula_manager.Mod(Int(5), Int(3))\n"
+        "assert Equals(m, Int(0)).get_type() is not None\n"
+        "print('MOD_OK')\n"
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", code], cwd=root, capture_output=True, text=True
+    )
+    assert r.returncode == 0, r.stderr
+    assert "MOD_OK" in r.stdout

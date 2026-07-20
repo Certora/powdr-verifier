@@ -11,9 +11,6 @@ import subprocess
 from io import StringIO
 from pathlib import Path
 
-from pysmt.smtlib import commands as smtcmd
-from pysmt.smtlib.parser import SmtLibParser
-
 from .report.action import Action, classify_expected_vs_result
 from .smt.utils import *
 from .utils.args import ARGS
@@ -398,6 +395,12 @@ def _parse_z3_model(stdout: str | None) -> dict[str, Any] | None:
     inner = stdout[start + 1 : end].strip()
     if inner.startswith("model"):  # older z3: (model (define-fun ...) ...)
         inner = inner[len("model") :]
+
+    # Import lazily: pulling pysmt's parser at module load initializes its
+    # environment before src.smt_backends.pysmt registers the custom MOD
+    # operator, which breaks MOD type-checking in the encode path.
+    from pysmt.smtlib import commands as smtcmd
+    from pysmt.smtlib.parser import SmtLibParser
 
     try:
         script = SmtLibParser().get_script(StringIO(inner))
