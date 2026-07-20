@@ -28,7 +28,25 @@ def is_timeout_reason(reason: str | None) -> bool:
         or "time out" in r
         or "resource limit" in r
         or "resource limits" in r
+        # z3 reports "canceled" (not "timeout") when its wall-clock ``timeout``
+        # fires outside the main search loop, e.g. during a tactic or model
+        # construction. Same mechanism, different phase -> still a timeout.
+        or "canceled" in r
+        or "cancelled" in r
     )
+
+
+def is_memout_reason(reason: str | None) -> bool:
+    """True for z3 ``:reason-unknown`` strings that signal memory exhaustion.
+
+    Under a per-job address-space cap (``prlimit --as``) z3 catches the failed
+    allocation and reports ``(:reason-unknown "out of memory")`` rather than
+    dying, so the unknown reason -- not just the process stderr -- must be
+    recognized as a memout.
+    """
+    if not reason:
+        return False
+    return is_memout_text(reason)
 
 
 def classify_expected_vs_result(*, name: str, expected: str | None, result: str | None) -> str:
@@ -44,6 +62,12 @@ def classify_expected_vs_result(*, name: str, expected: str | None, result: str 
         return "success" if result == expected else "wrong"
     reason = unknown_reason_from_result(result)
     if reason is not None:
+        # Resource exhaustion is not a hard error: an ``unsat``-expected
+        # obligation that z3 could not finish under the memory/time budget is a
+        # memout/timeout, matching how the leaf ``check-attempt`` (which has no
+        # ``expected``) already classifies the very same result string.
+        if is_memout_reason(reason):
+            return "memout"
         return "timeout" if is_timeout_reason(reason) else "error"
     return "error"
 
@@ -137,6 +161,15 @@ class Action:
             return "error"
         if r in ("invalid-json",) or (isinstance(r, str) and r.startswith("error")):
             return "error"
+        # An ``unknown-<reason>`` leaf (no ``expected`` to compare against, e.g.
+        # ``check-attempt``) still carries a resource reason: bucket it the same
+        # way as the parent so leaf and parent never disagree.
+        reason = unknown_reason_from_result(r)
+        if reason is not None:
+            if is_memout_reason(reason):
+                return "memout"
+            if is_timeout_reason(reason):
+                return "timeout"
         return r
 
     
