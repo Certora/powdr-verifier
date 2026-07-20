@@ -7,9 +7,10 @@ use smt2::command::SmtCommand;
 use smt2::{
     assert_commands, ast_hash_dyn, ast_hash_int, debug_assert_direct_int_operand,
     declared_symbol_ids, ensure_free_symbols_declared, int_from_i128,
-    int_value, int_value_dyn, map_bool_children, seed_parser_context,
+    int_value, int_value_dyn, map_bool_children, parse_single_command, seed_parser_context,
     symbol_id_dyn, IntTermSet, ParseCtx, Script,
 };
+use smt2::ast_build::{substitute_dyn, symbol_name_dyn};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 use z3::{DeclKind, SortKind};
 
@@ -663,6 +664,210 @@ fn normalize_term(term: &Bool, ctx: &NormalizeCtx<'_>) -> Bool {
         }
     }
     map_bool_children(term, &mut |a| normalize_term(a, ctx))
+}
+
+// ---------------------------------------------------------------------------
+// diff_vars pass: substitute ``x -> y + d`` for pairs ``(x, y)`` that occur only
+// as the difference ``x - y`` in the nonlinear (mod) constraints. Colocated here
+// to reuse this module's polynomial machinery. Sound (invertible change of
+// variables); collapses ``(x - y)^2`` quadratics that z3 nlsat times out on.
+// ---------------------------------------------------------------------------
+
+fn coeff2(poly: &Poly, a: u32, b: u32, p: i128) -> i128 {
+    let mut m = vec![a, b];
+    m.sort();
+    coeff_mod(*poly.get(&m).unwrap_or(&0), p)
+}
+
+/// ``(x, y)`` occur only as ``x - y`` in ``poly``'s quadratic part: the ``(x-y)^2``
+/// diagonal plus ``coeff(x·k) = -coeff(y·k)`` for every other ``k``.
+fn pair_reduces(poly: &Poly, i: u32, j: u32, p: i128) -> (bool, bool) {
+    let cii = coeff2(poly, i, i, p);
+    if cii != coeff2(poly, j, j, p) || coeff2(poly, i, j, p) != coeff_mod(-2 * cii, p) {
+        return (false, false);
+    }
+    let ks: HashSet<u32> = poly
+        .keys()
+        .flat_map(|m| m.iter().copied())
+        .filter(|&k| k != i && k != j)
+        .collect();
+    for k in ks {
+        if coeff2(poly, i, k, p) != coeff_mod(-coeff2(poly, j, k, p), p) {
+            return (false, false);
+        }
+    }
+    (true, cii != 0)
+}
+
+fn detect_pairs(rels: &[Poly], p: i128) -> Vec<(u32, u32)> {
+    let mut squared: Vec<u32> = rels
+        .iter()
+        .flat_map(|poly| poly.keys())
+        .filter(|m| m.len() == 2 && m[0] == m[1])
+        .map(|m| m[0])
+        .collect();
+    squared.sort_unstable();
+    squared.dedup();
+    let mut chosen = Vec::new();
+    let mut used: HashSet<u32> = HashSet::new();
+    for a in 0..squared.len() {
+        for b in (a + 1)..squared.len() {
+            let (i, j) = (squared[a], squared[b]);
+            if used.contains(&i) || used.contains(&j) {
+                continue;
+            }
+            let mut all_ok = true;
+            let mut coupled = false;
+            for poly in rels {
+                let (ok, has_sq) = pair_reduces(poly, i, j, p);
+                if !ok {
+                    all_ok = false;
+                    break;
+                }
+                coupled |= has_sq;
+            }
+            if all_ok && coupled {
+                used.insert(i);
+                used.insert(j);
+                chosen.push((i, j));
+            }
+        }
+    }
+    chosen
+}
+
+fn collect_quad_rels(term: &Bool, ctx: &NormalizeCtx<'_>, out: &mut Vec<Poly>) {
+    if term.kind() == AstKind::App && term.num_children() == 2 && term.decl().kind() == DeclKind::Eq
+    {
+        let lhs = term.nth_child(0).and_then(|c| c.as_int());
+        let rhs = term.nth_child(1).and_then(|c| c.as_int());
+        if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
+            if let Some((diff, true)) = relation_poly_diff_plain(&lhs, &rhs, ctx) {
+                let quad: Poly = diff.into_iter().filter(|(m, _)| m.len() == 2).collect();
+                if !quad.is_empty() {
+                    out.push(quad);
+                }
+            }
+        }
+    }
+    for k in 0..term.num_children() {
+        if let Some(child) = term.nth_child(k).and_then(|c| c.as_bool()) {
+            collect_quad_rels(&child, ctx, out);
+        }
+    }
+}
+
+pub fn diff_vars_apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
+    let p = field_mod();
+    let mut var_terms = collect_variables(script, p);
+
+    // Detect pairs on the original variables (before introducing d).
+    let pairs = {
+        let ctx = NormalizeCtx {
+            var_terms: &var_terms,
+            field_mod: p,
+        };
+        let mut rels = Vec::new();
+        for cmd in &script.commands {
+            if let SmtCommand::Assert { bool: b, .. } = cmd {
+                collect_quad_rels(b, &ctx, &mut rels);
+            }
+        }
+        match p {
+            Some(pm) => detect_pairs(&rels, pm),
+            None => Vec::new(),
+        }
+    };
+
+    let noop = || Ok((script.clone(), serde_json::json!({"pairs": 0})));
+    if pairs.is_empty() {
+        return noop();
+    }
+
+    // Introduce a fresh ``d`` per pair and substitute ``x -> y + d`` uniformly
+    // across every assert body (all constraint kinds, not just the modular
+    // equalities). The following ``normalize`` pass re-expands ``(y + d)`` and
+    // cancels ``y`` from the nonlinear part.
+    let mut defs: Vec<(u32, u32, u32)> = Vec::new(); // (i, j, dgen)
+    let mut subs: Vec<(String, Dynamic)> = Vec::new(); // (x name, replacement y + d)
+    let mut d_names: Vec<String> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    for &(i, j) in pairs.iter() {
+        let xt = var_terms.get(i as usize).unwrap().clone();
+        // Only symbol generators can be substituted/declared by name.
+        let Some(xname) = symbol_name_dyn(&Dynamic::from_ast(&xt)) else {
+            continue;
+        };
+        let yt = var_terms.get(j as usize).unwrap().clone();
+        let yname = symbol_name_dyn(&Dynamic::from_ast(&yt)).unwrap_or_default();
+        // Name the difference variable exactly as the Python pass does
+        // (``<x>!diff``). z3's nlsat variable ordering is name-sensitive, so a
+        // divergent name here alone flips solve<->timeout on these VCs.
+        let d_name = format!("{xname}!diff");
+        let d = Int::new_const(d_name.as_str());
+        let dgen = var_terms.insert(d.clone()) as u32;
+        subs.push((xname.clone(), Dynamic::from_ast(&int_add(&[yt, d]))));
+        defs.push((i, j, dgen));
+        d_names.push(d_name);
+        names.push(format!("{xname}<-{yname}"));
+    }
+    if defs.is_empty() {
+        return noop();
+    }
+
+    let mut parse_ctx = ParseCtx::new();
+    seed_parser_context(&mut parse_ctx, script)?;
+
+    let mut commands: Vec<SmtCommand> = Vec::new();
+    let mut inserted_decls = false;
+    for cmd in &script.commands {
+        if !inserted_decls && matches!(cmd, SmtCommand::Assert { .. }) {
+            // ``d`` must be declared before the asserts that reference it.
+            // Declare unquoted to match the ``Int::new_const(d_name)`` used in
+            // the substitution: ``@``/``!`` are valid simple-symbol chars, and
+            // a quoted decl interns a *different* symbol id, so the pipeline's
+            // ``ensure_declarations_for_asserts`` would re-declare it (duplicate).
+            for d_name in &d_names {
+                commands.push(parse_single_command(
+                    &format!("(declare-fun {d_name} () Int)"),
+                    &mut parse_ctx,
+                )?);
+            }
+            inserted_decls = true;
+        }
+        match cmd {
+            SmtCommand::Assert { bool: b, span, .. } => {
+                let mut cur = Dynamic::from_ast(b);
+                for (name, repl) in &subs {
+                    cur = substitute_dyn(&cur, name, repl);
+                }
+                let nb = cur
+                    .as_bool()
+                    .ok_or("diff_vars: assert body not Bool after substitution")?;
+                commands.push(SmtCommand::Assert {
+                    bool: nb,
+                    span: *span,
+                    term_text: None,
+                });
+            }
+            SmtCommand::CheckSat => {
+                // Pin ``x = y + d`` so the change of variables is equisatisfiable
+                // and ``x`` still appears in counterexample models.
+                for (i, j, dgen) in &defs {
+                    let x = var_terms.get(*i as usize).unwrap();
+                    let y = var_terms.get(*j as usize).unwrap().clone();
+                    let d = var_terms.get(*dgen as usize).unwrap().clone();
+                    commands.push(SmtCommand::new_assert(x.eq(int_add(&[y, d]))));
+                }
+                commands.push(cmd.clone());
+            }
+            _ => commands.push(cmd.clone()),
+        }
+    }
+
+    let out = Script::from_commands(&script.source, commands);
+    let stats = serde_json::json!({ "pairs": defs.len(), "pair_vars": names });
+    Ok((out, stats))
 }
 
 #[cfg(test)]

@@ -67,6 +67,7 @@ pub fn apply_pass(raw_tactic: &str, script: &Script) -> Result<(Script, StepResu
         "evaluator" => evaluator::apply(script)?,
         "demod" => demod::apply(script)?,
         "normalize" => normalize::apply(script)?,
+        "diff_vars" => normalize::diff_vars_apply(script)?,
         "skolem" => skolem::apply(script)?,
         "lift" => lift::apply(script)?,
         "witness" => witness::apply(script)?,
