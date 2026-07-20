@@ -7,12 +7,18 @@ when the result is inconclusive.
 import json
 import logging
 import re
+import subprocess
+from io import StringIO
 from pathlib import Path
+
+from pysmt.smtlib import commands as smtcmd
+from pysmt.smtlib.parser import SmtLibParser
 
 from .report.action import Action, classify_expected_vs_result
 from .smt.utils import *
 from .utils.args import ARGS
 from .utils.io import SMT_ENCODING, load_smt_script
+from .utils.process import communicate_with_timeout
 from .utils.stats import init_stats_run, set_stats_tag, stats_enabled, stats_tag_from_path
 
 
@@ -30,6 +36,13 @@ def _get_reason_unknown(solver):
         return m.group(1) if m else line
     except Exception:
         return None
+
+
+# Splitting the goal ``Or`` into per-disjunct incremental solves (the chunked
+# path) defeats z3's monolithic QF_NIA/nlsat tactic, which frequently refutes
+# the entire script in a fraction of a second. Spend this long on a cheap
+# whole-script solve before paying for chunking.
+MONOLITHIC_PRETRY_SEC = 5.0
 
 
 def _solver_configs(*, check_timeout: float | None = None):
@@ -319,6 +332,186 @@ def check_smt_script(
     return res
 
 
+def _resolve_pretry_z3() -> Path | None:
+    """Path to the configured z3 binary, or ``None`` if the pre-try can't run.
+
+    The pre-try shells out to z3 directly on the ``.smt2`` file, so it applies
+    only to z3-family solvers (the CLI invocation and stdout parsing below are
+    z3-specific). The binary is looked up in the same registry that backs the
+    pysmt solver, so it is exactly the z3 the chunked path would use.
+    """
+    name = ARGS().solver
+    if not name.startswith("z3"):
+        return None
+    try:
+        from .smt_backends.pysmt import solvers as _solvers
+    except Exception:
+        return None
+    for s in _solvers:
+        if s["name"] == name:
+            path = s["path"]
+            return path if path.exists() else None
+    return None
+
+
+def _read_status_from_file(path: Path) -> str | None:
+    """Extract ``(set-info :status <x>)`` with a line scan (no full parse)."""
+    try:
+        with open(path, "r", encoding=SMT_ENCODING) as f:
+            for line in f:
+                if ":status" in line:
+                    m = re.search(r":status\s+([A-Za-z-]+)", line)
+                    if m:
+                        return m.group(1)
+    except OSError:
+        return None
+    return None
+
+
+def _parse_z3_result(stdout: str | None) -> str | None:
+    """Return the ``sat`` / ``unsat`` / ``unknown`` line z3 printed, else None."""
+    if not stdout:
+        return None
+    for line in stdout.splitlines():
+        tok = line.strip()
+        if tok in ("sat", "unsat", "unknown"):
+            return tok
+    return None
+
+
+def _parse_z3_model(stdout: str | None) -> dict[str, Any] | None:
+    """Parse z3's ``(get-model)`` output into ``{name: value}`` like ``to_nice_model``.
+
+    z3 prints the model as ``( (define-fun name () Sort value) ... )`` (older
+    builds wrap it in ``(model ...)``). Those ``define-fun`` forms are valid
+    SMT-LIB, so we strip the outer wrapper and hand them to pysmt's
+    ``SmtLibParser`` -- reusing the same constant extraction (:func:`as_constant`,
+    array filtering) as :func:`to_nice_model` instead of a bespoke parser.
+    Returns ``None`` if the output can't be parsed, so the caller can fall back.
+    """
+    if not stdout:
+        return None
+    start = stdout.find("(")
+    end = stdout.rfind(")")
+    if start < 0 or end <= start:
+        return None
+    inner = stdout[start + 1 : end].strip()
+    if inner.startswith("model"):  # older z3: (model (define-fun ...) ...)
+        inner = inner[len("model") :]
+
+    try:
+        script = SmtLibParser().get_script(StringIO(inner))
+    except Exception:
+        return None
+
+    model: dict[str, Any] = {}
+    for cmd in script:
+        if cmd.name != smtcmd.DEFINE_FUN:
+            continue
+        name, formals, _rtype, body = cmd.args
+        if formals:  # only 0-ary symbol assignments
+            continue
+        if body.is_array_value() or body.is_array_op():
+            continue  # arrays are dropped, matching to_nice_model
+        model[str(name)] = as_constant(body)
+    return model
+
+
+def _monolithic_pretry() -> Action | None:
+    """Cheap whole-script solve by invoking the z3 binary on the ``.smt2`` file.
+
+    The chunked strategy (Python or Rust) splits the goal ``Or`` and solves the
+    disjuncts incrementally, which defeats z3's monolithic QF_NIA/nlsat tactic
+    and can stall for minutes on a formula z3 resolves whole in a fraction of a
+    second. Run z3 directly (no pysmt parse) with a short soft timeout and take
+    whatever it decides -- ``sat`` or ``unsat``. When a model dump is requested
+    the ``sat`` model is read back via ``(get-model)``; if it cannot be parsed,
+    fall through so the chunked path can produce the authoritative model.
+    Returns a finished ``check`` Action if z3 decided, else ``None``.
+    """
+    z3 = _resolve_pretry_z3()
+    if z3 is None:
+        return None
+    input_path = ARGS().input
+    log_key = _display_path(input_path)
+    logging.warning("check %s monolithic pre-try (<= %gs)", log_key, MONOLITHIC_PRETRY_SEC)
+
+    want_model = bool(getattr(ARGS(), "dump_model", None))
+    try:
+        smt_text = Path(input_path).read_text(encoding=SMT_ENCODING)
+    except OSError:
+        return None
+
+    timeout_ms = int(MONOLITHIC_PRETRY_SEC * 1000)
+    options = {"timeout": timeout_ms, "smt.random_seed": 0, "sat.random_seed": 0}
+    cmd = [str(z3), "-smt2", "-in", f"-t:{timeout_ms}", "smt.random_seed=0", "sat.random_seed=0"]
+    stdin_text = smt_text if not want_model else (
+        "(set-option :produce-models true)\n" + smt_text + "\n(get-model)\n"
+    )
+
+    with Action("check") as action:
+        action += {"inputs": [input_path]}
+        expected = _read_status_from_file(input_path)
+        with action.action("solve") as subaction:
+            if expected is not None:
+                subaction += {"expected": expected}
+            model = None
+            with subaction.action("check-attempt") as attempt:
+                attempt += {"solver": ARGS().solver, "solver_options": options}
+                proc = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                try:
+                    proc.stdin.write(stdin_text)
+                    proc.stdin.close()
+                except BrokenPipeError:
+                    pass
+                stdout, _stderr, timed_out = communicate_with_timeout(
+                    proc, MONOLITHIC_PRETRY_SEC + 5.0
+                )
+                result = None if timed_out else _parse_z3_result(stdout)
+                if result == "sat" and want_model:
+                    model = _parse_z3_model(stdout)
+                if model is not None:
+                    attempt += {"model": model}
+                attempt += {"result": result or ("timeout" if timed_out else "unknown")}
+
+            # z3 was inconclusive, or produced a sat we can't hand a model for:
+            # let the chunked path take over (it dumps the authoritative model).
+            if result not in ("sat", "unsat") or (result == "sat" and want_model and model is None):
+                logging.warning(
+                    "check %s monolithic pre-try inconclusive (%s); falling back to chunking",
+                    log_key,
+                    attempt.result,
+                )
+                return None
+
+            _dump_model_if_requested(model)
+            subaction += {"result": result}
+            if model is not None:
+                subaction += {"model": model}
+            if expected is not None:
+                o = classify_expected_vs_result(
+                    name=subaction.name, expected=expected, result=result
+                )
+                if o == "wrong":
+                    logging.error("expected %s but got %s", expected, result)
+                elif o not in ("success", "timeout"):
+                    logging.error("expected %s but got %s", expected, result)
+    return action
+
+
+def _dump_model_if_requested(model: dict[str, Any] | None) -> None:
+    if model is not None and getattr(ARGS(), "dump_model", None):
+        logging.info("dumping model to %s", ARGS().dump_model)
+        with open(ARGS().dump_model, "w") as f:
+            json.dump(model, f, indent=4)
+
+
 def check():
     """Check the smt2 file."""
 
@@ -327,6 +520,15 @@ def check():
         set_stats_tag(getattr(ARGS(), "stats_tag", None) or stats_tag_from_path(ARGS().input))
 
     solve_sliced = getattr(ARGS(), "solve_sliced", False)
+
+    # Cheap whole-script solve before anything else. Runs independently of the
+    # solve_sliced / solve_chunked strategy: whichever the caller picked only
+    # matters as the fallback when this quick solve is inconclusive.
+    if getattr(ARGS(), "monolithic_pretry", True):
+        pre = _monolithic_pretry()
+        if pre is not None:
+            return pre
+
     try:
         from .check.rust import action_from_dict, resolve_checker_bin, run_checker_subprocess
 

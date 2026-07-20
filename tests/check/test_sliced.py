@@ -348,7 +348,8 @@ def test_dispatch_bypasses_rust(tmp_path, monkeypatch):
         rust_mod, "resolve_checker_bin", lambda: calls.append("resolve") or None
     )
     saved = args_mod.__dict__.get("__ARGS")
-    args_mod.parse_args(["check", str(vc), "--solve-sliced"])
+    # Disable the monolithic pre-try so the sliced dispatch is what runs here.
+    args_mod.parse_args(["check", str(vc), "--solve-sliced", "--no-monolithic-pretry"])
     try:
         action = checker_mod.check()
     finally:

@@ -165,6 +165,12 @@ def __build_parser(skip_subparsers=False):
         "--solve-sliced", action=argparse.BooleanOptionalAction, default=False
     )
     sub_check.add_argument(
+        "--monolithic-pretry",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="before chunking, try a cheap whole-script z3 solve (accepts only unsat)",
+    )
+    sub_check.add_argument(
         "--boundary-regex",
         type=str,
         default=r"memory_(match|isinput|isoutput|isdisabled)",
