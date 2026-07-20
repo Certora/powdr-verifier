@@ -27,6 +27,7 @@ from .simplify import (
     simplify_bounds,
     simplify_cvc5,
     simplify_demod,
+    simplify_diff_vars,
     simplify_evaluate,
     simplify_flatten_outer_array,
     simplify_bitwise,
@@ -49,11 +50,15 @@ from .simplify.rust import run_rust_pipeline, rust_step_action_props
 
 _T = TypeVar("_T")
 
-# Regular prefix to eliminate quantifiers
-TACTIC_QEPREFIX = "nnf:skolem:lift:witness:demod:isqf"
+# Regular prefix to eliminate quantifiers. ``diff_vars`` runs right after the
+# quantifier-free checkpoint (``isqf``), where the ``(x - y)²`` difference
+# structure is still intact -- it collapses those quadratics that z3 nlsat times
+# out on. It must run BEFORE any later ``z3-solve-eqs`` is dropped from the tail
+# (see STEP_TACTICS): solve-eqs would re-derive ``x - y`` and undo the rewrite.
+TACTIC_QEPREFIX = "nnf:skolem:lift:witness:demod:isqf:diff_vars"
 # Bus-heavy powdr steps still need skolem/lift/witness: soundness VCs keep a
 # ForAll until those passes run (nnf alone does not make them ground).
-TACTIC_BUS_QE = "nnf:skolem:lift:witness:demod:isqf"
+TACTIC_BUS_QE = "nnf:skolem:lift:witness:demod:isqf:diff_vars"
 
 # Tail without rewrite/z3: on large keccak VCs rewrite is a no-op and z3 passes
 # are skipped above the assert threshold but still pay setup cost.
@@ -70,7 +75,10 @@ DEFAULT_TACTIC = TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demo
 STEP_TACTICS: dict[str, str] = {
     "exec_bus": TACTIC_BUS_QE + TACTIC_BUS_TAIL + ":z3-propagate-values:z3-solve-eqs",
     "loop_iteration": TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:normalize:demod",
-    "solver": TACTIC_BUS_QE + TACTIC_BUS_TAIL + ":z3-propagate-values:z3-solve-eqs",
+    # No z3-propagate-values/z3-solve-eqs: solve-eqs re-derives ``x - y`` and
+    # undoes diff_vars' difference reduction (the reduction is what lets these
+    # otherwise-timing-out solver VCs discharge).
+    "solver": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
     "substitute_bus_interactio_fields": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
     "low_degree_bus": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
     "memory": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
@@ -411,6 +419,8 @@ def _apply_tactic_pass(
             return simplify_evaluate(smt_script, subaction)
         case "skolem":
             return simplify_skolem(smt_script, subaction)
+        case "diff_vars":
+            return simplify_diff_vars(smt_script, subaction)
         case "intervals":
             return simplify_intervals(smt_script, subaction)
         case "intervals2":
