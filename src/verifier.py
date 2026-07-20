@@ -17,6 +17,7 @@ from .utils.io import load_apc_dump, open_file, SMT_ENCODING, load_json
 from .utils.stats import init_stats_run, set_stats_tag, stats_enabled
 from .verify.bug_injection import apply_injection
 from .verify.preanalysis import analyze_memory_bus_alignment, apply_skip_trivial
+from .verify.membus_subprocess import reset_membus_cache
 from .verify.memory_bus_alignment import BEFORE_PREFIX, AFTER_PREFIX, emit_memory_equalities
 from .verify import SetInfos, SkolemPinKind
 from .verify.skolem_pins import derived_columns_skolem_setinfo, drop_mirrored_derived
@@ -126,6 +127,7 @@ def verify():
         before = load_apc_dump(ARGS().input_before)
         after = load_apc_dump(ARGS().input_after)
 
+        reset_membus_cache()
         apply_skip_trivial(before, after)
         introduces_is_valid = dump_introduces_is_valid(before, after)
         with action.action("membus"):
