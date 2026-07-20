@@ -25,13 +25,22 @@
 use std::collections::{HashMap, HashSet};
 
 use smt2::ast_build::substitute_dyn;
-use smt2::ast_util::{scoped_free_symbol_ids, swap_prefix, symbol_name_for_id};
-use smt2::strip_prefix;
-use z3::ast::{Bool, Dynamic, Int};
+use smt2::ast_util::{decl_name, scoped_free_symbol_ids, swap_prefix, symbol_name_for_id};
+use smt2::{iter_nodes_dyn, strip_prefix};
+use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
 use super::map::SkolemMap;
 use super::types::{SkolemPin, SortKind};
 use super::utils::split_equation;
+
+/// True if `expr` applies `uf_mod_inv` anywhere -- i.e. it is an IsZero
+/// `QuotientOrZero` gadget definition. Transferring that inverse form to the
+/// checked side leaves an unconstrained field inverse the solver stalls on;
+/// `names` pins the column linearly to its same-name partner instead (matching
+/// the python skolem, which never transfers these).
+fn is_iszero_gadget(expr: &Dynamic) -> bool {
+    iter_nodes_dyn(expr).any(|n| n.kind() == AstKind::App && decl_name(&n.decl()) == "uf_mod_inv")
+}
 
 /// Swap the before-/after- prefix on every free variable of `expr`.
 fn swap_expr_prefix(expr: &Dynamic, sorts: &HashMap<String, SortKind>) -> Dynamic {
@@ -82,6 +91,9 @@ pub fn contribute(map: &mut SkolemMap, pins: &[SkolemPin], sorts: &HashMap<Strin
         let Some(expr) = defs.get(&partner) else {
             continue;
         };
+        if is_iszero_gadget(expr) {
+            continue;
+        }
         let witness = swap_expr_prefix(expr, sorts);
         map.pin(q, witness, "cross-side-derived");
     }

@@ -823,10 +823,13 @@ pub fn diff_vars_apply(script: &Script) -> Result<(Script, serde_json::Value), S
     for cmd in &script.commands {
         if !inserted_decls && matches!(cmd, SmtCommand::Assert { .. }) {
             // ``d`` must be declared before the asserts that reference it.
-            // Quote the name: it contains ``@``/``!`` (not simple-symbol chars).
+            // Declare unquoted to match the ``Int::new_const(d_name)`` used in
+            // the substitution: ``@``/``!`` are valid simple-symbol chars, and
+            // a quoted decl interns a *different* symbol id, so the pipeline's
+            // ``ensure_declarations_for_asserts`` would re-declare it (duplicate).
             for d_name in &d_names {
                 commands.push(parse_single_command(
-                    &format!("(declare-fun |{d_name}| () Int)"),
+                    &format!("(declare-fun {d_name} () Int)"),
                     &mut parse_ctx,
                 )?);
             }
@@ -1098,8 +1101,9 @@ mod tests {
         let (out, _) = apply(&script).unwrap();
         let s = smt2::dump_string(&out);
         // -x < 0  <=>  x > 0, equivalent to 3x < 5x. The buggy sign-flip would
-        // have produced (< x 0) instead.
-        assert!(s.contains("(< (- x) 0)"));
+        // have produced (< x 0) instead. Unary minus serializes as (* (- 1) x)
+        // (see z3_uminus_to_mul).
+        assert!(s.contains("(< (* (- 1) x) 0)"));
         assert!(!s.contains("(< x 0)"));
     }
 }
