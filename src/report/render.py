@@ -136,6 +136,8 @@ class TreeNode:
     block: Optional[int] = None
     passname: Optional[str] = None
     command_line: Optional[str] = None
+    enter_time: Optional[int] = None       # CLOCK_MONOTONIC ns, cross-process comparable
+    exit_time: Optional[int] = None
 
 class TreeTableWidget:
     _STATUS = {
@@ -303,6 +305,8 @@ def normalize_substep_tree(node: TreeNode) -> TreeNode:
         block=node.block,
         passname=node.passname,
         command_line=node.command_line,
+        enter_time=node.enter_time,
+        exit_time=node.exit_time,
     )
 
 
@@ -317,6 +321,8 @@ def to_tree_node(data: Action) -> TreeNode:
         status=data.status(),
         children=[to_tree_node(c) for c in data.actions],
         command_line=data.properties.get("command_line"),
+        enter_time=data.enter_time,
+        exit_time=data.exit_time,
     )
 
 def collect(basedir: Path):
