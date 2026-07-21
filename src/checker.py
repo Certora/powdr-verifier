@@ -50,34 +50,25 @@ CHECK_PLAIN = "plain"
 CHECK_CHUNKED = "chunked"
 CHECK_SLICED = "sliced"
 CHECK_STRATEGY_CHOICES = (CHECK_PLAIN, CHECK_CHUNKED, CHECK_SLICED)
-DEFAULT_CHECK_STRATEGY = CHECK_CHUNKED
+# ``plain`` (whole-script z3 with the full check budget) is the default: across
+# the guest-keccak benchmark essentially every VC is decided whole-script in
+# under a couple of seconds, while the ``chunked`` per-disjunct split (especially
+# once it descends into a top-level ``And`` to split a nested goal ``Or``) turns
+# those instant solves into per-branch case-splits that time out -- a comparison
+# of the 07-20 and 07-21 runs pinned 659 success->timeout regressions on exactly
+# that split, all of which solve whole-script in <=3s.
+DEFAULT_CHECK_STRATEGY = CHECK_PLAIN
 
 # Per-pass strategy overrides, mirroring the simplifier's ``STEP_TACTICS``.
-# Passes not listed use ``DEFAULT_CHECK_STRATEGY``; an explicit ``--strategy``
-# overrides both. ``exec_bus`` VCs solve whole in a few seconds but their
-# chunked disjunct solve stalls (benchmark: every successful exec_bus check
-# finished plain in <4s and not one was solved by chunking, yet VCs solvable
-# whole in 5-14s timed out once chunking took over), so run them plain.
+# Passes not listed use ``DEFAULT_CHECK_STRATEGY`` (``plain``); an explicit
+# ``--strategy`` overrides both. Only list passes that genuinely need a
+# non-``plain`` strategy here.
 #   ``inlining`` completeness/soundness VCs are wide conjunctions with a large
 # goal ``Or`` whose per-disjunct queries are individually easy but whose whole-
-# script (and incremental-chunked) solve times out; the ``sliced`` strategy's
-# cone-of-influence + one-shot per-disjunct solving clears them (e.g. guest-keccak
-# 2104736/035 soundness, which times out both chunked directions, solves sliced).
-#   ``remove_trivial`` / ``remove_free`` / ``remove_disconnected`` are all
-# constraint-*dropping* passes, so each soundness goal ``Or`` (``¬before``) is
-# refuted whole-script in milliseconds, but the chunked nested-``Or`` split turns
-# it into a per-disjunct case-split that stalls (every saved guest-keccak timeout
-# VC across the three -- e.g. 2099512/2104024/2099600/2103824/2099544/2099680 --
-# solves unsat whole in <=3s), so run them plain like exec_bus.
-#   ``simplify_exhaustive`` is a *transforming* pass but its soundness VC has the
-# same shape (whole-script unsat in <=2.6s: 2100224/2103416/2104604; chunked
-# nested-``Or`` split times out), so run it plain too.
+# script solve times out (e.g. guest-keccak 2104736/035 soundness); the
+# ``sliced`` strategy's cone-of-influence + one-shot per-disjunct solving clears
+# them where a whole-script solve does not.
 CHECK_STRATEGIES: dict[str, str] = {
-    "exec_bus": CHECK_PLAIN,
-    "remove_trivial": CHECK_PLAIN,
-    "remove_free": CHECK_PLAIN,
-    "remove_disconnected": CHECK_PLAIN,
-    "simplify_exhaustive": CHECK_PLAIN,
     "inlining": CHECK_SLICED,
 }
 

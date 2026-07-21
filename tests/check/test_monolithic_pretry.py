@@ -15,6 +15,7 @@ import src.checker as checker_mod
 from src.checker import (
     CHECK_CHUNKED,
     CHECK_PLAIN,
+    CHECK_SLICED,
     PLAIN_PRETRY_SEC,
     check_plain,
     _resolve_check_strategy,
@@ -62,7 +63,9 @@ def _solve_action(res):
 def test_pretry_resolves_without_chunking(tmp_path, monkeypatch):
     f = tmp_path / "u.smt2"
     f.write_text(UNSAT_OR)
-    parse_args(["check", str(f), "--timeout", "30"])
+    # ``chunked`` runs the cheap whole-script pre-try first; it must resolve the
+    # goal without ever reaching the per-disjunct path.
+    parse_args(["check", str(f), "--strategy", "chunked", "--timeout", "30"])
 
     chunked = {"called": False}
     monkeypatch.setattr(
@@ -85,10 +88,10 @@ def test_pretry_resolves_without_chunking(tmp_path, monkeypatch):
 def test_pretry_inconclusive_falls_back_to_chunking(tmp_path, monkeypatch):
     f = tmp_path / "u.smt2"
     f.write_text(UNSAT_OR)
-    parse_args(["check", str(f), "--timeout", "30"])
+    parse_args(["check", str(f), "--strategy", "chunked", "--timeout", "30"])
 
     # Force the pre-try to report inconclusive.
-    monkeypatch.setattr(checker_mod, "check_plain", lambda: None)
+    monkeypatch.setattr(checker_mod, "check_plain", lambda *a, **k: None)
     # Keep the fallback on the Python path (skip the Rust binary if present).
     from src.check import rust as rust_mod
 
@@ -134,7 +137,7 @@ def test_no_pretry_when_disabled_by_flag(tmp_path, monkeypatch):
     """``--no-pretry-plain`` skips the pre-try and goes straight to chunking."""
     f = tmp_path / "u.smt2"
     f.write_text(UNSAT_OR)
-    parse_args(["check", str(f), "--no-pretry-plain", "--timeout", "30"])
+    parse_args(["check", str(f), "--strategy", "chunked", "--no-pretry-plain", "--timeout", "30"])
     from src.check import rust as rust_mod
 
     monkeypatch.setattr(rust_mod, "resolve_checker_bin", lambda: None)
@@ -143,7 +146,7 @@ def test_no_pretry_when_disabled_by_flag(tmp_path, monkeypatch):
     monkeypatch.setattr(
         checker_mod,
         "check_plain",
-        lambda: called.__setitem__("pretry", True) or None,
+        lambda *a, **k: called.__setitem__("pretry", True) or None,
     )
 
     res = check()
@@ -165,12 +168,13 @@ def _counting_pretry(monkeypatch, calls):
     monkeypatch.setattr(
         checker_mod,
         "check_plain",
-        lambda: (calls.__setitem__("n", calls["n"] + 1), orig())[1],
+        lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), orig(*a, **k))[1],
     )
 
 
 def test_pretry_runs_regardless_of_strategy(tmp_path, monkeypatch):
-    """The pre-try runs before both the chunked and sliced strategies."""
+    """The whole-script solve runs for every strategy: as the pre-try before
+    ``chunked``/``sliced``, and as the ``plain`` default itself."""
     from src.check import rust as rust_mod
 
     for extra in (["--strategy", "chunked"], ["--strategy", "sliced"], []):
@@ -208,20 +212,20 @@ def test_importing_checker_does_not_break_mod_typecheck():
 
 
 def test_strategy_resolution(tmp_path):
-    """``exec_bus`` overrides to ``plain``; other passes get the ``chunked``
-    default; an explicit ``--strategy`` beats both.
+    """``plain`` is the default; only ``inlining`` overrides (to ``sliced``); an
+    explicit ``--strategy`` beats both.
 
     The pass is taken from ``--optimization-step``, else parsed from the input
     filename so a standalone ``check`` picks the same strategy.
     """
-    parse_args(["check", "x.smt2", "--optimization-step", "exec_bus"])
-    assert _resolve_check_strategy() == CHECK_PLAIN
+    parse_args(["check", "x.smt2", "--optimization-step", "inlining"])
+    assert _resolve_check_strategy() == CHECK_SLICED
 
     parse_args(["check", "x.smt2", "--optimization-step", "solver"])
-    assert _resolve_check_strategy() == CHECK_CHUNKED
+    assert _resolve_check_strategy() == CHECK_PLAIN
 
     parse_args(["check", "x.smt2"])
-    assert _resolve_check_strategy() == CHECK_CHUNKED
+    assert _resolve_check_strategy() == CHECK_PLAIN
 
     # Filename fallback (real verify-style name).
     fname = "verify-apc_candidate_1_0_unopt-apc_candidate_1_1_exec_bus.soundness.smt2"
@@ -229,9 +233,10 @@ def test_strategy_resolution(tmp_path):
     assert _resolve_check_strategy() == CHECK_PLAIN
 
     # Explicit --strategy wins over the per-pass override.
-    parse_args(["check", fname, "--strategy", "chunked"])
+    fname_inl = "verify-apc_candidate_1_0_x-apc_candidate_1_1_inlining.soundness.smt2"
+    parse_args(["check", fname_inl, "--strategy", "chunked"])
     assert _resolve_check_strategy() == CHECK_CHUNKED
-    parse_args(["check", "x.smt2", "--optimization-step", "solver", "--strategy", "sliced"])
+    parse_args(["check", "x.smt2", "--optimization-step", "inlining", "--strategy", "sliced"])
     assert _resolve_check_strategy() == "sliced"
 
 
