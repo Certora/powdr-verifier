@@ -164,22 +164,6 @@ def _run_solver_config(smt_script, config):
         return action
 
 
-def _find_largest_or_goal(smt_script: list) -> FNode | None:
-    """Return the largest top-level ``Or`` assert body, if splittable."""
-    goal = None
-    n_disjuncts = 0
-    for cmd in smt_script:
-        if cmd.name != "assert" or not cmd.args[0].is_or():
-            continue
-        f = cmd.args[0]
-        k = len(f.args())
-        if k > n_disjuncts:
-            goal, n_disjuncts = f, k
-    if goal is None or n_disjuncts < 2:
-        return None
-    return goal
-
-
 def _finalize_result(action: Action, attempt: Action) -> str:
     """Fold ``attempt`` into ``action``: model dump, expected-vs-result logging,
     and the final ``result`` property. Shared by the chunked and sliced paths."""
@@ -208,13 +192,21 @@ def _finalize_result(action: Action, attempt: Action) -> str:
 
 def check_smt_script_disjuncts(
     smt_script,
+    ctx,
     goal,
     action: Action,
     *,
     input_for_log: Path | None = None,
     check_timeout: float | None = None,
 ) -> str:
-    """Like :func:`check_smt_script`, but solve the goal ``Or`` one disjunct at a time."""
+    """Like :func:`check_smt_script`, but solve the goal ``Or`` one disjunct at a
+    time.
+
+    ``ctx`` is the flattened conjunct context (every assert body flattened through
+    ``And``, minus ``goal``); ``goal`` is the largest ``Or`` conjunct and may have
+    been nested inside a top-level ``(assert (and ...))``. We therefore assert
+    ``ctx`` instead of replaying the original asserts (only declarations and other
+    non-assert commands are replayed from ``smt_script``)."""
     log_key = _display_path(input_for_log)
     log = logging.warning if input_for_log is not None else logging.debug
     first = _solver_configs(check_timeout=check_timeout)[0]
@@ -239,13 +231,15 @@ def check_smt_script_disjuncts(
             ) as s:
                 s.set_logic = lambda l: None
                 for cmd in smt_script:
+                    if cmd.name == "assert":
+                        continue  # asserts replaced by the flattened `ctx` below
                     if cmd.name == "set-info" and cmd.args[0] == ":status":
-                        continue
-                    if cmd.name == "assert" and cmd.args[0] is goal:
                         continue
                     if cmd.name == "check-sat":
                         continue
                     script.evaluate_command(cmd, s)
+                for conjunct in ctx:
+                    s.add_assertion(conjunct)
                 for k, disjunct in enumerate(disjuncts):
                     s.push()
                     s.add_assertion(disjunct)
@@ -640,7 +634,13 @@ def _check_python(strategy: str) -> Action:
                         dump_all=getattr(ARGS(), "dump_slices_all", False),
                     )
             else:
-                goal = _find_largest_or_goal(smt_script)
+                from .check.sliced import flatten_script_conjuncts
+
+                # Flatten top-level `(assert (and ...))` bodies so a goal `Or`
+                # nested inside a conjunction (the usual VC shape:
+                # `And(before.C, Or(¬after ∨ ¬io))`) is still found and split
+                # per-disjunct, not just a bare top-level `(assert (or ...))`.
+                ctx, goal = flatten_script_conjuncts(smt_script)
                 if goal is None:
                     logging.warning(
                         "no splittable Or-disjunction found, checking entire script"
@@ -648,6 +648,6 @@ def _check_python(strategy: str) -> Action:
                     check_smt_script(smt_script, subaction, input_for_log=ARGS().input)
                 else:
                     check_smt_script_disjuncts(
-                        smt_script, goal, subaction, input_for_log=ARGS().input
+                        smt_script, ctx, goal, subaction, input_for_log=ARGS().input
                     )
         return action

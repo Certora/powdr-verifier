@@ -176,8 +176,7 @@ pub fn check_script(
 
 pub fn check_script_disjuncts(
     _prefix: &str,
-    assertions: &[Bool],
-    goal_idx: usize,
+    context: &[Bool],
     disjuncts: &[Bool],
     log_key: &str,
 ) -> Action {
@@ -198,10 +197,8 @@ pub fn check_script_disjuncts(
     );
 
     let solver = Solver::new();
-    for (i, a) in assertions.iter().enumerate() {
-        if i != goal_idx {
-            solver.assert(a);
-        }
+    for a in context {
+        solver.assert(a);
     }
     apply_params(&solver, &options);
     let mut final_result = "unsat".to_string();
