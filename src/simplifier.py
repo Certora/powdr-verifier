@@ -77,11 +77,12 @@ STEP_TACTICS: dict[str, str] = {
     "loop_iteration": TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:normalize:demod",
     # No z3-propagate-values/z3-solve-eqs: solve-eqs re-derives ``x - y`` and
     # undoes diff_vars' difference reduction (the reduction is what lets these
-    # otherwise-timing-out solver VCs discharge). ``rewrite`` factors modular
-    # products (e.g. the ``bit^2 - bit = 0`` to_pc/least-sig-bit encoding) into
-    # explicit ``(or (= x 0) (= x 1))`` disjunctions so z3 can case-split; the
-    # trailing ``demod`` folds the range bounds it emits.
-    "solver": TACTIC_BUS_QE + TACTIC_BUS_TAIL + ":rewrite:demod",
+    # otherwise-timing-out solver VCs discharge). NOTE: do NOT add ``rewrite``
+    # here -- its FLINT factorization of multivariate comparison-gadget
+    # quadratics is unsound (spurious sat on 2099672 soundness); see
+    # [[verifier-rulebased-notqf-spurious]]. The bit^2-bit=0 case-split win needs
+    # a sound hint pass that only *adds* (or (= x 0) (= x 1)), not rewrite.
+    "solver": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
     "substitute_bus_interactio_fields": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
     "low_degree_bus": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
     "memory": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
