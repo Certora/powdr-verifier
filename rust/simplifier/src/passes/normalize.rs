@@ -737,6 +737,15 @@ fn detect_pairs(rels: &[Poly], p: i128) -> Vec<(u32, u32)> {
 }
 
 fn collect_quad_rels(term: &Bool, ctx: &NormalizeCtx<'_>, out: &mut Vec<Poly>) {
+    // Quantifier nodes are not apps; ``num_children()``/``nth_child()`` panic on
+    // them in z3-rs. Soundness VCs can stay quantified (not-qf), so recurse into
+    // the body instead of the child loop below.
+    if term.kind() == AstKind::Quantifier {
+        if let Some(body) = smt2::quantifier_body_bool(&Dynamic::from_ast(term)) {
+            collect_quad_rels(&body, ctx, out);
+        }
+        return;
+    }
     if term.kind() == AstKind::App && term.num_children() == 2 && term.decl().kind() == DeclKind::Eq
     {
         let lhs = term.nth_child(0).and_then(|c| c.as_int());
