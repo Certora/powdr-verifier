@@ -209,9 +209,13 @@ class OpenVMMemoryEncoder(
         ts = self.ordered_timestamp_check()
         pval = ARGS().field_type.value
 
+        _align = self._cur_state.memory_bus_alignment
+        _assume_is_valid = _align is not None and getattr(
+            _align, "after_assume_is_valid", False
+        )
+
         def _active_mult(idx: int) -> int | None:
-            m = wrap_mod(self._interactions[idx].mult).simplify()
-            return m.constant_value() % pval if m.is_int_constant() else None
+            return _const_mult(self._interactions[idx].mult, pval, _assume_is_valid)
 
         interface = ARGS().memory_encoding == "interface"
         match ARGS().memory_encoding:
@@ -511,7 +515,7 @@ class OpenVMMemoryEncoder(
             pairs = alignment.internal_pairs_for(source_path)
             if pairs:
                 eqs = internal_pair_equalities(
-                    self.NAME, self._bus_interactions(), pairs
+                    self.NAME, self._bus_interactions(), pairs, _assume_is_valid
                 )
                 logging.info(
                     "%s interface internal pairs: %d pair(s) -> %d equalities",
@@ -796,6 +800,9 @@ class OpenVMMemoryEncoder(
                 bounds_a=self._syntactic_bounds,
                 bounds_b=other._syntactic_bounds,
                 internal_a=internal_a,
+                assume_is_valid=getattr(
+                    alignment, "after_assume_is_valid", False
+                ),
             )
         if ARGS().memory_encoding == "plain":
             alignment = self._cur_state.memory_bus_alignment
@@ -894,10 +901,31 @@ def _interface_pointer_eq(
     return [field_eq(px[0], py[0]), field_eq(px[1], py[1])]
 
 
+def _const_mult(mult: FNode, p: int, assume_is_valid: bool = False) -> int | None:
+    """Const-evaluate a memory multiplicity mod p, or None if not constant.
+
+    [is_valid=1 interface] When ``assume_is_valid`` (the analysis assumed the
+    openvm is_valid activation selector == 1), is_valid columns are folded to 1
+    first, so a gated ``0 - is_valid`` const-evaluates to ``p - 1`` (i.e. -1).
+    Remove the ``assume_is_valid`` handling once the interface encoder resolves
+    is_valid-gated mults natively."""
+    if assume_is_valid:
+        subs = {
+            v: Int(1)
+            for v in mult.get_free_variables()
+            if "is_valid" in v.symbol_name()
+        }
+        if subs:
+            mult = mult.substitute(subs)
+    m = wrap_mod(mult).simplify()
+    return m.constant_value() % p if m.is_int_constant() else None
+
+
 def internal_pair_equalities(
     name: str,
     interactions: list[BusInteraction],
     pairs: list[tuple[int, int]],
+    assume_is_valid: bool = False,
 ) -> list[FNode]:
     """Equalities compiling away a circuit's internal forced recv<->send pairs.
 
@@ -917,8 +945,7 @@ def internal_pair_equalities(
     p = ARGS().field_type.value
 
     def cmult(inter: BusInteraction) -> int | None:
-        w = wrap_mod(inter.mult).simplify()
-        return w.constant_value() % p if w.is_int_constant() else None
+        return _const_mult(inter.mult, p, assume_is_valid)
 
     parts: list[FNode] = []
     for a, b in pairs:
@@ -952,6 +979,7 @@ def interface_io_relation(
     bounds_a: dict[FNode, int],
     bounds_b: dict[FNode, int],
     internal_a: frozenset[int] = frozenset(),
+    assume_is_valid: bool = False,
 ) -> tuple[FNode, frozenset[FNode]]:
     """Cross-circuit io relation for the uninterpreted-interface encoding.
 
@@ -982,8 +1010,7 @@ def interface_io_relation(
         )
 
     def cmult(inter: BusInteraction) -> int | None:
-        w = wrap_mod(inter.mult).simplify()
-        return w.constant_value() % p if w.is_int_constant() else None
+        return _const_mult(inter.mult, p, assume_is_valid)
 
     parts: list[FNode] = []
     splits = applied = 0

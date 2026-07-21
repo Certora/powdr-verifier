@@ -106,6 +106,11 @@ class MembusAnalysis:
     # captured BEFORE any identity fill and left empty on the heuristic fallback
     # (no align ran). The interface encoding trusts only these.
     kept_pairs: dict[int, int] = field(default_factory=dict)
+    # [is_valid=1 interface] whether this analysis assumed the openvm is_valid
+    # activation selector == 1. Read by the interface encoder to const-fold
+    # is_valid-gated memory multiplicities. Remove when the interface encoder
+    # resolves gated mults natively.
+    after_assume_is_valid: bool = False
 
     @property
     def n_before(self) -> int:
@@ -996,4 +1001,5 @@ def run_membus_analysis(
         before_info=before_info,
         after_info=after_info,
         kept_pairs=kept_pairs,
+        after_assume_is_valid=after_assume_is_valid,
     )

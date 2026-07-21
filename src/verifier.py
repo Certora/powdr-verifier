@@ -130,6 +130,13 @@ def verify():
         reset_membus_cache()
         apply_skip_trivial(before, after)
         introduces_is_valid = dump_introduces_is_valid(before, after)
+        # [is_valid=1 interface] `analyze_memory_bus_alignment` resolves the "auto"
+        # memory encoding into ARGS() once and it sticks. When is_valid is introduced
+        # the main analysis assumes is_valid==1, which can now resolve to `interface`;
+        # the is_valid==0 special-soundness analysis below must re-resolve from scratch
+        # (it assumes is_valid free -> plain), so remember the pre-resolution value and
+        # restore it before that call. Remove with the is_valid=1 interface workaround.
+        orig_memory_encoding = ARGS().memory_encoding
         with action.action("membus"):
             memory_bus_alignment = analyze_memory_bus_alignment(
                 before, after, after_assume_is_valid=introduces_is_valid
@@ -268,6 +275,10 @@ def verify():
                     action += ("outputs", outfile)
 
                 with action.action("membus-inactive"):
+                    # [is_valid=1 interface] re-resolve the encoding for the is_valid==0
+                    # analysis (is_valid free -> plain); the main analysis may have stuck
+                    # ARGS().memory_encoding at "interface".
+                    ARGS().memory_encoding = orig_memory_encoding
                     memory_bus_alignment_inactive = analyze_memory_bus_alignment(
                         before, after, after_assume_is_valid=False
                     )

@@ -42,7 +42,7 @@ def analyze_memory_bus_alignment(
         # to the always-sound plain encoding. Resolve the global once so every
         # downstream reader (encode / io-relation / pins) sees a concrete mode.
         problems = _alignment_problems(analysis)
-        if not problems and not _interface_mults_const(before, after):
+        if not problems and not _interface_mults_const(before, after, after_assume_is_valid):
             problems = ["memory multiplicities are not const-evaluable (is_valid/flag-gated); interface v1 aborts"]
         resolved = "plain" if problems else "interface"
         logger.warning(
@@ -121,20 +121,40 @@ def _expr_references_variable(expr: Any) -> bool:
     return False
 
 
-def _interface_mults_const(before: dict[str, Any], after: dict[str, Any]) -> bool:
+def _fold_is_valid_one(expr: Any) -> Any:
+    """[is_valid=1 interface] Replace every ``is_valid`` column reference in a
+    dumped expression with the constant 1. Remove with its caller once the
+    interface encoder resolves is_valid-gated mults natively."""
+    if isinstance(expr, str):
+        return 1 if "is_valid" in expr else expr
+    if isinstance(expr, list):
+        return [_fold_is_valid_one(x) for x in expr]
+    return expr
+
+
+def _interface_mults_const(
+    before: dict[str, Any], after: dict[str, Any], assume_is_valid: bool = False
+) -> bool:
     """Mirror the interface encoding's precondition (openvm_memory.encode_all):
     every memory-bus multiplicity must const-evaluate to {0, +-1}. Conservative
     and syntactic — a multiplicity that references any column (e.g. the
     ``is_valid``- or flag-gated ``0 - is_valid``) is treated as non-const, so
     ``auto`` falls back to the always-sound plain encoding instead of letting
-    the interface encoder abort with a hard error."""
+    the interface encoder abort with a hard error.
+
+    When ``assume_is_valid`` (this analysis assumes is_valid==1, matching
+    ``openvm_memory._active_mult``), is_valid selectors are folded to 1 first, so
+    ``0 - is_valid`` counts as the const -1 and the interface encoding applies."""
     for dump in (before, after):
         machine = dump.get("machine", dump)
         mem_id = _memory_bus_id(dump)
         for bi in machine.get("bus_interactions", []):
             if bi.get("id") != mem_id:
                 continue
-            if _expr_references_variable(bi.get("mult")):
+            mult = bi.get("mult")
+            if assume_is_valid:
+                mult = _fold_is_valid_one(mult)
+            if _expr_references_variable(mult):
                 return False
     return True
 
