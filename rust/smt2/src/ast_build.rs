@@ -210,10 +210,17 @@ pub fn substitute_dyn(ast: &Dynamic, name: &str, replacement: &Dynamic) -> Dynam
         }
         let is_forall = crate::ast_util::is_forall(ast);
         let bounds = crate::ast_util::quantifier_bounds(ast);
-        let body = quantifier_body(ast).expect("body").as_bool().expect("bool body");
-        let rep_b = replacement.as_bool().expect("bool replacement");
-        let new_body = substitute_bool(&body, name, &rep_b);
-        return Dynamic::from_ast(&rebuild_quantifier_dyn(is_forall, &bounds, &new_body));
+        let Some(body) = quantifier_body(ast) else {
+            return ast.clone();
+        };
+        // Substitute generically into the (Bool-sorted) body: the replacement may
+        // be an Int term (e.g. diff_vars' ``x -> y + d``), so we must not force
+        // it to Bool via substitute_bool (which panicked on Int replacements).
+        let new_body = substitute_dyn(&body, name, replacement);
+        let Some(new_body_b) = new_body.as_bool() else {
+            return ast.clone();
+        };
+        return Dynamic::from_ast(&rebuild_quantifier_dyn(is_forall, &bounds, &new_body_b));
     }
     if ast.kind() == AstKind::App {
         let args: Vec<Dynamic> = (0..ast.num_children())
