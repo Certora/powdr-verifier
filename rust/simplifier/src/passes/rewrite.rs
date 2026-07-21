@@ -161,27 +161,20 @@ fn or_terms(mut parts: Vec<Bool>) -> Bool {
     Bool::or(&parts.iter().collect::<Vec<_>>())
 }
 
-fn and_terms(mut parts: Vec<Bool>) -> Bool {
-    if parts.len() == 1 {
-        return parts.pop().unwrap();
-    }
-    Bool::and(&parts.iter().collect::<Vec<_>>())
-}
 
-fn roots_with_range(var: &Int, values: &BTreeSet<i128>, _p: i128) -> Bool {
-    let min_v = *values.iter().next().unwrap();
-    let max_v = *values.iter().next_back().unwrap();
-    let disj = or_terms(
+fn roots_with_range(var: &Int, values: &BTreeSet<i128>, p: i128) -> Bool {
+    // `poly ≡ 0 (mod P)` with roots {rᵢ} ⟺ ⋁ᵢ (var − rᵢ ≡ 0 mod P). Emit that
+    // modular disjunction. Do NOT convert to exact equalities `var = rᵢ` plus an
+    // `[min,max]` integer range: `var` need not lie in `[0,P)` (e.g. diff vars),
+    // so exact equality drops the mod-periodic solutions (`var ≡ rᵢ mod P` but
+    // outside `[min,max]`) and, under a negation, admits spurious models --
+    // observed as a spurious `sat` on 2099672 solver soundness.
+    or_terms(
         values
             .iter()
-            .map(|v| var.eq(int_from_i128(*v)))
+            .map(|v| mod_zero_eq(&Int::sub(&[var, &int_from_i128(*v)]), p))
             .collect(),
-    );
-    and_terms(vec![
-        disj,
-        int_from_i128(min_v).le(var),
-        var.le(&int_from_i128(max_v)),
-    ])
+    )
 }
 
 fn solved_roots(factors: &[Int], p: i128) -> Option<(Int, BTreeSet<i128>)> {
@@ -561,8 +554,10 @@ mod tests {
                 "(= (mod (* (+ x 1) (+ x 2)) {p}) 0)"
             ));
             let s = out.to_string();
+            // Sound modular disjunction of root congruences; no exact-equality +
+            // [min,max] range (which is unsound for vars not in [0,P)).
             assert!(s.contains("or"), "{s}");
-            assert!(s.contains("and"), "{s}");
+            assert!(!s.contains("<="), "must not emit a range bound: {s}");
         });
     }
 
@@ -584,8 +579,9 @@ mod tests {
                 "(= (mod (+ (+ (* x x) (* 3 x)) 2) {p}) 0)"
             ));
             let s = out.to_string();
+            // x^2+3x+2 = (x+1)(x+2): sound modular disjunction, no range bound.
             assert!(s.contains("or"), "{s}");
-            assert!(s.contains("and"), "{s}");
+            assert!(!s.contains("<="), "must not emit a range bound: {s}");
         });
     }
 
