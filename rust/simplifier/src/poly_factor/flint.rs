@@ -4,7 +4,7 @@ use std::mem::MaybeUninit;
 use super::ffi::{
     flint_free, fmpz, fmpz_add, fmpz_clear, fmpz_get_str, fmpz_init, fmpz_is_zero,
     fmpz_mpoly_clear, fmpz_mpoly_combine_like_terms, fmpz_mpoly_ctx_clear, fmpz_mpoly_ctx_init,
-    fmpz_mpoly_ctx_struct, fmpz_mpoly_factor, fmpz_mpoly_factor_clear, fmpz_mpoly_factor_get_base,
+    fmpz_mpoly_ctx_struct, fmpz_mpoly_divides, fmpz_mpoly_factor, fmpz_mpoly_factor_clear, fmpz_mpoly_factor_get_base,
     fmpz_mpoly_factor_get_exp_si, fmpz_mpoly_factor_init, fmpz_mpoly_factor_length,
     fmpz_mpoly_factor_struct, fmpz_mpoly_get_term_coeff_fmpz, fmpz_mpoly_get_term_exp_ui,
     fmpz_mpoly_init, fmpz_mpoly_is_zero, fmpz_mpoly_length, fmpz_mpoly_push_term_fmpz_ui,
@@ -151,6 +151,32 @@ impl MpolyInner {
     fn as_mut(&mut self) -> *mut fmpz_mpoly_struct {
         &mut self.0
     }
+}
+
+/// True iff `divisor` divides `dividend` as integer polynomials (both built in a
+/// shared context so generator indices align). Used by the `factor_reduce` pass.
+pub(crate) fn divides_terms(
+    dividend: &TermMap,
+    divisor: &TermMap,
+    nvars: usize,
+) -> Result<bool, FactorError> {
+    if nvars == 0 || dividend.is_empty() || divisor.is_empty() {
+        return Err(FactorError::BuildFailed);
+    }
+    let ctx = ZzCtx::new(nvars);
+    let mut num = MpolyInner::new(&ctx);
+    let mut den = MpolyInner::new(&ctx);
+    let mut quo = MpolyInner::new(&ctx);
+    let divides = unsafe {
+        build_fmpz_mpoly_from_terms(num.as_mut(), ctx.as_ptr(), nvars, dividend)?;
+        build_fmpz_mpoly_from_terms(den.as_mut(), ctx.as_ptr(), nvars, divisor)?;
+        let r = fmpz_mpoly_divides(quo.as_mut(), num.as_ptr(), den.as_ptr(), ctx.as_ptr());
+        fmpz_mpoly_clear(num.as_mut(), ctx.as_ptr());
+        fmpz_mpoly_clear(den.as_mut(), ctx.as_ptr());
+        fmpz_mpoly_clear(quo.as_mut(), ctx.as_ptr());
+        r != 0
+    };
+    Ok(divides)
 }
 
 pub(crate) fn factor_mpoly(built: BuiltMpoly) -> Result<FlintFactorization, FactorError> {

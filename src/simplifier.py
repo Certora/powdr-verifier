@@ -92,7 +92,14 @@ STEP_TACTICS: dict[str, str] = {
     "inlining": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
     "rule_based": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
     "range_constraints": TACTIC_QEPREFIX + TACTIC_BUS_TAIL,
-    "trivial_simp": TACTIC_QEPREFIX + TACTIC_BUS_TAIL,
+    # trivial_simp drops `A*B = 0` constraints when `B = 0` is kept (factor
+    # redundancy, remove_redundant_constraints). z3 can't re-derive `A*B = 0`
+    # from the expanded mod-poly `B = 0` (ideal-membership / flag case-split ->
+    # timeout on the soundness side). z3-solve-eqs unifies the before/after
+    # columns via their linking equalities so `factor_reduce` can see that a kept
+    # hypothesis polynomial-divides the dropped goal constraint and rewrite it to
+    # true. Sound: B = 0 is a global conjunct and B | Q => Q = 0 (mod P).
+    "trivial_simp": TACTIC_QEPREFIX + TACTIC_BUS_TAIL + ":z3-solve-eqs:factor_reduce",
     "simplify_exhaustive": TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:normalize:demod",
 }
 
