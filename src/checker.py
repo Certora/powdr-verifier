@@ -58,8 +58,14 @@ DEFAULT_CHECK_STRATEGY = CHECK_CHUNKED
 # chunked disjunct solve stalls (benchmark: every successful exec_bus check
 # finished plain in <4s and not one was solved by chunking, yet VCs solvable
 # whole in 5-14s timed out once chunking took over), so run them plain.
+#   ``inlining`` completeness/soundness VCs are wide conjunctions with a large
+# goal ``Or`` whose per-disjunct queries are individually easy but whose whole-
+# script (and incremental-chunked) solve times out; the ``sliced`` strategy's
+# cone-of-influence + one-shot per-disjunct solving clears them (e.g. guest-keccak
+# 2104736/035 soundness, which times out both chunked directions, solves sliced).
 CHECK_STRATEGIES: dict[str, str] = {
     "exec_bus": CHECK_PLAIN,
+    "inlining": CHECK_SLICED,
 }
 
 
