@@ -69,11 +69,15 @@ DEFAULT_CHECK_STRATEGY = CHECK_CHUNKED
 # it into a per-disjunct case-split that stalls (every saved guest-keccak timeout
 # VC across the three -- e.g. 2099512/2104024/2099600/2103824/2099544/2099680 --
 # solves unsat whole in <=3s), so run them plain like exec_bus.
+#   ``simplify_exhaustive`` is a *transforming* pass but its soundness VC has the
+# same shape (whole-script unsat in <=2.6s: 2100224/2103416/2104604; chunked
+# nested-``Or`` split times out), so run it plain too.
 CHECK_STRATEGIES: dict[str, str] = {
     "exec_bus": CHECK_PLAIN,
     "remove_trivial": CHECK_PLAIN,
     "remove_free": CHECK_PLAIN,
     "remove_disconnected": CHECK_PLAIN,
+    "simplify_exhaustive": CHECK_PLAIN,
     "inlining": CHECK_SLICED,
 }
 
