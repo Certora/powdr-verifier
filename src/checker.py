@@ -63,8 +63,14 @@ DEFAULT_CHECK_STRATEGY = CHECK_CHUNKED
 # script (and incremental-chunked) solve times out; the ``sliced`` strategy's
 # cone-of-influence + one-shot per-disjunct solving clears them (e.g. guest-keccak
 # 2104736/035 soundness, which times out both chunked directions, solves sliced).
+#   ``remove_trivial`` drops factor-redundant constraints, so its soundness goal
+# ``Or`` (``¬before``) is refuted whole-script in milliseconds, but the chunked
+# nested-``Or`` split turns it into a per-disjunct case-split that stalls (every
+# saved guest-keccak remove_trivial timeout VC -- 2099512/2099828/2104024/2104216/
+# 2105880/2106332 -- solves unsat whole in <=3.3s), so run it plain.
 CHECK_STRATEGIES: dict[str, str] = {
     "exec_bus": CHECK_PLAIN,
+    "remove_trivial": CHECK_PLAIN,
     "inlining": CHECK_SLICED,
 }
 
