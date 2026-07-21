@@ -76,7 +76,7 @@ def job_banner(report_dir: Path) -> str:
     duration = _format_duration(float(running_time)) if running_time is not None else "—"
     command_line = job.get("command_line")
     cmd_html = (
-        f'<code class="text-break user-select-all flex-grow-1 min-width-0" style="font-size:0.82em">'
+        f'<code class="text-break user-select-all min-width-0" style="font-size:0.82em">'
         f"{html.escape(command_line)}</code>"
         if command_line
         else '<span class="text-body-secondary">—</span>'
@@ -86,6 +86,24 @@ def job_banner(report_dir: Path) -> str:
         f'<span class="text-body-secondary"> @ {html.escape(started)}</span>'
     )
     copy_badge = copy_command_badge(command_line)
+
+    def _commit(label: str, value) -> str:
+        if not value:
+            return ""
+        return (
+            f'<span class="text-body-secondary">{label}</span> '
+            f'<code>{html.escape(str(value))}</code>'
+        )
+
+    commits = "  ".join(
+        c for c in (_commit("powdr", job.get("powdr_commit")),
+                    _commit("verifier", job.get("verifier_commit"))) if c
+    )
+    commits_html = (
+        f'<div class="d-flex align-items-center gap-3 mt-1" style="font-size:0.8em">{commits}</div>'
+        if commits
+        else ""
+    )
     return f"""
 <section class="container-fluid py-2 pb-0">
   <div class="card shadow-sm">
@@ -94,10 +112,11 @@ def job_banner(report_dir: Path) -> str:
         <span class="fw-semibold"><code>{command}</code> <code>{test}</code></span>
         <span class="text-end text-nowrap">{timing}</span>
       </div>
-      <div class="d-flex align-items-center gap-2 min-width-0">
+      <div class="d-flex align-items-baseline gap-2 min-width-0">
         {cmd_html}
         {copy_badge}
       </div>
+      {commits_html}
     </div>
   </div>
 </section>
