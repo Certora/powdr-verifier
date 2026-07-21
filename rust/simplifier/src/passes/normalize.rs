@@ -708,6 +708,40 @@ fn detect_pairs(rels: &[Poly], p: i128) -> Vec<(u32, u32)> {
         .collect();
     squared.sort_unstable();
     squared.dedup();
+    let squared_set: HashSet<u32> = squared.iter().copied().collect();
+
+    // Inverted index + co-occurrence, over squared vars only. A viable difference
+    // pair ``(i, j)`` must reduce in *every* relation, but in a relation where
+    // neither appears in a degree-2 monomial ``pair_reduces`` holds trivially (all
+    // coeffs 0) -- so we only ever verify the union of the two vars' relation lists
+    // (``var_rels``). And the two vars must co-occur in some relation, else the lone
+    // var's squared/cross term breaks the symmetry -- so candidates are restricted to
+    // co-occurring pairs (``cooccur``). Both cut the scan from O(S^2 * R) down to the
+    // handful of relations each squared var actually touches. Since ``squared`` stays
+    // sorted and the greedy ``used`` filter is unchanged, the chosen set is identical
+    // to the exhaustive scan; only the wasted work on absent/non-co-occurring pairs
+    // is removed.
+    let mut var_rels: HashMap<u32, Vec<usize>> = HashMap::new();
+    let mut cooccur: HashSet<(u32, u32)> = HashSet::new();
+    for (r, poly) in rels.iter().enumerate() {
+        let mut sq: Vec<u32> = poly
+            .keys()
+            .filter(|m| m.len() == 2)
+            .flat_map(|m| m.iter().copied())
+            .filter(|v| squared_set.contains(v))
+            .collect();
+        sq.sort_unstable();
+        sq.dedup();
+        for &v in &sq {
+            var_rels.entry(v).or_default().push(r);
+        }
+        for a in 0..sq.len() {
+            for b in (a + 1)..sq.len() {
+                cooccur.insert((sq[a], sq[b]));
+            }
+        }
+    }
+
     let mut chosen = Vec::new();
     let mut used: HashSet<u32> = HashSet::new();
     for a in 0..squared.len() {
@@ -716,10 +750,22 @@ fn detect_pairs(rels: &[Poly], p: i128) -> Vec<(u32, u32)> {
             if used.contains(&i) || used.contains(&j) {
                 continue;
             }
+            if !cooccur.contains(&(i, j)) {
+                continue;
+            }
+            let mut check: Vec<usize> = Vec::new();
+            if let Some(ri) = var_rels.get(&i) {
+                check.extend_from_slice(ri);
+            }
+            if let Some(rj) = var_rels.get(&j) {
+                check.extend_from_slice(rj);
+            }
+            check.sort_unstable();
+            check.dedup();
             let mut all_ok = true;
             let mut coupled = false;
-            for poly in rels {
-                let (ok, has_sq) = pair_reduces(poly, i, j, p);
+            for &r in &check {
+                let (ok, has_sq) = pair_reduces(&rels[r], i, j, p);
                 if !ok {
                     all_ok = false;
                     break;
