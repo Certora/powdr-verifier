@@ -100,7 +100,7 @@ def job_banner(report_dir: Path) -> str:
                     _commit("verifier", job.get("verifier_commit"))) if c
     )
     commits_html = (
-        f'<div class="d-flex align-items-center gap-3 mt-1" style="font-size:0.8em">{commits}</div>'
+        f'<span class="text-nowrap ms-auto ps-3" style="font-size:0.8em">{commits}</span>'
         if commits
         else ""
     )
@@ -115,8 +115,8 @@ def job_banner(report_dir: Path) -> str:
       <div class="d-flex align-items-baseline gap-2 min-width-0">
         {cmd_html}
         {copy_badge}
+        {commits_html}
       </div>
-      {commits_html}
     </div>
   </div>
 </section>
