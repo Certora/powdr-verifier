@@ -77,8 +77,11 @@ STEP_TACTICS: dict[str, str] = {
     "loop_iteration": TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:normalize:demod",
     # No z3-propagate-values/z3-solve-eqs: solve-eqs re-derives ``x - y`` and
     # undoes diff_vars' difference reduction (the reduction is what lets these
-    # otherwise-timing-out solver VCs discharge).
-    "solver": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
+    # otherwise-timing-out solver VCs discharge). ``rewrite`` factors modular
+    # products (e.g. the ``bit^2 - bit = 0`` to_pc/least-sig-bit encoding) into
+    # explicit ``(or (= x 0) (= x 1))`` disjunctions so z3 can case-split; the
+    # trailing ``demod`` folds the range bounds it emits.
+    "solver": TACTIC_BUS_QE + TACTIC_BUS_TAIL + ":rewrite:demod",
     "substitute_bus_interactio_fields": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
     "low_degree_bus": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
     "memory": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
