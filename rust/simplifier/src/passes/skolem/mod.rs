@@ -1,5 +1,4 @@
 pub(crate) mod ast_build;
-mod cross_side;
 mod derived;
 mod isolate;
 mod map;
@@ -237,10 +236,6 @@ fn walk_forall_opt(
     if let Some(p) = field {
         rules::contribute(&mut skolem, script, &body, p);
     }
-    // Cross-side derived transfer runs LAST: a purely-additive fallback that only
-    // witnesses columns nothing above pinned. Running it before `names` preempts
-    // the correct same-name pin and yields a spurious sat (e.g. 2104736 014_solver).
-    cross_side::contribute(&mut skolem, pins, sorts);
 
     for src in skolem.sources.values() {
         *applied.entry(src.clone()).or_insert(0) += 1;

@@ -262,10 +262,10 @@ fn filter_live_pins(
     // A var counts as live if it, OR its before-/after- prefix-swapped
     // counterpart, is live. A rule_based rewrite can define a gadget column
     // (diff_marker, …) as derived on one side while the *other* side keeps it a
-    // live constrained witness; the derived pin `<other>-X = expr` is then needed
-    // to witness the checked-side `<swap>-X` (via cross_side) even though
-    // `<other>-X` is not itself live. Dropping it leaves the checked column
-    // unwitnessed => spurious sat.
+    // live constrained witness; the derived pin `<other>-X = expr` is kept live so
+    // its swapped counterpart `<swap>-X` can still be witnessed by the `derived` /
+    // substitution machinery even though `<other>-X` is not itself live. Dropping
+    // it leaves the checked column unwitnessed => spurious sat.
     let live_or_swapped = |id: SymbolId| -> bool {
         live.contains(&id)
             || symbol_name_for_id(id)
