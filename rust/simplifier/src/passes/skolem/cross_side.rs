@@ -10,17 +10,17 @@
 //! effectively unwitnessed, the solver assigns a value that violates the gadget,
 //! and the soundness VC returns a spurious `sat`.
 //!
-//! This runs FIRST (before `names` / `derived` / `witness` / `isolate` / `rules`)
-//! so it takes precedence over the weaker same-name pin. For each still-unpinned
-//! quantified column `<checked>-X` it looks up the other side's derived definition
-//! `<other>-X = expr` among the loaded pins and pins `<checked>-X` to `expr` with
-//! every free variable's before-/after- prefix swapped onto the checked side. Both
-//! sides compute the same gadget over the same (same-name-pinned) inputs, so the
-//! swapped definition is a valid -- indeed the canonical -- witness. IsZero
-//! markers (`diff_inv_marker`) are skipped here and left to the dedicated `rules`
-//! contributor. Sound: an added witness can only discharge a spurious failure,
-//! never mask a real one (a wrong witness merely fails to close the case, leaving
-//! the `sat`).
+//! This runs LAST (after `names` / `derived` / `witness` / `isolate` / `rules`)
+//! and only touches quantified columns nothing else pinned -- a purely additive
+//! fallback. For each still-unpinned column `<checked>-X` it looks up the other
+//! side's derived definition `<other>-X = expr` and pins `<checked>-X` to `expr`
+//! with every free variable's before-/after- prefix swapped onto the checked side.
+//! It must NOT run before `names`: when the same-name partner survives as a
+//! properly-constrained free symbol, `names`' equality pin is correct, and a
+//! preempting cross_side def can diverge from the free partner and yield a spurious
+//! sat (e.g. 2104736 014_solver). Sound: an added witness can only discharge a
+//! spurious failure, never mask a real one. IsZero markers (`diff_inv_marker`) are
+//! skipped here and left to the dedicated `rules` contributor.
 
 use std::collections::{HashMap, HashSet};
 
