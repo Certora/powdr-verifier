@@ -50,15 +50,21 @@ from .simplify.rust import run_rust_pipeline, rust_step_action_props
 
 _T = TypeVar("_T")
 
-# Regular prefix to eliminate quantifiers. ``diff_vars`` runs right after the
-# quantifier-free checkpoint (``isqf``), where the ``(x - y)²`` difference
-# structure is still intact -- it collapses those quadratics that z3 nlsat times
-# out on. It must run BEFORE any later ``z3-solve-eqs`` is dropped from the tail
-# (see STEP_TACTICS): solve-eqs would re-derive ``x - y`` and undo the rewrite.
-TACTIC_QEPREFIX = "nnf:skolem:lift:witness:demod:isqf:diff_vars"
+# Regular prefix to eliminate quantifiers.
+#
+# NOTE: ``diff_vars`` is intentionally NOT in these prefixes. It was wired in
+# here (commit f92881d) to help a narrow set of solver VCs by collapsing
+# ``(x - y)²`` quadratics, but it makes MOST VCs materially HARDER for z3 -- e.g.
+# a remove_trivial soundness VC that is ``unsat`` in 0s without it becomes
+# ``unknown``@60s with it, and it didn't even help the solver VC it targeted.
+# That regressed the keccak benchmark from ~242 to ~903 check timeouts. The pass
+# itself (``diff_vars`` / src/simplify/diff_vars.py + its rust pass) is kept so
+# it can be re-enabled in a TARGETED, validated way, but never as a blanket
+# prefix. See [[verifier-ec2-z3-multithread-timeouts]].
+TACTIC_QEPREFIX = "nnf:skolem:lift:witness:demod:isqf"
 # Bus-heavy powdr steps still need skolem/lift/witness: soundness VCs keep a
 # ForAll until those passes run (nnf alone does not make them ground).
-TACTIC_BUS_QE = "nnf:skolem:lift:witness:demod:isqf:diff_vars"
+TACTIC_BUS_QE = "nnf:skolem:lift:witness:demod:isqf"
 
 # Tail without rewrite/z3: on large keccak VCs rewrite is a no-op and z3 passes
 # are skipped above the assert threshold but still pay setup cost.
@@ -75,16 +81,16 @@ DEFAULT_TACTIC = TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demo
 STEP_TACTICS: dict[str, str] = {
     "exec_bus": TACTIC_BUS_QE + TACTIC_BUS_TAIL + ":z3-propagate-values:z3-solve-eqs",
     "loop_iteration": TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:normalize:demod",
-    # No z3-propagate-values/z3-solve-eqs: solve-eqs re-derives ``x - y`` and
-    # undoes diff_vars' difference reduction (the reduction is what lets these
-    # otherwise-timing-out solver VCs discharge). ``rewrite`` LAST factors modular
-    # products (e.g. the ``bit^2-bit=0`` to_pc/least-sig-bit encoding) into
-    # ``(or (var - r_i = 0 mod P))`` congruence disjunctions so z3 case-splits.
-    # It must be the final pass: a following ``demod`` mangles those disjunctions
-    # back into a spurious sat. (rewrite now emits modular congruences, not the
-    # old exact-equality + [min,max] range, which was unsound for unbounded diff
-    # vars -- see [[verifier-rulebased-notqf-spurious]].)
-    "solver": TACTIC_BUS_QE + TACTIC_BUS_TAIL + ":rewrite",
+    # z3-propagate-values:z3-solve-eqs are restored now that diff_vars is gone
+    # from the prefix (f92881d had dropped them here only because solve-eqs undid
+    # diff_vars' difference reduction). They run BEFORE ``rewrite``, which must
+    # stay the FINAL pass: it factors modular products (e.g. the ``bit^2-bit=0``
+    # to_pc/least-sig-bit encoding) into ``(or (var - r_i = 0 mod P))`` congruence
+    # disjunctions for z3 to case-split, and a following pass (demod, or solve-eqs)
+    # mangles those disjunctions back into a spurious sat. (rewrite emits modular
+    # congruences, not the old exact-equality + [min,max] range, which was unsound
+    # for unbounded diff vars -- see [[verifier-rulebased-notqf-spurious]].)
+    "solver": TACTIC_BUS_QE + TACTIC_BUS_TAIL + ":z3-propagate-values:z3-solve-eqs:rewrite",
     "substitute_bus_interactio_fields": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
     "low_degree_bus": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
     "memory": TACTIC_BUS_QE + TACTIC_BUS_TAIL,

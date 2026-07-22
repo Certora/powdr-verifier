@@ -47,10 +47,10 @@ def test_group_default_tactic_uses_default_executor():
 def test_group_isqf_stays_in_rust_batch():
     tactics = TACTIC_QEPREFIX.split(":")
     groups = _group_tactics(tactics, default_executor="r")
-    # diff_vars is a native rust pass, so the whole QE prefix stays in one rust
-    # batch (no python-only pass forces a split).
+    # The whole QE prefix is native rust, so it stays in one rust batch (no
+    # python-only pass forces a split).
     assert groups == [
-        ("r", ["nnf", "skolem", "lift", "witness", "demod", "isqf", "diff_vars"]),
+        ("r", ["nnf", "skolem", "lift", "witness", "demod", "isqf"]),
     ]
 
 
