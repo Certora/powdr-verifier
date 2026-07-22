@@ -103,6 +103,28 @@ def test_pretry_inconclusive_falls_back_to_chunking(tmp_path, monkeypatch):
     assert _solve_action(res).result == "unsat"
 
 
+def test_plain_records_unknown_not_bare_timeout(tmp_path, monkeypatch):
+    """A z3 ``unknown`` on the plain strategy must be RECORDED (as
+    ``unknown-timeout``, since check_plain always time-limits z3) with its solve
+    attempt intact -- not discarded into a bare ``timeout`` stub. Regression: the
+    stub made timed-out checks look like z3 never ran, hiding the real cause."""
+    f = tmp_path / "u.smt2"
+    f.write_text(UNSAT_OR)
+    parse_args(["check", str(f), "--timeout", "30"])
+    from pathlib import Path
+
+    monkeypatch.setattr(checker_mod, "_resolve_pretry_z3", lambda: Path("/bin/true"))
+    monkeypatch.setattr(
+        checker_mod, "communicate_with_timeout", lambda *a, **k: ("unknown\n", "", False)
+    )
+    res = check_plain(30, accept_inconclusive=True)
+    assert res is not None, "plain must not discard an unknown into a bare stub"
+    solve = _solve_action(res)
+    assert solve.result == "unknown-timeout"
+    # classifies as a timeout (z3 exhausted its budget), not error/success.
+    assert res.status() == "timeout"
+
+
 def test_pretry_accepts_sat(tmp_path):
     """A ``sat`` result is taken by the pre-try just like ``unsat``."""
     f = tmp_path / "s.smt2"
@@ -272,7 +294,7 @@ def test_exec_bus_inconclusive_reports_timeout_without_chunking(tmp_path, monkey
 
     # z3 is available, but the whole-script solve cannot decide in the budget.
     monkeypatch.setattr(checker_mod, "_resolve_pretry_z3", lambda: Path("/bin/z3"))
-    monkeypatch.setattr(checker_mod, "check_plain", lambda budget_sec=None: None)
+    monkeypatch.setattr(checker_mod, "check_plain", lambda budget_sec=None, **kw: None)
     chunked = {"called": False}
     monkeypatch.setattr(
         checker_mod,

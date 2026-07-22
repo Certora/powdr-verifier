@@ -428,7 +428,7 @@ def _parse_z3_model(stdout: str | None) -> dict[str, Any] | None:
     return model
 
 
-def check_plain(budget_sec: float = PLAIN_PRETRY_SEC) -> Action | None:
+def check_plain(budget_sec: float = PLAIN_PRETRY_SEC, *, accept_inconclusive: bool = False) -> Action | None:
     """Solve the whole script by invoking the z3 binary directly on the ``.smt2``
     file (no pysmt parse, no disjunct chunking).
 
@@ -487,34 +487,56 @@ def check_plain(budget_sec: float = PLAIN_PRETRY_SEC) -> Action | None:
                     proc, budget_sec + 5.0
                 )
                 result = None if timed_out else _parse_z3_result(stdout)
+                # check_plain always runs z3 with a ``-t:budget`` limit, so a bare
+                # ``unknown`` means z3 exhausted that budget (z3's own
+                # :reason-unknown here is "timeout"). Tag it so it classifies as a
+                # timeout rather than degrading to ``error``.
+                if result == "unknown":
+                    result = "unknown-timeout"
                 if result == "sat" and want_model:
                     model = _parse_z3_model(stdout)
                 if model is not None:
                     attempt += {"model": model}
                 attempt += {"result": result or ("timeout" if timed_out else "unknown")}
 
-            # z3 was inconclusive, or produced a sat we can't hand a model for:
-            # let the chunked path take over (it dumps the authoritative model).
-            if result not in ("sat", "unsat") or (result == "sat" and want_model and model is None):
-                logging.warning(
-                    "check %s plain solve inconclusive (%s)",
-                    log_key,
-                    attempt.result,
-                )
-                return None
+            sat_no_model = result == "sat" and want_model and model is None
 
-            _dump_model_if_requested(model)
-            subaction += {"result": result}
-            if model is not None:
-                subaction += {"model": model}
-            if expected is not None:
-                o = classify_expected_vs_result(
-                    name=subaction.name, expected=expected, result=result
-                )
-                if o == "wrong":
-                    logging.error("expected %s but got %s", expected, result)
-                elif o not in ("success", "timeout"):
-                    logging.error("expected %s but got %s", expected, result)
+            if result in ("sat", "unsat") and not sat_no_model:
+                _dump_model_if_requested(model)
+                subaction += {"result": result}
+                if model is not None:
+                    subaction += {"model": model}
+                if expected is not None:
+                    o = classify_expected_vs_result(
+                        name=subaction.name, expected=expected, result=result
+                    )
+                    if o == "wrong":
+                        logging.error("expected %s but got %s", expected, result)
+                    elif o not in ("success", "timeout"):
+                        logging.error("expected %s but got %s", expected, result)
+                return action
+
+            # Inconclusive: z3 timed out or returned ``unknown``. In ``plain``
+            # strategy (``accept_inconclusive``) there is no chunked fallback, so
+            # record the FAITHFUL verdict (``timeout``/``unknown``) on the solve
+            # node -- otherwise the caller replaces this whole Action with a bare
+            # ``timeout`` stub and the fact that z3 ran and returned ``unknown``
+            # is lost from the JSON/HTML reports. The ``sat``-without-model case
+            # still falls through so a model-producing path can run.
+            if accept_inconclusive and not sat_no_model:
+                verdict = attempt.result  # "unknown" or "timeout"
+                logging.warning("check %s plain solve %s", log_key, verdict)
+                subaction += {"result": verdict}
+                if expected is not None:
+                    classify_expected_vs_result(
+                        name=subaction.name, expected=expected, result=verdict
+                    )
+                return action
+
+            logging.warning(
+                "check %s plain solve inconclusive (%s)", log_key, attempt.result
+            )
+            return None
     return action
 
 
@@ -574,7 +596,11 @@ def check():
     # decide). Falls back to the chunked path only if the z3 binary is missing.
     if strategy == CHECK_PLAIN:
         if _resolve_pretry_z3() is not None:
-            pre = check_plain(ARGS().timeout)
+            # accept_inconclusive: the plain strategy has no fallback, so an
+            # ``unknown``/``timeout`` from z3 is recorded faithfully (not turned
+            # into a bare timeout stub). Only a sat-without-model or a missing z3
+            # binary yields None here.
+            pre = check_plain(ARGS().timeout, accept_inconclusive=True)
             return pre if pre is not None else _plain_timeout_action()
         logging.warning("plain check requested but no z3 binary; falling back to chunked")
         strategy = CHECK_CHUNKED
