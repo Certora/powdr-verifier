@@ -1,9 +1,11 @@
 """JSON/APC loading, stdin/stdout path handling, and structured dumps for reports."""
-import logging
+import io
 import json
+import logging
+from contextlib import contextmanager
 from pathlib import Path
 import sys
-from typing import Any, Optional, TextIO, Union
+from typing import Any, BinaryIO, Iterator, Optional, TextIO, Union
 
 from ..paths import dump_input_abspath, dump_input_relpath
 from ..report.action import Action
@@ -11,17 +13,50 @@ from .args import ARGS
 
 logger = logging.getLogger(__name__)
 
+SMT_ENCODING = "utf-8"
 
-def open_file(file: Optional[Path], mode: str = "r") -> TextIO:
+
+def is_smt_path(file: Path | None) -> bool:
+    return file is not None and str(file) != "-" and file.suffix == ".smt2"
+
+
+def open_file(
+    file: Optional[Path], mode: str = "r"
+) -> Union[TextIO, BinaryIO]:
     if file is None or str(file) == "-":
         if mode == "r":
             return sys.stdin
-        elif mode == "w":
-            return sys.stdout
-        else:
-            raise ValueError(f"invalid mode {mode} for -")
-    else:
-        return open(file, mode)
+        if mode == "w":
+            return sys.stdout.buffer
+        raise ValueError(f"invalid mode {mode} for -")
+    if is_smt_path(file):
+        if mode == "r":
+            return io.TextIOWrapper(
+                open(file, "rb"), encoding=SMT_ENCODING, newline="\n"
+            )
+        if mode == "w":
+            return open(file, "wb")
+    return open(file, mode)
+
+
+@contextmanager
+def open_smt_read(file: Path) -> Iterator[TextIO]:
+    with open_file(file, "r") as f:
+        yield f
+
+
+@contextmanager
+def open_smt_write(file: Path) -> Iterator[BinaryIO]:
+    with open_file(file, "w") as f:
+        yield f
+
+
+def load_smt_script(file: Path):
+    from ..smt_backends.pysmt import SmtLibParser
+
+    with open_smt_read(file) as f:
+        logging.info("loading from %s", f.name)
+        return SmtLibParser().get_script(f)
 
 
 def load_json(file: Union[Path, TextIO]) -> Any:
