@@ -28,14 +28,26 @@ jobs:
       uses: actions/cache@v3
       with:
           path: ~/bin/
-          key: bin-${{ steps.get-date.outputs.date }}
-          restore-keys: bin-
+          key: bin-sdk-${{ steps.get-date.outputs.date }}
+          restore-keys: bin-sdk-
 
     - name: install custom binaries
       run: |
         mkdir -p ~/bin/
-        python3 verifier/download_z3.py z3-4.16.0 --bindir ~/bin/
+        # Download the z3 release SDK (z3 binary + libz3.so/.a + headers) so the
+        # rust workspace links against this exact z3 instead of a system-wide one.
+        python3 verifier/download_z3.py z3-4.16.0 --bindir ~/bin/ --sdk ~/bin/z3-sdk
         chmod +x ~/bin/*
+        # pkg-config file so z3-sys links the downloaded z3 (the parser-context
+        # API in smt2/z3_parse.rs needs a recent z3, newer than distro packages).
+        mkdir -p ~/bin/z3-sdk/pkgconfig
+        printf '%s\n' \
+          'Name: z3' \
+          'Description: Z3 theorem prover' \
+          'Version: 4.16.0' \
+          "Libs: -L$HOME/bin/z3-sdk/bin -lz3" \
+          "Cflags: -I$HOME/bin/z3-sdk/include" \
+          > ~/bin/z3-sdk/pkgconfig/z3.pc
 
   lint:
     runs-on: ubuntu-latest
@@ -58,7 +70,7 @@ jobs:
       with:
         path: ~/bin/
         fail-on-cache-miss: true
-        key: bin-${{ needs.binaries.outputs.date }}
+        key: bin-sdk-${{ needs.binaries.outputs.date }}
       
     - name: install python dependencies
       run: |
@@ -67,8 +79,10 @@ jobs:
 
     - uses: actions-rust-lang/setup-rust-toolchain@v1
 
-    - name: install z3 dev libs
-      run: sudo apt-get install -y libz3-dev
+    - name: use the downloaded z3 for linking (no system-wide z3)
+      run: |
+        echo "PKG_CONFIG_PATH=$HOME/bin/z3-sdk/pkgconfig" >> "$GITHUB_ENV"
+        echo "LD_LIBRARY_PATH=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
 
     - name: build verifier rust workspace
       run: cargo build --release --workspace --manifest-path verifier/rust/Cargo.toml
@@ -130,7 +144,7 @@ jobs:
       with:
         path: ~/bin/
         fail-on-cache-miss: true
-        key: bin-${{ needs.binaries.outputs.date }}
+        key: bin-sdk-${{ needs.binaries.outputs.date }}
     
     - name: install python dependencies
       run: |
