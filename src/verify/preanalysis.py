@@ -159,6 +159,47 @@ def _interface_mults_const(
     return True
 
 
+def presolve_interface_eligible(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    kept_pairs: dict[int, int],
+    removed_ids: set[int],
+    n_before: int,
+    n_after: int,
+    *,
+    after_assume_is_valid: bool = False,
+) -> bool:
+    """Decide, from ALIGN data + the syntactic mult-const check ONLY (no membus
+    ``solve``), whether the interface encoding will be used — so the ~11s solve
+    can be skipped when it will be.
+
+    Mirrors the interface branch of :func:`analyze_memory_bus_alignment` /
+    :func:`_alignment_problems`, minus the ``internal_pairs_for`` check: that one
+    reads the solve-derived match sets, but the align-time
+    ``_collect_internal_pairs`` (run inside ``run_membus_analysis``'s align loop,
+    before the solve) already certifies the same internal-pair shape and *raises*
+    on any malformation — so by the time we get here it is redundant.
+
+    Conservative by construction: any doubt returns ``False`` (keep the solve).
+    Plain always keeps the solve; a wrong ``True`` on a plain step would only
+    leave the permutation unpinned (a perf regression), never be unsound."""
+    if ARGS().memory_encoding not in ("interface", "auto"):
+        return False
+    if not kept_pairs:
+        return False
+    if not ARGS().interface_internal_pairs and removed_ids:
+        return False
+    if set(kept_pairs) & removed_ids:
+        return False
+    if set(kept_pairs) | removed_ids != set(range(n_before)):
+        return False
+    if sorted(kept_pairs.values()) != list(range(n_after)):
+        return False
+    if not _interface_mults_const(before, after, after_assume_is_valid):
+        return False
+    return True
+
+
 def _require_interface_alignment(analysis: MembusAnalysis) -> None:
     """Raise unless ``analysis`` is a kept alignment covering all interactions
     (modulo forced internal pairs; see :func:`_alignment_problems`). Used by the

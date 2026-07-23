@@ -947,10 +947,40 @@ def run_membus_analysis(
     after_info_json = fetch_info_json(after_path)
     before_extract = fetch_extract_json(before_path)
     after_extract = fetch_extract_json(after_path)
-    before_solve = fetch_solve_json_all(before_path, present=present)
-    after_solve = fetch_solve_json_all(
-        after_path, present=present, assume_is_valid=after_assume_is_valid
+
+    # The membus `solve` (~11s symbolic AS2) recovers the read<->write matching
+    # that only the PLAIN permutation encoding needs to pin its vars. When the
+    # interface encoding will be used, the alignment (kept_pairs) + align-supplied
+    # roles/internal-pairs suffice, so skip it. The decision is fully determined
+    # here, pre-solve, from align + the syntactic mult-const check (validated: the
+    # emitted interface VC is identical with vs without the solve, up to forall
+    # binder order). Conservative -- plain always keeps the solve.
+    from .preanalysis import presolve_interface_eligible  # lazy: avoid import cycle
+
+    removed_ids = {
+        r["before_id"]
+        for r in before_align_rows
+        if r.get("status") == "removed" and r.get("before_id") is not None
+    }
+    skip_solve = align_ran and presolve_interface_eligible(
+        before,
+        after,
+        kept_pairs,
+        removed_ids,
+        n_before,
+        n_after,
+        after_assume_is_valid=after_assume_is_valid,
     )
+    if skip_solve:
+        _LOG.warning(
+            "membus analysis: interface eligible pre-solve; skipping the membus solve"
+        )
+        before_solve = after_solve = None
+    else:
+        before_solve = fetch_solve_json_all(before_path, present=present)
+        after_solve = fetch_solve_json_all(
+            after_path, present=present, assume_is_valid=after_assume_is_valid
+        )
 
     before_state = _analyze_side(
         before,
