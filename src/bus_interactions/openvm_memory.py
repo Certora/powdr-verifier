@@ -461,8 +461,9 @@ class OpenVMMemoryEncoder(
         # (like TS_BOUND), not a circuit commitment — each recv's data limbs
         # are bytes because every value in memory was range-checked when
         # written. Recvs are statically known here (const mult == p-1), so no
-        # isinput booleans are needed. Granted via the axioms channel: a
-        # premise for BOTH sides, never a proof obligation. The send-side
+        # isinput booleans are needed. Routed through the consequences channel
+        # (like the timestamp bounds above): a premise for the reference (before)
+        # side only, never a proof obligation. The send-side
         # counterpart ("every byte written is a byte") is a per-circuit
         # property, independently recoverable by the deterministic bound
         # algorithm (`infer_unconditional_ranges`) — it must not join the
