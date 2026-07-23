@@ -1156,9 +1156,8 @@ mod tests {
         let (out, _) = apply(&script).unwrap();
         let s = smt2::dump_string(&out);
         // -x < 0  <=>  x > 0, equivalent to 3x < 5x. The buggy sign-flip would
-        // have produced (< x 0) instead. Unary minus serializes as (* (- 1) x)
-        // (see z3_uminus_to_mul).
-        assert!(s.contains("(< (* (- 1) x) 0)"));
+        // have produced (< x 0) instead. Unary minus serializes as (- x).
+        assert!(s.contains("(< (- x) 0)"), "sign must be preserved as (- x): {s}");
         assert!(!s.contains("(< x 0)"));
     }
 }

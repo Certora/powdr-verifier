@@ -31,78 +31,6 @@ pub fn z3_if_to_ite(s: &str) -> String {
     }
 }
 
-/// End (exclusive) of one s-expr token starting at `start`: a balanced
-/// parenthesized form, or an atom run (respecting `|...|` quoting).
-fn end_of_token(bytes: &[u8], start: usize) -> usize {
-    let mut j = start;
-    let mut in_pipe = false;
-    if bytes.get(start) == Some(&b'(') {
-        let mut depth = 0i32;
-        while j < bytes.len() {
-            match bytes[j] {
-                b'|' => in_pipe = !in_pipe,
-                b'(' if !in_pipe => depth += 1,
-                b')' if !in_pipe => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return j + 1;
-                    }
-                }
-                _ => {}
-            }
-            j += 1;
-        }
-    } else {
-        while j < bytes.len() {
-            match bytes[j] {
-                b'|' => in_pipe = !in_pipe,
-                b' ' | b'\t' | b'\n' | b'(' | b')' if !in_pipe => break,
-                _ => {}
-            }
-            j += 1;
-        }
-    }
-    j
-}
-
-/// Rewrite z3's unary minus `(- T)` to `(* (- 1) T)` for non-numeral `T`,
-/// matching the pysmt serialization. z3's nlsat is sensitive to this surface
-/// form: the `(* (- 1) x)` shape lets otherwise timing-out keccak solver VCs
-/// discharge (parity with the python pipeline output). Binary subtraction
-/// `(- a b)` and negative numerals `(- 5)` are left intact.
-pub fn z3_uminus_to_mul(s: &str) -> String {
-    if !s.contains("(- ") {
-        return s.to_string();
-    }
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        // A minus application: '(', '-', ' '.
-        if bytes[i] == b'(' && bytes.get(i + 1) == Some(&b'-') && bytes.get(i + 2) == Some(&b' ') {
-            let arg_start = i + 3;
-            let arg_end = end_of_token(bytes, arg_start);
-            // Sole argument iff the next non-space char closes the form.
-            let mut k = arg_end;
-            while bytes.get(k) == Some(&b' ') {
-                k += 1;
-            }
-            let unary = bytes.get(k) == Some(&b')');
-            let numeral = bytes.get(arg_start).is_some_and(u8::is_ascii_digit);
-            if unary && !numeral {
-                out.push_str("(* (- 1) ");
-                out.push_str(&z3_uminus_to_mul(&s[arg_start..arg_end]));
-                out.push(')');
-                i = k + 1;
-                continue;
-            }
-        }
-        out.push(bytes[i] as char);
-        i += 1;
-    }
-    out
-}
-
 pub fn is_int_numeral(ast: &Dynamic) -> bool {
     ast.kind() == AstKind::Numeral && ast.get_sort().kind() == SortKind::Int
 }
@@ -1215,28 +1143,6 @@ mod tests {
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
-    }
-
-    #[test]
-    fn uminus_to_mul_rewrites_only_unary_nonnumeral() {
-        // Unary minus of a symbol -> (* (- 1) x).
-        assert_eq!(z3_uminus_to_mul("(<= (- x) 0)"), "(<= (* (- 1) x) 0)");
-        // Negative numeral is preserved.
-        assert_eq!(z3_uminus_to_mul("(+ x (- 5))"), "(+ x (- 5))");
-        // Binary subtraction is preserved.
-        assert_eq!(z3_uminus_to_mul("(- a b)"), "(- a b)");
-        // Nested: unary minus of a compound term, and inside it.
-        assert_eq!(
-            z3_uminus_to_mul("(- (+ (- y) z))"),
-            "(* (- 1) (+ (* (- 1) y) z))"
-        );
-        // Quoted symbols with @/! are handled.
-        assert_eq!(
-            z3_uminus_to_mul("(<= (- |a@1!d|) 0)"),
-            "(<= (* (- 1) |a@1!d|) 0)"
-        );
-        // No-op fast path.
-        assert_eq!(z3_uminus_to_mul("(+ a b)"), "(+ a b)");
     }
 
     #[test]
