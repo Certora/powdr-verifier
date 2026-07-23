@@ -402,20 +402,37 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
                 }
             }
         }
-        for (id, sort) in to_declare {
+        // Emit hoisted declarations sorted by name, matching the python lift.
+        // `to_declare` is keyed by interned `SymbolId`; z3's nlsat variable
+        // ordering is sensitive to declaration order, so name-sorting keeps
+        // parity with the python pipeline output (lets these VCs discharge).
+        let mut decls_sorted: Vec<(String, SymbolId, DeclSort)> = to_declare
+            .into_iter()
+            .filter_map(|(id, sort)| symbol_name_for_id(id).map(|n| (n, id, sort)))
+            .collect();
+        decls_sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, id, sort) in decls_sorted {
             if declared.contains(&id) {
                 continue;
             }
-            let Some(name) = symbol_name_for_id(id) else {
-                continue;
-            };
             let raw = format!("(declare-fun {name} () {})", sort_kind_to_smt(sort));
             let cmd = parse_single_command(&raw, ctx.parse())?;
             insert.push(cmd);
             declared.insert(id);
             hoisted_decls += 1;
         }
-        for eq in walker.lifted.values() {
+        // Emit lifted asserts sorted by the lifted symbol's *name*, matching the
+        // python lift. The `lifted` BTreeMap is keyed by interned `SymbolId`
+        // (interning order), which differs from name order; z3's nlsat is
+        // sensitive to assertion order, so name-sorting is what lets these VCs
+        // discharge (parity with the python pipeline output).
+        let mut lifted_sorted: Vec<(String, &Bool)> = walker
+            .lifted
+            .iter()
+            .map(|(id, eq)| (symbol_name_for_id(*id).unwrap_or_default(), eq))
+            .collect();
+        lifted_sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_, eq) in lifted_sorted {
             ctx.push_assert(&mut insert, eq)?;
             hoisted_asserts += 1;
         }
