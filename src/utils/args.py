@@ -153,12 +153,21 @@ def __build_parser(skip_subparsers=False):
 
     sub_check = sub.add_parser("check")
     sub_check.add_argument("input", type=Path)
+    sub_check.add_argument("--strategy", type=str, default=None, choices=["plain", "chunked", "sliced"])
+    sub_check.add_argument("--timeout", type=float, default=60.0, metavar="SEC")
+    sub_check.add_argument(
+        "--optimization-step",
+        type=str,
+        default=None,
+        metavar="PASS",
+        help="powdr pass name; selects a per-pass check strategy (see CHECK_STRATEGIES)",
+    )
     sub_check.add_argument("--dump-model", type=Path, default=None)
     sub_check.add_argument(
-        "--solve-chunked", action=argparse.BooleanOptionalAction, default=True
-    )
-    sub_check.add_argument(
-        "--solve-sliced", action=argparse.BooleanOptionalAction, default=False
+        "--pretry-plain",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="before chunked/sliced, try a cheap whole-script z3 solve (accepts only unsat)",
     )
     sub_check.add_argument(
         "--boundary-regex",
