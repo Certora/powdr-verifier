@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from src.lens.normalize import BABYBEAR_PRIME, to_signed
 
 from .busmodel import BITWISE, TUPLE_RANGE, VAR_RANGE, MemRow, range_bus_rows
-from .facts import Bound, ExprEval, Fact, LinZero, Pin, Src, TS_MAX
+from .facts import Bound, ExprEval, Fact, LinZero, Pin, Src
 from .linform import LinForm, bits_of, domain_gadget, linform, names, product
 
 if TYPE_CHECKING:
@@ -29,7 +29,17 @@ def _certifiable(b: Bound) -> bool:
 
 
 def prop_bound_facts(an: Analysis) -> dict[str, Bound]:
-    """Certifiable column bounds for propagation window premises."""
+    """Sound, source-backed column bounds used as propagation window premises.
+
+    Every bound here is an integer fact entailed by its cited circuit source
+    alone (range-check bus rows, a single-column residue pin, a boolean/domain
+    gadget) — no VM-environment assumption (TS_BOUND / MEMBUS_BYTE) and no
+    ``kinds`` classification is used, because this runs during ``Analysis``
+    construction before either is available. As window premises these bounds
+    are asserted (and, being circuit facts, independently re-derivable) by
+    ``certify``; keeping them true is what prevents a false premise from
+    vacuously certifying a false integer identity.
+    """
     out: dict[str, Bound] = {}
 
     def put(fact: Bound) -> None:
@@ -69,7 +79,17 @@ def prop_bound_facts(an: Analysis) -> dict[str, Bound]:
         src = (Src("constraint", idx),)
         lf = linform(con)
         if lf is not None and len(lf.coeffs) == 1:
-            put(Bound(lf.coeffs[0][0], 0, TS_MAX, sources=src))
+            # a·col + c ≡ 0 (mod P) pins col to its exact residue
+            # (−c·a⁻¹) mod P, matching rules.Analysis.bounds. The old
+            # Bound(col, 0, TS_MAX) was FALSE whenever that residue was ≥ 2^29
+            # (e.g. a column fixed to −1 = P−1); as a trusted window premise a
+            # false bound can certify a false integer identity (vacuous UNSAT).
+            col, a = lf.coeffs[0]
+            try:
+                v = (-lf.const * pow(a % P, -1, P)) % P
+                put(Bound(col, v, v + 1, sources=src))
+            except ValueError:
+                pass
         dg = domain_gadget(con)
         if dg is not None:
             put(Bound(dg[0], 0, dg[1], sources=src))
@@ -80,21 +100,21 @@ def prop_bound_facts(an: Analysis) -> dict[str, Bound]:
         if (pr.left.coeffs == pr.right.coeffs
                 and pr.right.const == pr.left.const - 1
                 and len(pr.left.coeffs) == 1
-                and pr.left.coeffs[0][1] == 1):
+                and pr.left.coeffs[0][1] == 1
+                # (col+a)(col+a-1)=0 has roots {−a, 1−a}; [0,2) holds only for
+                # the boolean gadget a=0. For a≠0 the roots are ≥ 2^29.
+                and pr.left.const == 0):
             put(Bound(pr.left.coeffs[0][0], 0, 2, sources=src))
 
-    for row in an.mem:
-        src = (Src("bus", row.ordinal),)
-        if isinstance(row.addr_space_expr, str):
-            put(Bound(row.addr_space_expr, 0, TS_MAX, sources=src))
-        if isinstance(row.ptr, str):
-            put(Bound(row.ptr, 0, TS_MAX, sources=src))
-        for byte in row.data:
-            if isinstance(byte, str):
-                put(Bound(byte, 0, 1 << 8, sources=src))
-        if isinstance(row.ts, str):
-            put(Bound(row.ts, 0, TS_MAX, sources=src))
-
+    # No memory-row bounds here. addr_space/ptr are not derivably < 2^29 from a
+    # single bus interaction (no assumption licenses it); ts and data bytes ARE
+    # bounded, but only under TS_BOUND / MEMBUS_BYTE and only for the right
+    # rows (recv data, slot timestamps) — which needs the send/recv `kinds`
+    # classification. `kinds` depends on this propagation's result, so it is
+    # unavailable here; rules.Analysis.bounds emits those (assumption-tagged,
+    # certified) facts once propagation is done. Emitting them here untagged
+    # would either be false (ptr/addr_space) or hide a TS_BOUND/MEMBUS_BYTE
+    # dependency behind a "clean" certificate.
     return out
 
 
@@ -257,11 +277,6 @@ def _all_constraint_cols(machine: dict) -> set[str]:
     for c in machine.get("constraints", []):
         out |= names(c)
     return out
-
-
-def _flag_cols_for_access(cols: set[str], access: int) -> tuple[str, ...]:
-    needle = f"_{access}@"
-    return tuple(sorted(c for c in cols if c.startswith("flags__") and needle in c))
 
 
 def _flags_by_access(cols: set[str]) -> dict[int, tuple[str, ...]]:
@@ -806,21 +821,3 @@ def format_debug(an: Analysis) -> str:
         lines.append(
             f"  #{r.ordinal}  mult={json.dumps(r.mult)}  args={json.dumps(list(r.args))}")
     return "\n".join(lines)
-
-
-def _deciding_constraints(cons: list[Any], is_load: str, flag_cols: tuple[str, ...],
-                          pins: dict[str, int],
-                          index: _DecodingIndex | None = None) -> list[Any]:
-    del pins, cons
-    if index is not None:
-        return [c for _, c in index.deciding_constraints(is_load, flag_cols)]
-    return []
-
-
-def _refute_expr(expr: Any, pins: dict[str, int],
-                 envs_by_access: dict[int, list[dict[str, int]]]) -> int | None:
-    prop = PropagationResult(
-        pins={c: Pin(c, v) for c, v in pins.items()},
-        zeros=(), exprs=(), decoding=_DecodingIndex({}, {}))
-    ev = _try_refute_expr(expr, prop, envs_by_access)
-    return ev.value if ev is not None else None

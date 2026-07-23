@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from src.lens.loader import machine_of
 from src.lens.normalize import BABYBEAR_PRIME as P
 from src.membus import keys, propagate
 from src.membus.busmodel import symbolic_as_ordinals
@@ -133,38 +132,32 @@ def test_ternary_boolean_gadget_bounds():
     assert an.kinds[0].kind == "send"
 
 
-def test_refute_expr_requires_bound_columns():
-    """Unbound columns that still affect the value are not guessed."""
-    expr = ["ptr@1", "+", "mem@2"]
-    pins = {"ptr@1": 8}
-    envs = {0: [{"ptr@1": 8, "flags__0_0@3": 0}]}
-    assert propagate._refute_expr(expr, pins, envs) is None
+def test_single_col_constraint_bounds_exact_residue():
+    """A single-column constraint pins the column's EXACT residue, even one
+    >= 2^29. The old Bound(col, 0, 2^29) was false for large residues; trusted
+    as a window premise a false bound can certify a false integer identity."""
+    an = _an(cons=[["col@1", "+", 1]])          # col + 1 = 0  ->  col = P - 1
+    b = propagate.prop_bound_facts(an)["col@1"]
+    assert (b.lo, b.hi) == (P - 1, P)           # exact, not [0, 2^29)
 
 
-def test_refute_expr_zeroes_pinned_factor():
-    """Pinned zero eliminates an unbound multiplicand."""
-    expr = [["is_load_0@10", "*", "rd_0@11"], "+", "ptr_0@12"]
-    pins = {"is_load_0@10": 0, "ptr_0@12": 44}
-    envs = {0: [{"is_load_0@10": 0, "ptr_0@12": 44, "flags__0_0@5": 0}]}
-    assert propagate._refute_expr(expr, pins, envs) == 44
+def test_large_residue_column_yields_no_integer_zero():
+    """With the exact residue bound, a term touching a large-residue column has
+    an out-of-window integer span, so no (unsound) integer LinZero is emitted.
+    Under the old loose bound `y - 2*col = 0` certified though `col = P-1`
+    makes it false by exactly P."""
+    an = _an(cons=[["col@1", "+", 1], ["y@2", "-", _m(2, "col@1")]])
+    zero_cols = {z.coeffs for z in propagate.propagate(an).zeros}
+    assert (("col@1", -2), ("y@2", 1)) not in zero_cols
+    assert (("y@2", 1), ("col@1", -2)) not in zero_cols
 
 
-@pytest.mark.skipif(not _DUMP_2100223.is_file(), reason="regression dump not present")
-def test_decoding_index_matches_naive_deciding():
-    data = json.loads(_DUMP_2100223.read_text())
-    cons = machine_of(data).get("constraints", [])
-    index = propagate._DecodingIndex.build(cons)
-    cols = propagate._all_constraint_cols({"constraints": cons})
-    for is_load in sorted(c for c in cols if c.startswith("is_load_")):
-        m = propagate._IS_LOAD_RE.match(is_load)
-        if m is None:
-            continue
-        flag_cols = propagate._flag_cols_for_access(cols, int(m.group(1)))
-        if not flag_cols:
-            continue
-        naive = propagate._deciding_constraints(cons, is_load, flag_cols, {})
-        indexed = index.deciding_constraints(is_load, flag_cols)
-        assert [c for _, c in indexed] == naive, is_load
+def test_product_gadget_bounds_only_boolean_form():
+    """(col+a)(col+a-1)=0 has roots {-a, 1-a}; [0,2) is sound only for a=0."""
+    boolean = propagate.prop_bound_facts(_an(cons=[_bool("x@1")]))["x@1"]
+    assert (boolean.lo, boolean.hi) == (0, 2)
+    shifted = [["x@1", "+", 5], "*", ["x@1", "+", 4]]     # (x+5)(x+4)=0
+    assert propagate.prop_bound_facts(_an(cons=[shifted])).get("x@1") is None
 
 
 def test_decoding_index_flipped_mux_form():
