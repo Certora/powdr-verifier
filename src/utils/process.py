@@ -94,9 +94,6 @@ def _drain_pipes(
 def _process_tree(root_pid: int) -> list[psutil.Process]:
     try:
         root = psutil.Process(root_pid)
-    except psutil.NoSuchProcess:
-        return []
-    try:
         return root.children(recursive=True) + [root]
     except psutil.NoSuchProcess:
         return []
