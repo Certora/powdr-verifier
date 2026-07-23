@@ -37,6 +37,10 @@ jobs:
         # Download the z3 release SDK (z3 binary + libz3.so/.a + headers) so the
         # rust workspace links against this exact z3 instead of a system-wide one.
         python3 verifier/download_z3.py z3-4.16.0 --bindir ~/bin/ --sdk ~/bin/z3-sdk
+        # The default --solver is z3-nightly (~/bin/z3-nightly); alias it to the
+        # pinned release so CI solves with the exact z3 it downloaded instead of
+        # a stale cached nightly.
+        cp ~/bin/z3-4.16.0 ~/bin/z3-nightly
         chmod +x ~/bin/*
         # pkg-config file so z3-sys links the downloaded z3 (the parser-context
         # API in smt2/z3_parse.rs needs a recent z3, newer than distro packages).
