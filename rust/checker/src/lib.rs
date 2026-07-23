@@ -50,11 +50,10 @@ pub fn run_check(opts: &CheckOptions) -> Result<Action, String> {
     }
 
     let result = if opts.solve_chunked {
-        if let Some((goal_idx, disjuncts)) = find_largest_or_goal(&loaded.assertions) {
+        if let Some((context, disjuncts)) = find_largest_or_goal(&loaded.assertions) {
             let attempt = check_script_disjuncts(
                 &loaded.prefix,
-                &loaded.assertions,
-                goal_idx,
+                &context,
                 &disjuncts,
                 &log_key,
             );
@@ -137,9 +136,27 @@ mod tests {
 (assert (or (= x 3) (= x 4) (= x 5)))
 (check-sat)\n";
         let loaded = load_script(smt).unwrap();
-        let (idx, parts) = find_largest_or_goal(&loaded.assertions).unwrap();
-        assert_eq!(idx, 1);
-        assert_eq!(parts.len(), 3);
+        let (context, disjuncts) = find_largest_or_goal(&loaded.assertions).unwrap();
+        assert_eq!(disjuncts.len(), 3);
+        // the smaller 2-disjunct Or stays in the context
+        assert_eq!(context.len(), 1);
+    }
+
+    #[test]
+    fn find_largest_or_nested_in_and() {
+        // The goal Or is nested inside a top-level (assert (and ...)) -- the
+        // usual VC shape. It must still be found and split, with the sibling
+        // conjunct kept in the context.
+        let smt = "\
+(set-logic ALL)
+(declare-fun x () Int)
+(declare-fun y () Int)
+(assert (and (= x 0) (or (= y 1) (= y 2) (= y 3))))
+(check-sat)\n";
+        let loaded = load_script(smt).unwrap();
+        let (context, disjuncts) = find_largest_or_goal(&loaded.assertions).unwrap();
+        assert_eq!(disjuncts.len(), 3);
+        assert_eq!(context.len(), 1); // (= x 0) survives
     }
 
     fn test_smt_path(name: &str) -> PathBuf {

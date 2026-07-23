@@ -3,9 +3,11 @@ import json
 import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from ..utils.args import ARGS
+from ..utils.process import communicate_with_timeout
 
 
 def _verifier_root() -> Path:
@@ -40,14 +42,75 @@ def _build_checker_cmd(
         cmd.extend(["--dump-model", str(dump_model)])
     if timeout is not None:
         cmd.extend(["--timeout", str(timeout)])
-    chunked = (
-        solve_chunked
-        if solve_chunked is not None
-        else getattr(ARGS(), "solve_chunked", True)
-    )
+    chunked = solve_chunked if solve_chunked is not None else True
     cmd.append("--solve-chunked" if chunked else "--no-solve-chunked")
     cmd.append(input_path)
     return cmd
+
+
+def _emit_stderr(stderr: str | None) -> None:
+    if stderr:
+        sys.stderr.write(stderr)
+        if not stderr.endswith("\n"):
+            sys.stderr.write("\n")
+        sys.stderr.flush()
+
+
+def _effective_check_timeout(check_timeout: float | None) -> float | None:
+    if check_timeout is not None:
+        return check_timeout
+    return getattr(ARGS(), "timeout", None)
+
+
+def _timeout_action() -> dict:
+    return {"name": "check", "result": "timeout"}
+
+
+def _run_checker_proc(
+    cmd: list[str],
+    *,
+    stdin: str | None = None,
+    check_timeout: float | None = None,
+) -> dict:
+    timeout = _effective_check_timeout(check_timeout)
+    if timeout is not None:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE if stdin is not None else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if stdin is not None and proc.stdin is not None:
+            proc.stdin.write(stdin)
+            proc.stdin.close()
+        stdout, stderr, timed_out = communicate_with_timeout(proc, timeout)
+        _emit_stderr(stderr)
+        if timed_out:
+            logging.warning("checker subprocess timed out after %.1fs", timeout)
+            return _timeout_action()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"checker exited {proc.returncode}: {(stderr or '').strip()}"
+            )
+        data = json.loads(stdout or "")
+    else:
+        proc = subprocess.run(
+            cmd,
+            input=stdin,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        _emit_stderr(proc.stderr)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"checker exited {proc.returncode}: {proc.stderr.strip()}"
+            )
+        data = json.loads(proc.stdout)
+    if isinstance(data, dict) and "__Action" in data:
+        return data["__Action"]
+    return data
 
 
 def run_checker_subprocess(
@@ -60,99 +123,15 @@ def run_checker_subprocess(
     bin_path = resolve_checker_bin()
     if bin_path is None:
         raise FileNotFoundError("checker binary not found")
+    timeout = _effective_check_timeout(check_timeout)
     cmd = _build_checker_cmd(
         bin_path,
         str(input_path),
         dump_model=dump_model or getattr(ARGS(), "dump_model", None),
         solve_chunked=solve_chunked,
-        timeout=check_timeout,
+        timeout=timeout,
     )
-    proc = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"checker exited {proc.returncode}: {proc.stderr.strip()}"
-        )
-    data = json.loads(proc.stdout)
-    if isinstance(data, dict) and "__Action" in data:
-        return data["__Action"]
-    return data
-
-
-def run_checker_subprocess_text(
-    smt_text: str,
-    *,
-    dump_model: Path | None = None,
-    solve_chunked: bool | None = None,
-    check_timeout: float | None = None,
-) -> dict:
-    bin_path = resolve_checker_bin()
-    if bin_path is None:
-        raise FileNotFoundError("checker binary not found")
-    cmd = _build_checker_cmd(
-        bin_path,
-        "-",
-        dump_model=dump_model,
-        solve_chunked=solve_chunked,
-        timeout=check_timeout,
-    )
-    proc = subprocess.run(
-        cmd,
-        input=smt_text,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"checker exited {proc.returncode}: {proc.stderr.strip()}"
-        )
-    data = json.loads(proc.stdout)
-    if isinstance(data, dict) and "__Action" in data:
-        return data["__Action"]
-    return data
-
-
-def merge_solve_action(python_action, rust_data: dict) -> str:
-    """Copy solve attempts/result from a Rust checker action into ``python_action``."""
-    solve = next(
-        (a for a in rust_data.get("actions", []) if a.get("name") == "solve"),
-        rust_data,
-    )
-    for child in solve.get("actions", []):
-        python_action += action_from_dict(child)
-    res = solve.get("result") or rust_data.get("result") or "unknown"
-    if res == "sat":
-        model = solve.get("model")
-        if model is not None:
-            python_action += {"model": model}
-        dump_model = getattr(ARGS(), "dump_model", None)
-        if dump_model:
-            logging.info("dumping model to %s", dump_model)
-            with open(dump_model, "w") as f:
-                json.dump(model or {}, f, indent=4)
-    if python_action.expected is not None:
-        from ..report.action import classify_expected_vs_result
-
-        o = classify_expected_vs_result(
-            name=python_action.name, expected=python_action.expected, result=res
-        )
-        if o == "wrong":
-            logging.error("expected %s but got %s", python_action.expected, res)
-        elif o == "timeout":
-            logging.warning(
-                "expected %s; solver timed out (result %s)",
-                python_action.expected,
-                res,
-            )
-        elif o != "success":
-            logging.error("expected %s but got %s", python_action.expected, res)
-    python_action += {"result": res}
-    return res
+    return _run_checker_proc(cmd, check_timeout=timeout)
 
 
 def action_from_dict(data: dict):
