@@ -8,15 +8,33 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
 from src.lens import loader, resolve
 
+_SUBS_RE = re.compile(r"^apc_candidate_(\d+)_")
+
+
+def _load_dump(path: Path) -> dict:
+    """Load a dump and attach a sibling ``*_substitutions.json`` as
+    ``data["substitutions"]`` (membus timestamp normalization consumes it)."""
+    data = loader.load(path)
+    if isinstance(data, dict) and "substitutions" not in data:
+        m = _SUBS_RE.match(path.name)
+        if m is not None:
+            subs = path.parent / f"apc_candidate_{m.group(1)}_substitutions.json"
+            if subs.is_file():
+                data = {**data, "substitutions": loader.load(subs)}
+    return data
+
 from . import align, certify, extract, meminfo, memstats, render, solve
 from .busfmt import memory_bus_id
-from .busmodel import memory_rows, symbolic_as_ordinals
+from .busmodel import symbolic_as_ordinals
+from .propagate import format_debug
 from .render import JSON, PLAIN, Target, default_mode
+from .rules import Analysis
 
 
 def _add_common(parser: argparse.ArgumentParser, suppress: bool) -> None:
@@ -62,6 +80,9 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="restrict to this address space")
     sp_info.add_argument("--limit", type=int, default=0,
                          help="max interactions listed (default 0 = all)")
+    sp_info.add_argument("--debug-propagate", action="store_true",
+                         help="print propagation pins/zeros and simplified mem rows "
+                              "(stderr) before the info table")
 
     sp_solve = sub.add_parser("solve", parents=[common],
                               help="solve the memory bus: inputs / outputs / data flow")
@@ -137,7 +158,7 @@ def _load_circuit(group, block, step, file_override, root):
     """Return ``(data, labels, Target)`` for one circuit."""
     if file_override:
         p = Path(file_override)
-        return loader.load(p), {}, Target("(file)", "(file)", p.name, str(p))
+        return _load_dump(p), {}, Target("(file)", "(file)", p.name, str(p))
     if not (group and block and step):
         raise resolve.ResolveError("specify <group> <block> <step> or --file-a PATH")
     directory = resolve.group_dir(group, root)
@@ -145,7 +166,7 @@ def _load_circuit(group, block, step, file_override, root):
     entry = resolve.resolve_step(entries, step)
     labels = loader.load_bus_map(resolve.base_dump_path(directory, block))
     target = Target(group, resolve.normalize_block(block), entry.label, str(entry.path))
-    return loader.load(entry.path), labels, target
+    return _load_dump(entry.path), labels, target
 
 
 def _run_stats(args, mode):
@@ -159,11 +180,14 @@ def _run_info(args, mode):
     data, labels, t = _load_circuit(args.group, args.block, args.step,
                                     getattr(args, "file_a", None), args.root)
     mem_id = memory_bus_id(labels)
-    rows = meminfo.compute(data, mem_id, args.addr_space)
+    an = Analysis(data, mem_id)
+    if args.debug_propagate:
+        print(format_debug(an), file=sys.stderr)
+    rows = meminfo.compute(data, mem_id, args.addr_space, an=an)
     total = len(rows)
     if args.limit and total > args.limit:
         rows = rows[:args.limit]
-    symbolic_as = len(symbolic_as_ordinals(memory_rows(data, mem_id)))
+    symbolic_as = len(symbolic_as_ordinals(an.mem))
     print(render.render_info(rows, t, mode, total, symbolic_as))
 
 
@@ -179,7 +203,7 @@ def _run_extract(args):
                                       getattr(args, "file_a", None), args.root)
     data_b = None
     if args.file_b:
-        data_b = loader.load(Path(args.file_b))
+        data_b = _load_dump(Path(args.file_b))
     elif args.step_b:
         data_b, _, _ = _load_circuit(args.group, args.block, args.step_b, None, args.root)
     mem_id = memory_bus_id(labels)

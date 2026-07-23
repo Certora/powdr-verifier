@@ -30,6 +30,13 @@ def _canon(v: int) -> int:
     return to_signed(v % BABYBEAR_PRIME)
 
 
+def bits_of(arg: Any) -> int | None:
+    """The bit-width arg of a VariableRangeChecker row, if constant."""
+    if isinstance(arg, str) and arg.isdigit():
+        arg = int(arg)
+    return arg if isinstance(arg, int) and 0 <= arg < 31 else None
+
+
 @dataclass(frozen=True)
 class LinForm:
     """``Σ coeffs[col]·col + const`` with canonical signed integer entries."""
@@ -59,6 +66,17 @@ class LinForm:
     @property
     def is_const(self) -> bool:
         return not self.coeffs
+
+    def subst(self, pins: dict[str, int]) -> "LinForm":
+        """Fold pinned columns into ``const``; drop them from ``coeffs``."""
+        const = self.const
+        rem: dict[str, int] = {}
+        for col, c in self.coeffs:
+            if col in pins:
+                const += c * pins[col]
+            else:
+                rem[col] = c
+        return LinForm.make(rem, const)
 
     def __str__(self) -> str:
         parts = [f"{v}*{k}" for k, v in self.coeffs]
@@ -126,6 +144,43 @@ def product(e: Any) -> Product | None:
         if left is not None and right is not None:
             return Product(left, right)
     return None
+
+
+def _flatten_mul(e: Any) -> list[Any]:
+    """Left-flattened factors of a nested ``*`` expression."""
+    if isinstance(e, list) and len(e) == 3 and e[1] == "*":
+        return _flatten_mul(e[0]) + _flatten_mul(e[2])
+    return [e]
+
+
+def domain_gadget(e: Any) -> tuple[str, int] | None:
+    """``col * (col-1) * … * (col-(n-1)) = 0`` → ``(col, n)``; else None."""
+    factors = _flatten_mul(e)
+    col: str | None = None
+    deltas: list[int] = []
+    for f in factors:
+        if isinstance(f, str):
+            if col is None:
+                col = f
+            elif f != col:
+                return None
+            deltas.append(0)
+        elif isinstance(f, list) and len(f) == 3 and f[1] == "-":
+            if not isinstance(f[0], str) or not isinstance(f[2], int):
+                return None
+            if col is None:
+                col = f[0]
+            elif f[0] != col:
+                return None
+            deltas.append(f[2])
+        else:
+            return None
+    if col is None or not deltas:
+        return None
+    deltas.sort()
+    if deltas != list(range(len(deltas))):
+        return None
+    return col, len(deltas)
 
 
 _OPS = ("+", "-", "*")
