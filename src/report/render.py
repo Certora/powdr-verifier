@@ -76,7 +76,7 @@ def job_banner(report_dir: Path) -> str:
     duration = _format_duration(float(running_time)) if running_time is not None else "—"
     command_line = job.get("command_line")
     cmd_html = (
-        f'<code class="text-break user-select-all flex-grow-1 min-width-0" style="font-size:0.82em">'
+        f'<code class="text-break user-select-all min-width-0" style="font-size:0.82em">'
         f"{html.escape(command_line)}</code>"
         if command_line
         else '<span class="text-body-secondary">—</span>'
@@ -86,6 +86,24 @@ def job_banner(report_dir: Path) -> str:
         f'<span class="text-body-secondary"> @ {html.escape(started)}</span>'
     )
     copy_badge = copy_command_badge(command_line)
+
+    def _commit(label: str, value) -> str:
+        if not value:
+            return ""
+        return (
+            f'<span class="text-body-secondary">{label}</span> '
+            f'<code>{html.escape(str(value))}</code>'
+        )
+
+    commits = "  ".join(
+        c for c in (_commit("powdr", job.get("powdr_commit")),
+                    _commit("verifier", job.get("verifier_commit"))) if c
+    )
+    commits_html = (
+        f'<span class="text-nowrap ms-auto ps-3" style="font-size:0.8em">{commits}</span>'
+        if commits
+        else ""
+    )
     return f"""
 <section class="container-fluid py-2 pb-0">
   <div class="card shadow-sm">
@@ -94,9 +112,10 @@ def job_banner(report_dir: Path) -> str:
         <span class="fw-semibold"><code>{command}</code> <code>{test}</code></span>
         <span class="text-end text-nowrap">{timing}</span>
       </div>
-      <div class="d-flex align-items-center gap-2 min-width-0">
+      <div class="d-flex align-items-baseline gap-2 min-width-0">
         {cmd_html}
         {copy_badge}
+        {commits_html}
       </div>
     </div>
   </div>
@@ -117,6 +136,8 @@ class TreeNode:
     block: Optional[int] = None
     passname: Optional[str] = None
     command_line: Optional[str] = None
+    enter_time: Optional[int] = None       # CLOCK_MONOTONIC ns, cross-process comparable
+    exit_time: Optional[int] = None
 
 class TreeTableWidget:
     _STATUS = {
@@ -284,6 +305,8 @@ def normalize_substep_tree(node: TreeNode) -> TreeNode:
         block=node.block,
         passname=node.passname,
         command_line=node.command_line,
+        enter_time=node.enter_time,
+        exit_time=node.exit_time,
     )
 
 
@@ -298,6 +321,8 @@ def to_tree_node(data: Action) -> TreeNode:
         status=data.status(),
         children=[to_tree_node(c) for c in data.actions],
         command_line=data.properties.get("command_line"),
+        enter_time=data.enter_time,
+        exit_time=data.exit_time,
     )
 
 def collect(basedir: Path):
