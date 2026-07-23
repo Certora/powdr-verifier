@@ -179,6 +179,20 @@ def __job_report_path(test: str) -> Path:
     return REPORTS_DIR / test / "job.json"
 
 
+def __git_commit(repo: Path) -> Optional[str]:
+    """Short git commit hash of ``repo``'s HEAD, or ``None`` if unavailable."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None if out.returncode == 0 else None
+
+
 def __dump_job_report(test: str, command: str, *, started_at: str, started: float) -> None:
     path = __job_report_path(test)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -186,6 +200,8 @@ def __dump_job_report(test: str, command: str, *, started_at: str, started: floa
         "command": command,
         "test": test,
         "command_line": dump_cmd_parts(sys.argv),
+        "powdr_commit": __git_commit(POWDR_DIR),
+        "verifier_commit": __git_commit(VERIFIER_DIR),
         "started_at": started_at,
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "running_time": time.perf_counter() - started,

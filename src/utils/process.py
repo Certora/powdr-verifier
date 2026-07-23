@@ -36,14 +36,21 @@ _MEMOUT_MARKERS = (
     "Cannot allocate memory",
     "std::bad_alloc",
     "out of memory",
+    "out_of_memory_error",
 )
+
+
+def is_memout_text(text: str | None) -> bool:
+    if not text:
+        return False
+    err = text.lower()
+    return any(marker.lower() in err for marker in _MEMOUT_MARKERS)
 
 
 def is_subprocess_memout(returncode: int | None, stderr: str | None) -> bool:
     if returncode is None or returncode == 0:
         return False
-    err = (stderr or "").lower()
-    if any(marker.lower() in err for marker in _MEMOUT_MARKERS):
+    if is_memout_text(stderr):
         return True
     return returncode == -9 and _limit_bytes is not None and _limit_bytes > 0
 
