@@ -254,9 +254,9 @@ impl SmtCommand {
             SmtCommand::Assert { bool: b, .. } => {
                 if crate::ast_util::has_quantifier(b) {
                     let pretty = crate::pretty::pretty_print_bool_in_script(b);
-                    format!("(assert {pretty})")
+                    format!("(assert {})", crate::ast_util::z3_uminus_to_mul(&pretty))
                 } else {
-                    let raw = z3_if_to_ite(&b.to_string());
+                    let raw = crate::ast_util::z3_uminus_to_mul(&z3_if_to_ite(&b.to_string()));
                     format!("(assert {})", crate::sexpr::strip_smtlib_annotations(&raw))
                 }
             }
