@@ -118,7 +118,6 @@ class OpenVMMemoryEncoder(
         self.interactions = {}
         self.name_or_id = NameOrIdGenerator()
         self.analysis = None
-        self._granted: list[FNode] = []  # set by encode_all, read by get_axioms
         # syntactic upper bounds from the constraint set, stashed by
         # `infer_unconditional_ranges` for the interface-mode limb split
         self._syntactic_bounds: dict[FNode, int] = {}
@@ -437,17 +436,17 @@ class OpenVMMemoryEncoder(
         # principle, but routing them as axioms measurably regressed 2100224
         # (3x assert blowup after propagate-values, unknowns on the
         # pointer-distinctness family), and as obligations they are cheap.
-        self._granted = []
         if ts_bounds:
-            self._granted.append(
+            self.consequences.append(
                 with_comment(And(*ts_bounds), f"{self.NAME} timestamp bounds")
             )
         # Interface mode: "memory holds bytes" is a VM environment assumption
         # (like TS_BOUND), not a circuit commitment — each recv's data limbs
         # are bytes because every value in memory was range-checked when
         # written. Recvs are statically known here (const mult == p-1), so no
-        # isinput booleans are needed. Granted via the axioms channel: a
-        # premise for BOTH sides, never a proof obligation. The send-side
+        # isinput booleans are needed. Routed through the consequences channel
+        # (like the timestamp bounds above): a premise for the reference (before)
+        # side only, never a proof obligation. The send-side
         # counterpart ("every byte written is a byte") is a per-circuit
         # property, independently recoverable by the deterministic bound
         # algorithm (`infer_unconditional_ranges`) — it must not join the
@@ -467,7 +466,7 @@ class OpenVMMemoryEncoder(
                 if _active_mult(id) == pval - 1
             ]
             if recv_bytes:
-                self._granted.append(
+                self.consequences.append(
                     with_comment(
                         And(*recv_bytes), f"{self.NAME} recv byte assumption"
                     )
@@ -513,10 +512,6 @@ class OpenVMMemoryEncoder(
                 )
         if ts_recon:
             yield with_comment(And(*ts_recon), f"{self.NAME} timestamp reconstruction")
-
-    def get_axioms(self) -> Iterable[FNode]:
-        """Granted membus assumptions (populated by `encode_all`)."""
-        yield from self._granted
 
     def _bus_interactions(self) -> list[BusInteraction]:
         return [
