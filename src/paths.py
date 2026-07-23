@@ -74,7 +74,15 @@ def dump_cmd_parts(parts: list) -> str:
 def dump_input_relpath(path: Path | str) -> Path:
     p = Path(path)
     if p.is_absolute():
-        p = p.resolve().relative_to(WORKSPACE_DIR.resolve())
+        resolved = p.resolve()
+        try:
+            p = resolved.relative_to(WORKSPACE_DIR.resolve())
+        except ValueError:
+            # Outside the workspace (e.g. a scratch/tmp output dir): keep the
+            # path absolute rather than failing serialization. dump_input_abspath
+            # round-trips absolute paths unchanged, and display_path/arg_for_dump
+            # already fall back the same way.
+            return resolved
     if "powdr-dumps" in p.parts:
         idx = p.parts.index("powdr-dumps")
         return Path("verifier", *p.parts[idx:])
