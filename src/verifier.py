@@ -48,15 +48,26 @@ def encoding(before, after, qvars, io_relation, additional_asserts=[]):
     later attaches per-qvar witnesses (rules / derived /
     same-name) as ``Not(q = expr)`` disjuncts which ``simplify_lift_forall``
     hoists out as top-level assertions.
+
+    Only ``before.consequences`` (the reference side) are asserted, as premises
+    at the top level; ``after.consequences`` are deliberately NOT added to the
+    negated obligation. A consequence is a fact *derived from* the constraints
+    (e.g. "a memory data value is a field element in [0,P)"); as a goal-side
+    obligation such a fact can be violated by a value-preserving expression
+    rewrite (e.g. `-x` -> `(P-1)*x`, whose raw integer exceeds P), producing a
+    spurious counterexample. Kept before-only, a consequence is a sound premise
+    and never a spurious obligation.
     """
     if ARGS().filter_constraints:
         after = _filter_mirrored_constraints(before, after)
     res = And(
         *before.constraints,
+        *before.consequences,
         ForAll(
             qvars,
             Or(
                 Not(And(*after.constraints)),
+                # Not(And(*after.consequences)), # NOT HERE!
                 Not(io_relation),
             ),
         ),
