@@ -59,7 +59,21 @@ def diff():
         case _:
             logging.error(f"unknown format: {ARGS().format}")
 
-    subprocess.run(["meld", before_formatted, after_formatted])
-
-    before_formatted.unlink()
-    after_formatted.unlink()
+    # Launch meld detached and do not wait for it: this command runs under a
+    # timeout that kills the whole process tree, and blocking here would take
+    # meld down with it. nohup lets meld outlive this process; a shell wrapper
+    # removes the temporary formatted files once the viewer is closed.
+    subprocess.Popen(
+        [
+            "nohup",
+            "sh",
+            "-c",
+            'meld "$1" "$2"; rm -f "$1" "$2"',
+            "meld-diff",
+            str(before_formatted),
+            str(after_formatted),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
