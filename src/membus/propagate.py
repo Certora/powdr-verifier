@@ -11,9 +11,9 @@ from typing import TYPE_CHECKING, Any
 
 from src.lens.normalize import BABYBEAR_PRIME, to_signed
 
-from .busmodel import BITWISE, TUPLE_RANGE, VAR_RANGE, MemRow, range_bus_rows
+from .busmodel import MemRow
 from .facts import Bound, ExprEval, Fact, LinZero, Pin, Src
-from .linform import LinForm, bits_of, domain_gadget, linform, names, product
+from .linform import LinForm, linform, names
 
 if TYPE_CHECKING:
     from .rules import Analysis
@@ -26,96 +26,6 @@ _ACCESS_RE = re.compile(r"_(\d+)@\d+$")
 
 def _certifiable(b: Bound) -> bool:
     return bool(b.sources) or bool(b.assumptions)
-
-
-def prop_bound_facts(an: Analysis) -> dict[str, Bound]:
-    """Sound, source-backed column bounds used as propagation window premises.
-
-    Every bound here is an integer fact entailed by its cited circuit source
-    alone (range-check bus rows, a single-column residue pin, a boolean/domain
-    gadget) — no VM-environment assumption (TS_BOUND / MEMBUS_BYTE) and no
-    ``kinds`` classification is used, because this runs during ``Analysis``
-    construction before either is available. As window premises these bounds
-    are asserted (and, being circuit facts, independently re-derivable) by
-    ``certify``; keeping them true is what prevents a false premise from
-    vacuously certifying a false integer identity.
-    """
-    out: dict[str, Bound] = {}
-
-    def put(fact: Bound) -> None:
-        cur = out.get(fact.col)
-        if cur is None:
-            out[fact.col] = fact
-        elif fact.hi is not None and (cur.hi is None or fact.hi < cur.hi):
-            out[fact.col] = fact
-
-    for idx, bid, args in range_bus_rows(an.machine):
-        src = (Src("bus", idx),)
-        if bid == VAR_RANGE and len(args) >= 2:
-            bits = bits_of(args[1])
-            if bits is None:
-                continue
-            val = args[0]
-            if isinstance(val, str):
-                put(Bound(val, 0, 1 << bits, sources=src))
-            elif (isinstance(val, list) and len(val) == 3 and val[1] == "*"
-                  and isinstance(val[0], int) and isinstance(val[2], str)):
-                try:
-                    s = pow(val[0] % P, -1, P)
-                except ValueError:
-                    continue
-                if s * (1 << bits) < P:
-                    put(Bound(val[2], 0, s * (1 << bits), sources=src))
-        elif bid == BITWISE:
-            for a in args[:2]:
-                if isinstance(a, str):
-                    put(Bound(a, 0, 1 << 8, sources=src))
-        elif bid == TUPLE_RANGE:
-            for a in args:
-                if isinstance(a, str):
-                    put(Bound(a, 0, None, sources=src))
-
-    for idx, con in enumerate(an.machine.get("constraints", [])):
-        src = (Src("constraint", idx),)
-        lf = linform(con)
-        if lf is not None and len(lf.coeffs) == 1:
-            # a·col + c ≡ 0 (mod P) pins col to its exact residue
-            # (−c·a⁻¹) mod P, matching rules.Analysis.bounds. The old
-            # Bound(col, 0, TS_MAX) was FALSE whenever that residue was ≥ 2^29
-            # (e.g. a column fixed to −1 = P−1); as a trusted window premise a
-            # false bound can certify a false integer identity (vacuous UNSAT).
-            col, a = lf.coeffs[0]
-            try:
-                v = (-lf.const * pow(a % P, -1, P)) % P
-                put(Bound(col, v, v + 1, sources=src))
-            except ValueError:
-                pass
-        dg = domain_gadget(con)
-        if dg is not None:
-            put(Bound(dg[0], 0, dg[1], sources=src))
-            continue
-        pr = product(con)
-        if pr is None:
-            continue
-        if (pr.left.coeffs == pr.right.coeffs
-                and pr.right.const == pr.left.const - 1
-                and len(pr.left.coeffs) == 1
-                and pr.left.coeffs[0][1] == 1
-                # (col+a)(col+a-1)=0 has roots {−a, 1−a}; [0,2) holds only for
-                # the boolean gadget a=0. For a≠0 the roots are ≥ 2^29.
-                and pr.left.const == 0):
-            put(Bound(pr.left.coeffs[0][0], 0, 2, sources=src))
-
-    # No memory-row bounds here. addr_space/ptr are not derivably < 2^29 from a
-    # single bus interaction (no assumption licenses it); ts and data bytes ARE
-    # bounded, but only under TS_BOUND / MEMBUS_BYTE and only for the right
-    # rows (recv data, slot timestamps) — which needs the send/recv `kinds`
-    # classification. `kinds` depends on this propagation's result, so it is
-    # unavailable here; rules.Analysis.bounds emits those (assumption-tagged,
-    # certified) facts once propagation is done. Emitting them here untagged
-    # would either be false (ptr/addr_space) or hide a TS_BOUND/MEMBUS_BYTE
-    # dependency behind a "clean" certificate.
-    return out
 
 
 def _window_premises(lf: LinForm, bounds: dict[str, Bound],
@@ -446,7 +356,10 @@ def surviving_envs(an: Analysis, prop: PropagationResult,
 
 def propagate(an: Analysis) -> PropagationResult:
     """Fixpoint column pins + residual linear zeros (after substitution)."""
-    bounds = prop_bound_facts(an)
+    # Kinds-independent bounds from the single oracle (rules.Analysis); these
+    # are a subset of `an.bounds`, so every window premise below is a fact that
+    # certify.all_facts independently proves.
+    bounds = an._static_bounds
     cons = an.machine.get("constraints", [])
     decoding = _DecodingIndex.build(cons)
     raw = [(idx, lf) for idx, c in enumerate(cons) if (lf := linform(c)) is not None]

@@ -137,7 +137,7 @@ def test_single_col_constraint_bounds_exact_residue():
     >= 2^29. The old Bound(col, 0, 2^29) was false for large residues; trusted
     as a window premise a false bound can certify a false integer identity."""
     an = _an(cons=[["col@1", "+", 1]])          # col + 1 = 0  ->  col = P - 1
-    b = propagate.prop_bound_facts(an)["col@1"]
+    b = an._static_bounds["col@1"]
     assert (b.lo, b.hi) == (P - 1, P)           # exact, not [0, 2^29)
 
 
@@ -154,10 +154,10 @@ def test_large_residue_column_yields_no_integer_zero():
 
 def test_product_gadget_bounds_only_boolean_form():
     """(col+a)(col+a-1)=0 has roots {-a, 1-a}; [0,2) is sound only for a=0."""
-    boolean = propagate.prop_bound_facts(_an(cons=[_bool("x@1")]))["x@1"]
+    boolean = _an(cons=[_bool("x@1")])._static_bounds["x@1"]
     assert (boolean.lo, boolean.hi) == (0, 2)
     shifted = [["x@1", "+", 5], "*", ["x@1", "+", 4]]     # (x+5)(x+4)=0
-    assert propagate.prop_bound_facts(_an(cons=[shifted])).get("x@1") is None
+    assert _an(cons=[shifted])._static_bounds.get("x@1") is None
 
 
 def test_decoding_index_flipped_mux_form():
