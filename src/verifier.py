@@ -137,10 +137,18 @@ def verify():
         # (it assumes is_valid free -> plain), so remember the pre-resolution value and
         # restore it before that call. Remove with the is_valid=1 interface workaround.
         orig_memory_encoding = ARGS().memory_encoding
-        with action.action("membus"):
+        with action.action("membus") as membus_action:
             memory_bus_alignment = analyze_memory_bus_alignment(
                 before, after, after_assume_is_valid=introduces_is_valid
             )
+            # Record the encoding actually used so it is visible in the JSON
+            # report: ``auto`` resolves in place to ``plain``/``interface`` inside
+            # the call above, so ``ARGS().memory_encoding`` now holds the concrete
+            # choice, while ``orig_memory_encoding`` preserves what was requested.
+            membus_action += {
+                "memory_encoding_requested": orig_memory_encoding,
+                "memory_encoding": ARGS().memory_encoding,
+            }
 
         if ARGS().inject is not None:
             old_before = copy.deepcopy(before)
@@ -274,7 +282,7 @@ def verify():
                     write_smtlib_script(smtlib, dump)
                     action += ("outputs", outfile)
 
-                with action.action("membus-inactive"):
+                with action.action("membus-inactive") as membus_inactive_action:
                     # [is_valid=1 interface] re-resolve the encoding for the is_valid==0
                     # analysis (is_valid free -> plain); the main analysis may have stuck
                     # ARGS().memory_encoding at "interface".
@@ -282,6 +290,12 @@ def verify():
                     memory_bus_alignment_inactive = analyze_memory_bus_alignment(
                         before, after, after_assume_is_valid=False
                     )
+                    # The is_valid==0 analysis can resolve differently from the
+                    # active one above, so record its own encoding.
+                    membus_inactive_action += {
+                        "memory_encoding_requested": orig_memory_encoding,
+                        "memory_encoding": ARGS().memory_encoding,
+                    }
 
                 with SmtConverter(
                     AFTER_PREFIX,
