@@ -74,7 +74,7 @@ from .busmodel import (
     range_bus_rows,
 )
 from .facts import TS_MAX, AffineDef, Assumption, Bound, EffKind, Fact, Gap, RecvUpper, Src
-from .linform import LinForm, bits_of, linform, names, product
+from .linform import LinForm, bits_of, domain_gadget, linform, names, product
 from . import propagate
 
 P = BABYBEAR_PRIME
@@ -290,9 +290,20 @@ class Analysis:
 
     # -- R0: bounds ---------------------------------------------------------
 
-    @functools.cached_property
-    def bounds(self) -> dict[str, Bound]:
-        """Column → tightest known Bound fact."""
+    def _compute_bounds(self, *, include_kinds: bool) -> dict[str, Bound]:
+        """Column → tightest known Bound fact — the single bound oracle.
+
+        Seeds split into kinds-INDEPENDENT facts (range-check bus rows, a
+        single-column residue pin, boolean/domain gadgets) and kinds-DEPENDENT
+        ones (recv-data bytes under MEMBUS_BYTE, positional timestamps under
+        TS_BOUND) that need the send/recv classification. ``propagate`` runs
+        during ``Analysis`` construction, before ``kinds`` exists, so it uses
+        ``_static_bounds`` (``include_kinds=False``); ``bounds``
+        (``include_kinds=True``) layers the classified facts on top. Both go
+        through this one computation, so the bounds ``propagate`` trusts as
+        window premises are exactly a subset of the ``bounds`` that
+        ``certify.all_facts`` proves — the two sets can never diverge.
+        """
         out: dict[str, Bound] = {}
 
         def put(fact: Bound) -> None:
@@ -330,31 +341,47 @@ class Analysis:
                     if isinstance(a, str):
                         put(Bound(a, 0, None, sources=src))
 
-        for row in self.mem:                     # membus-byte: recv data only
-            k = self.kinds.get(row.ordinal)
-            if k is None or k.kind != "recv":
-                continue
-            for a in row.data:
-                if isinstance(a, str):
-                    put(Bound(a, 0, 1 << 8, sources=(self.mem_src(row),),
-                              premises=(k,) if k.assumptions else (),
-                              assumptions=frozenset({Assumption.MEMBUS_BYTE})))
-        for fact in self.ts_domain[2].values():  # positional timestamp bounds
-            put(fact)
+        if include_kinds:
+            for row in self.mem:                 # membus-byte: recv data only
+                k = self.kinds.get(row.ordinal)
+                if k is None or k.kind != "recv":
+                    continue
+                for a in row.data:
+                    if isinstance(a, str):
+                        put(Bound(a, 0, 1 << 8, sources=(self.mem_src(row),),
+                                  premises=(k,) if k.assumptions else (),
+                                  assumptions=frozenset({Assumption.MEMBUS_BYTE})))
+            for fact in self.ts_domain[2].values():  # positional timestamp bounds
+                put(fact)
 
-        # A single-column linear constraint pins the column's residue outright:
-        # a·col + c ≡ 0 (mod p) ⟹ col = (−c·a⁻¹) mod p. No window argument
-        # needed — the claim is exactly the canonical residue.
         for idx, con in enumerate(self.machine.get("constraints", [])):
+            src = (Src("constraint", idx),)
+            # A single-column linear constraint pins the column's residue
+            # outright: a·col + c ≡ 0 (mod p) ⟹ col = (−c·a⁻¹) mod p — the claim
+            # is exactly the canonical residue, no window argument needed.
             lf = linform(con)
-            if lf is None or len(lf.coeffs) != 1:
+            if lf is not None and len(lf.coeffs) == 1:
+                col, a = lf.coeffs[0]
+                try:
+                    v = (-lf.const * pow(a % P, -1, P)) % P
+                    put(Bound(col, v, v + 1, sources=src))
+                except ValueError:
+                    pass
                 continue
-            col, a = lf.coeffs[0]
-            try:
-                v = (-lf.const * pow(a % P, -1, P)) % P
-            except ValueError:
+            # Boolean / domain gadgets bound a column directly (no window).
+            dg = domain_gadget(con)
+            if dg is not None:
+                put(Bound(dg[0], 0, dg[1], sources=src))
                 continue
-            put(Bound(col, v, v + 1, sources=(Src("constraint", idx),)))
+            pr = product(con)
+            if pr is not None and (
+                    pr.left.coeffs == pr.right.coeffs
+                    and pr.right.const == pr.left.const - 1
+                    and len(pr.left.coeffs) == 1
+                    and pr.left.coeffs[0][1] == 1
+                    # (col+a)(col+a-1)=0 has roots {−a, 1−a}: [0,2) only for a=0.
+                    and pr.left.const == 0):
+                put(Bound(pr.left.coeffs[0][0], 0, 2, sources=src))
 
         # Closure: propagate bounds across two-column ±1 constraints
         # (``pos − neg + const = 0``, i.e. ``pos = neg + d`` with
@@ -383,6 +410,18 @@ class Analysis:
                                              premises=(b,))
                         changed = True
         return out
+
+    @functools.cached_property
+    def _static_bounds(self) -> dict[str, Bound]:
+        """Kinds-independent bounds — available during ``Analysis``
+        construction, so ``propagate`` can use them as window premises before
+        ``kinds`` (which depends on propagation) exists."""
+        return self._compute_bounds(include_kinds=False)
+
+    @functools.cached_property
+    def bounds(self) -> dict[str, Bound]:
+        """Column → tightest known Bound fact (all seeds, incl. kinds-gated)."""
+        return self._compute_bounds(include_kinds=True)
 
     def _window(self, terms: list[tuple[str, int]], const: int,
                 ) -> tuple[int, int, tuple[Fact, ...]] | None:
