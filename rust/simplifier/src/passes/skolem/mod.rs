@@ -10,17 +10,19 @@ mod witness;
 
 use std::collections::{HashMap, HashSet};
 
-use smt2::ast_util::{is_forall, or_body_parts, rebuild_quantifier_dyn, symbol_id_from_name, SymbolId};
+use smt2::ast_util::{
+    is_forall, or_body_parts, rebuild_quantifier_dyn, symbol_id_from_name, SymbolId,
+};
 use smt2::{map_asserts, map_bool_children_opt, Script};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 
-use crate::expr_util::AssertBuildCtx;
 use self::ast_build::field_mod;
 use self::map::SkolemMap;
 use self::types::SortKind;
 use self::utils::{
     collect_declared_symbols, declare_fun_block, parse_forall, prepare_skolem_inputs,
 };
+use crate::expr_util::AssertBuildCtx;
 
 const SKOLEM_SETINFO_PREFIX: &str = ":skolem-";
 
@@ -116,16 +118,7 @@ fn walk_assert(
     qvar_sets: &mut Vec<HashSet<SymbolId>>,
 ) -> Bool {
     walk_assert_opt(
-        script,
-        term,
-        declared,
-        sorts,
-        pins,
-        candidates,
-        decl_block,
-        field,
-        applied,
-        qvar_sets,
+        script, term, declared, sorts, pins, candidates, decl_block, field, applied, qvar_sets,
     )
     .unwrap_or_else(|| term.clone())
 }
@@ -176,15 +169,7 @@ fn walk_assert_dyn_opt(
     if term.kind() == AstKind::Quantifier {
         if is_forall(term) {
             return walk_forall_opt(
-                script,
-                term,
-                declared,
-                sorts,
-                pins,
-                candidates,
-                decl_block,
-                field,
-                applied,
+                script, term, declared, sorts, pins, candidates, decl_block, field, applied,
                 qvar_sets,
             )
             .map(|b| Dynamic::from_ast(&b));
@@ -192,16 +177,7 @@ fn walk_assert_dyn_opt(
         let bounds = smt2::quantifier_bounds(term);
         let body = smt2::quantifier_body_bool(term)?;
         let new_body = walk_assert_opt(
-            script,
-            &body,
-            declared,
-            sorts,
-            pins,
-            candidates,
-            decl_block,
-            field,
-            applied,
-            qvar_sets,
+            script, &body, declared, sorts, pins, candidates, decl_block, field, applied, qvar_sets,
         )?;
         return Some(Dynamic::from_ast(&rebuild_quantifier_dyn(
             false, &bounds, &new_body,
@@ -210,15 +186,7 @@ fn walk_assert_dyn_opt(
     if let Some(b) = term.as_bool() {
         return map_bool_children_opt(&b, &mut |child| {
             walk_assert_opt(
-                script,
-                child,
-                declared,
-                sorts,
-                pins,
-                candidates,
-                decl_block,
-                field,
-                applied,
+                script, child, declared, sorts, pins, candidates, decl_block, field, applied,
                 qvar_sets,
             )
         })
@@ -229,7 +197,7 @@ fn walk_assert_dyn_opt(
 
 #[allow(clippy::too_many_arguments)]
 fn walk_forall_opt(
-    _script: &Script,
+    script: &Script,
     term: &Dynamic,
     declared: &HashMap<String, Vec<String>>,
     sorts: &HashMap<String, SortKind>,
@@ -243,7 +211,8 @@ fn walk_forall_opt(
     let (qvars, bounds, body) = parse_forall(term)?;
     qvar_sets.push(qvars.iter().map(|(n, _)| symbol_id_from_name(n)).collect());
 
-    let body = crate::passes::lift::name_debruijn_bool(&body, term).unwrap_or_else(|_| body.clone());
+    let body =
+        crate::passes::lift::name_debruijn_bool(&body, term).unwrap_or_else(|_| body.clone());
 
     let mut skolem = SkolemMap::new(&qvars);
     names::contribute(&mut skolem, declared, sorts);
@@ -256,8 +225,17 @@ fn walk_forall_opt(
         &body,
         sorts,
         decl_block,
-        &qvars.iter().map(|(n, _)| symbol_id_from_name(n)).collect::<Vec<_>>(),
+        &qvars
+            .iter()
+            .map(|(n, _)| symbol_id_from_name(n))
+            .collect::<Vec<_>>(),
     );
+    // OpenVM IsZero (diff_inv_marker) witnesses: run last so it only pins
+    // markers that no earlier contributor (same-name / derived / witness /
+    // isolate) could handle.
+    if let Some(p) = field {
+        rules::contribute(&mut skolem, script, &body, p);
+    }
 
     for src in skolem.sources.values() {
         *applied.entry(src.clone()).or_insert(0) += 1;
@@ -299,12 +277,7 @@ mod tests {
         )
         .unwrap();
         let (out, stats) = apply(&script).unwrap();
-        assert!(
-            stats["pins_by_source"]["memory_bus"]
-                .as_u64()
-                .unwrap_or(0)
-                >= 2
-        );
+        assert!(stats["pins_by_source"]["memory_bus"].as_u64().unwrap_or(0) >= 2);
         let s = smt2::dump_string(&out);
         assert!(s.contains("not (= before-memory_isinput_0 after-memory_isinput_0)"));
         assert!(s.contains("not (= before-memory_isoutput_0 after-memory_isoutput_0)"));
@@ -344,84 +317,6 @@ mod tests {
         let s = smt2::dump_string(&out);
         assert!(s.contains("(not (= before-x@0 (mod after-x@0"), "{s}");
         assert!(stats["pins_by_source"]["names"].as_u64().unwrap_or(0) >= 1);
-    }
-
-    #[test]
-    fn forall_body_or_body_parts_after_nnf() {
-        use smt2::ast_util::{or_body_parts, or_parts};
-        use smt2::iter_nodes_dyn;
-        use super::utils::parse_forall;
-        std::env::set_var("SIMPLIFIER_FIELD_MOD", "2013265921");
-        let raw = std::fs::read_to_string(
-            "/home/gereon/certora/powdr/verifier/data/guest-keccak-selection/verify-apc_candidate_2105892_035_inlining-apc_candidate_2105892_036_remove_disconnected.soundness.smt2",
-        )
-        .unwrap();
-        let script = Script::parse(&raw).unwrap();
-        let (nnf, _) = crate::passes::nnf::apply(&script).unwrap();
-        let top = nnf.commands.iter().find_map(|c| c.assert_bool()).unwrap();
-        let mut body = None;
-        for node in iter_nodes_dyn(&Dynamic::from_ast(top)) {
-            if let Some((qvars, _, b)) = parse_forall(&node) {
-                if qvars.iter().any(|(n, _)| n.contains("rs1_aux_cols__base__timestamp_lt_aux__lower_decomp__0_1@24")) {
-                    body = Some(b);
-                    break;
-                }
-            }
-        }
-        let body = body.expect("inner forall");
-        let ast = Dynamic::from_ast(&body);
-        let head = if ast.kind() == AstKind::App {
-            smt2::ast_util::decl_name(&ast.decl())
-        } else {
-            format!("{:?}", ast.kind())
-        };
-        assert!(
-            or_body_parts(&body).is_some(),
-            "head={head} or_parts={:?}",
-            or_parts(&body).map(|v| v.len())
-        );
-    }
-
-    #[test]
-    fn keccak_2104736_witness_pins_diff_inv_markers() {
-        use smt2::dump_string;
-        std::env::set_var("SIMPLIFIER_FIELD_MOD", "2013265921");
-        let raw = std::fs::read_to_string(
-            "/home/gereon/certora/powdr/verifier/data/guest-keccak-selection/verify-apc_candidate_2104736_008_trivial_simp-apc_candidate_2104736_009_rule_based.soundness.smt2",
-        )
-        .unwrap();
-        let script = Script::parse(&raw).unwrap();
-        let (nnf, _) = crate::passes::nnf::apply(&script).unwrap();
-        let field = 2013265921i128;
-        let cands = witness::collect_candidates(&nnf, field);
-        assert!(!cands.is_empty(), "no witness candidates");
-        let (sk, stats) = apply(&nnf).unwrap();
-        let witness = stats["pins_by_source"].get("witness");
-        let s = dump_string(&sk);
-        assert!(
-            s.contains("(not (= before-diff_inv_marker__0_4@168"),
-            "missing witness pin disjuncts; witness={witness:?} candidates={}",
-            cands.len()
-        );
-    }
-
-    #[test]
-    fn keccak_2106348_isolate_pins_reads_aux() {
-        use smt2::dump_string;
-        std::env::set_var("SIMPLIFIER_FIELD_MOD", "2013265921");
-        let raw = std::fs::read_to_string(
-            "/home/gereon/certora/powdr/verifier/data/guest-keccak-selection/verify-apc_candidate_2106348_035_inlining-apc_candidate_2106348_036_remove_disconnected.soundness.smt2",
-        )
-        .unwrap();
-        let script = Script::parse(&raw).unwrap();
-        let (nnf, _) = crate::passes::nnf::apply(&script).unwrap();
-        let (sk, stats) = apply(&nnf).unwrap();
-        let isolate = stats["pins_by_source"].get("isolate");
-        let s = dump_string(&sk);
-        assert!(
-            s.contains("before-reads_aux__0__base__timestamp_lt_aux__lower_decomp__0_1@25 (mod 0"),
-            "missing reads_aux__0 isolate pin; isolate={isolate:?}"
-        );
     }
 
     #[test]
