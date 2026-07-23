@@ -341,6 +341,7 @@ def clear_encode_caches() -> None:
             memo.clear()
 
 
+
 def field_lt(a: FNode, b: FNode) -> FNode:
     return LT(wrap_mod(a), wrap_mod(b))
     return LT(wrap_mod(Minus(b, a)), Int(2**29))
