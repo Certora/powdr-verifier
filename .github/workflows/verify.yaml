@@ -155,6 +155,18 @@ jobs:
         pip install -r verifier/requirements.txt
         pysmt-install --z3 --confirm-agreement
 
+    - name: use the downloaded z3 for linking (no system-wide z3)
+      run: |
+        echo "PKG_CONFIG_PATH=$HOME/bin/z3-sdk/pkgconfig" >> "$GITHUB_ENV"
+        echo "LD_LIBRARY_PATH=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
+
+    - name: build verifier rust workspace
+      # The tracer/evaluator/verifier resolve the rust simplifier at
+      # rust/target/release/simplifier; without this build they fall back to the
+      # slow python passes. LD_LIBRARY_PATH (above) is also needed at run time so
+      # the binary finds the SDK's libz3.so.
+      run: cargo build --release --workspace --manifest-path verifier/rust/Cargo.toml
+
     - name: cargo clean
       run: cd powdr && cargo clean
 
