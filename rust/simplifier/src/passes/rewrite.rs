@@ -168,19 +168,23 @@ fn and_terms(mut parts: Vec<Bool>) -> Bool {
     Bool::and(&parts.iter().collect::<Vec<_>>())
 }
 
-fn roots_with_range(var: &Int, values: &BTreeSet<i128>, _p: i128) -> Bool {
+fn roots_with_range(var: &Int, values: &BTreeSet<i128>, p: i128) -> Bool {
+    // `poly ≡ 0 (mod P)` with roots {rᵢ} ⟺ `(mod var P) ∈ {rᵢ}`. Wrap `var` in
+    // `mod P` so the exact root equalities and the `[min,max]` range constrain
+    // the field residue -- always in `[0,P)` -- rather than `var` itself, which
+    // need not lie in `[0,P)` (diff vars are `a - b`, unbounded). On the raw
+    // var the exact-equality + range dropped the mod-periodic solutions and, under
+    // a negation, admitted spurious models (a spurious `sat` on 2099672 solver
+    // soundness). On the residue it is an equivalence -- sound under any polarity
+    // -- while still carrying the bound (range on the reduced value).
+    let vr = var.modulo(&int_from_i128(p));
     let min_v = *values.iter().next().unwrap();
     let max_v = *values.iter().next_back().unwrap();
-    let disj = or_terms(
-        values
-            .iter()
-            .map(|v| var.eq(int_from_i128(*v)))
-            .collect(),
-    );
+    let disj = or_terms(values.iter().map(|v| vr.eq(&int_from_i128(*v))).collect());
     and_terms(vec![
         disj,
-        int_from_i128(min_v).le(var),
-        var.le(&int_from_i128(max_v)),
+        int_from_i128(min_v).le(&vr),
+        vr.le(&int_from_i128(max_v)),
     ])
 }
 
@@ -561,8 +565,11 @@ mod tests {
                 "(= (mod (* (+ x 1) (+ x 2)) {p}) 0)"
             ));
             let s = out.to_string();
+            // Roots on the field residue `(mod x P)`: disjunction + range, all
+            // over the reduced value (sound for vars not in [0,P)).
             assert!(s.contains("or"), "{s}");
-            assert!(s.contains("and"), "{s}");
+            assert!(s.contains("mod"), "roots must be on the residue (mod x P): {s}");
+            assert!(s.contains("<="), "should still carry the range bound: {s}");
         });
     }
 
@@ -584,8 +591,10 @@ mod tests {
                 "(= (mod (+ (+ (* x x) (* 3 x)) 2) {p}) 0)"
             ));
             let s = out.to_string();
+            // x^2+3x+2 = (x+1)(x+2): roots on the residue `(mod x P)`.
             assert!(s.contains("or"), "{s}");
-            assert!(s.contains("and"), "{s}");
+            assert!(s.contains("mod"), "roots must be on the residue (mod x P): {s}");
+            assert!(s.contains("<="), "should still carry the range bound: {s}");
         });
     }
 
