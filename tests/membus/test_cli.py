@@ -40,15 +40,18 @@ def _mem(ptr, mult, ts):
 
 
 def _align_pair(tmp_path):
-    fs0, fs1 = "from_state__timestamp_0@1", "from_state__timestamp_1@2"
+    # sends share one base clock (fs0), a later send at fs0+3 — the same
+    # from_state_0-relative frame real dumps carry after inlining, so before
+    # and after match by timestamp.
+    fs0 = "from_state__timestamp_0@1"
+    fs1 = [fs0, "+", 3]
     pva, pvb = "aux__base__prev_timestamp_0@7", "aux__base__prev_timestamp_1@8"
     before = {
         "bus_interactions": [
             _mem(8, 1, fs0), _mem(8, -1, pva), _mem(8, 1, fs1), _mem(8, -1, pvb)],
         "constraints": [
             [[fs0, "+", [-1, "*", pva]], "+", -1],
-            [[fs1, "+", [-1, "*", pvb]], "+", -1],
-            [[fs1, "+", [-1, "*", fs0]], "+", -3]],
+            [[fs1, "+", [-1, "*", pvb]], "+", -1]],
     }
     after = {"bus_interactions": [_mem(8, -1, pva), _mem(8, 1, fs1)], "constraints": []}
     b = tmp_path / "before.json"; b.write_text(json.dumps(before))

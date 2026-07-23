@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import functools
 import math
+from dataclasses import replace
 from typing import Any
 
 from src.lens.loader import machine_of
@@ -73,20 +74,14 @@ from .busmodel import (
     range_bus_rows,
 )
 from .facts import TS_MAX, AffineDef, Assumption, Bound, EffKind, Fact, Gap, RecvUpper, Src
-from .linform import LinForm, linform, product
+from .linform import LinForm, bits_of, linform, names, product
+from . import propagate
 
 P = BABYBEAR_PRIME
 
 # Residue-enumeration cap for the range-check R2 form: 2^bits SMT-free loop
 # iterations per candidate row. Corpus widths are ≤ 12 bits.
 _MAX_ENUM_BITS = 16
-
-
-def _bits_of(arg: Any) -> int | None:
-    """The bit-width arg of a VariableRangeChecker row, if constant."""
-    if isinstance(arg, str) and arg.isdigit():
-        arg = int(arg)
-    return arg if isinstance(arg, int) and 0 <= arg < 31 else None
 
 
 class Analysis:
@@ -100,6 +95,22 @@ class Analysis:
         self.assume_is_valid = assume_is_valid
         self.mem = memory_rows(data, mem_id)
         self._mem_bus_ordinal = bus_ordinal_of_mem(data, mem_id)
+        self._propagation = propagate.propagate(self)
+        envs = propagate.surviving_envs(self, self._propagation)
+        substitutions = data.get("substitutions") if isinstance(data, dict) else None
+        send_cols: set[str] = set()
+        for row in self.mem:
+            k = self._kind(row)
+            if k is not None and k.kind == "send":
+                col = self._slot_col(row.ts)
+                if col is not None:
+                    send_cols.add(col)
+        self._ts_aliases = propagate.send_ts_aliases(
+            send_cols, self._two_col_gaps, substitutions)
+        self._kinds_cache = {row.ordinal: self._kind(row) for row in self.mem}
+        self.mem, exprs = propagate.simplify_mem_rows(
+            self.mem, self._propagation, envs, self._ts_aliases)
+        self._propagation = replace(self._propagation, exprs=exprs)
 
     def mem_src(self, row: MemRow) -> Src:
         return Src("bus", self._mem_bus_ordinal[row.ordinal])
@@ -141,10 +152,7 @@ class Analysis:
     def kinds(self) -> dict[int, EffKind | None]:
         """Membus ordinal → EffKind fact, or None when the multiplicity does
         not resolve (genuinely symbolic — pre-`solver` flag muxes)."""
-        out: dict[int, EffKind | None] = {}
-        for row in self.mem:
-            out[row.ordinal] = self._kind(row)
-        return out
+        return self._kinds_cache
 
     def _kind(self, row: MemRow) -> EffKind | None:
         lf = linform(row.mult)
@@ -160,6 +168,11 @@ class Analysis:
             kind = "send" if lf.coeffs[0][1] == 1 else "recv"   # g := 1
             return EffKind(row.ordinal, kind, sources=src,
                            assumptions=frozenset({Assumption.ACTIVE_SELECTOR}))
+        v, prem = propagate.eval_mult_basis(lf, self._propagation)
+        if v is not None:
+            kind = {1: "send", P - 1: "recv", 0: "disabled"}.get(v)
+            if kind is not None:
+                return EffKind(row.ordinal, kind, sources=src, premises=prem)
         return None
 
     # -- Timestamp domain (positional) ----------------------------------------
@@ -292,7 +305,7 @@ class Analysis:
         for idx, bid, args in range_bus_rows(self.machine):
             src = (Src("bus", idx),)
             if bid == VAR_RANGE and len(args) >= 2:
-                bits = _bits_of(args[1])
+                bits = bits_of(args[1])
                 if bits is None:
                     continue
                 lf = linform(args[0])            # canonical: shape-independent
@@ -430,10 +443,45 @@ class Analysis:
         rest = [(c, v) for c, v in lf.items() if c not in clocks and c not in witnesses]
         return fs, pv, rest
 
+    def _ungate_lessthan(self, con: Any) -> Any:
+        """Fold pins / timestamp aliases into a constraint and peel selector
+        factors off a gated LessThan.
+
+        A LessThan may appear as ``sel · (fs − pv − …) = 0`` where ``sel`` is a
+        pinned column (``is_valid``) or a linear selector propagation proves
+        equals 1 (``Σ opcode_flags``, whose ``Σ − 1`` is a known zero). It may
+        also reference a per-access ``from_state`` clock that timestamp
+        normalization folded onto the shared base. Fold both, then drop any
+        top-level product factor that evaluates to 1; a factor of 0 makes the
+        constraint vacuous (no bound), signalled by ``None``.
+        """
+        prop = self._propagation
+        expr = propagate._fold_pins(con, prop, self._ts_aliases)
+        while isinstance(expr, list) and len(expr) == 3 and expr[1] == "*":
+            va = propagate.eval_expr(prop, expr[0])
+            vb = propagate.eval_expr(prop, expr[2])
+            if va == 0 or vb == 0:
+                return None
+            if va == 1:
+                expr = expr[2]
+            elif vb == 1:
+                expr = expr[0]
+            else:
+                break
+        return expr
+
     def _recv_upper_constraints(self) -> list[RecvUpper]:
+        # A RecvUpper needs exactly one recv-witness column; skip the (majority
+        # of) constraints touching none before the costly fold / ungate.
+        witnesses = self.ts_domain[1]
         out = []
         for idx, con in enumerate(self.machine.get("constraints", [])):
-            lf = linform(con)
+            if witnesses.isdisjoint(names(con)):
+                continue
+            body = self._ungate_lessthan(con)
+            if body is None:
+                continue
+            lf = linform(body)
             if lf is None:
                 continue
             fs, pv, rest = self._split_ts(lf)
@@ -457,7 +505,7 @@ class Analysis:
         for idx, bid, args in range_bus_rows(self.machine):
             if bid != VAR_RANGE or len(args) < 2:
                 continue
-            bits = _bits_of(args[1])
+            bits = bits_of(args[1])
             lf = linform(args[0])
             if bits is None or bits > _MAX_ENUM_BITS or lf is None:
                 continue

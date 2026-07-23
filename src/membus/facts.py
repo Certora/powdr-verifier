@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import Iterator
+from typing import Any, Iterator
 
 
 class Assumption(enum.Enum):
@@ -168,3 +168,42 @@ class EffKind(Fact):
 
     def __str__(self) -> str:
         return f"mem#{self.ordinal} is {self.kind}"
+
+
+@dataclass(frozen=True)
+class Pin(Fact):
+    """``col`` holds integer ``value`` — a single-column propagation pin."""
+
+    col: str
+    value: int
+    # flag columns for is_load refutation certificates (empty for constraint pins)
+    refute_flags: tuple[str, ...] = field(kw_only=True, default=())
+
+    def __str__(self) -> str:
+        return f"{self.col} = {self.value}"
+
+
+@dataclass(frozen=True)
+class LinZero(Fact):
+    """``Σ coeff·col + const = 0`` as integers — a propagated linear identity."""
+
+    coeffs: tuple[tuple[str, int], ...]
+    const: int
+
+    def __str__(self) -> str:
+        parts = [f"{v}*{k}" for k, v in self.coeffs]
+        if self.const or not parts:
+            parts.append(str(self.const))
+        return " + ".join(parts) + " = 0"
+
+
+@dataclass(frozen=True)
+class ExprEval(Fact):
+    """A dump expression evaluates to ``value`` under every surviving flag env."""
+
+    expr: Any
+    value: int
+    access: int
+
+    def __str__(self) -> str:
+        return f"expr@access{self.access} = {self.value}"
