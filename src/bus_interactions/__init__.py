@@ -50,6 +50,14 @@ class InteractionEncoder:
         for encoder in self.encoders:
             yield from encoder.get_axioms()
 
+    def get_consequences(self) -> Iterable[FNode]:
+        """Return derived statements (not circuit constraints) from sub-encoders.
+
+        Must be consumed *after* ``encode()``, which is what appends to the
+        per-encoder ``consequences`` list."""
+        for encoder in self.encoders:
+            yield from encoder.get_consequences()
+
     def get_globals(self) -> frozenset[FNode]:
         """Returns all global symbols that should not be part of any quantifier"""
         return frozenset.union(*[encoder.get_globals() for encoder in self.encoders])
