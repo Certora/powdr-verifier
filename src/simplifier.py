@@ -351,7 +351,11 @@ def _run_rust_tactics(
     dump_steps_output: Path | None = None,
     dump_step_offset: int = 0,
     parse_output: bool = True,
-) -> script.SmtLibScript | None:
+) -> tuple[script.SmtLibScript | None, bool]:
+    """Run ``raw_tactics`` as a rust batch. Returns ``(script, fell_back)`` where
+    ``fell_back`` is True if the rust binary was unavailable/failed and the passes
+    ran in the python fallback instead -- in which case ``rust_output_path`` was
+    NOT written (the caller must dump the returned script itself)."""
     pipeline = ":".join(raw_tactics)
     try:
         smt_script, steps = run_rust_pipeline(
@@ -388,12 +392,12 @@ def _run_rust_tactics(
             dump_steps=getattr(ARGS(), "dump_steps", False),
             rust_fallback_batch=pipeline,
         )
-        return smt_script
+        return smt_script, True
 
     _attach_rust_step_actions(
         parent, raw_tactics, steps, batch_end_ns=time.perf_counter_ns()
     )
-    return smt_script
+    return smt_script, False
 
 
 def _apply_tactic_pass(
@@ -567,10 +571,9 @@ def simplify_smt_script(
                     elif output is not None:
                         rust_out = output
                         parse_output = False
-                        wrote_final_output = True
 
                 try:
-                    smt_script = _run_rust_tactics(
+                    smt_script, fell_back = _run_rust_tactics(
                         parent,
                         smt_script,
                         raw_list,
@@ -586,6 +589,12 @@ def simplify_smt_script(
                 finally:
                     if temp_out is not None and temp_out.is_file():
                         temp_out.unlink()
+
+                # The rust batch writes ``output`` itself only on success; on the
+                # python fallback it returns the script in memory without writing,
+                # so the caller must still dump it (wrote_final_output stays False).
+                if rust_out is output and output is not None and not fell_back:
+                    wrote_final_output = True
 
                 if smt_script is not None:
                     _ensure_declarations_for_asserts(smt_script)
