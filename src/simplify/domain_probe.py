@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 _MAX_VALUES = 3
 _MAX_PAIRS = 20
+_MAX_CLUSTER_ASSERTS = 100
+_MAX_CLUSTER_FLAG_VARS = 16
 _SOLVER_OPTS = {"rlimit": 1000000}
 
 def _cluster_assertions(
@@ -228,6 +230,14 @@ def simplify_domain_probe(
                 )
 
             rel = _cluster_assertions(assertions, cluster)
+            if len(cluster) > _MAX_CLUSTER_FLAG_VARS or len(rel) > _MAX_CLUSTER_ASSERTS:
+                logger.info(
+                    "domain_probe: skip cluster seed %s (%d flag var(s), %d assert(s))",
+                    seed,
+                    len(cluster),
+                    len(rel),
+                )
+                continue
             clusters_probed += 1
             symbols_probed += len(cluster_choices)
             flag_vars_total += len(cluster)
