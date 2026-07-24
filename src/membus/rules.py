@@ -84,6 +84,28 @@ P = BABYBEAR_PRIME
 _MAX_ENUM_BITS = 16
 
 
+def _proportional(a: tuple[tuple[str, int], ...],
+                  b: tuple[tuple[str, int], ...]) -> int | None:
+    """The scalar ``k`` with ``a == k·b`` over the field (same column set, one
+    common ratio), or ``None`` if the coefficient vectors are not proportional.
+    Used to recognise a constraint whose column part is a multiple of a range
+    check's multiplicity, so the constraint pins the multiplicity's value."""
+    da, db = dict(a), dict(b)
+    if not db or da.keys() != db.keys():
+        return None
+    k: int | None = None
+    for col, bc in db.items():
+        try:
+            kk = (da[col] * pow(bc % P, -1, P)) % P
+        except ValueError:
+            return None
+        if k is None:
+            k = kk
+        elif k != kk:
+            return None
+    return k
+
+
 class Analysis:
     """All facts extracted from one dump. Owns the caches (nothing is stashed
     inside the input JSON), and is the single entry point the deduction layer
@@ -129,28 +151,90 @@ class Analysis:
         return propagate._all_constraint_cols(self.machine)
 
     @functools.cached_property
-    def _single_col_pins(self) -> dict[str, int]:
-        """Columns pinned to a constant residue by a single-column linear
-        constraint (kinds-independent, no propagation). Enough to tell whether a
-        range-check row is disabled (``mult ≡ 0``) at bound-seeding time."""
+    def _const_pins(self) -> dict[str, int]:
+        """Columns pinned to a constant residue by the fixpoint of single-column
+        linear constraints (substitute known pins, repeat). Kinds-independent, no
+        propagation, so usable at bound-seeding time. The fixpoint (not a single
+        pass) catches multi-step zeros like ``g = h, h = 0 ⟹ g = 0`` — needed to
+        tell whether a range-check row is disabled (``mult ≡ 0``)."""
         pins: dict[str, int] = {}
-        for con in self.machine.get("constraints", []):
+        changed = True
+        while changed:
+            changed = False
+            for con in self.machine.get("constraints", []):
+                lf = linform(con)
+                if lf is None:
+                    continue
+                lf = lf.subst(pins)
+                if len(lf.coeffs) == 1:
+                    col, a = lf.coeffs[0]
+                    if col in pins:
+                        continue
+                    try:
+                        pins[col] = (-lf.const * pow(a % P, -1, P)) % P
+                    except ValueError:
+                        continue
+                    changed = True
+        return pins
+
+    @functools.cached_property
+    def _single_col_src(self) -> dict[str, tuple[int, int]]:
+        """col → (residue value, constraint idx) for single-column linear
+        constraints — the citable evidence that a column holds a constant."""
+        out: dict[str, tuple[int, int]] = {}
+        for idx, con in enumerate(self.machine.get("constraints", [])):
             lf = linform(con)
             if lf is not None and len(lf.coeffs) == 1:
                 col, a = lf.coeffs[0]
+                if col in out:
+                    continue
                 try:
-                    pins[col] = (-lf.const * pow(a % P, -1, P)) % P
+                    out[col] = ((-lf.const * pow(a % P, -1, P)) % P, idx)
                 except ValueError:
-                    pass
-        return pins
+                    continue
+        return out
 
-    def _range_row_disabled(self, mult: Any) -> bool:
-        """True when a range-check row's multiplicity is provably zero, so the
-        interaction is not sent and constrains nothing — its args must NOT be
-        bounded (else a false Bound would certify, since the range source is
-        asserted unconditionally)."""
-        return (mult is not None
-                and propagate._eval_partial(mult, self._single_col_pins) == 0)
+    def _range_mult_evidence(self, mult: Any) -> tuple[Src, ...] | None:
+        """Evidence that a range-check row is SENT (``mult != 0``), so its range
+        genuinely bounds the arg. ``add_source`` asserts the range only when
+        ``mult != 0``, so a bound may be emitted only with a certificate proof
+        the row is active. Returns the extra certificate sources (constraints)
+        proving ``mult != 0``, or ``None`` when the row is disabled (``mult ≡ 0``,
+        incl. multi-step) or its activity cannot be proven — then no bound."""
+        if mult is None:
+            return ()                      # no multiplicity: always sent
+        lf = linform(mult)
+        if lf is None:
+            return None                    # non-linear mult: cannot analyse
+        folded = lf.subst(self._const_pins)
+        if not folded.coeffs and folded.const % P == 0:
+            return None                    # disabled (mult ≡ 0), incl. multi-step
+        # Cite the single-column pins that make the mult's columns constant, and
+        # substitute them; the gate then rests on the residual.
+        srcs: list[Src] = []
+        subs: dict[str, int] = {}
+        for col, _ in lf.coeffs:
+            if col in self._single_col_src:
+                v, idx = self._single_col_src[col]
+                subs[col] = v
+                srcs.append(Src("constraint", idx))
+        resid = lf.subst(subs)
+        if not resid.coeffs:               # residual is a constant
+            return tuple(srcs) if resid.const % P != 0 else None
+        # Symbolic residual: a constraint pinning it to a NONZERO constant (e.g.
+        # sum(opcode flags) = 1) proves the row is sent.
+        for idx, con in enumerate(self.machine.get("constraints", [])):
+            lc = linform(con)
+            if lc is None:
+                continue
+            lc = lc.subst(subs)
+            k = _proportional(lc.coeffs, resid.coeffs)
+            if k is None:
+                continue
+            # lc ≡ 0 is k·(resid − resid.const) + lc.const ≡ 0 ⟹ resid = resid.const − lc.const/k
+            if (resid.const - lc.const * pow(k, -1, P)) % P != 0:
+                return (*srcs, Src("constraint", idx))
+        return None
 
     @functools.cached_property
     def flags_by_access(self) -> dict[int, tuple[str, ...]]:
@@ -356,9 +440,10 @@ class Analysis:
                 out[fact.col] = fact
 
         for idx, bid, args, mult in range_bus_rows(self.machine):
-            if self._range_row_disabled(mult):
-                continue                          # disabled row bounds nothing
-            src = (Src("bus", idx),)
+            ev = self._range_mult_evidence(mult)
+            if ev is None:
+                continue        # disabled or unprovably-active row bounds nothing
+            src = (Src("bus", idx), *ev)          # + evidence the row is sent
             if bid == VAR_RANGE and len(args) >= 2:
                 bits = bits_of(args[1])
                 if bits is None:
@@ -596,8 +681,9 @@ class Analysis:
         for idx, bid, args, mult in range_bus_rows(self.machine):
             if bid != VAR_RANGE or len(args) < 2:
                 continue
-            if self._range_row_disabled(mult):
-                continue                          # disabled row constrains nothing
+            ev = self._range_mult_evidence(mult)
+            if ev is None:
+                continue        # disabled or unprovably-active row constrains nothing
             bits = bits_of(args[1])
             lf = linform(args[0])
             if bits is None or bits > _MAX_ENUM_BITS or lf is None:
@@ -640,7 +726,7 @@ class Analysis:
                 continue
             out.append(RecvUpper(
                 pv[0][0], fs[0][0], nconst,
-                sources=(Src("bus", idx),), premises=prem))
+                sources=(Src("bus", idx), *ev), premises=prem))
         return out
 
     # -- Affine byte-decomposition gadget ------------------------------------

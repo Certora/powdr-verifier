@@ -146,20 +146,27 @@ class _Query:
         else:  # bus row
             b = self.an.machine["bus_interactions"][src.index]
             bid, args = b.get("id"), b.get("args", [])
+            # A range/bitwise check constrains its args only when the interaction
+            # is SENT (mult != 0). Gate the range on that, so a disabled row
+            # (mult ≡ 0) contributes nothing — a false bound then fails to
+            # certify unless its own sources prove the row is active.
+            mult = b.get("mult")
+            gate = (f"(= (mod {self._canon_expr(mult)} {P}) 0)"
+                    if mult is not None else "false")
             if bid == VAR_RANGE and len(args) >= 2 and isinstance(args[1], int):
                 self.declare(args[0])
                 self.comment(f"source bus[{src.index}]: VariableRangeChecker "
-                             f"(value residue in [0, 2^{args[1]}))")
+                             f"(value residue in [0, 2^{args[1]}) when sent)")
                 q, r = self.quotient(), self.quotient()
                 self.assert_(f"(= {self._canon_expr(args[0])} (+ (* {P} {q}) {r}))")
-                self.assert_(f"(and (<= 0 {r}) (< {r} {1 << args[1]}))")
+                self.assert_(f"(or {gate} (and (<= 0 {r}) (< {r} {1 << args[1]})))")
                 self._scaled_hint(args[0], q, r)
             elif bid == BITWISE:
                 for a in args[:2]:
                     if isinstance(a, str):
                         self.declare(a)
-                        self.comment(f"source bus[{src.index}]: BitwiseLookup operand is a byte")
-                        self.assert_(f"(< {_smt_sym(a)} 256)")
+                        self.comment(f"source bus[{src.index}]: BitwiseLookup operand is a byte when sent")
+                        self.assert_(f"(or {gate} (< {_smt_sym(a)} 256))")
             else:
                 self.comment(f"source bus[{src.index}] (id {bid}): no direct SMT semantics; "
                              f"granted by a named assumption below")
