@@ -129,6 +129,30 @@ class Analysis:
         return propagate._all_constraint_cols(self.machine)
 
     @functools.cached_property
+    def _single_col_pins(self) -> dict[str, int]:
+        """Columns pinned to a constant residue by a single-column linear
+        constraint (kinds-independent, no propagation). Enough to tell whether a
+        range-check row is disabled (``mult ≡ 0``) at bound-seeding time."""
+        pins: dict[str, int] = {}
+        for con in self.machine.get("constraints", []):
+            lf = linform(con)
+            if lf is not None and len(lf.coeffs) == 1:
+                col, a = lf.coeffs[0]
+                try:
+                    pins[col] = (-lf.const * pow(a % P, -1, P)) % P
+                except ValueError:
+                    pass
+        return pins
+
+    def _range_row_disabled(self, mult: Any) -> bool:
+        """True when a range-check row's multiplicity is provably zero, so the
+        interaction is not sent and constrains nothing — its args must NOT be
+        bounded (else a false Bound would certify, since the range source is
+        asserted unconditionally)."""
+        return (mult is not None
+                and propagate._eval_partial(mult, self._single_col_pins) == 0)
+
+    @functools.cached_property
     def flags_by_access(self) -> dict[int, tuple[str, ...]]:
         """Opcode flag columns grouped by access, from the constraint columns."""
         return propagate._flags_by_access(self.constraint_cols)
@@ -331,7 +355,9 @@ class Analysis:
             elif fact.hi is not None and (cur.hi is None or fact.hi < cur.hi):
                 out[fact.col] = fact
 
-        for idx, bid, args in range_bus_rows(self.machine):
+        for idx, bid, args, mult in range_bus_rows(self.machine):
+            if self._range_row_disabled(mult):
+                continue                          # disabled row bounds nothing
             src = (Src("bus", idx),)
             if bid == VAR_RANGE and len(args) >= 2:
                 bits = bits_of(args[1])
@@ -567,9 +593,11 @@ class Analysis:
 
     def _recv_upper_range_checks(self) -> list[RecvUpper]:
         out = []
-        for idx, bid, args in range_bus_rows(self.machine):
+        for idx, bid, args, mult in range_bus_rows(self.machine):
             if bid != VAR_RANGE or len(args) < 2:
                 continue
+            if self._range_row_disabled(mult):
+                continue                          # disabled row constrains nothing
             bits = bits_of(args[1])
             lf = linform(args[0])
             if bits is None or bits > _MAX_ENUM_BITS or lf is None:
