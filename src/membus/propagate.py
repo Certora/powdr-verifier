@@ -220,17 +220,6 @@ def _flag_domain(an: Analysis, flag_cols: tuple[str, ...]) -> dict[str, int] | N
     return dom
 
 
-def _sat_with_flags(cons: list[Any], env: dict[str, int],
-                    flag_cols: tuple[str, ...], flag_dom: dict[str, int]) -> bool:
-    for bits in iproduct(*(range(flag_dom[c]) for c in flag_cols)):
-        trial = dict(env)
-        for col, v in zip(flag_cols, bits):
-            trial[col] = v
-        if all(_eval_constraint(c, trial) == 0 for c in cons):
-            return True
-    return False
-
-
 def _deciding_covered(deciding: list[Any], known: set[str]) -> bool:
     """True iff every column in the deciding constraints is enumerated or pinned.
 
@@ -250,11 +239,29 @@ def _refute_is_load(is_load: str, flag_cols: tuple[str, ...],
         return None
     if not _deciding_covered(deciding, set(flag_cols) | {is_load} | set(pin_values)):
         return None
-    survivors: list[int] = []
-    for v in (0, 1):
-        if _sat_with_flags(deciding, {**pin_values, is_load: v}, flag_cols, flag_dom):
-            survivors.append(v)
-    return survivors[0] if len(survivors) == 1 else None
+    mux = index.mux_by_is_load.get(is_load)
+    if mux is None:
+        return None
+    mux_con = mux[1]
+    # is_load has no proven finite domain of its own, so enumerating it over
+    # {0,1} would refute a value a ternary/scaled mux still reaches (e.g.
+    # is_load = 2*f over boolean f reaches {0,2}, yet {0,1} sees only 0, pinning
+    # is_load=0 wrongly). Instead read is_load off the mux -- linear in is_load,
+    # a*is_load + g(flags) = 0 -- for every flag assignment in the proven
+    # domain, and pin only when that reachable set is a single value.
+    reachable: set[int] = set()
+    for bits in iproduct(*(range(flag_dom[c]) for c in flag_cols)):
+        env = dict(pin_values)
+        for col, v in zip(flag_cols, bits):
+            env[col] = v
+        m0 = _eval_constraint(mux_con, {**env, is_load: 0})
+        a = (_eval_constraint(mux_con, {**env, is_load: 1}) - m0) % P
+        if a == 0:
+            return None   # mux does not determine is_load here: cannot pin
+        v_il = (-m0 * pow(a, -1, P)) % P
+        if all(_eval_constraint(c, {**env, is_load: v_il}) == 0 for c in deciding):
+            reachable.add(v_il)
+    return to_signed(reachable.pop()) if len(reachable) == 1 else None
 
 
 def _surviving_flag_bits(
