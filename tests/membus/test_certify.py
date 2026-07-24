@@ -147,6 +147,25 @@ def test_negative_value_claim_uses_field_residue():
 
 
 @pytest.mark.skipif(certify.find_z3() is None, reason="no z3 on PATH")
+def test_range_check_bound_gated_on_multiplicity():
+    # The range source is asserted only when the row is sent (mult != 0). An
+    # active row (mult = sum(flags) pinned to 1) certifies; a fabricated bound on
+    # a can-be-zero row (bare boolean flag) must come back sat — the gate leaves
+    # the arg free when the flag is 0.
+    from src.membus.facts import Bound, Src
+    an = Analysis({"constraints": [[["f0@1", "+", "f1@2"], "-", 1]],
+                   "bus_interactions": [
+                       {"id": 3, "mult": ["f0@1", "+", "f1@2"], "args": ["aux@2", 17]}]})
+    b = next(x for x in certify.all_facts(an)
+             if isinstance(x, Bound) and x.col == "aux@2")
+    assert certify.run_z3(certify.certificate(an, b).smt2, certify.find_z3()) == "unsat"
+    anc = Analysis({"constraints": [["flag@1", "*", ["flag@1", "+", -1]]],
+                    "bus_interactions": [{"id": 3, "mult": "flag@1", "args": ["aux@2", 17]}]})
+    fake = Bound("aux@2", 0, 1 << 17, sources=(Src("bus", 0),))
+    assert certify.run_z3(certify.certificate(anc, fake).smt2, certify.find_z3()) == "sat"
+
+
+@pytest.mark.skipif(certify.find_z3() is None, reason="no z3 on PATH")
 def test_expreval_negative_value_claim_is_mod_p():
     # ExprEval's LHS is INTEGER arithmetic (can go negative/wrap), so the claim
     # must be mod p, not a direct integer == residue comparison. expr = pa - pb
