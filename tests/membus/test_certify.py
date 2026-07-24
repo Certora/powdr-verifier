@@ -88,16 +88,20 @@ def test_all_facts_covered_and_certificates_emit():
 
 
 def test_certificate_names_assumptions():
-    from src.membus.facts import TS_MAX
+    from src.membus.facts import TS_MAX, Assumption, Bound
     an = Analysis(_dump())
     facts = certify.all_facts(an)
-    # TS_BOUND: the Gap rests on a ts Bound granted its [0, TS_MAX) domain. The
-    # grant must be an actual asserted CLAIM (not merely a named-assumption
-    # comment), and at exactly TS_MAX — a wrong domain is left ungranted.
-    gap = next(f for f in facts if type(f).__name__ == "Gap")
-    gap_grants = [ln for ln in certify.certificate(an, gap).smt2.splitlines()
-                  if ln.startswith("(assert") and f" {TS_MAX})" in ln]
-    assert gap_grants, "TS_BOUND domain not granted as an asserted claim"
+    # TS_BOUND: a ts Bound rests on the assumption -- its OWN certificate must
+    # positively grant the [0, TS_MAX) domain (that grant is what makes the
+    # otherwise-unprovable ts range certify). Check the Bound's own cert, not a
+    # Gap that also carries the same Bound as a premise line (which would match
+    # regardless of the grant, hiding a regression). Grant is at exactly TS_MAX.
+    tsb = next(f for f in facts if isinstance(f, Bound)
+               and Assumption.TS_BOUND in f.assumptions)
+    grant = f"(assert (and (<= 0 {certify._smt_sym(tsb.col)}) "\
+            f"(< {certify._smt_sym(tsb.col)} {TS_MAX})))"
+    assert grant in certify.certificate(an, tsb).smt2, \
+        "TS_BOUND domain not positively granted in the ts Bound's certificate"
     # ACTIVE_SELECTOR: fixes the gating column to 1 — assert the grant line.
     sel = an.active_selector
     assert sel is not None
@@ -125,6 +129,24 @@ def test_bogus_fact_certificate_is_sat():
 
 
 @pytest.mark.skipif(certify.find_z3() is None, reason="no z3 on PATH")
+def test_negative_value_claim_uses_field_residue():
+    # A pin/expr value is a SIGNED residue (to_signed), but the column symbol is
+    # declared in [0, p). A negative value must render as its residue, else the
+    # negated claim is trivially sat and a TRUE fact is misreported as unsound.
+    from src.membus.facts import Pin, Src
+    P = 2013265921
+    il, f = "is_load_0@10", "flags__0_0@11"
+    an = Analysis({"constraints": [[f, "*", [f, "+", -1]], [il, "-", (P - 3)]],
+                   "bus_interactions": []})
+    pin = an._propagation.pins[il]
+    assert pin.value == -3   # stored signed, residue P-3
+    assert certify.run_z3(certify.certificate(an, pin).smt2, certify.find_z3()) == "unsat"
+    # a genuinely wrong value must still be caught
+    wrong = Pin(il, -5, sources=pin.sources, premises=pin.premises)
+    assert certify.run_z3(certify.certificate(an, wrong).smt2, certify.find_z3()) == "sat"
+
+
+@pytest.mark.skipif(certify.find_z3() is None, reason="no z3 on PATH")
 def test_ternary_flag_refutation_grant_is_sound():
     # The is_load refutation must grant each flag its proven [0,n) domain, not a
     # hard-coded {0,1}. A fabricated is_load=1 pin, forced only when the ternary
@@ -144,6 +166,42 @@ def test_ternary_flag_refutation_grant_is_sound():
     cert = certify.certificate(an, wrong)
     assert f"< {certify._smt_sym(f)} 3" in cert.smt2   # proven domain, not <= 1
     assert certify.run_z3(cert.smt2, certify.find_z3()) == "sat"
+
+
+@pytest.mark.skipif(certify.find_z3() is None, reason="no z3 on PATH")
+def test_linzero_affinedef_expreval_claims_certify():
+    # Coverage for the LinZero / AffineDef / ExprEval claim renderings, which the
+    # committed dumps don't otherwise exercise. Each true fact certifies unsat
+    # and a falsifying perturbation flips to sat.
+    import dataclasses
+    from src.membus.facts import LinZero, AffineDef, ExprEval, Src
+    z3 = certify.find_z3()
+
+    # LinZero: [bool(a), bool(b), a-b] leaves the residual a - b == 0
+    a, b = "xa@1", "xb@2"
+    an = Analysis({"constraints": [[a, "*", [a, "+", -1]], [b, "*", [b, "+", -1]],
+                                   [a, "-", b]], "bus_interactions": []})
+    lz = next(f for f in certify.all_facts(an) if isinstance(f, LinZero))
+    assert certify.run_z3(certify.certificate(an, lz).smt2, z3) == "unsat"
+    assert certify.run_z3(
+        certify.certificate(an, dataclasses.replace(lz, const=1)).smt2, z3) == "sat"
+
+    # AffineDef: col*(col-65536)=0, col in [0, 2^17) ⟹ col ≡ 0 (mod 65536)
+    col = "ptr@1"
+    an2 = Analysis({"constraints": [[col, "*", [col, "+", -65536]]],
+                    "bus_interactions": [{"id": 3, "mult": 1, "args": [col, 17]}]})
+    ad = an2.affine(col)
+    assert ad is not None and ad.modulus == 65536
+    assert certify.run_z3(certify.certificate(an2, ad).smt2, z3) == "unsat"
+    assert certify.run_z3(
+        certify.certificate(an2, dataclasses.replace(ad, modulus=None)).smt2, z3) == "sat"
+
+    # ExprEval: x pinned to 5 ⟹ expr x evaluates to 5
+    an3 = Analysis({"constraints": [["x@1", "-", 5]], "bus_interactions": []})
+    ev = ExprEval("x@1", 5, 0, sources=(Src("constraint", 0),))
+    assert certify.run_z3(certify.certificate(an3, ev).smt2, z3) == "unsat"
+    assert certify.run_z3(
+        certify.certificate(an3, dataclasses.replace(ev, value=6)).smt2, z3) == "sat"
 
 
 def test_propagation_facts_in_all_facts():
