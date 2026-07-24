@@ -489,7 +489,7 @@ class Analysis:
         rest = [(c, v) for c, v in lf.items() if c not in clocks and c not in witnesses]
         return fs, pv, rest
 
-    def _ungate_lessthan(self, con: Any) -> Any:
+    def _ungate_lessthan(self, con: Any) -> tuple[Any, tuple[Fact, ...]]:
         """Fold pins / timestamp aliases into a constraint and peel selector
         factors off a gated LessThan.
 
@@ -502,19 +502,27 @@ class Analysis:
         constraint vacuous (no bound), signalled by ``None``.
         """
         prop = self._propagation
+        # Collect the facts that justify the fold/peel, so _recv_upper_constraints
+        # can premise the RecvUpper with them. The certificate re-expands the RAW
+        # gated source, so without the selector's LinZero/pins z3 satisfies the
+        # `selector = 0` disjunct and the bound spuriously fails (sat). Folded
+        # pins are premised for the same reason (the raw source keeps the column).
+        prem: list[Fact] = [prop.pins[c] for c in names(con) if c in prop.pins]
         expr = propagate._fold_pins(con, prop, self._ts_aliases)
         while isinstance(expr, list) and len(expr) == 3 and expr[1] == "*":
-            va = propagate.eval_expr(prop, expr[0])
-            vb = propagate.eval_expr(prop, expr[2])
+            va, pa = propagate.eval_mult_basis(linform(expr[0]), prop)
+            vb, pb = propagate.eval_mult_basis(linform(expr[2]), prop)
             if va == 0 or vb == 0:
-                return None
+                return None, ()
             if va == 1:
+                prem.extend(pa)
                 expr = expr[2]
             elif vb == 1:
+                prem.extend(pb)
                 expr = expr[0]
             else:
                 break
-        return expr
+        return expr, tuple(prem)
 
     def _recv_upper_constraints(self) -> list[RecvUpper]:
         # A RecvUpper needs exactly one recv-witness column; skip the (majority
@@ -524,7 +532,7 @@ class Analysis:
         for idx, con in enumerate(self.machine.get("constraints", [])):
             if witnesses.isdisjoint(names(con)):
                 continue
-            body = self._ungate_lessthan(con)
+            body, ungate_prem = self._ungate_lessthan(con)
             if body is None:
                 continue
             lf = linform(body)
@@ -543,7 +551,7 @@ class Analysis:
                 continue
             out.append(RecvUpper(
                 pv[0][0], fs[0][0], lf.const,
-                sources=(Src("constraint", idx),), premises=prem))
+                sources=(Src("constraint", idx),), premises=prem + ungate_prem))
         return out
 
     def _recv_upper_range_checks(self) -> list[RecvUpper]:
