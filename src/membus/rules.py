@@ -194,15 +194,18 @@ class Analysis:
                     continue
         return out
 
-    def _range_mult_evidence(self, mult: Any) -> tuple[Src, ...] | None:
+    def _range_mult_evidence(
+        self, mult: Any) -> tuple[tuple[Src, ...], frozenset[Assumption]] | None:
         """Evidence that a range-check row is SENT (``mult != 0``), so its range
         genuinely bounds the arg. ``add_source`` asserts the range only when
         ``mult != 0``, so a bound may be emitted only with a certificate proof
-        the row is active. Returns the extra certificate sources (constraints)
-        proving ``mult != 0``, or ``None`` when the row is disabled (``mult ≡ 0``,
-        incl. multi-step) or its activity cannot be proven — then no bound."""
+        the row is active. Returns ``(sources, assumptions)`` proving
+        ``mult != 0`` — the constraint sources, plus ``ACTIVE_SELECTOR`` when the
+        row is gated by the block activation selector (granted ``= 1``, exactly
+        as the memory-row kinds are). ``None`` when the row is disabled
+        (``mult ≡ 0``, incl. multi-step) or its activity cannot be proven."""
         if mult is None:
-            return ()                      # no multiplicity: always sent
+            return ((), frozenset())       # no multiplicity: always sent
         lf = linform(mult)
         if lf is None:
             return None                    # non-linear mult: cannot analyse
@@ -220,7 +223,14 @@ class Analysis:
                 srcs.append(Src("constraint", idx))
         resid = lf.subst(subs)
         if not resid.coeffs:               # residual is a constant
-            return tuple(srcs) if resid.const % P != 0 else None
+            return (tuple(srcs), frozenset()) if resid.const % P != 0 else None
+        # Block-activation selector: a residual k·is_valid is nonzero because
+        # ACTIVE_SELECTOR grants is_valid = 1 (the same assumption the memory
+        # kinds rest on). Without it these is_valid-gated rows would drop.
+        sel = self.active_selector
+        if (self.assume_is_valid and sel is not None and resid.const == 0
+                and len(resid.coeffs) == 1 and resid.coeffs[0][0] == sel):
+            return (tuple(srcs), frozenset({Assumption.ACTIVE_SELECTOR}))
         # Symbolic residual: a constraint pinning it to a NONZERO constant (e.g.
         # sum(opcode flags) = 1) proves the row is sent.
         for idx, con in enumerate(self.machine.get("constraints", [])):
@@ -233,7 +243,7 @@ class Analysis:
                 continue
             # lc ≡ 0 is k·(resid − resid.const) + lc.const ≡ 0 ⟹ resid = resid.const − lc.const/k
             if (resid.const - lc.const * pow(k, -1, P)) % P != 0:
-                return (*srcs, Src("constraint", idx))
+                return ((*srcs, Src("constraint", idx)), frozenset())
         return None
 
     @functools.cached_property
@@ -443,7 +453,8 @@ class Analysis:
             ev = self._range_mult_evidence(mult)
             if ev is None:
                 continue        # disabled or unprovably-active row bounds nothing
-            src = (Src("bus", idx), *ev)          # + evidence the row is sent
+            ev_src, asm = ev                     # evidence the row is sent
+            src = (Src("bus", idx), *ev_src)
             if bid == VAR_RANGE and len(args) >= 2:
                 bits = bits_of(args[1])
                 if bits is None:
@@ -453,22 +464,22 @@ class Analysis:
                     continue
                 col, c = lf.coeffs[0]
                 if c == 1:
-                    put(Bound(col, 0, 1 << bits, sources=src))
+                    put(Bound(col, 0, 1 << bits, sources=src, assumptions=asm))
                     continue
                 try:
                     s = pow(c % P, -1, P)
                 except ValueError:
                     continue
                 if s * (1 << bits) < P:          # no wrap ⟹ sound scaled bound
-                    put(Bound(col, 0, s * (1 << bits), sources=src))
+                    put(Bound(col, 0, s * (1 << bits), sources=src, assumptions=asm))
             elif bid == BITWISE:
                 for a in args[:2]:
                     if isinstance(a, str):
-                        put(Bound(a, 0, 1 << 8, sources=src))
+                        put(Bound(a, 0, 1 << 8, sources=src, assumptions=asm))
             elif bid == TUPLE_RANGE:
                 for a in args:
                     if isinstance(a, str):
-                        put(Bound(a, 0, None, sources=src))
+                        put(Bound(a, 0, None, sources=src, assumptions=asm))
 
         if include_kinds:
             for row in self.mem:                 # membus-byte: recv data only
@@ -684,6 +695,7 @@ class Analysis:
             ev = self._range_mult_evidence(mult)
             if ev is None:
                 continue        # disabled or unprovably-active row constrains nothing
+            ev_src, asm = ev
             bits = bits_of(args[1])
             lf = linform(args[0])
             if bits is None or bits > _MAX_ENUM_BITS or lf is None:
@@ -726,7 +738,7 @@ class Analysis:
                 continue
             out.append(RecvUpper(
                 pv[0][0], fs[0][0], nconst,
-                sources=(Src("bus", idx), *ev), premises=prem))
+                sources=(Src("bus", idx), *ev_src), premises=prem, assumptions=asm))
         return out
 
     # -- Affine byte-decomposition gadget ------------------------------------
