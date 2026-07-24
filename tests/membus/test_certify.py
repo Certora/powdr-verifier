@@ -166,6 +166,20 @@ def test_range_check_bound_gated_on_multiplicity():
 
 
 @pytest.mark.skipif(certify.find_z3() is None, reason="no z3 on PATH")
+def test_active_selector_gated_range_bound_certifies():
+    # A range check gated by the block activation selector certifies via the
+    # ACTIVE_SELECTOR grant (is_valid = 1) discharging the conditional gate.
+    from src.membus.facts import Assumption, Bound
+    an = Analysis({"constraints": [], "bus_interactions": [
+        {"id": 1, "mult": "is_valid@9", "args": [1, 8, "d@1", 0, 0, 0, "ts@2"]},
+        {"id": 3, "mult": "is_valid@9", "args": ["aux@8", 17]}]})
+    b = next(x for x in certify.all_facts(an)
+             if isinstance(x, Bound) and x.col == "aux@8")
+    assert Assumption.ACTIVE_SELECTOR in b.assumptions
+    assert certify.run_z3(certify.certificate(an, b).smt2, certify.find_z3()) == "unsat"
+
+
+@pytest.mark.skipif(certify.find_z3() is None, reason="no z3 on PATH")
 def test_expreval_negative_value_claim_is_mod_p():
     # ExprEval's LHS is INTEGER arithmetic (can go negative/wrap), so the claim
     # must be mod p, not a direct integer == residue comparison. expr = pa - pb

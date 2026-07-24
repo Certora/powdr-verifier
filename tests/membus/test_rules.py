@@ -68,6 +68,22 @@ def test_disabled_range_check_emits_no_bound():
     assert ansum.bounds["aux@2"].hi == 1 << 17
 
 
+def test_active_selector_gated_range_check_bound():
+    # A range check gated by the block activation selector (is_valid) is active
+    # under --assume-is-valid: its bound must be EMITTED carrying ACTIVE_SELECTOR
+    # (mirroring the memory kinds) — not dropped. Regression: dropping it lost
+    # the recv-order edges on the final dumps. Without the assumption, decline.
+    bis = [{"id": 1, "mult": "is_valid@9", "args": [1, 8, "d@1", 0, 0, 0, "ts@2"]},
+           {"id": 3, "mult": "is_valid@9", "args": ["aux@8", 17]}]
+    an = _an(bis=bis)
+    assert an.active_selector == "is_valid@9"
+    assert an.bounds["aux@8"].hi == 1 << 17
+    assert Assumption.ACTIVE_SELECTOR in an.bounds["aux@8"].assumptions
+    an_off = Analysis({"constraints": [], "bus_interactions": bis},
+                      assume_is_valid=False)
+    assert "aux@8" not in an_off.bounds
+
+
 def test_byte_bound_is_recv_only_and_assumed():
     recv = {"id": 1, "mult": -1, "args": [1, 8, "r0@1", 0, 0, 0, PV]}
     send = {"id": 1, "mult": 1, "args": [1, 8, "s0@2", 0, 0, 0, FS]}
