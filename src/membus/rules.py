@@ -108,6 +108,13 @@ class Analysis:
         self._ts_aliases = propagate.send_ts_aliases(
             send_cols, self._two_col_gaps, substitutions)
         self._kinds_cache = {row.ordinal: self._kind(row) for row in self.mem}
+        # Preserve the ORIGINAL (pre-fold) multiplicity expressions. `_kind`
+        # classified each row from its original mult, but simplify_mem_rows below
+        # rewrites self.mem, folding a symbolic mult to a constant. An EffKind
+        # certificate must obligate `sources+premises ⊢ original_mult ≡ v`; if it
+        # rendered the folded constant instead, the claim would be a tautology
+        # and the fold's premises inert (a mis-fold would still certify).
+        self._orig_mult = {row.ordinal: row.mult for row in self.mem}
         self.mem, exprs = propagate.simplify_mem_rows(
             self.mem, self._propagation, envs, self._ts_aliases)
         self._propagation = replace(self._propagation, exprs=exprs)

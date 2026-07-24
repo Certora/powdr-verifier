@@ -272,10 +272,15 @@ class _Query:
                 return f"(= {_smt_sym(f.col)} {rhs})"
             return f"(= (mod (- {_smt_sym(f.col)} {rhs}) {f.modulus}) 0)"
         if isinstance(f, EffKind):
-            row = self.an.mem[f.ordinal]
-            self.declare(row.mult)
+            # The ORIGINAL multiplicity, not the folded one in self.an.mem: for a
+            # propagation-folded mult the folded value is a constant, so the
+            # claim would be a tautology and the premises inert. Rendering the
+            # original expr makes `premises ⊢ original_mult ≡ v` the real
+            # obligation z3 must discharge.
+            mult = self.an._orig_mult[f.ordinal]
+            self.declare(mult)
             v = {"send": 1, "recv": P - 1, "disabled": 0}[f.kind]
-            return f"(= (mod {_expr(row.mult)} {P}) {v})"
+            return f"(= (mod {_expr(mult)} {P}) {v})"
         if isinstance(f, Pin):
             self.declare(f.col)
             if f.refute_flags:
