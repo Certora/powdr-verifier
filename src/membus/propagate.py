@@ -211,10 +211,23 @@ def _sat_with_flags(cons: list[Any], env: dict[str, int],
     return False
 
 
+def _deciding_covered(deciding: list[Any], known: set[str]) -> bool:
+    """True iff every column in the deciding constraints is enumerated or pinned.
+
+    ``_eval_constraint`` reads any column not in the trial env as 0, so a free
+    (non-flag, non-solved, non-pinned) column would make the refutation reason
+    over a single arbitrary assignment (col = 0) rather than all of them — it
+    could then declare a value refuted that is actually reachable, pinning
+    wrongly. When a deciding constraint has such a column, decline to pin."""
+    return all(col in known for c in deciding for col in names(c))
+
+
 def _refute_is_load(is_load: str, flag_cols: tuple[str, ...],
                     index: _DecodingIndex, pin_values: dict[str, int]) -> int | None:
     deciding = [c for _, c in index.deciding_constraints(is_load, flag_cols)]
     if not deciding:
+        return None
+    if not _deciding_covered(deciding, set(flag_cols) | {is_load} | set(pin_values)):
         return None
     survivors: list[int] = []
     for v in (0, 1):
@@ -244,6 +257,8 @@ def _refute_flag_value(
     deciding: list[Any],
     pin_values: dict[str, int],
 ) -> int | None:
+    if not _deciding_covered(deciding, set(flag_cols) | {col} | set(pin_values)):
+        return None
     survivors: list[int] = []
     for v in (0, 1):
         trial = dict(pin_values)
