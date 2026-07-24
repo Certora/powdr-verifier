@@ -169,6 +169,31 @@ def test_decoding_index_flipped_mux_form():
     assert index.mux_by_is_load[is_load][1] == cons[0]
 
 
+def test_ternary_flag_is_load_not_over_pinned():
+    """Opcode flags are ternary, so the is_load refutation must enumerate the
+    proven [0,n) domain, not {0,1}. A mux that fixes is_load=1 over {0,1} but
+    allows is_load=0 via f=2 must NOT pin is_load (regression: enumerating
+    {0,1} pinned a value refuted only because f=2 was never tried)."""
+    inv2 = pow(2, -1, P)
+    f, il = "flags__0_0@11", "is_load_0@10"
+    # is_load - (1 - f^2/2 + f/2): quad(0)=quad(1)=1, quad(2)=0
+    mux = [il, "-", [1, "+", [[(-inv2) % P, "*", [f, "*", f]],
+                              "+", [inv2 % P, "*", f]]]]
+    an = _an([mux, _ternary_bool(f)])
+    assert il not in an._propagation.pins
+
+
+def test_boolean_flag_is_load_still_pinned():
+    """Contrast to the ternary case: when the flag is proven boolean, is_load is
+    genuinely forced over its whole domain and must still be pinned."""
+    inv2 = pow(2, -1, P)
+    f, il = "flags__0_0@11", "is_load_0@10"
+    mux = [il, "-", [1, "+", [[(-inv2) % P, "*", [f, "*", f]],
+                              "+", [inv2 % P, "*", f]]]]
+    an = _an([mux, _bool(f)])
+    assert an._propagation.pins[il].value == 1
+
+
 def test_fold_pins_algebraic_identities():
     col = "mem_ptr_limbs__0_1@52"
     assert propagate._fold_pins([0, "+", [1, "*", col]], {}) == col
