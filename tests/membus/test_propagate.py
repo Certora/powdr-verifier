@@ -194,6 +194,27 @@ def test_boolean_flag_is_load_still_pinned():
     assert an._propagation.pins[il].value == 1
 
 
+def test_is_load_not_over_pinned_when_mux_image_non_singleton():
+    """is_load has no proven domain of its own, so the refutation must read it
+    off the mux over the flag domain — not enumerate it over {0,1}. For
+    is_load = 2*f with f boolean the reachable set is {0,2}: is_load must NOT be
+    pinned, and the dependent flag pin (which would have been premised on a wrong
+    is_load and could then certify unsat) must not be produced either."""
+    f, il = "flags__0_0@11", "is_load_0@10"
+    an = _an([[il, "-", [2, "*", f]], _bool(f)])
+    assert il not in an._propagation.pins
+    assert f not in an._propagation.pins
+
+
+def test_is_load_pinned_to_non_boolean_value_when_forced():
+    """The reachable-set reading also pins values outside {0,1}: a mux that
+    forces is_load=2 over the whole flag domain yields a is_load=2 pin (the old
+    {0,1} enumeration missed it entirely)."""
+    f, il = "flags__0_0@11", "is_load_0@10"
+    an = _an([[il, "-", [2, "+", [0, "*", f]]], _bool(f)])
+    assert an._propagation.pins[il].value == 2
+
+
 def test_fold_pins_algebraic_identities():
     col = "mem_ptr_limbs__0_1@52"
     assert propagate._fold_pins([0, "+", [1, "*", col]], {}) == col
