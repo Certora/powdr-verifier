@@ -43,6 +43,18 @@ def test_bare_and_scaled_range_args_bound():
     assert an.bounds["y@2"].hi == 30720 * (1 << 14)
 
 
+def test_disabled_range_check_emits_no_bound():
+    # A range-check whose multiplicity is provably zero (gate pinned to 0 by a
+    # single-column constraint) is not sent and constrains nothing, so its arg
+    # must NOT be bounded — else a false Bound would certify unsat (the range
+    # source is asserted unconditionally). An active row still bounds its arg.
+    an = _an(cons=[["gate@1", "-", 0]],
+             bis=[{"id": 3, "mult": "gate@1", "args": ["aux@2", 17]}])
+    assert "aux@2" not in an.bounds
+    an2 = _an(bis=[{"id": 3, "mult": 1, "args": ["aux@2", 17]}])
+    assert an2.bounds["aux@2"].hi == 1 << 17
+
+
 def test_byte_bound_is_recv_only_and_assumed():
     recv = {"id": 1, "mult": -1, "args": [1, 8, "r0@1", 0, 0, 0, PV]}
     send = {"id": 1, "mult": 1, "args": [1, 8, "s0@2", 0, 0, 0, FS]}
