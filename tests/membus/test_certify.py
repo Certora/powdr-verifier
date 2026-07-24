@@ -147,6 +147,22 @@ def test_negative_value_claim_uses_field_residue():
 
 
 @pytest.mark.skipif(certify.find_z3() is None, reason="no z3 on PATH")
+def test_expreval_negative_value_claim_is_mod_p():
+    # ExprEval's LHS is INTEGER arithmetic (can go negative/wrap), so the claim
+    # must be mod p, not a direct integer == residue comparison. expr = pa - pb
+    # with pa=0, pb=1 has true value -1 ≡ p-1; the claim must certify unsat.
+    import dataclasses
+    from src.membus.facts import ExprEval
+    an = Analysis({"constraints": [["pa@0", "-", 0], ["pb@0", "-", 1]],
+                   "bus_interactions": []})
+    ev = ExprEval(["pa@0", "-", "pb@0"], -1, 0, sources=(),
+                  premises=(an._propagation.pins["pa@0"], an._propagation.pins["pb@0"]))
+    assert certify.run_z3(certify.certificate(an, ev).smt2, certify.find_z3()) == "unsat"
+    wrong = dataclasses.replace(ev, value=-2)
+    assert certify.run_z3(certify.certificate(an, wrong).smt2, certify.find_z3()) == "sat"
+
+
+@pytest.mark.skipif(certify.find_z3() is None, reason="no z3 on PATH")
 def test_ternary_flag_refutation_grant_is_sound():
     # The is_load refutation must grant each flag its proven [0,n) domain, not a
     # hard-coded {0,1}. A fabricated is_load=1 pin, forced only when the ternary

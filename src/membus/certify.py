@@ -311,7 +311,10 @@ class _Query:
             return f"(= {_lin(list(f.coeffs), f.const)} 0)"
         if isinstance(f, ExprEval):
             self.declare(f.expr)
-            return f"(= {_expr(f.expr)} {f.value % P})"  # residue: symbol is [0, p)
+            # _expr renders INTEGER arithmetic (may go negative or wrap), so the
+            # claim must be mod p: expr ≡ value (mod p). Comparing the integer
+            # expr directly to the residue would spuriously fail a true fact.
+            return f"(= (mod (- {_expr(f.expr)} {f.value % P}) {P}) 0)"
         raise TypeError(f"no claim rendering for {type(f).__name__}")
 
     def finish(self, negated_claim: str) -> str:
