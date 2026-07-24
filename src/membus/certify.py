@@ -62,6 +62,16 @@ def _expr(e: Any) -> str:
     raise ValueError(f"cannot render expr: {e!r}")
 
 
+def _product_factors(e: Any) -> list[Any]:
+    """Flatten a (possibly nested) ``*`` product into its factor list.
+
+    ``a * (b * c)`` and ``(a * b) * c`` both give ``[a, b, c]``; a non-product
+    gives ``[e]``. Used so a product constraint splits into ALL its factors."""
+    if isinstance(e, list) and len(e) == 3 and e[1] == "*":
+        return _product_factors(e[0]) + _product_factors(e[2])
+    return [e]
+
+
 def _lin(coeffs: dict[str, int] | list[tuple[str, int]], const: int) -> str:
     parts = [f"(* {c} {_smt_sym(col)})" if c >= 0 else f"(* (- {-c}) {_smt_sym(col)})"
              for col, c in (coeffs.items() if isinstance(coeffs, dict) else coeffs)]
@@ -129,9 +139,15 @@ class _Query:
             con = self.an.machine["constraints"][src.index]
             self.declare(con)
             if isinstance(con, list) and len(con) == 3 and con[1] == "*":
-                # prime field: G·H ≡ 0 ⟹ G ≡ 0 ∨ H ≡ 0 (p is prime)
-                self.comment(f"source constraint[{src.index}] (product; prime-field split)")
-                self.assert_(f"(or {self.field_zero(con[0])} {self.field_zero(con[2])})")
+                # prime field: F1·…·Fn ≡ 0 ⟹ ⋁ Fi ≡ 0 (p is prime). Split ALL
+                # factors, not just the outermost two: a domain gadget
+                # f·(f-1)·(f-2) must yield three LINEAR disjuncts, else the
+                # nested `(f-1)·(f-2)` disjunct stays quadratic and z3 times out
+                # (the [0,n) domain bound then spuriously fails to certify).
+                factors = _product_factors(con)
+                self.comment(f"source constraint[{src.index}] "
+                             f"(product; prime-field split, {len(factors)} factors)")
+                self.assert_("(or " + " ".join(self.field_zero(f) for f in factors) + ")")
             else:
                 self.comment(f"source constraint[{src.index}]")
                 self.assert_(self.field_zero(con))
