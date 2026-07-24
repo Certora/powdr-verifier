@@ -30,7 +30,9 @@ from typing import Any
 
 from src.lens.normalize import BABYBEAR_PRIME
 
-from .facts import AffineDef, Assumption, Bound, EffKind, ExprEval, Fact, Gap, LinZero, Pin, RecvUpper
+from .facts import (
+    AffineDef, Assumption, Bound, EffKind, ExprEval, Fact, Gap, LinZero, Pin, RecvUpper, TS_MAX,
+)
 from .linform import linform, names
 from .rules import Analysis
 
@@ -211,15 +213,31 @@ class _Query:
         for a in f.assumptions:
             self.add_assumption_for(f, a)
 
+    # The exact [lo, hi) domain each assumption licenses. A Bound tagged with
+    # the assumption is granted only at this value — a byte is [0, 256), a
+    # timestamp slot is [0, 2^29). Anything else is not what the assumption
+    # means and must not be granted.
+    _GRANTED_BOUND = {
+        Assumption.MEMBUS_BYTE: (0, 1 << 8),
+        Assumption.TS_BOUND: (0, TS_MAX),
+    }
+
     def add_assumption_for(self, f: Fact, a: Assumption) -> None:
         self.comment(f"named assumption: {a.name} -- {a.value}")
         # MEMBUS_BYTE and TS_BOUND *grant* their slot-derived Bound facts
         # outright: the granted claim is asserted so the certificate is
-        # (visibly) trivial — the fact rests on the assumption, and this line
-        # is where that shows. ACTIVE_SELECTOR fixes the structurally
-        # recognized gating column to 1.
-        if a in (Assumption.MEMBUS_BYTE, Assumption.TS_BOUND) and isinstance(f, Bound):
-            self.assert_(self.claim(f))
+        # (visibly) trivial — the fact rests on the assumption. But grant ONLY
+        # the assumption's exact domain; asserting the claim for any other
+        # (lo, hi) would vacuously certify a wrong-valued or mis-identified
+        # Bound. A mismatch is left ungranted so it surfaces as a failing (sat)
+        # certificate. ACTIVE_SELECTOR fixes the recognized gating column to 1.
+        grant = self._GRANTED_BOUND.get(a)
+        if grant is not None and isinstance(f, Bound):
+            if (f.lo, f.hi) == grant:
+                self.assert_(self.claim(f))
+            else:
+                self.comment(f"NOT granted: {a.name} licenses only [{grant[0]}, "
+                             f"{grant[1]}), but this Bound is [{f.lo}, {f.hi})")
         if a is Assumption.ACTIVE_SELECTOR and self.an.active_selector is not None:
             sel = self.an.active_selector
             self.declare(sel)
