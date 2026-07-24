@@ -44,15 +44,28 @@ def test_bare_and_scaled_range_args_bound():
 
 
 def test_disabled_range_check_emits_no_bound():
-    # A range-check whose multiplicity is provably zero (gate pinned to 0 by a
-    # single-column constraint) is not sent and constrains nothing, so its arg
-    # must NOT be bounded — else a false Bound would certify unsat (the range
-    # source is asserted unconditionally). An active row still bounds its arg.
+    # A range-check is sent (constrains its arg) only when mult != 0. A bound may
+    # be emitted only when the row is PROVABLY active, else a false Bound would
+    # certify. Cover: single-col-zero, multi-step-zero, can-be-zero, and active.
+    # (a) mult pinned 0 by a single-column constraint -> disabled -> no bound.
     an = _an(cons=[["gate@1", "-", 0]],
              bis=[{"id": 3, "mult": "gate@1", "args": ["aux@2", 17]}])
     assert "aux@2" not in an.bounds
+    # (b) mult zero via MULTI-STEP reasoning (g = h, h = 0) -> disabled -> no bound.
+    anb = _an(cons=[["h@1", "-", 0], ["g@2", "-", "h@1"]],
+              bis=[{"id": 3, "mult": "g@2", "args": ["aux@3", 17]}])
+    assert "aux@3" not in anb.bounds
+    # (c) mult a bare boolean flag that CAN be 0 -> activity unprovable -> no bound.
+    anc = _an(cons=[["flag@1", "*", ["flag@1", "+", -1]]],
+              bis=[{"id": 3, "mult": "flag@1", "args": ["aux@2", 17]}])
+    assert "aux@2" not in anc.bounds
+    # active: a constant nonzero mult, and a symbolic mult pinned nonzero by a
+    # constraint (sum(flags) = 1), both bound their arg.
     an2 = _an(bis=[{"id": 3, "mult": 1, "args": ["aux@2", 17]}])
     assert an2.bounds["aux@2"].hi == 1 << 17
+    ansum = _an(cons=[[["f0@1", "+", "f1@2"], "-", 1]],
+                bis=[{"id": 3, "mult": ["f0@1", "+", "f1@2"], "args": ["aux@2", 17]}])
+    assert ansum.bounds["aux@2"].hi == 1 << 17
 
 
 def test_byte_bound_is_recv_only_and_assumed():
