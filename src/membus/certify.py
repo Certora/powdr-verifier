@@ -25,7 +25,6 @@ from __future__ import annotations
 import shutil
 import subprocess
 from dataclasses import dataclass
-from itertools import product as iproduct
 from pathlib import Path
 from typing import Any
 
@@ -227,38 +226,26 @@ class _Query:
             self.assert_(f"(= {_smt_sym(sel)} 1)")
 
     def _assert_flag_refutation(self, pin: Pin) -> None:
+        """Grant the finite domain the is_load refutation enumerated: the
+        deciding flags and is_load itself are boolean.
+
+        The real obligation — that under those domains the deciding constraints
+        (asserted as this pin's sources by ``certificate()``) admit no is_load
+        value other than ``pin.value`` — is discharged by z3 against the negated
+        claim ``finish`` asserts. So all we add here is the booleanity of the
+        flags and ``pin.col``.
+
+        We must NOT assert a "witness" that fixes ``is_load = pin.value``: every
+        witness disjunct contains ``(= is_load value)``, so asserting their
+        disjunction forces the claim and makes the query vacuously UNSAT for ANY
+        value (a wrong pin certified). Nor may we assert the refuted value
+        infeasible — that asserts the conclusion. Both were the old bug.
+        """
         if not pin.refute_flags:
             return
-        flag_cols = pin.refute_flags
-        deciding = [self.an.machine["constraints"][s.index]
-                    for s in pin.sources if s.kind == "constraint"]
-        for col in flag_cols:
+        for col in (*pin.refute_flags, pin.col):
             self.declare(col)
             self.assert_(f"(and (<= 0 {_smt_sym(col)}) (<= {_smt_sym(col)} 1))")
-        self.declare(pin.col)
-
-        def env_sat(is_load_val: int, bits: tuple[int, ...]) -> str:
-            env = {pin.col: is_load_val, **dict(zip(flag_cols, bits))}
-            for p in pin.premises:
-                if isinstance(p, Pin):
-                    env[p.col] = p.value
-            conj = [self.field_zero(c) for c in deciding]
-            flag_eq = [f"(= {_smt_sym(c)} {v})" for c, v in zip(flag_cols, bits)]
-            is_load_eq = f"(= {_smt_sym(pin.col)} {is_load_val})"
-            return f"(and {is_load_eq} {' '.join(flag_eq)} {' '.join(conj)})"
-
-        witness = []
-        for bits in iproduct((0, 1), repeat=len(flag_cols)):
-            witness.append(env_sat(pin.value, bits))
-        self.comment("witness: some flag assignment satisfies deciding constraints")
-        self.assert_(f"(or {' '.join(witness)})")
-
-        refuted = 1 - pin.value
-        refuted_cases = []
-        for bits in iproduct((0, 1), repeat=len(flag_cols)):
-            refuted_cases.append(env_sat(refuted, bits))
-        self.comment(f"refutation: is_load={refuted} unsatisfiable under any flag assignment")
-        self.assert_(f"(not (or {' '.join(refuted_cases)}))")
 
     def claim(self, f: Fact) -> str:
         if isinstance(f, Bound):
