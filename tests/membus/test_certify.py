@@ -80,6 +80,28 @@ def test_bogus_fact_certificate_is_sat():
     assert certify.run_z3(cert.smt2, certify.find_z3()) == "sat"
 
 
+@pytest.mark.skipif(certify.find_z3() is None, reason="no z3 on PATH")
+def test_ternary_flag_refutation_grant_is_sound():
+    # The is_load refutation must grant each flag its proven [0,n) domain, not a
+    # hard-coded {0,1}. A fabricated is_load=1 pin, forced only when the ternary
+    # flag is treated as boolean, must come back sat: over the real domain, f=2
+    # gives is_load=0. (Old bug: the boolean grant deleted the f=2 case, so this
+    # certified unsat.)
+    from src.membus.facts import Pin, Src
+    from src.lens.normalize import BABYBEAR_PRIME as P
+    inv2 = pow(2, -1, P)
+    f, il = "flags__0_0@11", "is_load_0@10"
+    mux = [il, "-", [1, "+", [[(-inv2) % P, "*", [f, "*", f]],
+                              "+", [inv2 % P, "*", f]]]]
+    ternary = [f, "*", [[f, "-", 1], "*", [f, "-", 2]]]
+    an = Analysis({"constraints": [mux, ternary], "bus_interactions": []})
+    wrong = Pin(il, 1, sources=(Src("constraint", 0), Src("constraint", 1)),
+                refute_flags=(f,))
+    cert = certify.certificate(an, wrong)
+    assert f"< {certify._smt_sym(f)} 3" in cert.smt2   # proven domain, not <= 1
+    assert certify.run_z3(cert.smt2, certify.find_z3()) == "sat"
+
+
 def test_propagation_facts_in_all_facts():
     cons = [["g@1", "*", ["g@1", "+", -1]], ["g@1", "+", -1]]
     an = Analysis({"constraints": cons,
