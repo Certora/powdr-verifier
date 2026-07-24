@@ -86,17 +86,23 @@ class _DecodingIndex:
     def build(cls, cons: list[Any]) -> _DecodingIndex:
         mux: dict[str, tuple[int, Any]] = {}
         nonlinear: dict[frozenset[str], list[tuple[int, Any]]] = {}
+        # Pass 1: forward decodes (is_load - g / g + is_load) take precedence.
         for idx, c in enumerate(cons):
-            if isinstance(c, list) and len(c) == 3 and c[1] in ("-", "+"):
-                # is_load is the bare-string side of a +/- decode constraint;
-                # _refute_is_load solves its (±1) coefficient off the mux either
-                # way, so register a reversed `g - is_load` decode too.
+            if isinstance(c, list) and len(c) == 3:
                 if c[1] == "-" and isinstance(c[0], str):
                     mux.setdefault(c[0], (idx, c))
-                if isinstance(c[2], str):
+                elif c[1] == "+" and isinstance(c[2], str):
                     mux.setdefault(c[2], (idx, c))
             if linform(c) is None:
                 nonlinear.setdefault(frozenset(names(c)), []).append((idx, c))
+        # Pass 2: a reversed decode `g - is_load` is registered only if no forward
+        # decode already claimed is_load — otherwise an alias like `freevar -
+        # is_load` appearing first would shadow the genuine forward mux.
+        # _refute_is_load solves the (-1) coefficient off the reversed mux.
+        for idx, c in enumerate(cons):
+            if (isinstance(c, list) and len(c) == 3
+                    and c[1] == "-" and isinstance(c[2], str)):
+                mux.setdefault(c[2], (idx, c))
         return cls(mux, {k: tuple(v) for k, v in nonlinear.items()})
 
     def flag_domain_nonlinear(self, flag_cols: tuple[str, ...],
