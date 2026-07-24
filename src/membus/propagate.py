@@ -20,6 +20,12 @@ if TYPE_CHECKING:
 
 P = BABYBEAR_PRIME
 
+# Cap on the flag-assignment enumeration (product of per-flag domain sizes).
+# Real opcode-flag groups are a handful of boolean/ternary columns; a wider
+# product means a range-checked non-flag column slipped in, so decline instead
+# of enumerating it.
+_MAX_FLAG_ENUM = 1 << 16
+
 _IS_LOAD_RE = re.compile(r"^is_load_(\d+)@")
 _ACCESS_RE = re.compile(r"_(\d+)@\d+$")
 
@@ -82,20 +88,28 @@ class _DecodingIndex:
         nonlinear: dict[frozenset[str], list[tuple[int, Any]]] = {}
         for idx, c in enumerate(cons):
             if isinstance(c, list) and len(c) == 3 and c[1] in ("-", "+"):
+                # is_load is the bare-string side of a +/- decode constraint;
+                # _refute_is_load solves its (±1) coefficient off the mux either
+                # way, so register a reversed `g - is_load` decode too.
                 if c[1] == "-" and isinstance(c[0], str):
                     mux.setdefault(c[0], (idx, c))
-                elif c[1] == "+" and isinstance(c[2], str):
+                if isinstance(c[2], str):
                     mux.setdefault(c[2], (idx, c))
             if linform(c) is None:
                 nonlinear.setdefault(frozenset(names(c)), []).append((idx, c))
         return cls(mux, {k: tuple(v) for k, v in nonlinear.items()})
 
     def flag_domain_nonlinear(self, flag_cols: tuple[str, ...],
-                              is_load: str) -> list[tuple[int, Any]]:
+                              is_load: str | None) -> list[tuple[int, Any]]:
+        # Only gadgets whose column set is EXACTLY flag_cols qualify, so for a
+        # multi-flag access the individual per-flag domain gadgets are omitted.
+        # That only under-constrains the query (conservative — it can make a
+        # spurious unsat impossible, never a spurious pass). is_load=None keeps
+        # every gadget (used when no is_load pin exists for the access).
         candidates = self.nonlinear_by_names.get(frozenset(flag_cols), ())
         return [(i, c) for i, c in candidates if is_load not in names(c)]
 
-    def deciding_constraints(self, is_load: str,
+    def deciding_constraints(self, is_load: str | None,
                              flag_cols: tuple[str, ...]) -> list[tuple[int, Any]]:
         out: list[tuple[int, Any]] = []
         mux = self.mux_by_is_load.get(is_load)
@@ -104,7 +118,7 @@ class _DecodingIndex:
         out.extend(self.flag_domain_nonlinear(flag_cols, is_load))
         return out
 
-    def deciding_sources(self, is_load: str,
+    def deciding_sources(self, is_load: str | None,
                          flag_cols: tuple[str, ...]) -> tuple[Src, ...]:
         return tuple(Src("constraint", idx)
                      for idx, _ in self.deciding_constraints(is_load, flag_cols))
@@ -210,14 +224,21 @@ def _flag_domain(an: Analysis, flag_cols: tuple[str, ...]) -> dict[str, int] | N
     real domain: assuming ``{0,1}`` refutes a value only because ``f=2`` was
     never tried, pinning a flag (or is_load) that is not actually forced.
     Returns ``None`` if any flag lacks a proven finite ``[0,n)`` domain — then
-    no sound enumeration exists and the caller must decline.
+    no sound enumeration exists and the caller must decline. Also declines when
+    the enumeration would blow up: a range-checked column with a wide bound
+    (e.g. an 8-bit ``[0,256)``) is not a real opcode flag, and the product of
+    domains bounds the ``iproduct`` size, so cap it.
     """
     dom: dict[str, int] = {}
+    size = 1
     for c in flag_cols:
         b = an._static_bounds.get(c)
         if b is None or b.lo != 0 or b.hi is None:
             return None
         dom[c] = b.hi
+        size *= b.hi
+        if size > _MAX_FLAG_ENUM:
+            return None
     return dom
 
 
@@ -307,8 +328,8 @@ def _refute_flag_value(
 
 def _refute_is_load_pins(pins: dict[str, Pin], pin_values: dict[str, int],
                          an: Analysis, index: _DecodingIndex) -> None:
-    cols = _all_constraint_cols(an.machine)
-    flags = _flags_by_access(cols)
+    cols = an.constraint_cols
+    flags = an.flags_by_access
     for is_load in sorted(c for c in cols if c.startswith("is_load_")):
         if is_load in pins:
             continue
@@ -337,8 +358,7 @@ def _refute_is_load_pins(pins: dict[str, Pin], pin_values: dict[str, int],
 def _refute_flag_pins(pins: dict[str, Pin], pin_values: dict[str, int],
                       an: Analysis, index: _DecodingIndex) -> None:
     """Pin opcode flag bits once is_load and the mux cone fix their value."""
-    cols = _all_constraint_cols(an.machine)
-    flags = _flags_by_access(cols)
+    flags = an.flags_by_access
     for is_load in sorted(c for c in pins if c.startswith("is_load_")):
         m = _IS_LOAD_RE.match(is_load)
         if m is None:
@@ -381,8 +401,7 @@ def surviving_envs(an: Analysis, prop: PropagationResult,
                    ) -> dict[int, list[dict[str, int]]]:
     """Pinned + flag assignments satisfying each access's mux/opcode cone."""
     pin_values = prop.pin_values
-    cols = _all_constraint_cols(an.machine)
-    flags = _flags_by_access(cols)
+    flags = an.flags_by_access
     out: dict[int, list[dict[str, int]]] = {}
     index = prop.decoding
     for is_load in sorted(c for c in pin_values if c.startswith("is_load_")):
@@ -693,12 +712,13 @@ def _try_refute_expr(expr: Any, prop: PropagationResult,
     cols = set(prop.pin_values) | set(names(expr))
     flags = _flags_by_access(cols)
     flag_cols = flags.get(access, ())
-    is_load = f"is_load_{access}@"
+    is_load = None
     for col in prop.pin_values:
         m = _IS_LOAD_RE.match(col)
         if m is not None and int(m.group(1)) == access:
             is_load = col
             break
+    # deciding_sources tolerates is_load=None (no mux; flag-domain gadgets only).
     sources = prop.decoding.deciding_sources(is_load, flag_cols) if flag_cols else ()
     return ExprEval(expr, value, access,
                     sources=sources,

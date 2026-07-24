@@ -122,6 +122,17 @@ class Analysis:
     def mem_src(self, row: MemRow) -> Src:
         return Src("bus", self._mem_bus_ordinal[row.ordinal])
 
+    @functools.cached_property
+    def constraint_cols(self) -> set[str]:
+        """All column names appearing in the machine's constraints — cached so
+        the refutation/surviving-env passes don't each rescan the machine."""
+        return propagate._all_constraint_cols(self.machine)
+
+    @functools.cached_property
+    def flags_by_access(self) -> dict[int, tuple[str, ...]]:
+        """Opcode flag columns grouped by access, from the constraint columns."""
+        return propagate._flags_by_access(self.constraint_cols)
+
     # -- Kind + activation selector (structural) ------------------------------
 
     @functools.cached_property
