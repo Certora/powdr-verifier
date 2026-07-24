@@ -112,7 +112,8 @@ class _DecodingIndex:
 
 @dataclass(frozen=True)
 class PropagationResult:
-    """Propagation state: facts are the only stored fields."""
+    """Propagation state: the derived facts (pins/zeros/exprs) plus the
+    ``_DecodingIndex`` used to derive them."""
 
     pins: dict[str, Pin]
     zeros: tuple[LinZero, ...]
