@@ -200,9 +200,29 @@ def _flags_by_access(cols: set[str]) -> dict[int, tuple[str, ...]]:
     return {a: tuple(sorted(v)) for a, v in out.items()}
 
 
+def _flag_domain(an: Analysis, flag_cols: tuple[str, ...]) -> dict[str, int] | None:
+    """Each flag's proven value-domain size ``n`` (values ``0..n-1``) from the
+    certified ``_static_bounds`` — a domain gadget ``f·(f-1)·…·(f-(n-1))=0``
+    gives ``Bound[0,n)``.
+
+    Opcode flags are frequently TERNARY, so the refutation must enumerate the
+    real domain: assuming ``{0,1}`` refutes a value only because ``f=2`` was
+    never tried, pinning a flag (or is_load) that is not actually forced.
+    Returns ``None`` if any flag lacks a proven finite ``[0,n)`` domain — then
+    no sound enumeration exists and the caller must decline.
+    """
+    dom: dict[str, int] = {}
+    for c in flag_cols:
+        b = an._static_bounds.get(c)
+        if b is None or b.lo != 0 or b.hi is None:
+            return None
+        dom[c] = b.hi
+    return dom
+
+
 def _sat_with_flags(cons: list[Any], env: dict[str, int],
-                    flag_cols: tuple[str, ...]) -> bool:
-    for bits in iproduct((0, 1), repeat=len(flag_cols)):
+                    flag_cols: tuple[str, ...], flag_dom: dict[str, int]) -> bool:
+    for bits in iproduct(*(range(flag_dom[c]) for c in flag_cols)):
         trial = dict(env)
         for col, v in zip(flag_cols, bits):
             trial[col] = v
@@ -223,7 +243,8 @@ def _deciding_covered(deciding: list[Any], known: set[str]) -> bool:
 
 
 def _refute_is_load(is_load: str, flag_cols: tuple[str, ...],
-                    index: _DecodingIndex, pin_values: dict[str, int]) -> int | None:
+                    index: _DecodingIndex, pin_values: dict[str, int],
+                    flag_dom: dict[str, int]) -> int | None:
     deciding = [c for _, c in index.deciding_constraints(is_load, flag_cols)]
     if not deciding:
         return None
@@ -231,7 +252,7 @@ def _refute_is_load(is_load: str, flag_cols: tuple[str, ...],
         return None
     survivors: list[int] = []
     for v in (0, 1):
-        if _sat_with_flags(deciding, {**pin_values, is_load: v}, flag_cols):
+        if _sat_with_flags(deciding, {**pin_values, is_load: v}, flag_cols, flag_dom):
             survivors.append(v)
     return survivors[0] if len(survivors) == 1 else None
 
@@ -240,9 +261,10 @@ def _surviving_flag_bits(
     flag_cols: tuple[str, ...],
     deciding: list[Any],
     pin_values: dict[str, int],
+    flag_dom: dict[str, int],
 ) -> list[tuple[int, ...]]:
     envs: list[tuple[int, ...]] = []
-    for bits in iproduct((0, 1), repeat=len(flag_cols)):
+    for bits in iproduct(*(range(flag_dom[c]) for c in flag_cols)):
         trial = dict(pin_values)
         for col, v in zip(flag_cols, bits):
             trial[col] = v
@@ -256,15 +278,16 @@ def _refute_flag_value(
     flag_cols: tuple[str, ...],
     deciding: list[Any],
     pin_values: dict[str, int],
+    flag_dom: dict[str, int],
 ) -> int | None:
     if not _deciding_covered(deciding, set(flag_cols) | {col} | set(pin_values)):
         return None
     survivors: list[int] = []
-    for v in (0, 1):
+    for v in range(flag_dom[col]):
         trial = dict(pin_values)
         trial[col] = v
         free = [c for c in flag_cols if c not in trial]
-        for bits in iproduct((0, 1), repeat=len(free)):
+        for bits in iproduct(*(range(flag_dom[c]) for c in free)):
             env = dict(trial)
             for c, b in zip(free, bits):
                 env[c] = b
@@ -287,7 +310,10 @@ def _refute_is_load_pins(pins: dict[str, Pin], pin_values: dict[str, int],
         flag_cols = flags.get(int(m.group(1)), ())
         if not flag_cols:
             continue
-        v = _refute_is_load(is_load, flag_cols, index, pin_values)
+        flag_dom = _flag_domain(an, flag_cols)
+        if flag_dom is None:
+            continue
+        v = _refute_is_load(is_load, flag_cols, index, pin_values, flag_dom)
         if v is None:
             continue
         prem = tuple(pins.values())
@@ -312,6 +338,9 @@ def _refute_flag_pins(pins: dict[str, Pin], pin_values: dict[str, int],
         flag_cols = flags.get(int(m.group(1)), ())
         if not flag_cols:
             continue
+        flag_dom = _flag_domain(an, flag_cols)
+        if flag_dom is None:
+            continue
         deciding = [c for _, c in index.deciding_constraints(is_load, flag_cols)]
         if not deciding:
             continue
@@ -323,7 +352,7 @@ def _refute_flag_pins(pins: dict[str, Pin], pin_values: dict[str, int],
             for col in flag_cols:
                 if col in pins:
                     continue
-                v = _refute_flag_value(col, flag_cols, deciding, pin_values)
+                v = _refute_flag_value(col, flag_cols, deciding, pin_values, flag_dom)
                 if v is None:
                     continue
                 pins[col] = Pin(col, v, sources=sources, premises=(load_pin,))
@@ -356,8 +385,11 @@ def surviving_envs(an: Analysis, prop: PropagationResult,
         flag_cols = flags.get(access, ())
         if not flag_cols:
             continue
+        flag_dom = _flag_domain(an, flag_cols)
+        if flag_dom is None:
+            continue
         deciding = [c for _, c in index.deciding_constraints(is_load, flag_cols)]
-        bits_list = _surviving_flag_bits(flag_cols, deciding, pin_values)
+        bits_list = _surviving_flag_bits(flag_cols, deciding, pin_values, flag_dom)
         envs = []
         for bits in bits_list:
             trial = dict(pin_values)

@@ -244,26 +244,34 @@ class _Query:
             self.assert_(f"(= {_smt_sym(sel)} 1)")
 
     def _assert_flag_refutation(self, pin: Pin) -> None:
-        """Grant the finite domain the is_load refutation enumerated: the
-        deciding flags and is_load itself are boolean.
+        """Grant each deciding flag its PROVEN value domain — the certified
+        ``_static_bounds`` Bound (a domain gadget ``f·(f-1)·…·(f-(n-1))=0`` gives
+        ``[0,n)``), cited as a premise.
+
+        Opcode flags are frequently TERNARY, so hard-coding ``flag ≤ 1`` was
+        unsound: it deleted the ``f=2`` case, and an ``is_load`` value unique
+        only over ``{0,1}`` (but not over the real domain) then certified. We do
+        NOT grant ``is_load`` a domain — the deciding mux (a source) determines
+        it from the flags. A flag with no proven finite domain gets no grant;
+        the sources must then constrain it or the certificate fails (safe).
 
         The real obligation — that under those domains the deciding constraints
-        (asserted as this pin's sources by ``certificate()``) admit no is_load
-        value other than ``pin.value`` — is discharged by z3 against the negated
-        claim ``finish`` asserts. So all we add here is the booleanity of the
-        flags and ``pin.col``.
-
-        We must NOT assert a "witness" that fixes ``is_load = pin.value``: every
-        witness disjunct contains ``(= is_load value)``, so asserting their
-        disjunction forces the claim and makes the query vacuously UNSAT for ANY
-        value (a wrong pin certified). Nor may we assert the refuted value
-        infeasible — that asserts the conclusion. Both were the old bug.
+        (this pin's sources) admit no ``is_load`` value other than ``pin.value``
+        — is discharged by z3 against the negated claim ``finish`` asserts. We
+        must NOT assert a "witness" fixing ``is_load = pin.value`` (vacuous
+        UNSAT for any value) nor the refuted value infeasible (asserts the
+        conclusion). Both were earlier bugs.
         """
         if not pin.refute_flags:
             return
         for col in (*pin.refute_flags, pin.col):
+            b = self.an._static_bounds.get(col)
+            if b is None or b.lo != 0 or b.hi is None:
+                continue   # no proven finite domain (e.g. is_load): the
+                # deciding sources must constrain it, or the certificate fails
             self.declare(col)
-            self.assert_(f"(and (<= 0 {_smt_sym(col)}) (<= {_smt_sym(col)} 1))")
+            self.assert_(f"(and (<= 0 {_smt_sym(col)}) (< {_smt_sym(col)} {b.hi}))")
+            self.add_premise(b)   # the domain is a certified fact, cite it
 
     def claim(self, f: Fact) -> str:
         if isinstance(f, Bound):
