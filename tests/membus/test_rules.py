@@ -84,6 +84,21 @@ def test_active_selector_gated_range_check_bound():
     assert "aux@8" not in an_off.bounds
 
 
+def test_active_selector_declines_on_unverifiable_gate():
+    # A memory row whose multiplicity is a nonlinear mux (is_valid·is_load) may
+    # be gated by a different column, so uniform gating is unconfirmed. The
+    # selector must NOT be recognized — else a per-instruction flag (is_load)
+    # would pose as the block selector, be granted = 1, and certify a false
+    # is_load-gated range bound (the arg is free when is_load = 0).
+    bis = [{"id": 1, "mult": ["is_valid@9", "*", "is_load@10"],
+            "args": [1, 8, "d0@1", 0, 0, 0, "ts0@2"]},
+           {"id": 1, "mult": "is_load@10", "args": [1, 8, "d1@3", 0, 0, 0, "ts1@4"]},
+           {"id": 3, "mult": "is_load@10", "args": ["aux@8", 17]}]
+    an = _an(bis=bis)
+    assert an.active_selector is None            # not is_load@10
+    assert "aux@8" not in an.bounds              # the false bound is not emitted
+
+
 def test_byte_bound_is_recv_only_and_assumed():
     recv = {"id": 1, "mult": -1, "args": [1, 8, "r0@1", 0, 0, 0, PV]}
     send = {"id": 1, "mult": 1, "args": [1, 8, "s0@2", 0, 0, 0, FS]}
