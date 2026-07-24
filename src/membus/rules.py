@@ -106,6 +106,19 @@ def _proportional(a: tuple[tuple[str, int], ...],
     return k
 
 
+def _single_col_residue(lf: LinForm) -> tuple[str, int] | None:
+    """``(col, residue)`` for a single-column linear form: ``a·col + c ≡ 0``
+    pins ``col = (−c·a⁻¹) mod p``. ``None`` if ``lf`` is not single-column or the
+    coefficient is not invertible mod p."""
+    if len(lf.coeffs) != 1:
+        return None
+    col, a = lf.coeffs[0]
+    try:
+        return col, (-lf.const * pow(a % P, -1, P)) % P
+    except ValueError:
+        return None
+
+
 class Analysis:
     """All facts extracted from one dump. Owns the caches (nothing is stashed
     inside the input JSON), and is the single entry point the deduction layer
@@ -165,15 +178,9 @@ class Analysis:
                 lf = linform(con)
                 if lf is None:
                     continue
-                lf = lf.subst(pins)
-                if len(lf.coeffs) == 1:
-                    col, a = lf.coeffs[0]
-                    if col in pins:
-                        continue
-                    try:
-                        pins[col] = (-lf.const * pow(a % P, -1, P)) % P
-                    except ValueError:
-                        continue
+                r = _single_col_residue(lf.subst(pins))
+                if r is not None and r[0] not in pins:
+                    pins[r[0]] = r[1]
                     changed = True
         return pins
 
@@ -184,14 +191,9 @@ class Analysis:
         out: dict[str, tuple[int, int]] = {}
         for idx, con in enumerate(self.machine.get("constraints", [])):
             lf = linform(con)
-            if lf is not None and len(lf.coeffs) == 1:
-                col, a = lf.coeffs[0]
-                if col in out:
-                    continue
-                try:
-                    out[col] = ((-lf.const * pow(a % P, -1, P)) % P, idx)
-                except ValueError:
-                    continue
+            r = _single_col_residue(lf) if lf is not None else None
+            if r is not None and r[0] not in out:
+                out[r[0]] = (r[1], idx)
         return out
 
     def _range_mult_evidence(
@@ -505,12 +507,9 @@ class Analysis:
             # is exactly the canonical residue, no window argument needed.
             lf = linform(con)
             if lf is not None and len(lf.coeffs) == 1:
-                col, a = lf.coeffs[0]
-                try:
-                    v = (-lf.const * pow(a % P, -1, P)) % P
-                    put(Bound(col, v, v + 1, sources=src))
-                except ValueError:
-                    pass
+                r = _single_col_residue(lf)
+                if r is not None:
+                    put(Bound(r[0], r[1], r[1] + 1, sources=src))
                 continue
             # Boolean / domain gadgets bound a column directly (no window).
             dg = domain_gadget(con)
