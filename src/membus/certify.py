@@ -302,14 +302,16 @@ class _Query:
             self.declare(f.col)
             if f.refute_flags:
                 self._assert_flag_refutation(f)
-            return f"(= {_smt_sym(f.col)} {f.value})"
+            # f.value is a signed residue (to_signed); the column symbol is
+            # declared in [0, p), so compare against the non-negative residue.
+            return f"(= {_smt_sym(f.col)} {f.value % P})"
         if isinstance(f, LinZero):
             for col, _ in f.coeffs:
                 self.declare(col)
             return f"(= {_lin(list(f.coeffs), f.const)} 0)"
         if isinstance(f, ExprEval):
             self.declare(f.expr)
-            return f"(= {_expr(f.expr)} {f.value})"
+            return f"(= {_expr(f.expr)} {f.value % P})"  # residue: symbol is [0, p)
         raise TypeError(f"no claim rendering for {type(f).__name__}")
 
     def finish(self, negated_claim: str) -> str:
