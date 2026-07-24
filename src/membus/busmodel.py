@@ -83,16 +83,18 @@ def memory_rows(data: Any, mem_id: int = MEMORY) -> list[MemRow]:
     return rows
 
 
-def range_bus_rows(data: Any) -> Iterator[tuple[int, int, list]]:
-    """Yield ``(bus_ordinal, bus_id, args)`` for every range-check bus row.
+def range_bus_rows(data: Any) -> Iterator[tuple[int, int, list, Any]]:
+    """Yield ``(bus_ordinal, bus_id, args, mult)`` for every range-check bus row.
 
     ``bus_ordinal`` is the row's index in the full ``bus_interactions`` list —
-    the reference certificates use to point back at source material.
+    the reference certificates use to point back at source material. ``mult`` is
+    the interaction's multiplicity: a range check constrains its args only when
+    sent (``mult != 0``), so a disabled row bounds nothing.
     """
     machine = machine_of(data)
     for i, b in enumerate(machine.get("bus_interactions", [])):
         if b.get("id") in RANGE_BUS_IDS:
-            yield i, b["id"], b.get("args", [])
+            yield i, b["id"], b.get("args", []), b.get("mult")
 
 
 def row_key(row: MemRow) -> str:
