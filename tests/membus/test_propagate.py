@@ -207,12 +207,55 @@ def test_is_load_not_over_pinned_when_mux_image_non_singleton():
 
 
 def test_is_load_pinned_to_non_boolean_value_when_forced():
-    """The reachable-set reading also pins values outside {0,1}: a mux that
-    forces is_load=2 over the whole flag domain yields a is_load=2 pin (the old
-    {0,1} enumeration missed it entirely)."""
+    """The reachable-set reading pins values outside {0,1} via the mux path: for
+    is_load = 2 + f*(f-1) with f boolean the reachable set is {2}. The mux is
+    nonlinear in f, so ordinary linear pinning cannot fire — the pin must carry
+    refute_flags (proving it came from _refute_is_load), and the old {0,1}
+    enumeration would have found no survivor at all."""
     f, il = "flags__0_0@11", "is_load_0@10"
-    an = _an([[il, "-", [2, "+", [0, "*", f]]], _bool(f)])
-    assert an._propagation.pins[il].value == 2
+    an = _an([[il, "-", [2, "+", [f, "*", [f, "+", -1]]]], _bool(f)])
+    pin = an._propagation.pins[il]
+    assert pin.value == 2
+    assert pin.refute_flags == (f,)   # from the refutation, not linear _try_pin
+
+
+def test_reversed_mux_is_load_pinned():
+    """A reversed decode `g(flags) - is_load` (is_load on the RHS of a minus) is
+    a valid mux; the refutation must register and pin it. Here g = 1 - f with f
+    pinned to 0, so is_load = 1."""
+    f, il = "flags__0_0@11", "is_load_0@10"
+    an = _an([[[1, "-", f], "-", il], [f, "+", 0], _bool(f)])
+    assert an._propagation.pins[il].value == 1
+
+
+def test_wide_flag_domain_declines():
+    """A range-checked wide-domain column is not a real opcode flag; when the
+    per-flag domain product exceeds the cap, _flag_domain declines rather than
+    enumerating a huge iproduct."""
+    from src.membus.facts import Bound
+    an = _an()
+    cols = tuple(f"flags__{i}_0@{i}" for i in range(3))
+    an._static_bounds.update({c: Bound(c, 0, 256) for c in cols})   # 256^3 > cap
+    assert propagate._flag_domain(an, cols) is None
+    assert propagate._flag_domain(an, cols[:1]) == {cols[0]: 256}   # single: ok
+
+
+def test_eval_partial_short_circuit_and_missing():
+    """The partial evaluator: 0-factor short-circuits without needing the other
+    operand; a missing column yields None; a fully-known expr evaluates."""
+    assert propagate._eval_partial(["a@1", "*", "b@2"], {"a@1": 0}) == 0
+    assert propagate._eval_partial(["a@1", "+", "b@2"], {"a@1": 1}) is None
+    assert propagate._eval_partial(["a@1", "+", "b@2"], {"a@1": 1, "b@2": 2}) == 3
+
+
+def test_try_refute_expr_folds_over_envs():
+    """A single-access expression that evaluates to one value across the access's
+    surviving flag envs yields an ExprEval with that value."""
+    prop = propagate.PropagationResult(
+        pins={}, zeros=(), exprs=(), decoding=propagate._DecodingIndex({}, {}))
+    ev = propagate._try_refute_expr(["flags__0_1@5", "+", 3], prop,
+                                    {1: [{"flags__0_1@5": 0}]})
+    assert ev is not None and ev.value == 3 and ev.access == 1
 
 
 def test_fold_pins_algebraic_identities():
