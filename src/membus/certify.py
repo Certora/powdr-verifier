@@ -33,7 +33,8 @@ from src.lens.normalize import BABYBEAR_PRIME
 from .facts import (
     AffineDef, Assumption, Bound, EffKind, ExprEval, Fact, Gap, LinZero, Pin, RecvUpper, TS_MAX,
 )
-from .linform import linform, names
+from .busmodel import BITWISE, VAR_RANGE
+from .linform import flatten_product, linform, names
 from .rules import Analysis
 
 P = BABYBEAR_PRIME
@@ -61,16 +62,6 @@ def _expr(e: Any) -> str:
             raise ValueError(f"unsupported op {op!r} in {e!r}")
         return f"({op} {_expr(lhs)} {_expr(rhs)})"
     raise ValueError(f"cannot render expr: {e!r}")
-
-
-def _product_factors(e: Any) -> list[Any]:
-    """Flatten a (possibly nested) ``*`` product into its factor list.
-
-    ``a * (b * c)`` and ``(a * b) * c`` both give ``[a, b, c]``; a non-product
-    gives ``[e]``. Used so a product constraint splits into ALL its factors."""
-    if isinstance(e, list) and len(e) == 3 and e[1] == "*":
-        return _product_factors(e[0]) + _product_factors(e[2])
-    return [e]
 
 
 def _lin(coeffs: dict[str, int] | list[tuple[str, int]], const: int) -> str:
@@ -145,7 +136,7 @@ class _Query:
                 # f·(f-1)·(f-2) must yield three LINEAR disjuncts, else the
                 # nested `(f-1)·(f-2)` disjunct stays quadratic and z3 times out
                 # (the [0,n) domain bound then spuriously fails to certify).
-                factors = _product_factors(con)
+                factors = flatten_product(con)
                 self.comment(f"source constraint[{src.index}] "
                              f"(product; prime-field split, {len(factors)} factors)")
                 self.assert_("(or " + " ".join(self.field_zero(f) for f in factors) + ")")
@@ -155,7 +146,7 @@ class _Query:
         else:  # bus row
             b = self.an.machine["bus_interactions"][src.index]
             bid, args = b.get("id"), b.get("args", [])
-            if bid == 3 and len(args) >= 2 and isinstance(args[1], int):
+            if bid == VAR_RANGE and len(args) >= 2 and isinstance(args[1], int):
                 self.declare(args[0])
                 self.comment(f"source bus[{src.index}]: VariableRangeChecker "
                              f"(value residue in [0, 2^{args[1]}))")
@@ -163,7 +154,7 @@ class _Query:
                 self.assert_(f"(= {self._canon_expr(args[0])} (+ (* {P} {q}) {r}))")
                 self.assert_(f"(and (<= 0 {r}) (< {r} {1 << args[1]}))")
                 self._scaled_hint(args[0], q, r)
-            elif bid == 6:
+            elif bid == BITWISE:
                 for a in args[:2]:
                     if isinstance(a, str):
                         self.declare(a)

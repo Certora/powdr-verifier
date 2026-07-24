@@ -41,26 +41,70 @@ def _dump():
     }
 
 
+def _negated_claim(smt2):
+    return next(ln for ln in reversed(smt2.splitlines())
+                if ln.startswith("(assert (not"))
+
+
+def _expected_cols(an, f):
+    """The columns the fact's claim must be about."""
+    from src.membus.linform import names
+    t = type(f).__name__
+    if t == "Bound":
+        return {f.col}
+    if t == "Gap":
+        return {f.later, f.earlier}
+    if t == "RecvUpper":
+        return {f.pv, f.fs}
+    if t == "AffineDef":
+        return {f.col, *(o for o, _ in f.weights)}
+    if t == "EffKind":
+        return set(names(an._orig_mult[f.ordinal]))
+    if t == "Pin":
+        return {f.col}
+    if t == "LinZero":
+        return {c for c, _ in f.coeffs}
+    if t == "ExprEval":
+        return set(names(f.expr))
+    return set()
+
+
 def test_all_facts_covered_and_certificates_emit():
     an = Analysis(_dump())
     facts = certify.all_facts(an)
     types = {type(f).__name__ for f in facts}
     assert {"Bound", "Gap", "RecvUpper", "EffKind"} <= types
     for f in facts:
-        cert = certify.certificate(an, f)
-        assert "(check-sat)" in cert.smt2
-        assert "(assert (not" in cert.smt2                 # the negated claim
+        smt = certify.certificate(an, f).smt2
+        assert "(check-sat)" in smt
+        neg = _negated_claim(smt)
+        # the negated claim must be a NON-TRIVIAL assertion ABOUT this fact: a
+        # constant claim, or one mentioning none of the fact's own columns, is a
+        # vacuous / mis-targeted encoding the substring check used to miss.
+        assert neg not in ("(assert (not true))", "(assert (not false))")
+        cols = _expected_cols(an, f)
+        assert cols and any(certify._smt_sym(c) in neg for c in cols), \
+            f"{type(f).__name__} negated claim omits its columns: {neg}"
 
 
 def test_certificate_names_assumptions():
+    from src.membus.facts import TS_MAX
     an = Analysis(_dump())
     facts = certify.all_facts(an)
+    # TS_BOUND: the Gap rests on a ts Bound granted its [0, TS_MAX) domain. The
+    # grant must be an actual asserted CLAIM (not merely a named-assumption
+    # comment), and at exactly TS_MAX — a wrong domain is left ungranted.
     gap = next(f for f in facts if type(f).__name__ == "Gap")
-    cert = certify.certificate(an, gap)
-    assert "TS_BOUND" in cert.smt2
-    kinds = [f for f in facts if type(f).__name__ == "EffKind"]
-    iv = [f for f in kinds if f.assumptions]
-    assert iv and any("ACTIVE_SELECTOR" in certify.certificate(an, f).smt2 for f in iv)
+    gap_grants = [ln for ln in certify.certificate(an, gap).smt2.splitlines()
+                  if ln.startswith("(assert") and f" {TS_MAX})" in ln]
+    assert gap_grants, "TS_BOUND domain not granted as an asserted claim"
+    # ACTIVE_SELECTOR: fixes the gating column to 1 — assert the grant line.
+    sel = an.active_selector
+    assert sel is not None
+    grant = f"(assert (= {certify._smt_sym(sel)} 1))"
+    kinds = [f for f in facts if type(f).__name__ == "EffKind" and f.assumptions]
+    assert kinds and any(grant in certify.certificate(an, f).smt2 for f in kinds), \
+        "ACTIVE_SELECTOR grant (= sel 1) not asserted"
 
 
 @pytest.mark.skipif(certify.find_z3() is None, reason="no z3 on PATH")

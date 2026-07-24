@@ -146,16 +146,19 @@ def product(e: Any) -> Product | None:
     return None
 
 
-def _flatten_mul(e: Any) -> list[Any]:
-    """Left-flattened factors of a nested ``*`` expression."""
+def flatten_product(e: Any) -> list[Any]:
+    """Flatten a (possibly nested) ``*`` product into its factor list.
+
+    ``a * (b * c)`` and ``(a * b) * c`` both give ``[a, b, c]``; a non-product
+    gives ``[e]``."""
     if isinstance(e, list) and len(e) == 3 and e[1] == "*":
-        return _flatten_mul(e[0]) + _flatten_mul(e[2])
+        return flatten_product(e[0]) + flatten_product(e[2])
     return [e]
 
 
 def domain_gadget(e: Any) -> tuple[str, int] | None:
     """``col * (col-1) * … * (col-(n-1)) = 0`` → ``(col, n)``; else None."""
-    factors = _flatten_mul(e)
+    factors = flatten_product(e)
     col: str | None = None
     deltas: list[int] = []
     for f in factors:
