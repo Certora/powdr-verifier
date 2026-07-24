@@ -228,6 +228,15 @@ def test_reversed_mux_is_load_pinned():
     assert an._propagation.pins[il].value == 1
 
 
+def test_forward_mux_not_shadowed_by_reversed_alias():
+    """A reversed alias `freevar - is_load` appearing BEFORE the genuine forward
+    decode `is_load - g(flags)` must not shadow it: the two-pass registration
+    lets forward decodes win, so is_load still pins."""
+    f, il = "flags__0_0@11", "is_load_0@10"
+    an = _an([["freevar@9", "-", il], [il, "-", [1, "-", f]], [f, "+", 0], _bool(f)])
+    assert an._propagation.pins[il].value == 1
+
+
 def test_wide_flag_domain_declines():
     """A range-checked wide-domain column is not a real opcode flag; when the
     per-flag domain product exceeds the cap, _flag_domain declines rather than
