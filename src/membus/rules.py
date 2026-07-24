@@ -270,7 +270,11 @@ class Analysis:
         for row in self.mem:
             lf = linform(row.mult)
             if lf is None:
-                continue                        # flag-mux products stay unresolved
+                return None                     # a mult whose gate we cannot
+                # verify (a nonlinear mux like is_valid·is_load) might be gated
+                # by a different column, so uniform gating is unconfirmed —
+                # decline rather than let a per-instruction flag pose as the
+                # block selector (which would grant it =1 unsoundly)
             if lf.is_const:
                 if lf.const % P != 0:
                     has_const_active = True     # a ±1 row not behind any gate
