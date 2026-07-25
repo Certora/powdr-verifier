@@ -83,6 +83,9 @@ P = BABYBEAR_PRIME
 # iterations per candidate row. Corpus widths are ≤ 12 bits.
 _MAX_ENUM_BITS = 16
 
+# Memory-multiplicity residue → effect kind (send = +1, recv = −1, disabled = 0).
+_KIND_BY_MULT = {1: "send", P - 1: "recv", 0: "disabled"}
+
 
 def _proportional(a: tuple[tuple[str, int], ...],
                   b: tuple[tuple[str, int], ...]) -> int | None:
@@ -303,7 +306,7 @@ class Analysis:
         src = (self.mem_src(row),)
         if lf.is_const:
             v = lf.const % P
-            kind = {1: "send", P - 1: "recv", 0: "disabled"}.get(v)
+            kind = _KIND_BY_MULT.get(v)
             return EffKind(row.ordinal, kind, sources=src) if kind else None
         if (self.assume_is_valid and self.active_selector is not None
                 and lf.coeffs == ((self.active_selector, lf.coeffs[0][1]),)):
@@ -312,7 +315,7 @@ class Analysis:
                            assumptions=frozenset({Assumption.ACTIVE_SELECTOR}))
         v, prem = propagate.eval_mult_basis(lf, self._propagation)
         if v is not None:
-            kind = {1: "send", P - 1: "recv", 0: "disabled"}.get(v)
+            kind = _KIND_BY_MULT.get(v)
             if kind is not None:
                 return EffKind(row.ordinal, kind, sources=src, premises=prem)
         return None
@@ -597,7 +600,7 @@ class Analysis:
             if bp is None or bp.hi is None or bn is None or bn.hi is None:
                 continue
             # window: pos − neg + const ∈ (const − hi_neg, const + hi_pos) ⊂ (−p, p)
-            if not (const - bn.hi > -P and const + bp.hi < P):
+            if not propagate._window_sound(const - bn.hi, const + bp.hi):
                 continue
             gap = -const                           # pos = neg + gap
             if gap == 0 or abs(gap) >= TS_MAX:     # usability guard
@@ -683,7 +686,7 @@ class Analysis:
             if win is None:
                 continue
             lo, hi, prem = win
-            if not (lo > -P and hi < P):           # k ≡ 0 (mod p) ⟹ k = 0
+            if not propagate._window_sound(lo, hi):  # k ≡ 0 (mod p) ⟹ k = 0
                 continue
             out.append(RecvUpper(
                 pv[0][0], fs[0][0], lf.const,
@@ -722,7 +725,7 @@ class Analysis:
             if win is None:
                 continue
             lo, hi, prem = win
-            if not (lo > -P and hi < P):
+            if not propagate._window_sound(lo, hi):
                 continue                    # candidate set below assumes window ⊂ (−p, p)
             # enumerate the integer solutions the residue fact admits:
             # arg = sign·s·k, residue(arg) = r ∈ [0, 2^bits) ⟹ k ≡ (sign·s)⁻¹·r.
@@ -795,7 +798,7 @@ class Analysis:
             prem.append(b)
             lo -= max(0, w) * (b.hi - 1)
             hi -= min(0, w) * (b.hi - 1)
-        if not (lo > -P and hi < P):               # admitted-root sets below need this
+        if not propagate._window_sound(lo, hi):    # admitted-root sets below need this
             return None
         # admitted roots of the product within the window:
         #   chosen factor ≡ 0 ⟹ k = 0 (window excludes ±p);
