@@ -332,13 +332,13 @@ def _refute_flag_value(
     return survivors[0] if len(survivors) == 1 else None
 
 
-def _refute_is_load_pins(pins: dict[str, Pin], pin_values: dict[str, int],
-                         an: Analysis, index: _DecodingIndex) -> None:
-    cols = an.constraint_cols
+def _flag_accesses(cols, an: Analysis):
+    """Yield ``(is_load, access, flag_cols, flag_dom)`` for each ``is_load`` name
+    in ``cols`` whose access has a proven-finite flag domain — the shared
+    preamble of the is_load / flag refutation and surviving-env passes. Skips
+    names with no flags or no provable domain."""
     flags = an.flags_by_access
     for is_load in sorted(c for c in cols if c.startswith("is_load_")):
-        if is_load in pins:
-            continue
         m = _IS_LOAD_RE.match(is_load)
         if m is None:
             continue
@@ -347,6 +347,14 @@ def _refute_is_load_pins(pins: dict[str, Pin], pin_values: dict[str, int],
             continue
         flag_dom = _flag_domain(an, flag_cols)
         if flag_dom is None:
+            continue
+        yield is_load, int(m.group(1)), flag_cols, flag_dom
+
+
+def _refute_is_load_pins(pins: dict[str, Pin], pin_values: dict[str, int],
+                         an: Analysis, index: _DecodingIndex) -> None:
+    for is_load, _access, flag_cols, flag_dom in _flag_accesses(an.constraint_cols, an):
+        if is_load in pins:
             continue
         v = _refute_is_load(is_load, flag_cols, index, pin_values, flag_dom)
         if v is None:
@@ -364,17 +372,7 @@ def _refute_is_load_pins(pins: dict[str, Pin], pin_values: dict[str, int],
 def _refute_flag_pins(pins: dict[str, Pin], pin_values: dict[str, int],
                       an: Analysis, index: _DecodingIndex) -> None:
     """Pin opcode flag bits once is_load and the mux cone fix their value."""
-    flags = an.flags_by_access
-    for is_load in sorted(c for c in pins if c.startswith("is_load_")):
-        m = _IS_LOAD_RE.match(is_load)
-        if m is None:
-            continue
-        flag_cols = flags.get(int(m.group(1)), ())
-        if not flag_cols:
-            continue
-        flag_dom = _flag_domain(an, flag_cols)
-        if flag_dom is None:
-            continue
+    for is_load, _access, flag_cols, flag_dom in _flag_accesses(list(pins), an):
         deciding = [c for _, c in index.deciding_constraints(is_load, flag_cols)]
         if not deciding:
             continue
@@ -407,20 +405,9 @@ def surviving_envs(an: Analysis, prop: PropagationResult,
                    ) -> dict[int, list[dict[str, int]]]:
     """Pinned + flag assignments satisfying each access's mux/opcode cone."""
     pin_values = prop.pin_values
-    flags = an.flags_by_access
     out: dict[int, list[dict[str, int]]] = {}
     index = prop.decoding
-    for is_load in sorted(c for c in pin_values if c.startswith("is_load_")):
-        m = _IS_LOAD_RE.match(is_load)
-        if m is None:
-            continue
-        access = int(m.group(1))
-        flag_cols = flags.get(access, ())
-        if not flag_cols:
-            continue
-        flag_dom = _flag_domain(an, flag_cols)
-        if flag_dom is None:
-            continue
+    for is_load, access, flag_cols, flag_dom in _flag_accesses(pin_values, an):
         deciding = [c for _, c in index.deciding_constraints(is_load, flag_cols)]
         bits_list = _surviving_flag_bits(flag_cols, deciding, pin_values, flag_dom)
         envs = []
