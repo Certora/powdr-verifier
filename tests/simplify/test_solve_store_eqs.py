@@ -164,12 +164,12 @@ def test_does_not_descend_into_disjunction():
 
 
 def test_dispatcher_recognizes_tactic():
-    from src.simplifier import _apply_tactic_pass
+    from src.simplifier import _apply_tactic_pass, _split_tactic
 
     class _DummyAction:
         def __iadd__(self, other):
             return self
 
     smt = _script([])
-    out = _apply_tactic_pass("solve_store_eqs", [], smt, _DummyAction())
+    out = _apply_tactic_pass(_split_tactic("solve_store_eqs"), smt, _DummyAction())
     assert out is smt
