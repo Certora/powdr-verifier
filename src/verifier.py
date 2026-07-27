@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .encoding.utils import get_is_valid
 from .report.action import Action
-from .smt.conversion import SmtConverter
+from .smt.conversion import FormulaWithAxioms, SmtConverter
 from .smt.utils import *
 from .utils.basic_block import BasicBlock
 from .utils.io import load_apc_dump, load_json
@@ -19,6 +19,31 @@ from .verify.preanalysis import analyze_memory_bus_alignment, apply_skip_trivial
 from .verify.memory_bus_alignment import BEFORE_PREFIX, AFTER_PREFIX, emit_memory_equalities
 from .verify import SetInfos, SkolemPinKind
 from .verify.skolem_pins import derived_columns_skolem_setinfo, drop_mirrored_derived
+
+
+def _encoding_qvars(
+    inner: FormulaWithAxioms,
+    io_relation: FNode,
+    globals: frozenset[FNode],
+    *,
+    side_prefix: str,
+    iorelvars: frozenset[FNode],
+) -> frozenset[FNode]:
+    """Symbols quantified in ``encoding()``: live in the ``forall`` body on ``side_prefix``.
+
+    The body is ``Or(Not(inner.constraints), Not(io_relation))``. Only the inner
+    side's program variables (plus ``iorelvars``) are quantified; the other side
+    stays existentially bound at the top level. Quantifying the opposite side's
+    variables (they can leak in via ``io_relation``) turns a ground obligation
+    into a ``forall`` z3 can satisfy adversarially -> spurious sat.
+    """
+    live: set[FNode] = set()
+    for f in (*inner.constraints, io_relation):
+        live |= f.get_free_variables()
+    pref = f"{side_prefix}-"
+    return frozenset(
+        v for v in live if v.symbol_name().startswith(pref) or v in iorelvars
+    ) - globals
 
 
 def _filter_mirrored_constraints(before, after):
@@ -142,6 +167,14 @@ def verify():
             var1 = before_conv.symbols | iorelvars
             var2 = after_conv.symbols | iorelvars
             globals = before_smt.globals | after_smt.globals
+            completeness_qvars = _encoding_qvars(
+                after_smt, io_relation, globals,
+                side_prefix=AFTER_PREFIX, iorelvars=iorelvars,
+            )
+            soundness_qvars = _encoding_qvars(
+                before_smt, io_relation, globals,
+                side_prefix=BEFORE_PREFIX, iorelvars=iorelvars,
+            )
             auxiliaries = frozenset.union(
                 frozenset(),
                 *before_conv.bus_interaction_encoder.get_auxiliaries().values(),
@@ -188,7 +221,7 @@ def verify():
                     completeness = encoding(
                         before_smt,
                         after_smt,
-                        var2 - globals,
+                        completeness_qvars,
                         io_relation,
                     )
                     info = pin_metadata(completeness, after_derived_pins, reverse=True, smt_outfile=outfile)
@@ -211,7 +244,7 @@ def verify():
                     soundness = encoding(
                         after_smt,
                         before_smt,
-                        var1 - globals,
+                        soundness_qvars,
                         io_relation,
                         additional_asserts=[Equals(is_valid_after, Int(1))],
                     )
@@ -274,7 +307,7 @@ def verify():
                     soundness = encoding(
                         after_smt,
                         before_smt,
-                        var1 - globals,
+                        soundness_qvars,
                         io_relation,
                     )
                     info = pin_metadata(
