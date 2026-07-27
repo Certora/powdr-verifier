@@ -243,4 +243,5 @@ class SmtConverter:
             globals=self.bus_interaction_encoder.get_globals() | frozenset([self.UF_MOD_INV]),
         )
         logging.debug(f"{self.name}: done converting")
+        clear_encode_caches()
         return fwa
