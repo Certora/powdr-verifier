@@ -8,7 +8,7 @@ use z3::{SortKind, DeclKind};
 use z3_sys::{Z3_get_numeral_string, Z3_is_numeral_ast};
 
 use super::flint::{
-    factor_mpoly, BuiltMpoly, Coeff, Monomial, SparsePoly, TermMap,
+    divides_terms, factor_mpoly, BuiltMpoly, Coeff, Monomial, SparsePoly, TermMap,
 };
 use super::{FactorError, Factorization};
 
@@ -44,6 +44,24 @@ pub fn factor(expr: &Int) -> Result<Factorization, FactorError> {
     let built = z3_to_fmpz_mpoly(expr, &mut gens)?;
     let flint = factor_mpoly(built)?;
     flint_to_factorization(flint, &gens)
+}
+
+/// True iff `divisor` divides `dividend` as integer polynomials. Returns
+/// `Ok(false)` if either is not a plain polynomial in Int variables.
+pub fn divides(dividend: &Int, divisor: &Int) -> Result<bool, FactorError> {
+    let mut gens = GeneratorMap::new();
+    let num = match extract_terms(dividend, &mut gens) {
+        Ok(t) => t,
+        Err(_) => return Ok(false),
+    };
+    let den = match extract_terms(divisor, &mut gens) {
+        Ok(t) => t,
+        Err(_) => return Ok(false),
+    };
+    if num.is_empty() || den.is_empty() {
+        return Ok(false);
+    }
+    divides_terms(&num, &den, gens.gens.len())
 }
 
 fn z3_to_fmpz_mpoly(
