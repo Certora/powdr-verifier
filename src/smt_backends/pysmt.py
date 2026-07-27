@@ -204,10 +204,6 @@ pysmt.smtlib.solver.SmtLibSolver.assert_ = lambda self, formula: self.add_assert
 
 @clear_pending_pop
 def __smtlib_add_assertion_no_simplify(self, formula, named=None):
-    sorts = self.to.get_types(formula, custom_only=True)
-    for s in sorts:
-        if all(s not in ds for ds in self.declared_sorts):
-            self._declare_sort(s)
     deps = formula.get_free_variables()
     for d in deps:
         if all(d not in dv for dv in self.declared_vars):
@@ -647,7 +643,7 @@ def script_with_sorted_declarefuns(smtlib: script.SmtLibScript) -> script.SmtLib
     return smtlib
 
 def convert_to_smt_script(f: FNode, status=None, pin_info=None) -> script.SmtLibScript:
-    smtlib = script.smtlibscript_from_formula(f, None)
+    smtlib = script.smtlibscript_from_formula(f, ALL)
     merged_decls = [p.node for p in pin_info.decls] if pin_info is not None else []
     if merged_decls:
         existing = {
@@ -672,8 +668,6 @@ def convert_to_smt_script(f: FNode, status=None, pin_info=None) -> script.SmtLib
                     )
         smtlib.commands = new_cmds
     smtlib = script_with_sorted_declarefuns(smtlib)
-
-    smtlib.commands[0].args[0] = "ALL"
 
     # add model production and model retrieval
     #smtlib.commands.insert(2, script.SmtLibCommand(name='set-option', args=[':produce-models', 'true']))
