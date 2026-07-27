@@ -3,10 +3,13 @@ from textwrap import dedent
 
 import z3
 
-from pysmt.shortcuts import Solver
-
-from src.simplify.bitwise import UF_AND, UF_OR, UF_XOR, simplify_bitwise
+from src.simplify.bitwise import UF_AND, UF_XOR, simplify_bitwise
 from src.smt.utils import *
+
+# Imported AFTER src.smt.utils so the custom MOD operator is registered first;
+# importing pysmt.shortcuts earlier builds a MOD-less type checker that breaks
+# MOD type-checking for every test collected afterward.
+from pysmt.shortcuts import Solver
 
 BABYBEAR_PRIME = 0x78000001
 
@@ -53,11 +56,10 @@ def test_bitwise_grounds_axioms_for_seen_terms():
     z = Symbol("z", INT)
     xy = Function(UF_XOR, [x, y])
 
-    assert Implies(Equals(x, y), Equals(xy, Int(0))) in asserts
-    assert Implies(Equals(x, Int(0)), Equals(xy, y)) in asserts
-    assert Implies(Equals(y, Int(0)), Equals(xy, x)) in asserts
-    assert Implies(Equals(x, xy), Equals(y, Int(0))) in asserts
-    assert Implies(Equals(y, xy), Equals(x, Int(0))) in asserts
+    # XOR uses biconditionals (sound: x=y ⟺ xor=0); only AND/OR are implications.
+    assert Iff(Equals(x, y), Equals(xy, Int(0))) in asserts
+    assert Iff(Equals(x, Int(0)), Equals(xy, y)) in asserts
+    assert Iff(Equals(y, Int(0)), Equals(xy, x)) in asserts
     assert Equals(Int(0), Int(0)) in asserts
     assert Equals(xy, z) in asserts
 
@@ -86,11 +88,9 @@ def test_bitwise_injects_axioms_inside_quantifier():
     body = asserts[0].arg(0)
     assert body.is_and()
     assert Equals(xy, z) in body.args()
-    assert Implies(Equals(x, y), Equals(xy, Int(0))) in body.args()
-    assert Implies(Equals(x, Int(0)), Equals(xy, y)) in body.args()
-    assert Implies(Equals(y, Int(0)), Equals(xy, x)) in body.args()
-    assert Implies(Equals(x, xy), Equals(y, Int(0))) in body.args()
-    assert Implies(Equals(y, xy), Equals(x, Int(0))) in body.args()
+    assert Iff(Equals(x, y), Equals(xy, Int(0))) in body.args()
+    assert Iff(Equals(x, Int(0)), Equals(xy, y)) in body.args()
+    assert Iff(Equals(y, Int(0)), Equals(xy, x)) in body.args()
 
 
 def test_bitwise_simplifies_quantified_xor_terms_locally():
