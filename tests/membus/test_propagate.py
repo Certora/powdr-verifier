@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from src.lens.loader import machine_of
 from src.lens.normalize import BABYBEAR_PRIME as P
 from src.membus import keys, propagate
 from src.membus.busmodel import symbolic_as_ordinals
@@ -133,38 +132,32 @@ def test_ternary_boolean_gadget_bounds():
     assert an.kinds[0].kind == "send"
 
 
-def test_refute_expr_requires_bound_columns():
-    """Unbound columns that still affect the value are not guessed."""
-    expr = ["ptr@1", "+", "mem@2"]
-    pins = {"ptr@1": 8}
-    envs = {0: [{"ptr@1": 8, "flags__0_0@3": 0}]}
-    assert propagate._refute_expr(expr, pins, envs) is None
+def test_single_col_constraint_bounds_exact_residue():
+    """A single-column constraint pins the column's EXACT residue, even one
+    >= 2^29. The old Bound(col, 0, 2^29) was false for large residues; trusted
+    as a window premise a false bound can certify a false integer identity."""
+    an = _an(cons=[["col@1", "+", 1]])          # col + 1 = 0  ->  col = P - 1
+    b = an._static_bounds["col@1"]
+    assert (b.lo, b.hi) == (P - 1, P)           # exact, not [0, 2^29)
 
 
-def test_refute_expr_zeroes_pinned_factor():
-    """Pinned zero eliminates an unbound multiplicand."""
-    expr = [["is_load_0@10", "*", "rd_0@11"], "+", "ptr_0@12"]
-    pins = {"is_load_0@10": 0, "ptr_0@12": 44}
-    envs = {0: [{"is_load_0@10": 0, "ptr_0@12": 44, "flags__0_0@5": 0}]}
-    assert propagate._refute_expr(expr, pins, envs) == 44
+def test_large_residue_column_yields_no_integer_zero():
+    """With the exact residue bound, a term touching a large-residue column has
+    an out-of-window integer span, so no (unsound) integer LinZero is emitted.
+    Under the old loose bound `y - 2*col = 0` certified though `col = P-1`
+    makes it false by exactly P."""
+    an = _an(cons=[["col@1", "+", 1], ["y@2", "-", _m(2, "col@1")]])
+    zero_cols = {z.coeffs for z in propagate.propagate(an).zeros}
+    assert (("col@1", -2), ("y@2", 1)) not in zero_cols
+    assert (("y@2", 1), ("col@1", -2)) not in zero_cols
 
 
-@pytest.mark.skipif(not _DUMP_2100223.is_file(), reason="regression dump not present")
-def test_decoding_index_matches_naive_deciding():
-    data = json.loads(_DUMP_2100223.read_text())
-    cons = machine_of(data).get("constraints", [])
-    index = propagate._DecodingIndex.build(cons)
-    cols = propagate._all_constraint_cols({"constraints": cons})
-    for is_load in sorted(c for c in cols if c.startswith("is_load_")):
-        m = propagate._IS_LOAD_RE.match(is_load)
-        if m is None:
-            continue
-        flag_cols = propagate._flag_cols_for_access(cols, int(m.group(1)))
-        if not flag_cols:
-            continue
-        naive = propagate._deciding_constraints(cons, is_load, flag_cols, {})
-        indexed = index.deciding_constraints(is_load, flag_cols)
-        assert [c for _, c in indexed] == naive, is_load
+def test_product_gadget_bounds_only_boolean_form():
+    """(col+a)(col+a-1)=0 has roots {-a, 1-a}; [0,2) is sound only for a=0."""
+    boolean = _an(cons=[_bool("x@1")])._static_bounds["x@1"]
+    assert (boolean.lo, boolean.hi) == (0, 2)
+    shifted = [["x@1", "+", 5], "*", ["x@1", "+", 4]]     # (x+5)(x+4)=0
+    assert _an(cons=[shifted])._static_bounds.get("x@1") is None
 
 
 def test_decoding_index_flipped_mux_form():
@@ -174,6 +167,104 @@ def test_decoding_index_flipped_mux_form():
     index = propagate._DecodingIndex.build(cons)
     assert is_load in index.mux_by_is_load
     assert index.mux_by_is_load[is_load][1] == cons[0]
+
+
+def test_ternary_flag_is_load_not_over_pinned():
+    """Opcode flags are ternary, so the is_load refutation must enumerate the
+    proven [0,n) domain, not {0,1}. A mux that fixes is_load=1 over {0,1} but
+    allows is_load=0 via f=2 must NOT pin is_load (regression: enumerating
+    {0,1} pinned a value refuted only because f=2 was never tried)."""
+    inv2 = pow(2, -1, P)
+    f, il = "flags__0_0@11", "is_load_0@10"
+    # is_load - (1 - f^2/2 + f/2): quad(0)=quad(1)=1, quad(2)=0
+    mux = [il, "-", [1, "+", [[(-inv2) % P, "*", [f, "*", f]],
+                              "+", [inv2 % P, "*", f]]]]
+    an = _an([mux, _ternary_bool(f)])
+    assert il not in an._propagation.pins
+
+
+def test_boolean_flag_is_load_still_pinned():
+    """Contrast to the ternary case: when the flag is proven boolean, is_load is
+    genuinely forced over its whole domain and must still be pinned."""
+    inv2 = pow(2, -1, P)
+    f, il = "flags__0_0@11", "is_load_0@10"
+    mux = [il, "-", [1, "+", [[(-inv2) % P, "*", [f, "*", f]],
+                              "+", [inv2 % P, "*", f]]]]
+    an = _an([mux, _bool(f)])
+    assert an._propagation.pins[il].value == 1
+
+
+def test_is_load_not_over_pinned_when_mux_image_non_singleton():
+    """is_load has no proven domain of its own, so the refutation must read it
+    off the mux over the flag domain — not enumerate it over {0,1}. For
+    is_load = 2*f with f boolean the reachable set is {0,2}: is_load must NOT be
+    pinned, and the dependent flag pin (which would have been premised on a wrong
+    is_load and could then certify unsat) must not be produced either."""
+    f, il = "flags__0_0@11", "is_load_0@10"
+    an = _an([[il, "-", [2, "*", f]], _bool(f)])
+    assert il not in an._propagation.pins
+    assert f not in an._propagation.pins
+
+
+def test_is_load_pinned_to_non_boolean_value_when_forced():
+    """The reachable-set reading pins values outside {0,1} via the mux path: for
+    is_load = 2 + f*(f-1) with f boolean the reachable set is {2}. The mux is
+    nonlinear in f, so ordinary linear pinning cannot fire — the pin must carry
+    refute_flags (proving it came from _refute_is_load), and the old {0,1}
+    enumeration would have found no survivor at all."""
+    f, il = "flags__0_0@11", "is_load_0@10"
+    an = _an([[il, "-", [2, "+", [f, "*", [f, "+", -1]]]], _bool(f)])
+    pin = an._propagation.pins[il]
+    assert pin.value == 2
+    assert pin.refute_flags == (f,)   # from the refutation, not linear _try_pin
+
+
+def test_reversed_mux_is_load_pinned():
+    """A reversed decode `g(flags) - is_load` (is_load on the RHS of a minus) is
+    a valid mux; the refutation must register and pin it. Here g = 1 - f with f
+    pinned to 0, so is_load = 1."""
+    f, il = "flags__0_0@11", "is_load_0@10"
+    an = _an([[[1, "-", f], "-", il], [f, "+", 0], _bool(f)])
+    assert an._propagation.pins[il].value == 1
+
+
+def test_forward_mux_not_shadowed_by_reversed_alias():
+    """A reversed alias `freevar - is_load` appearing BEFORE the genuine forward
+    decode `is_load - g(flags)` must not shadow it: the two-pass registration
+    lets forward decodes win, so is_load still pins."""
+    f, il = "flags__0_0@11", "is_load_0@10"
+    an = _an([["freevar@9", "-", il], [il, "-", [1, "-", f]], [f, "+", 0], _bool(f)])
+    assert an._propagation.pins[il].value == 1
+
+
+def test_wide_flag_domain_declines():
+    """A range-checked wide-domain column is not a real opcode flag; when the
+    per-flag domain product exceeds the cap, _flag_domain declines rather than
+    enumerating a huge iproduct."""
+    from src.membus.facts import Bound
+    an = _an()
+    cols = tuple(f"flags__{i}_0@{i}" for i in range(3))
+    an._static_bounds.update({c: Bound(c, 0, 256) for c in cols})   # 256^3 > cap
+    assert propagate._flag_domain(an, cols) is None
+    assert propagate._flag_domain(an, cols[:1]) == {cols[0]: 256}   # single: ok
+
+
+def test_eval_partial_short_circuit_and_missing():
+    """The partial evaluator: 0-factor short-circuits without needing the other
+    operand; a missing column yields None; a fully-known expr evaluates."""
+    assert propagate._eval_partial(["a@1", "*", "b@2"], {"a@1": 0}) == 0
+    assert propagate._eval_partial(["a@1", "+", "b@2"], {"a@1": 1}) is None
+    assert propagate._eval_partial(["a@1", "+", "b@2"], {"a@1": 1, "b@2": 2}) == 3
+
+
+def test_try_refute_expr_folds_over_envs():
+    """A single-access expression that evaluates to one value across the access's
+    surviving flag envs yields an ExprEval with that value."""
+    prop = propagate.PropagationResult(
+        pins={}, zeros=(), exprs=(), decoding=propagate._DecodingIndex({}, {}))
+    ev = propagate._try_refute_expr(["flags__0_1@5", "+", 3], prop,
+                                    {1: [{"flags__0_1@5": 0}]})
+    assert ev is not None and ev.value == 3 and ev.access == 1
 
 
 def test_fold_pins_algebraic_identities():

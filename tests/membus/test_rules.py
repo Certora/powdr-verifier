@@ -43,6 +43,62 @@ def test_bare_and_scaled_range_args_bound():
     assert an.bounds["y@2"].hi == 30720 * (1 << 14)
 
 
+def test_disabled_range_check_emits_no_bound():
+    # A range-check is sent (constrains its arg) only when mult != 0. A bound may
+    # be emitted only when the row is PROVABLY active, else a false Bound would
+    # certify. Cover: single-col-zero, multi-step-zero, can-be-zero, and active.
+    # (a) mult pinned 0 by a single-column constraint -> disabled -> no bound.
+    an = _an(cons=[["gate@1", "-", 0]],
+             bis=[{"id": 3, "mult": "gate@1", "args": ["aux@2", 17]}])
+    assert "aux@2" not in an.bounds
+    # (b) mult zero via MULTI-STEP reasoning (g = h, h = 0) -> disabled -> no bound.
+    anb = _an(cons=[["h@1", "-", 0], ["g@2", "-", "h@1"]],
+              bis=[{"id": 3, "mult": "g@2", "args": ["aux@3", 17]}])
+    assert "aux@3" not in anb.bounds
+    # (c) mult a bare boolean flag that CAN be 0 -> activity unprovable -> no bound.
+    anc = _an(cons=[["flag@1", "*", ["flag@1", "+", -1]]],
+              bis=[{"id": 3, "mult": "flag@1", "args": ["aux@2", 17]}])
+    assert "aux@2" not in anc.bounds
+    # active: a constant nonzero mult, and a symbolic mult pinned nonzero by a
+    # constraint (sum(flags) = 1), both bound their arg.
+    an2 = _an(bis=[{"id": 3, "mult": 1, "args": ["aux@2", 17]}])
+    assert an2.bounds["aux@2"].hi == 1 << 17
+    ansum = _an(cons=[[["f0@1", "+", "f1@2"], "-", 1]],
+                bis=[{"id": 3, "mult": ["f0@1", "+", "f1@2"], "args": ["aux@2", 17]}])
+    assert ansum.bounds["aux@2"].hi == 1 << 17
+
+
+def test_active_selector_gated_range_check_bound():
+    # A range check gated by the block activation selector (is_valid) is active
+    # under --assume-is-valid: its bound must be EMITTED carrying ACTIVE_SELECTOR
+    # (mirroring the memory kinds) — not dropped. Regression: dropping it lost
+    # the recv-order edges on the final dumps. Without the assumption, decline.
+    bis = [{"id": 1, "mult": "is_valid@9", "args": [1, 8, "d@1", 0, 0, 0, "ts@2"]},
+           {"id": 3, "mult": "is_valid@9", "args": ["aux@8", 17]}]
+    an = _an(bis=bis)
+    assert an.active_selector == "is_valid@9"
+    assert an.bounds["aux@8"].hi == 1 << 17
+    assert Assumption.ACTIVE_SELECTOR in an.bounds["aux@8"].assumptions
+    an_off = Analysis({"constraints": [], "bus_interactions": bis},
+                      assume_is_valid=False)
+    assert "aux@8" not in an_off.bounds
+
+
+def test_active_selector_declines_on_unverifiable_gate():
+    # A memory row whose multiplicity is a nonlinear mux (is_valid·is_load) may
+    # be gated by a different column, so uniform gating is unconfirmed. The
+    # selector must NOT be recognized — else a per-instruction flag (is_load)
+    # would pose as the block selector, be granted = 1, and certify a false
+    # is_load-gated range bound (the arg is free when is_load = 0).
+    bis = [{"id": 1, "mult": ["is_valid@9", "*", "is_load@10"],
+            "args": [1, 8, "d0@1", 0, 0, 0, "ts0@2"]},
+           {"id": 1, "mult": "is_load@10", "args": [1, 8, "d1@3", 0, 0, 0, "ts1@4"]},
+           {"id": 3, "mult": "is_load@10", "args": ["aux@8", 17]}]
+    an = _an(bis=bis)
+    assert an.active_selector is None            # not is_load@10
+    assert "aux@8" not in an.bounds              # the false bound is not emitted
+
+
 def test_byte_bound_is_recv_only_and_assumed():
     recv = {"id": 1, "mult": -1, "args": [1, 8, "r0@1", 0, 0, 0, PV]}
     send = {"id": 1, "mult": 1, "args": [1, 8, "s0@2", 0, 0, 0, FS]}

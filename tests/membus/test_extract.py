@@ -1,8 +1,13 @@
 """Abstract-order .bus extraction + removed-set diff."""
+import json
+from pathlib import Path
+
 import pytest
 
 from src.membus import extract
 from src.membus.busmodel import find_duplicates, memory_rows, removed_rows
+
+_REGRESSION = Path(__file__).resolve().parents[1] / "regression_cases"
 
 
 def _m(c, col):
@@ -122,3 +127,18 @@ def test_removed_set_is_multiset_diff():
     removed = removed_rows(pre_rows, post_rows)
     assert [r.ordinal for r in removed] == [1]
     assert removed[0].mult == -1
+
+
+@pytest.mark.parametrize("case, final, n_edges", [
+    ("single_add_1", "apc_candidate_0_040.json", 1),
+    ("single_loadbu", "apc_candidate_0_029.json", 3),
+])
+def test_final_dump_order_edges(case, final, n_edges):
+    # The committed final dumps must yield the recv-order edges the verifier
+    # consumes. Guards the order_edges regression class (dropping is_valid-gated
+    # range bounds under the conditional gate). These dumps are committed, so
+    # this always runs — unlike the dump-gated propagate tests.
+    d = json.loads((_REGRESSION / case / final).read_text())
+    model = extract.build_dict(d, 1, 1, None)
+    assert len(model["order_edges"]) == n_edges
+    assert model["unordered"] == []

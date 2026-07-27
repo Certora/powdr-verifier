@@ -11,14 +11,20 @@ from typing import TYPE_CHECKING, Any
 
 from src.lens.normalize import BABYBEAR_PRIME, to_signed
 
-from .busmodel import BITWISE, TUPLE_RANGE, VAR_RANGE, MemRow, range_bus_rows
-from .facts import Bound, ExprEval, Fact, LinZero, Pin, Src, TS_MAX
-from .linform import LinForm, bits_of, domain_gadget, linform, names, product
+from .busmodel import MemRow
+from .facts import Bound, ExprEval, Fact, LinZero, Pin, Src
+from .linform import LinForm, linform, names
 
 if TYPE_CHECKING:
     from .rules import Analysis
 
 P = BABYBEAR_PRIME
+
+# Cap on the flag-assignment enumeration (product of per-flag domain sizes).
+# Real opcode-flag groups are a handful of boolean/ternary columns; a wider
+# product means a range-checked non-flag column slipped in, so decline instead
+# of enumerating it.
+_MAX_FLAG_ENUM = 1 << 16
 
 _IS_LOAD_RE = re.compile(r"^is_load_(\d+)@")
 _ACCESS_RE = re.compile(r"_(\d+)@\d+$")
@@ -26,76 +32,6 @@ _ACCESS_RE = re.compile(r"_(\d+)@\d+$")
 
 def _certifiable(b: Bound) -> bool:
     return bool(b.sources) or bool(b.assumptions)
-
-
-def prop_bound_facts(an: Analysis) -> dict[str, Bound]:
-    """Certifiable column bounds for propagation window premises."""
-    out: dict[str, Bound] = {}
-
-    def put(fact: Bound) -> None:
-        cur = out.get(fact.col)
-        if cur is None:
-            out[fact.col] = fact
-        elif fact.hi is not None and (cur.hi is None or fact.hi < cur.hi):
-            out[fact.col] = fact
-
-    for idx, bid, args in range_bus_rows(an.machine):
-        src = (Src("bus", idx),)
-        if bid == VAR_RANGE and len(args) >= 2:
-            bits = bits_of(args[1])
-            if bits is None:
-                continue
-            val = args[0]
-            if isinstance(val, str):
-                put(Bound(val, 0, 1 << bits, sources=src))
-            elif (isinstance(val, list) and len(val) == 3 and val[1] == "*"
-                  and isinstance(val[0], int) and isinstance(val[2], str)):
-                try:
-                    s = pow(val[0] % P, -1, P)
-                except ValueError:
-                    continue
-                if s * (1 << bits) < P:
-                    put(Bound(val[2], 0, s * (1 << bits), sources=src))
-        elif bid == BITWISE:
-            for a in args[:2]:
-                if isinstance(a, str):
-                    put(Bound(a, 0, 1 << 8, sources=src))
-        elif bid == TUPLE_RANGE:
-            for a in args:
-                if isinstance(a, str):
-                    put(Bound(a, 0, None, sources=src))
-
-    for idx, con in enumerate(an.machine.get("constraints", [])):
-        src = (Src("constraint", idx),)
-        lf = linform(con)
-        if lf is not None and len(lf.coeffs) == 1:
-            put(Bound(lf.coeffs[0][0], 0, TS_MAX, sources=src))
-        dg = domain_gadget(con)
-        if dg is not None:
-            put(Bound(dg[0], 0, dg[1], sources=src))
-            continue
-        pr = product(con)
-        if pr is None:
-            continue
-        if (pr.left.coeffs == pr.right.coeffs
-                and pr.right.const == pr.left.const - 1
-                and len(pr.left.coeffs) == 1
-                and pr.left.coeffs[0][1] == 1):
-            put(Bound(pr.left.coeffs[0][0], 0, 2, sources=src))
-
-    for row in an.mem:
-        src = (Src("bus", row.ordinal),)
-        if isinstance(row.addr_space_expr, str):
-            put(Bound(row.addr_space_expr, 0, TS_MAX, sources=src))
-        if isinstance(row.ptr, str):
-            put(Bound(row.ptr, 0, TS_MAX, sources=src))
-        for byte in row.data:
-            if isinstance(byte, str):
-                put(Bound(byte, 0, 1 << 8, sources=src))
-        if isinstance(row.ts, str):
-            put(Bound(row.ts, 0, TS_MAX, sources=src))
-
-    return out
 
 
 def _window_premises(lf: LinForm, bounds: dict[str, Bound],
@@ -150,22 +86,36 @@ class _DecodingIndex:
     def build(cls, cons: list[Any]) -> _DecodingIndex:
         mux: dict[str, tuple[int, Any]] = {}
         nonlinear: dict[frozenset[str], list[tuple[int, Any]]] = {}
+        # Pass 1: forward decodes (is_load - g / g + is_load) take precedence.
         for idx, c in enumerate(cons):
-            if isinstance(c, list) and len(c) == 3 and c[1] in ("-", "+"):
+            if isinstance(c, list) and len(c) == 3:
                 if c[1] == "-" and isinstance(c[0], str):
                     mux.setdefault(c[0], (idx, c))
                 elif c[1] == "+" and isinstance(c[2], str):
                     mux.setdefault(c[2], (idx, c))
             if linform(c) is None:
                 nonlinear.setdefault(frozenset(names(c)), []).append((idx, c))
+        # Pass 2: a reversed decode `g - is_load` is registered only if no forward
+        # decode already claimed is_load — otherwise an alias like `freevar -
+        # is_load` appearing first would shadow the genuine forward mux.
+        # _refute_is_load solves the (-1) coefficient off the reversed mux.
+        for idx, c in enumerate(cons):
+            if (isinstance(c, list) and len(c) == 3
+                    and c[1] == "-" and isinstance(c[2], str)):
+                mux.setdefault(c[2], (idx, c))
         return cls(mux, {k: tuple(v) for k, v in nonlinear.items()})
 
     def flag_domain_nonlinear(self, flag_cols: tuple[str, ...],
-                              is_load: str) -> list[tuple[int, Any]]:
+                              is_load: str | None) -> list[tuple[int, Any]]:
+        # Only gadgets whose column set is EXACTLY flag_cols qualify, so for a
+        # multi-flag access the individual per-flag domain gadgets are omitted.
+        # That only under-constrains the query (conservative — it can make a
+        # spurious unsat impossible, never a spurious pass). is_load=None keeps
+        # every gadget (used when no is_load pin exists for the access).
         candidates = self.nonlinear_by_names.get(frozenset(flag_cols), ())
         return [(i, c) for i, c in candidates if is_load not in names(c)]
 
-    def deciding_constraints(self, is_load: str,
+    def deciding_constraints(self, is_load: str | None,
                              flag_cols: tuple[str, ...]) -> list[tuple[int, Any]]:
         out: list[tuple[int, Any]] = []
         mux = self.mux_by_is_load.get(is_load)
@@ -174,7 +124,7 @@ class _DecodingIndex:
         out.extend(self.flag_domain_nonlinear(flag_cols, is_load))
         return out
 
-    def deciding_sources(self, is_load: str,
+    def deciding_sources(self, is_load: str | None,
                          flag_cols: tuple[str, ...]) -> tuple[Src, ...]:
         return tuple(Src("constraint", idx)
                      for idx, _ in self.deciding_constraints(is_load, flag_cols))
@@ -182,7 +132,8 @@ class _DecodingIndex:
 
 @dataclass(frozen=True)
 class PropagationResult:
-    """Propagation state: facts are the only stored fields."""
+    """Propagation state: the derived facts (pins/zeros/exprs) plus the
+    ``_DecodingIndex`` used to derive them."""
 
     pins: dict[str, Pin]
     zeros: tuple[LinZero, ...]
@@ -259,11 +210,6 @@ def _all_constraint_cols(machine: dict) -> set[str]:
     return out
 
 
-def _flag_cols_for_access(cols: set[str], access: int) -> tuple[str, ...]:
-    needle = f"_{access}@"
-    return tuple(sorted(c for c in cols if c.startswith("flags__") and needle in c))
-
-
 def _flags_by_access(cols: set[str]) -> dict[int, tuple[str, ...]]:
     out: dict[int, list[str]] = {}
     for c in cols:
@@ -275,36 +221,85 @@ def _flags_by_access(cols: set[str]) -> dict[int, tuple[str, ...]]:
     return {a: tuple(sorted(v)) for a, v in out.items()}
 
 
-def _sat_with_flags(cons: list[Any], env: dict[str, int],
-                    flag_cols: tuple[str, ...]) -> bool:
-    for bits in iproduct((0, 1), repeat=len(flag_cols)):
-        trial = dict(env)
-        for col, v in zip(flag_cols, bits):
-            trial[col] = v
-        if all(_eval_constraint(c, trial) == 0 for c in cons):
-            return True
-    return False
+def _flag_domain(an: Analysis, flag_cols: tuple[str, ...]) -> dict[str, int] | None:
+    """Each flag's proven value-domain size ``n`` (values ``0..n-1``) from the
+    certified ``_static_bounds`` — a domain gadget ``f·(f-1)·…·(f-(n-1))=0``
+    gives ``Bound[0,n)``.
+
+    Opcode flags are frequently TERNARY, so the refutation must enumerate the
+    real domain: assuming ``{0,1}`` refutes a value only because ``f=2`` was
+    never tried, pinning a flag (or is_load) that is not actually forced.
+    Returns ``None`` if any flag lacks a proven finite ``[0,n)`` domain — then
+    no sound enumeration exists and the caller must decline. Also declines when
+    the enumeration would blow up: a range-checked column with a wide bound
+    (e.g. an 8-bit ``[0,256)``) is not a real opcode flag, and the product of
+    domains bounds the ``iproduct`` size, so cap it.
+    """
+    dom: dict[str, int] = {}
+    size = 1
+    for c in flag_cols:
+        b = an._static_bounds.get(c)
+        if b is None or b.lo != 0 or b.hi is None:
+            return None
+        dom[c] = b.hi
+        size *= b.hi
+        if size > _MAX_FLAG_ENUM:
+            return None
+    return dom
+
+
+def _deciding_covered(deciding: list[Any], known: set[str]) -> bool:
+    """True iff every column in the deciding constraints is enumerated or pinned.
+
+    ``_eval_constraint`` reads any column not in the trial env as 0, so a free
+    (non-flag, non-solved, non-pinned) column would make the refutation reason
+    over a single arbitrary assignment (col = 0) rather than all of them — it
+    could then declare a value refuted that is actually reachable, pinning
+    wrongly. When a deciding constraint has such a column, decline to pin."""
+    return all(col in known for c in deciding for col in names(c))
 
 
 def _refute_is_load(is_load: str, flag_cols: tuple[str, ...],
-                    index: _DecodingIndex, pin_values: dict[str, int]) -> int | None:
+                    index: _DecodingIndex, pin_values: dict[str, int],
+                    flag_dom: dict[str, int]) -> int | None:
     deciding = [c for _, c in index.deciding_constraints(is_load, flag_cols)]
     if not deciding:
         return None
-    survivors: list[int] = []
-    for v in (0, 1):
-        if _sat_with_flags(deciding, {**pin_values, is_load: v}, flag_cols):
-            survivors.append(v)
-    return survivors[0] if len(survivors) == 1 else None
+    if not _deciding_covered(deciding, set(flag_cols) | {is_load} | set(pin_values)):
+        return None
+    mux = index.mux_by_is_load.get(is_load)
+    if mux is None:
+        return None
+    mux_con = mux[1]
+    # is_load has no proven finite domain of its own, so enumerating it over
+    # {0,1} would refute a value a ternary/scaled mux still reaches (e.g.
+    # is_load = 2*f over boolean f reaches {0,2}, yet {0,1} sees only 0, pinning
+    # is_load=0 wrongly). Instead read is_load off the mux -- linear in is_load,
+    # a*is_load + g(flags) = 0 -- for every flag assignment in the proven
+    # domain, and pin only when that reachable set is a single value.
+    reachable: set[int] = set()
+    for bits in iproduct(*(range(flag_dom[c]) for c in flag_cols)):
+        env = dict(pin_values)
+        for col, v in zip(flag_cols, bits):
+            env[col] = v
+        m0 = _eval_constraint(mux_con, {**env, is_load: 0})
+        a = (_eval_constraint(mux_con, {**env, is_load: 1}) - m0) % P
+        if a == 0:
+            return None   # mux does not determine is_load here: cannot pin
+        v_il = (-m0 * pow(a, -1, P)) % P
+        if all(_eval_constraint(c, {**env, is_load: v_il}) == 0 for c in deciding):
+            reachable.add(v_il)
+    return to_signed(reachable.pop()) if len(reachable) == 1 else None
 
 
 def _surviving_flag_bits(
     flag_cols: tuple[str, ...],
     deciding: list[Any],
     pin_values: dict[str, int],
+    flag_dom: dict[str, int],
 ) -> list[tuple[int, ...]]:
     envs: list[tuple[int, ...]] = []
-    for bits in iproduct((0, 1), repeat=len(flag_cols)):
+    for bits in iproduct(*(range(flag_dom[c]) for c in flag_cols)):
         trial = dict(pin_values)
         for col, v in zip(flag_cols, bits):
             trial[col] = v
@@ -318,13 +313,16 @@ def _refute_flag_value(
     flag_cols: tuple[str, ...],
     deciding: list[Any],
     pin_values: dict[str, int],
+    flag_dom: dict[str, int],
 ) -> int | None:
+    if not _deciding_covered(deciding, set(flag_cols) | {col} | set(pin_values)):
+        return None
     survivors: list[int] = []
-    for v in (0, 1):
+    for v in range(flag_dom[col]):
         trial = dict(pin_values)
         trial[col] = v
         free = [c for c in flag_cols if c not in trial]
-        for bits in iproduct((0, 1), repeat=len(free)):
+        for bits in iproduct(*(range(flag_dom[c]) for c in free)):
             env = dict(trial)
             for c, b in zip(free, bits):
                 env[c] = b
@@ -334,20 +332,31 @@ def _refute_flag_value(
     return survivors[0] if len(survivors) == 1 else None
 
 
-def _refute_is_load_pins(pins: dict[str, Pin], pin_values: dict[str, int],
-                         an: Analysis, index: _DecodingIndex) -> None:
-    cols = _all_constraint_cols(an.machine)
-    flags = _flags_by_access(cols)
+def _flag_accesses(cols, an: Analysis):
+    """Yield ``(is_load, access, flag_cols, flag_dom)`` for each ``is_load`` name
+    in ``cols`` whose access has a proven-finite flag domain — the shared
+    preamble of the is_load / flag refutation and surviving-env passes. Skips
+    names with no flags or no provable domain."""
+    flags = an.flags_by_access
     for is_load in sorted(c for c in cols if c.startswith("is_load_")):
-        if is_load in pins:
-            continue
         m = _IS_LOAD_RE.match(is_load)
         if m is None:
             continue
         flag_cols = flags.get(int(m.group(1)), ())
         if not flag_cols:
             continue
-        v = _refute_is_load(is_load, flag_cols, index, pin_values)
+        flag_dom = _flag_domain(an, flag_cols)
+        if flag_dom is None:
+            continue
+        yield is_load, int(m.group(1)), flag_cols, flag_dom
+
+
+def _refute_is_load_pins(pins: dict[str, Pin], pin_values: dict[str, int],
+                         an: Analysis, index: _DecodingIndex) -> None:
+    for is_load, _access, flag_cols, flag_dom in _flag_accesses(an.constraint_cols, an):
+        if is_load in pins:
+            continue
+        v = _refute_is_load(is_load, flag_cols, index, pin_values, flag_dom)
         if v is None:
             continue
         prem = tuple(pins.values())
@@ -363,15 +372,7 @@ def _refute_is_load_pins(pins: dict[str, Pin], pin_values: dict[str, int],
 def _refute_flag_pins(pins: dict[str, Pin], pin_values: dict[str, int],
                       an: Analysis, index: _DecodingIndex) -> None:
     """Pin opcode flag bits once is_load and the mux cone fix their value."""
-    cols = _all_constraint_cols(an.machine)
-    flags = _flags_by_access(cols)
-    for is_load in sorted(c for c in pins if c.startswith("is_load_")):
-        m = _IS_LOAD_RE.match(is_load)
-        if m is None:
-            continue
-        flag_cols = flags.get(int(m.group(1)), ())
-        if not flag_cols:
-            continue
+    for is_load, _access, flag_cols, flag_dom in _flag_accesses(list(pins), an):
         deciding = [c for _, c in index.deciding_constraints(is_load, flag_cols)]
         if not deciding:
             continue
@@ -383,7 +384,7 @@ def _refute_flag_pins(pins: dict[str, Pin], pin_values: dict[str, int],
             for col in flag_cols:
                 if col in pins:
                     continue
-                v = _refute_flag_value(col, flag_cols, deciding, pin_values)
+                v = _refute_flag_value(col, flag_cols, deciding, pin_values, flag_dom)
                 if v is None:
                     continue
                 pins[col] = Pin(col, v, sources=sources, premises=(load_pin,))
@@ -404,20 +405,11 @@ def surviving_envs(an: Analysis, prop: PropagationResult,
                    ) -> dict[int, list[dict[str, int]]]:
     """Pinned + flag assignments satisfying each access's mux/opcode cone."""
     pin_values = prop.pin_values
-    cols = _all_constraint_cols(an.machine)
-    flags = _flags_by_access(cols)
     out: dict[int, list[dict[str, int]]] = {}
     index = prop.decoding
-    for is_load in sorted(c for c in pin_values if c.startswith("is_load_")):
-        m = _IS_LOAD_RE.match(is_load)
-        if m is None:
-            continue
-        access = int(m.group(1))
-        flag_cols = flags.get(access, ())
-        if not flag_cols:
-            continue
+    for is_load, access, flag_cols, flag_dom in _flag_accesses(pin_values, an):
         deciding = [c for _, c in index.deciding_constraints(is_load, flag_cols)]
-        bits_list = _surviving_flag_bits(flag_cols, deciding, pin_values)
+        bits_list = _surviving_flag_bits(flag_cols, deciding, pin_values, flag_dom)
         envs = []
         for bits in bits_list:
             trial = dict(pin_values)
@@ -431,7 +423,10 @@ def surviving_envs(an: Analysis, prop: PropagationResult,
 
 def propagate(an: Analysis) -> PropagationResult:
     """Fixpoint column pins + residual linear zeros (after substitution)."""
-    bounds = prop_bound_facts(an)
+    # Kinds-independent bounds from the single oracle (rules.Analysis); these
+    # are a subset of `an.bounds`, so every window premise below is a fact that
+    # certify.all_facts independently proves.
+    bounds = an._static_bounds
     cons = an.machine.get("constraints", [])
     decoding = _DecodingIndex.build(cons)
     raw = [(idx, lf) for idx, c in enumerate(cons) if (lf := linform(c)) is not None]
@@ -710,12 +705,13 @@ def _try_refute_expr(expr: Any, prop: PropagationResult,
     cols = set(prop.pin_values) | set(names(expr))
     flags = _flags_by_access(cols)
     flag_cols = flags.get(access, ())
-    is_load = f"is_load_{access}@"
+    is_load = None
     for col in prop.pin_values:
         m = _IS_LOAD_RE.match(col)
         if m is not None and int(m.group(1)) == access:
             is_load = col
             break
+    # deciding_sources tolerates is_load=None (no mux; flag-domain gadgets only).
     sources = prop.decoding.deciding_sources(is_load, flag_cols) if flag_cols else ()
     return ExprEval(expr, value, access,
                     sources=sources,
@@ -806,21 +802,3 @@ def format_debug(an: Analysis) -> str:
         lines.append(
             f"  #{r.ordinal}  mult={json.dumps(r.mult)}  args={json.dumps(list(r.args))}")
     return "\n".join(lines)
-
-
-def _deciding_constraints(cons: list[Any], is_load: str, flag_cols: tuple[str, ...],
-                          pins: dict[str, int],
-                          index: _DecodingIndex | None = None) -> list[Any]:
-    del pins, cons
-    if index is not None:
-        return [c for _, c in index.deciding_constraints(is_load, flag_cols)]
-    return []
-
-
-def _refute_expr(expr: Any, pins: dict[str, int],
-                 envs_by_access: dict[int, list[dict[str, int]]]) -> int | None:
-    prop = PropagationResult(
-        pins={c: Pin(c, v) for c, v in pins.items()},
-        zeros=(), exprs=(), decoding=_DecodingIndex({}, {}))
-    ev = _try_refute_expr(expr, prop, envs_by_access)
-    return ev.value if ev is not None else None

@@ -25,14 +25,16 @@ from __future__ import annotations
 import shutil
 import subprocess
 from dataclasses import dataclass
-from itertools import product as iproduct
 from pathlib import Path
 from typing import Any
 
 from src.lens.normalize import BABYBEAR_PRIME
 
-from .facts import AffineDef, Assumption, Bound, EffKind, ExprEval, Fact, Gap, LinZero, Pin, RecvUpper
-from .linform import linform, names
+from .facts import (
+    AffineDef, Assumption, Bound, EffKind, ExprEval, Fact, Gap, LinZero, Pin, RecvUpper, TS_MAX,
+)
+from .busmodel import BITWISE, VAR_RANGE
+from .linform import flatten_product, linform, names
 from .rules import Analysis
 
 P = BABYBEAR_PRIME
@@ -129,29 +131,42 @@ class _Query:
             con = self.an.machine["constraints"][src.index]
             self.declare(con)
             if isinstance(con, list) and len(con) == 3 and con[1] == "*":
-                # prime field: G·H ≡ 0 ⟹ G ≡ 0 ∨ H ≡ 0 (p is prime)
-                self.comment(f"source constraint[{src.index}] (product; prime-field split)")
-                self.assert_(f"(or {self.field_zero(con[0])} {self.field_zero(con[2])})")
+                # prime field: F1·…·Fn ≡ 0 ⟹ ⋁ Fi ≡ 0 (p is prime). Split ALL
+                # factors, not just the outermost two: a domain gadget
+                # f·(f-1)·(f-2) must yield three LINEAR disjuncts, else the
+                # nested `(f-1)·(f-2)` disjunct stays quadratic and z3 times out
+                # (the [0,n) domain bound then spuriously fails to certify).
+                factors = flatten_product(con)
+                self.comment(f"source constraint[{src.index}] "
+                             f"(product; prime-field split, {len(factors)} factors)")
+                self.assert_("(or " + " ".join(self.field_zero(f) for f in factors) + ")")
             else:
                 self.comment(f"source constraint[{src.index}]")
                 self.assert_(self.field_zero(con))
         else:  # bus row
             b = self.an.machine["bus_interactions"][src.index]
             bid, args = b.get("id"), b.get("args", [])
-            if bid == 3 and len(args) >= 2 and isinstance(args[1], int):
+            # A range/bitwise check constrains its args only when the interaction
+            # is SENT (mult != 0). Gate the range on that, so a disabled row
+            # (mult ≡ 0) contributes nothing — a false bound then fails to
+            # certify unless its own sources prove the row is active.
+            mult = b.get("mult")
+            gate = (f"(= (mod {self._canon_expr(mult)} {P}) 0)"
+                    if mult is not None else "false")
+            if bid == VAR_RANGE and len(args) >= 2 and isinstance(args[1], int):
                 self.declare(args[0])
                 self.comment(f"source bus[{src.index}]: VariableRangeChecker "
-                             f"(value residue in [0, 2^{args[1]}))")
+                             f"(value residue in [0, 2^{args[1]}) when sent)")
                 q, r = self.quotient(), self.quotient()
                 self.assert_(f"(= {self._canon_expr(args[0])} (+ (* {P} {q}) {r}))")
-                self.assert_(f"(and (<= 0 {r}) (< {r} {1 << args[1]}))")
+                self.assert_(f"(or {gate} (and (<= 0 {r}) (< {r} {1 << args[1]})))")
                 self._scaled_hint(args[0], q, r)
-            elif bid == 6:
+            elif bid == BITWISE:
                 for a in args[:2]:
                     if isinstance(a, str):
                         self.declare(a)
-                        self.comment(f"source bus[{src.index}]: BitwiseLookup operand is a byte")
-                        self.assert_(f"(< {_smt_sym(a)} 256)")
+                        self.comment(f"source bus[{src.index}]: BitwiseLookup operand is a byte when sent")
+                        self.assert_(f"(or {gate} (< {_smt_sym(a)} 256))")
             else:
                 self.comment(f"source bus[{src.index}] (id {bid}): no direct SMT semantics; "
                              f"granted by a named assumption below")
@@ -196,53 +211,65 @@ class _Query:
         for a in f.assumptions:
             self.add_assumption_for(f, a)
 
+    # The exact [lo, hi) domain each assumption licenses. A Bound tagged with
+    # the assumption is granted only at this value — a byte is [0, 256), a
+    # timestamp slot is [0, 2^29). Anything else is not what the assumption
+    # means and must not be granted.
+    _GRANTED_BOUND = {
+        Assumption.MEMBUS_BYTE: (0, 1 << 8),
+        Assumption.TS_BOUND: (0, TS_MAX),
+    }
+
     def add_assumption_for(self, f: Fact, a: Assumption) -> None:
         self.comment(f"named assumption: {a.name} -- {a.value}")
         # MEMBUS_BYTE and TS_BOUND *grant* their slot-derived Bound facts
         # outright: the granted claim is asserted so the certificate is
-        # (visibly) trivial — the fact rests on the assumption, and this line
-        # is where that shows. ACTIVE_SELECTOR fixes the structurally
-        # recognized gating column to 1.
-        if a in (Assumption.MEMBUS_BYTE, Assumption.TS_BOUND) and isinstance(f, Bound):
-            self.assert_(self.claim(f))
+        # (visibly) trivial — the fact rests on the assumption. But grant ONLY
+        # the assumption's exact domain; asserting the claim for any other
+        # (lo, hi) would vacuously certify a wrong-valued or mis-identified
+        # Bound. A mismatch is left ungranted so it surfaces as a failing (sat)
+        # certificate. ACTIVE_SELECTOR fixes the recognized gating column to 1.
+        grant = self._GRANTED_BOUND.get(a)
+        if grant is not None and isinstance(f, Bound):
+            if (f.lo, f.hi) == grant:
+                self.assert_(self.claim(f))
+            else:
+                self.comment(f"NOT granted: {a.name} licenses only [{grant[0]}, "
+                             f"{grant[1]}), but this Bound is [{f.lo}, {f.hi})")
         if a is Assumption.ACTIVE_SELECTOR and self.an.active_selector is not None:
             sel = self.an.active_selector
             self.declare(sel)
             self.assert_(f"(= {_smt_sym(sel)} 1)")
 
     def _assert_flag_refutation(self, pin: Pin) -> None:
+        """Grant each deciding flag its PROVEN value domain — the certified
+        ``_static_bounds`` Bound (a domain gadget ``f·(f-1)·…·(f-(n-1))=0`` gives
+        ``[0,n)``), cited as a premise.
+
+        Opcode flags are frequently TERNARY, so hard-coding ``flag ≤ 1`` was
+        unsound: it deleted the ``f=2`` case, and an ``is_load`` value unique
+        only over ``{0,1}`` (but not over the real domain) then certified. We do
+        NOT grant ``is_load`` a domain — the deciding mux (a source) determines
+        it from the flags. A flag with no proven finite domain gets no grant;
+        the sources must then constrain it or the certificate fails (safe).
+
+        The real obligation — that under those domains the deciding constraints
+        (this pin's sources) admit no ``is_load`` value other than ``pin.value``
+        — is discharged by z3 against the negated claim ``finish`` asserts. We
+        must NOT assert a "witness" fixing ``is_load = pin.value`` (vacuous
+        UNSAT for any value) nor the refuted value infeasible (asserts the
+        conclusion). Both were earlier bugs.
+        """
         if not pin.refute_flags:
             return
-        flag_cols = pin.refute_flags
-        deciding = [self.an.machine["constraints"][s.index]
-                    for s in pin.sources if s.kind == "constraint"]
-        for col in flag_cols:
+        for col in (*pin.refute_flags, pin.col):
+            b = self.an._static_bounds.get(col)
+            if b is None or b.lo != 0 or b.hi is None:
+                continue   # no proven finite domain (e.g. is_load): the
+                # deciding sources must constrain it, or the certificate fails
             self.declare(col)
-            self.assert_(f"(and (<= 0 {_smt_sym(col)}) (<= {_smt_sym(col)} 1))")
-        self.declare(pin.col)
-
-        def env_sat(is_load_val: int, bits: tuple[int, ...]) -> str:
-            env = {pin.col: is_load_val, **dict(zip(flag_cols, bits))}
-            for p in pin.premises:
-                if isinstance(p, Pin):
-                    env[p.col] = p.value
-            conj = [self.field_zero(c) for c in deciding]
-            flag_eq = [f"(= {_smt_sym(c)} {v})" for c, v in zip(flag_cols, bits)]
-            is_load_eq = f"(= {_smt_sym(pin.col)} {is_load_val})"
-            return f"(and {is_load_eq} {' '.join(flag_eq)} {' '.join(conj)})"
-
-        witness = []
-        for bits in iproduct((0, 1), repeat=len(flag_cols)):
-            witness.append(env_sat(pin.value, bits))
-        self.comment("witness: some flag assignment satisfies deciding constraints")
-        self.assert_(f"(or {' '.join(witness)})")
-
-        refuted = 1 - pin.value
-        refuted_cases = []
-        for bits in iproduct((0, 1), repeat=len(flag_cols)):
-            refuted_cases.append(env_sat(refuted, bits))
-        self.comment(f"refutation: is_load={refuted} unsatisfiable under any flag assignment")
-        self.assert_(f"(not (or {' '.join(refuted_cases)}))")
+            self.assert_(f"(and (<= 0 {_smt_sym(col)}) (< {_smt_sym(col)} {b.hi}))")
+            self.add_premise(b)   # the domain is a certified fact, cite it
 
     def claim(self, f: Fact) -> str:
         if isinstance(f, Bound):
@@ -269,22 +296,32 @@ class _Query:
                 return f"(= {_smt_sym(f.col)} {rhs})"
             return f"(= (mod (- {_smt_sym(f.col)} {rhs}) {f.modulus}) 0)"
         if isinstance(f, EffKind):
-            row = self.an.mem[f.ordinal]
-            self.declare(row.mult)
+            # The ORIGINAL multiplicity, not the folded one in self.an.mem: for a
+            # propagation-folded mult the folded value is a constant, so the
+            # claim would be a tautology and the premises inert. Rendering the
+            # original expr makes `premises ⊢ original_mult ≡ v` the real
+            # obligation z3 must discharge.
+            mult = self.an._orig_mult[f.ordinal]
+            self.declare(mult)
             v = {"send": 1, "recv": P - 1, "disabled": 0}[f.kind]
-            return f"(= (mod {_expr(row.mult)} {P}) {v})"
+            return f"(= (mod {_expr(mult)} {P}) {v})"
         if isinstance(f, Pin):
             self.declare(f.col)
             if f.refute_flags:
                 self._assert_flag_refutation(f)
-            return f"(= {_smt_sym(f.col)} {f.value})"
+            # f.value is a signed residue (to_signed); the column symbol is
+            # declared in [0, p), so compare against the non-negative residue.
+            return f"(= {_smt_sym(f.col)} {f.value % P})"
         if isinstance(f, LinZero):
             for col, _ in f.coeffs:
                 self.declare(col)
             return f"(= {_lin(list(f.coeffs), f.const)} 0)"
         if isinstance(f, ExprEval):
             self.declare(f.expr)
-            return f"(= {_expr(f.expr)} {f.value})"
+            # _expr renders INTEGER arithmetic (may go negative or wrap), so the
+            # claim must be mod p: expr ≡ value (mod p). Comparing the integer
+            # expr directly to the residue would spuriously fail a true fact.
+            return f"(= (mod (- {_expr(f.expr)} {f.value % P}) {P}) 0)"
         raise TypeError(f"no claim rendering for {type(f).__name__}")
 
     def finish(self, negated_claim: str) -> str:
