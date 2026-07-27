@@ -6,7 +6,7 @@ mod z3_poly;
 
 use z3::ast::Int;
 
-pub use z3_poly::{build_failure_reason, factor};
+pub use z3_poly::{build_failure_reason, divides, factor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FactorError {
