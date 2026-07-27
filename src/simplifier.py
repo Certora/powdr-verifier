@@ -109,8 +109,10 @@ STEP_TACTICS: dict[str, str] = {
     # the kept hypothesis polynomial-divides the dropped goal and rewrites it to
     # true. Sound: B = 0 is a global conjunct and B | Q => Q = 0 (mod P).
     "trivial_simp": _pipe(_BUS, "z3-solve-eqs", "factor_reduce"),
+    # ... plus z3 equality propagation, which eliminates the statically-fixed
+    # `from_state__pc` constants (both sides) and concretizes the pc-lookup UFs.
+    "loop_iteration": _pipe(_BUS, _Z3_EQ),
     # Identical to the default pipeline.
-    "loop_iteration": DEFAULT_TACTIC,
     "simplify_exhaustive": DEFAULT_TACTIC,
 }
 
