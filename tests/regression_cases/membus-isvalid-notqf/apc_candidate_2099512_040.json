@@ -1,0 +1,288 @@
+{
+ "block": {
+  "blocks": [
+   {
+    "start_pc": 2099512,
+    "instructions": [
+     [
+      512,
+      8,
+      8,
+      16776736,
+      1,
+      0,
+      0,
+      0
+     ],
+     [
+      531,
+      4,
+      8,
+      476,
+      1,
+      2,
+      1,
+      0
+     ],
+     [
+      531,
+      32,
+      8,
+      472,
+      1,
+      2,
+      1,
+      0
+     ],
+     [
+      576,
+      4,
+      0,
+      32,
+      1,
+      0,
+      0,
+      0
+     ],
+     [
+      565,
+      4,
+      4,
+      63700,
+      1,
+      0,
+      1,
+      1
+     ]
+    ]
+   }
+  ]
+ },
+ "machine": {
+  "constraints": [],
+  "bus_interactions": [
+   {
+    "id": 1,
+    "mult": [
+     "-",
+     "is_valid@166"
+    ],
+    "args": [
+     1,
+     32,
+     "read_data__0_2@106",
+     "read_data__1_2@107",
+     "read_data__2_2@108",
+     "read_data__3_2@109",
+     "read_data_aux__base__prev_timestamp_2@88"
+    ]
+   },
+   {
+    "id": 1,
+    "mult": "is_valid@166",
+    "args": [
+     1,
+     32,
+     "read_data__0_2@106",
+     "read_data__1_2@107",
+     "read_data__2_2@108",
+     "read_data__3_2@109",
+     [
+      "from_state__timestamp_0@1",
+      "+",
+      7
+     ]
+    ]
+   }
+  ],
+  "derived_columns": []
+ },
+ "subs": [
+  [
+   {
+    "original_poly_index": 1,
+    "apc_poly_id": 1
+   },
+   {
+    "original_poly_index": 6,
+    "apc_poly_id": 6
+   },
+   {
+    "original_poly_index": 7,
+    "apc_poly_id": 7
+   },
+   {
+    "original_poly_index": 15,
+    "apc_poly_id": 15
+   },
+   {
+    "original_poly_index": 16,
+    "apc_poly_id": 16
+   },
+   {
+    "original_poly_index": 17,
+    "apc_poly_id": 17
+   },
+   {
+    "original_poly_index": 18,
+    "apc_poly_id": 18
+   },
+   {
+    "original_poly_index": 19,
+    "apc_poly_id": 19
+   },
+   {
+    "original_poly_index": 20,
+    "apc_poly_id": 20
+   },
+   {
+    "original_poly_index": 21,
+    "apc_poly_id": 21
+   },
+   {
+    "original_poly_index": 22,
+    "apc_poly_id": 22
+   }
+  ],
+  [
+   {
+    "original_poly_index": 11,
+    "apc_poly_id": 47
+   },
+   {
+    "original_poly_index": 12,
+    "apc_poly_id": 48
+   },
+   {
+    "original_poly_index": 16,
+    "apc_poly_id": 52
+   },
+   {
+    "original_poly_index": 17,
+    "apc_poly_id": 53
+   },
+   {
+    "original_poly_index": 19,
+    "apc_poly_id": 55
+   },
+   {
+    "original_poly_index": 20,
+    "apc_poly_id": 56
+   },
+   {
+    "original_poly_index": 29,
+    "apc_poly_id": 65
+   },
+   {
+    "original_poly_index": 30,
+    "apc_poly_id": 66
+   },
+   {
+    "original_poly_index": 31,
+    "apc_poly_id": 67
+   },
+   {
+    "original_poly_index": 32,
+    "apc_poly_id": 68
+   },
+   {
+    "original_poly_index": 33,
+    "apc_poly_id": 69
+   },
+   {
+    "original_poly_index": 34,
+    "apc_poly_id": 70
+   },
+   {
+    "original_poly_index": 35,
+    "apc_poly_id": 71
+   },
+   {
+    "original_poly_index": 36,
+    "apc_poly_id": 72
+   }
+  ],
+  [
+   {
+    "original_poly_index": 11,
+    "apc_poly_id": 88
+   },
+   {
+    "original_poly_index": 12,
+    "apc_poly_id": 89
+   },
+   {
+    "original_poly_index": 16,
+    "apc_poly_id": 93
+   },
+   {
+    "original_poly_index": 17,
+    "apc_poly_id": 94
+   },
+   {
+    "original_poly_index": 19,
+    "apc_poly_id": 96
+   },
+   {
+    "original_poly_index": 20,
+    "apc_poly_id": 97
+   },
+   {
+    "original_poly_index": 29,
+    "apc_poly_id": 106
+   },
+   {
+    "original_poly_index": 30,
+    "apc_poly_id": 107
+   },
+   {
+    "original_poly_index": 31,
+    "apc_poly_id": 108
+   },
+   {
+    "original_poly_index": 32,
+    "apc_poly_id": 109
+   },
+   {
+    "original_poly_index": 33,
+    "apc_poly_id": 110
+   },
+   {
+    "original_poly_index": 34,
+    "apc_poly_id": 111
+   },
+   {
+    "original_poly_index": 35,
+    "apc_poly_id": 112
+   },
+   {
+    "original_poly_index": 36,
+    "apc_poly_id": 113
+   }
+  ],
+  [],
+  []
+ ],
+ "optimistic_constraints": [],
+ "bus_map": {
+  "bus_ids": {
+   "0": "ExecutionBridge",
+   "1": "Memory",
+   "2": "PcLookup",
+   "3": {
+    "Other": "VariableRangeChecker"
+   },
+   "6": {
+    "Other": "BitwiseLookup"
+   },
+   "7": {
+    "Other": {
+     "TupleRangeChecker": [
+      256,
+      2048
+     ]
+    }
+   }
+  }
+ }
+}

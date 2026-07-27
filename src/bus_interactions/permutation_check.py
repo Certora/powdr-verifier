@@ -708,14 +708,14 @@ class PermutationCheckMixin:
         if skip_matches:
             logging.info("skipping matches for %s", self.NAME)
 
-        membus_status = alignment.status_for(source_path) if have_analysis else None
-        if membus_status is not None:
-            assert len(membus_status) == n
+        membus_info = alignment.info_for(source_path) if have_analysis else None
+        if membus_info is not None:
+            assert len(membus_info) == n
 
         is_inputs, is_outputs, is_disableds = [], [], []
         _pinning = {True: TRUE(), False: FALSE(), None: None}
         for i in range(n):
-            st = membus_status[i] if membus_status is not None else None
+            st = membus_info[i] if membus_info is not None else None
             isin = _pinning[st.input] if st is not None else None
             isout = _pinning[st.output] if st is not None else None
             isdis = _pinning[st.disabled] if st is not None else None
@@ -946,36 +946,6 @@ class PermutationCheckMixin:
                 )
 
         for i in range(n):
-            is_actives = []
-            has_inputs = []
-            has_outputs = []
-            for j in range(n):
-                if mem_keys_statically_disjoint(i, j):
-                    continue
-                mke = mem_key_eq(i, j)
-                if not is_disabled(j).is_true():
-                    is_actives.append(And(Not(is_disabled(j)), *mke))
-                if not is_input(j).is_false():
-                    has_inputs.append(And(is_input(j), *mke))
-                if not is_output(j).is_false():
-                    has_outputs.append(And(is_output(j), *mke))
-            is_active = Or(*is_actives)
-            has_input = Or(*has_inputs)
-            has_output = Or(*has_outputs)
-            conjuncts.append(
-                with_comment(
-                    Implies(is_active, has_input),
-                    f"key of interaction {i}: some input on that address_space/pointer",
-                )
-            )
-            conjuncts.append(
-                with_comment(
-                    Implies(is_active, has_output),
-                    f"key of interaction {i}: some output on that address_space/pointer",
-                )
-            )
-
-        for i in range(n):
             if is_disabled(i).is_true():
                 continue
             for j in cand(i):
@@ -1087,11 +1057,11 @@ class PermutationCheckMixin:
                 if learned:
                     conjuncts = learned + [c for c in conjuncts if c not in learned]
         simplified: list[FNode] = []
+        bool_simp_memo: dict[FNode, FNode] = {}
         for c in conjuncts:
-            s = c.simplify()
+            s = bool_simplify(c, bool_simp_memo)
             if not s.is_true():
                 simplified.append(keep_comment(s, c))
-        # ``simplified`` is already fully simplified, so skip BCP's presimplify pass.
         conjuncts = boolean_propagate(simplified, presimplify=False)
         self.plain_permutation_io = PlainPermutationIo(
             is_inputs=list(is_inputs),

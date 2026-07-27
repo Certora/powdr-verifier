@@ -7,15 +7,17 @@ import copy
 import logging
 from pathlib import Path
 
-from .encoding.utils import get_is_valid
+from .encoding.utils import dump_introduces_is_valid, get_is_valid
 from .report.action import Action
 from .smt.conversion import FormulaWithAxioms, SmtConverter
 from .smt.utils import *
+from .smt_backends.pysmt import disable_typecheck
 from .utils.basic_block import BasicBlock
-from .utils.io import load_apc_dump, load_json, open_file, SMT_ENCODING
+from .utils.io import load_apc_dump, open_file, SMT_ENCODING, load_json
 from .utils.stats import init_stats_run, set_stats_tag, stats_enabled
 from .verify.bug_injection import apply_injection
 from .verify.preanalysis import analyze_memory_bus_alignment, apply_skip_trivial
+from .verify.membus_subprocess import reset_membus_cache
 from .verify.memory_bus_alignment import BEFORE_PREFIX, AFTER_PREFIX, emit_memory_equalities
 from .verify import SetInfos, SkolemPinKind
 from .verify.skolem_pins import derived_columns_skolem_setinfo, drop_mirrored_derived
@@ -33,9 +35,7 @@ def _encoding_qvars(
 
     The body is ``Or(Not(inner.constraints), Not(io_relation))``. Only the inner
     side's program variables (plus ``iorelvars``) are quantified; the other side
-    stays existentially bound at the top level. Quantifying the opposite side's
-    variables (they can leak in via ``io_relation``) turns a ground obligation
-    into a ``forall`` z3 can satisfy adversarially -> spurious sat.
+    stays existentially bound at the top level.
     """
     live: set[FNode] = set()
     for f in (*inner.constraints, io_relation):
@@ -63,7 +63,6 @@ def _filter_mirrored_constraints(before, after):
         logging.info("filter-constraints: dropped %d mirrored constraint(s)", dropped)
         return after._replace(constraints=kept)
     return after
-
 
 def encoding(before, after, qvars, io_relation, additional_asserts=[]):
     """Build the verification formula without any encoder-side model map.
@@ -122,17 +121,34 @@ def verify():
     with Action("encode") as action:
         action += {"outputs": []}
 
-        # Encoding builds well-typed formulas programmatically, so pysmt's
-        # per-node type check is redundant work here (~30% of encode on
-        # 2099828 step 0).
+        # Encoding builds well-typed formulas programmatically; saves ~30% encode on 2099828 step 0.
         disable_typecheck()
 
         before = load_apc_dump(ARGS().input_before)
         after = load_apc_dump(ARGS().input_after)
 
+        reset_membus_cache()
         apply_skip_trivial(before, after)
-        with action.action("membus"):
-            memory_bus_alignment = analyze_memory_bus_alignment(before, after)
+        introduces_is_valid = dump_introduces_is_valid(before, after)
+        # [is_valid=1 interface] `analyze_memory_bus_alignment` resolves the "auto"
+        # memory encoding into ARGS() once and it sticks. When is_valid is introduced
+        # the main analysis assumes is_valid==1, which can now resolve to `interface`;
+        # the is_valid==0 special-soundness analysis below must re-resolve from scratch
+        # (it assumes is_valid free -> plain), so remember the pre-resolution value and
+        # restore it before that call. Remove with the is_valid=1 interface workaround.
+        orig_memory_encoding = ARGS().memory_encoding
+        with action.action("membus") as membus_action:
+            memory_bus_alignment = analyze_memory_bus_alignment(
+                before, after, after_assume_is_valid=introduces_is_valid
+            )
+            # Record the encoding actually used so it is visible in the JSON
+            # report: ``auto`` resolves in place to ``plain``/``interface`` inside
+            # the call above, so ``ARGS().memory_encoding`` now holds the concrete
+            # choice, while ``orig_memory_encoding`` preserves what was requested.
+            membus_action += {
+                "memory_encoding_requested": orig_memory_encoding,
+                "memory_encoding": ARGS().memory_encoding,
+            }
 
         if ARGS().inject is not None:
             old_before = copy.deepcopy(before)
@@ -222,7 +238,7 @@ def verify():
             if not ARGS().skip_completeness:
                 outfile = ARGS().output.with_suffix(".completeness.smt2")
                 with open_file(outfile, "w") as dump:
-                    dump.write(";; completeness check\n".encode(SMT_ENCODING))
+                    dump.write(f";; completeness check\n".encode(SMT_ENCODING))
                     completeness = encoding(
                         before_smt,
                         after_smt,
@@ -245,7 +261,7 @@ def verify():
                 logging.warning("is_valid was introduced, perform special soundness check")
                 outfile = ARGS().output.with_suffix(".soundness.smt2")
                 with open_file(outfile, "w") as dump:
-                    dump.write(";; soundness check\n".encode(SMT_ENCODING))
+                    dump.write(f";; soundness check\n".encode(SMT_ENCODING))
                     soundness = encoding(
                         after_smt,
                         before_smt,
@@ -266,49 +282,96 @@ def verify():
                     write_smtlib_script(smtlib, dump)
                     action += ("outputs", outfile)
 
-                outfile = ARGS().output.with_suffix(".soundness.zero-is-model.smt2")
-                with open_file(outfile, "w") as dump:
-                    dump.write(";; check that all zero is a model\n".encode(SMT_ENCODING))
-                    logging.info(f"dumping zero is model check to {dump.name}")
-                    intvars = [ v for v in (var2 - auxiliaries) if v.get_type() == INT ]
-                    intvars = sorted(intvars, key=lambda x: x.symbol_name())
-                    smtlib = convert_to_smt_script(
-                        And(
-                            *after_smt.constraints,
-                            *after_smt.axioms,
-                            with_comment(
-                                And(*[ Equals(v, Int(0)) for v in intvars ]),
-                                "ZERO MODEL"
-                            )
-                        ),
-                        status='sat'
+                with action.action("membus-inactive") as membus_inactive_action:
+                    # [is_valid=1 interface] re-resolve the encoding for the is_valid==0
+                    # analysis (is_valid free -> plain); the main analysis may have stuck
+                    # ARGS().memory_encoding at "interface".
+                    ARGS().memory_encoding = orig_memory_encoding
+                    memory_bus_alignment_inactive = analyze_memory_bus_alignment(
+                        before, after, after_assume_is_valid=False
                     )
-                    write_smtlib_script(smtlib, dump)
-                    action += ("outputs", outfile)
+                    # The is_valid==0 analysis can resolve differently from the
+                    # active one above, so record its own encoding.
+                    membus_inactive_action += {
+                        "memory_encoding_requested": orig_memory_encoding,
+                        "memory_encoding": ARGS().memory_encoding,
+                    }
 
-                outfile = ARGS().output.with_suffix(".soundness.invalid-all-mult-zero.smt2")
-                with open_file(outfile, "w") as dump:
-                    dump.write(";; check that all is_valid zero makes all multiplicities zero\n".encode(SMT_ENCODING))
-                    logging.info(f"dumping invalid makes all multiplicities zero check to {dump.name}")
-
+                with SmtConverter(
+                    AFTER_PREFIX,
+                    block,
+                    memory_bus_alignment=memory_bus_alignment_inactive,
+                    source_path=ARGS().input_after,
+                ) as after_conv_inactive:
+                    after_smt_inactive = after_conv_inactive.to_formula_with_axioms(after)
+                    auxiliaries_inactive = frozenset.union(
+                        frozenset(),
+                        *after_conv_inactive.bus_interaction_encoder.get_auxiliaries().values(),
+                    )
+                    is_valid_after_inactive = get_is_valid(
+                        after_conv_inactive.symbols, "after"
+                    )
+                    assert is_valid_after_inactive is not None
                     multiplicities = []
-                    for encoder in after_conv.bus_interaction_encoder.encoders:
+                    for encoder in after_conv_inactive.bus_interaction_encoder.encoders:
                         for interaction in encoder._interactions:
                             multiplicities.append(interaction.mult)
-                    smtlib = convert_to_smt_script(
-                        And(
-                            Equals(is_valid_after, Int(0)),
-                            *after_smt.constraints,
-                            Or(*[Not(Equals(mult, Int(0))) for mult in multiplicities ])
-                        ),
-                        status='unsat'
+
+                    outfile = ARGS().output.with_suffix(".soundness.zero-is-model.smt2")
+                    with open_file(outfile, "w") as dump:
+                        dump.write(f";; check that all zero is a model\n".encode(SMT_ENCODING))
+                        logging.info(f"dumping zero is model check to {dump.name}")
+                        intvars = [
+                            v
+                            for v in (after_conv_inactive.symbols - auxiliaries_inactive)
+                            if v.get_type() == INT
+                        ]
+                        intvars = sorted(intvars, key=lambda x: x.symbol_name())
+                        smtlib = convert_to_smt_script(
+                            And(
+                                *after_smt_inactive.constraints,
+                                *after_smt_inactive.axioms,
+                                with_comment(
+                                    And(*[Equals(v, Int(0)) for v in intvars]),
+                                    "ZERO MODEL",
+                                ),
+                            ),
+                            status="sat",
+                        )
+                        write_smtlib_script(smtlib, dump)
+                    action += ("outputs", outfile)
+
+                    outfile = ARGS().output.with_suffix(
+                        ".soundness.invalid-all-mult-zero.smt2"
                     )
-                    write_smtlib_script(smtlib, dump)
+                    with open_file(outfile, "w") as dump:
+                        dump.write(
+                            f";; check that all is_valid zero makes all multiplicities zero\n".encode(
+                                SMT_ENCODING
+                            )
+                        )
+                        logging.info(
+                            f"dumping invalid makes all multiplicities zero check to {dump.name}"
+                        )
+                        smtlib = convert_to_smt_script(
+                            And(
+                                Equals(is_valid_after_inactive, Int(0)),
+                                *after_smt_inactive.constraints,
+                                Or(
+                                    *[
+                                        Not(Equals(mult, Int(0)))
+                                        for mult in multiplicities
+                                    ]
+                                ),
+                            ),
+                            status="unsat",
+                        )
+                        write_smtlib_script(smtlib, dump)
                     action += ("outputs", outfile)
             elif not ARGS().skip_soundness:
                 outfile = ARGS().output.with_suffix(".soundness.smt2")
                 with open_file(outfile, "w") as dump:
-                    dump.write(";; soundness check\n".encode(SMT_ENCODING))
+                    dump.write(f";; soundness check\n".encode(SMT_ENCODING))
                     soundness = encoding(
                         after_smt,
                         before_smt,

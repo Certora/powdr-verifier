@@ -1,10 +1,8 @@
 """Structured memory-bus analysis for plain permutation encoding."""
 from __future__ import annotations
 
-import collections
 import itertools
 import logging
-from collections import namedtuple
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -21,14 +19,39 @@ from .membus_subprocess import (
     fetch_align_json,
     fetch_extract_json,
     fetch_info_json,
-    fetch_solve_json,
+    fetch_solve_json_all,
 )
 from .membus_types import MembusParsedKey, parse_membus_key
 
 _LOG = logging.getLogger(__name__)
 
 Tri = bool | None
-Status = namedtuple("Status", ("input", "output", "disabled", "match"))
+
+
+@dataclass(frozen=True)
+class Info:
+    """Everything the analysis resolves about a single interaction.
+
+    `matches` stays separate: it is a relation (per-interaction match sets),
+    not a scalar attribute, so it does not belong in this per-interaction
+    record.
+    """
+
+    # Worklist-inferred role flags (tri-valued: True / False / None=unknown).
+    input: Tri = None
+    output: Tri = None
+    disabled: Tri = None
+    match: Tri = None
+    # Classification: present in ONE circuit only (align status=="removed");
+    # never set on the after side. The recv<->send pairing among removed legs is
+    # recovered from `matches`, not stored (see `internal_pairs_for`).
+    removed: bool = False
+    # Trusted parsed timestamp: exact for sends, upper bound for recvs (offset
+    # from T), or None. Restricts a recv to matching only earlier sends.
+    time: TimeInfo | None = None
+    # Trusted parsed membus key (base+offset / const), or None — a syntactic
+    # reading of the circuit, used to anchor `pointer == base + offset`.
+    key: MembusParsedKey | None = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +79,7 @@ class IdFacts:
     abstract_ts: str | None = None
     mult_const: int | None = None
     solve_io: str | None = None
+    solve_forced: bool = False
     interior_partners: set[int] = field(default_factory=set)
 
 
@@ -65,6 +89,8 @@ class SideState:
     facts: list[IdFacts]
     matches: list[set[int]]
     status: list[list[Tri]]
+    removed: list[bool] = field(default_factory=list)
+    order_edges: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -74,24 +100,17 @@ class MembusAnalysis:
     before_to_after: dict[int, int]
     before_matches: list[list[int]]
     after_matches: list[list[int]]
-    before_status: list[Status]
-    after_status: list[Status]
-    before_times: list["TimeInfo | None"] = field(default_factory=list)
-    after_times: list["TimeInfo | None"] = field(default_factory=list)
-    before_keys: list["MembusParsedKey | None"] = field(default_factory=list)
-    after_keys: list["MembusParsedKey | None"] = field(default_factory=list)
-    # Whether `membus align` actually ran (False = heuristic fallback), and the
+    before_info: list[Info]
+    after_info: list[Info]
     # before->after pairs sourced from genuine status=="kept" align rows,
-    # captured BEFORE any identity fill. The interface encoding trusts only
-    # these.
-    align_ok: bool = False
+    # captured BEFORE any identity fill and left empty on the heuristic fallback
+    # (no align ran). The interface encoding trusts only these.
     kept_pairs: dict[int, int] = field(default_factory=dict)
-    # Forced interior recv<->send pairs among the removed (single-circuit)
-    # interactions, per side, plus the inert (mult==0) removed ordinals. The
-    # after side stays empty in v1: align aborts on 'added' rows.
-    internal_pairs_before: list[InternalPair] = field(default_factory=list)
-    internal_pairs_after: list[InternalPair] = field(default_factory=list)
-    inert_removed_before: frozenset[int] = frozenset()
+    # [is_valid=1 interface] whether this analysis assumed the openvm is_valid
+    # activation selector == 1. Read by the interface encoder to const-fold
+    # is_valid-gated memory multiplicities. Remove when the interface encoder
+    # resolves gated mults natively.
+    after_assume_is_valid: bool = False
 
     @property
     def n_before(self) -> int:
@@ -110,56 +129,60 @@ class MembusAnalysis:
         )
         return self.after_matches
 
-    def status_for(self, path: Path) -> list[Status]:
+    def info_for(self, path: Path) -> list[Info]:
+        """Per-interaction `Info` records (role flags, removed bit, parsed
+        time/key) for the given side. See `Info` for field semantics."""
         path = path.resolve()
         if path == self.before_path.resolve():
-            return self.before_status
+            return self.before_info
         assert path == self.after_path.resolve(), (
             f"path {path} is neither before {self.before_path} nor after {self.after_path}"
         )
-        return self.after_status
+        return self.after_info
 
-    def keys_for(self, path: Path) -> list["MembusParsedKey | None"]:
-        """Per-interaction parsed membus key (base+offset / const), or ``None``.
+    def removed_for(self, path: Path) -> frozenset[int]:
+        """Ordinals of this side's removed interactions (present in ONE circuit
+        only): the union of the forced interior pair legs and the inert rows.
+        Empty when no align ran (and always empty on the after side in v1)."""
+        return frozenset(i for i, st in enumerate(self.info_for(path)) if st.removed)
 
-        This is membus's *key reconstruction* (trusted — a syntactic reading of
-        the circuit), independent of its (guessed) solve. The encoder uses it to
-        assert ``pointer == base + offset`` so EUF/arith derives key
-        distinctness (``base+o1 != base+o2``) instead of nonlinear limb work.
-        """
-        path = path.resolve()
-        if path == self.before_path.resolve():
-            return self.before_keys
-        assert path == self.after_path.resolve(), (
-            f"path {path} is neither before {self.before_path} nor after {self.after_path}"
-        )
-        return self.after_keys
-
-    def internal_pairs_for(self, path: Path) -> list[InternalPair]:
+    def internal_pairs_for(self, path: Path) -> list[tuple[int, int]]:
         """Forced interior recv<->send pairs among this side's removed
-        interactions (membus ordinals). Empty unless ``align_ok``."""
-        path = path.resolve()
-        if path == self.before_path.resolve():
-            return self.internal_pairs_before
-        assert path == self.after_path.resolve(), (
-            f"path {path} is neither before {self.before_path} nor after {self.after_path}"
-        )
-        return self.internal_pairs_after
+        interactions, recovered from the match analysis as mutual singletons.
 
-    def time_for(self, path: Path) -> list["TimeInfo | None"]:
-        """Per-interaction membus timestamp (`TimeInfo`, or ``None`` if unknown).
-
-        Sends carry an exact time (``kind="exact"``), recvs an upper bound
-        (``kind="upper"``); both as an integer offset from ``T``. Used to
-        restrict a recv to matching only strictly-earlier sends.
-        """
-        path = path.resolve()
-        if path == self.before_path.resolve():
-            return self.before_times
-        assert path == self.after_path.resolve(), (
-            f"path {path} is neither before {self.before_path} nor after {self.after_path}"
-        )
-        return self.after_times
+        The pairing is not stored: a removed, non-inert interaction is (by the
+        ``local_partners`` fed into ``_restrict_partners``) a match-singleton
+        with its one partner, so ``matches[i] == {j}`` and ``matches[j] == {i}``.
+        Returned unordered (``i < j``) — recv/send roles are erased once the
+        worklist resolves both legs to ``match``; the consumer
+        (``internal_pair_equalities``) re-derives them from the multiplicities.
+        Raises if a removed leg is not a clean mutual singleton (the align-shape
+        gate in ``_collect_internal_pairs`` runs at construction, but these feed
+        SMT equalities, so a corrupted ``matches`` must never pass silently)."""
+        status = self.info_for(path)
+        matches = self.matches_for(path)
+        pairs: list[tuple[int, int]] = []
+        seen: set[int] = set()
+        for i, st in enumerate(status):
+            if i in seen or not st.removed or st.disabled:
+                continue
+            cand = [j for j in matches[i] if j != i]
+            partner = cand[0] if len(cand) == 1 else None
+            if (
+                partner is None
+                or partner in seen
+                or not status[partner].removed
+                or status[partner].disabled
+                or [x for x in matches[partner] if x != partner] != [i]
+            ):
+                raise RuntimeError(
+                    f"internal pair recovery: removed interaction #{i} is not a "
+                    f"forced mutual singleton (match={matches[i]})"
+                )
+            seen.add(i)
+            seen.add(partner)
+            pairs.append((i, partner) if i < partner else (partner, i))
+        return pairs
 
 
 def _normalize_dump(data: dict[str, Any]) -> dict[str, Any]:
@@ -173,6 +196,12 @@ def _normalize_dump(data: dict[str, Any]) -> dict[str, Any]:
         },
         "bus_map": {"bus_ids": {"1": "Memory"}},
     }
+
+
+def _parse_addr_space(raw: Any) -> int | None:
+    if raw is None or raw == "sym":
+        return None
+    return int(raw)
 
 
 def _parse_time(s: str | None) -> TimeInfo | None:
@@ -197,26 +226,30 @@ def _parse_time(s: str | None) -> TimeInfo | None:
     return None
 
 
-def _ordered_ts_pairs(order_edges: list[dict]) -> set[frozenset[str]]:
+# Transitive closure over timestamp ordering; unordered pairs as sorted 2-tuples.
+def _ordered_ts_pairs(order_edges: list[dict]) -> set[tuple[str, str]]:
     nodes = sorted({e["lhs"] for e in order_edges} | {e["rhs"] for e in order_edges})
     if not nodes:
         return set()
     idx = {n: i for i, n in enumerate(nodes)}
     n = len(nodes)
-    before = [[False] * n for _ in range(n)]
+    # Bitset transitive closure: ~1.6s -> ~0.1s per side on 2099828 step 0 membus analysis.
+    reach = [0] * n
     for e in order_edges:
-        before[idx[e["lhs"]]][idx[e["rhs"]]] = True
+        reach[idx[e["lhs"]]] |= 1 << idx[e["rhs"]]
     for k in range(n):
+        bit_k = 1 << k
+        rk = reach[k]
+        if not rk:
+            continue
         for i in range(n):
-            if not before[i][k]:
-                continue
-            for j in range(n):
-                before[i][j] = before[i][j] or before[k][j]
+            if reach[i] & bit_k:
+                reach[i] |= rk
     return {
-        frozenset({nodes[i], nodes[j]})
+        (nodes[i], nodes[j])
         for i in range(n)
         for j in range(i + 1, n)
-        if before[i][j] or before[j][i]
+        if (reach[i] >> j) & 1 or (reach[j] >> i) & 1
     }
 
 
@@ -307,8 +340,101 @@ def _set_flag(st: list[Tri], idx: int, val: Tri) -> bool:
     return True
 
 
-def _status_tuple(st: list[Tri]) -> Status:
-    return Status(st[0], st[1], st[2], st[3])
+def _make_info(st: list[Tri], removed: bool, fact: IdFacts) -> Info:
+    return Info(st[0], st[1], st[2], st[3], removed, fact.time, fact.key)
+
+
+def _apply_boundary_io(status: list[list[Tri]], i: int, io: str | None) -> None:
+    match io:
+        case "in":
+            _set_flag(status[i], 1, False)
+            _set_flag(status[i], 3, False)
+        case "out":
+            _set_flag(status[i], 0, False)
+            _set_flag(status[i], 3, False)
+
+
+def _apply_forced_io(status: list[list[Tri]], i: int, io: str | None) -> None:
+    """Pin I/O status from a forced membus solve row (``io`` is authoritative)."""
+    match io:
+        case "in":
+            _set_flag(status[i], 0, True)
+            _set_flag(status[i], 1, False)
+            _set_flag(status[i], 2, False)
+            _set_flag(status[i], 3, False)
+        case "out":
+            _set_flag(status[i], 0, False)
+            _set_flag(status[i], 1, True)
+            _set_flag(status[i], 2, False)
+            _set_flag(status[i], 3, False)
+
+
+def _apply_local_role(
+    status: list[list[Tri]],
+    i: int,
+    f: IdFacts,
+    *,
+    role: str | None,
+    partners: list[int],
+    io: str | None,
+) -> None:
+    if role == "inert":
+        _set_flag(status[i], 2, True)
+    elif role == "interior":
+        f.interior_partners.update(partners)
+    io_eff = io
+    if not io_eff and role in ("input", "output"):
+        io_eff = {"input": "in", "output": "out"}[role]
+    if io_eff:
+        f.solve_io = io_eff
+        _apply_boundary_io(status, i, io_eff)
+
+
+def _merge_info(f: IdFacts, raw: dict) -> None:
+    if raw.get("kind"):
+        f.kind = raw["kind"]
+    if raw.get("address_space") is not None:
+        f.addr_space = _parse_addr_space(raw["address_space"])
+    if raw.get("key"):
+        f.key = parse_membus_key(raw["key"])
+    t = _parse_time(raw.get("time"))
+    if t is not None:
+        f.time = t
+
+
+def _merge_extract(f: IdFacts, raw: dict) -> None:
+    if raw.get("abstract_ts") is not None:
+        f.abstract_ts = raw["abstract_ts"]
+    if f.addr_space is None and raw.get("address_space") is not None:
+        f.addr_space = _parse_addr_space(raw["address_space"])
+    if f.key is None and raw.get("key"):
+        f.key = parse_membus_key(raw["key"])
+
+
+def _merge_solve(f: IdFacts, raw: dict) -> None:
+    if raw.get("kind") and not f.kind:
+        f.kind = raw["kind"]
+    if f.addr_space is None and raw.get("address_space") is not None:
+        f.addr_space = _parse_addr_space(raw["address_space"])
+    if raw.get("key") and not f.key:
+        f.key = parse_membus_key(raw["key"])
+    if raw.get("forced") is False:
+        return
+    if raw.get("forced") is True:
+        f.solve_forced = True
+    if raw.get("io"):
+        f.solve_io = raw["io"]
+    vint = raw.get("vtime_int")
+    if vint is not None:
+        f.time = TimeInfo("exact", int(vint))
+    elif raw.get("io") == "in":
+        f.time = TimeInfo("upper", 0)
+    rf = raw.get("reads_from")
+    if rf is not None:
+        f.interior_partners.add(int(rf))
+    for rb in raw.get("read_by") or []:
+        f.interior_partners.add(int(rb))
+
 
 
 def _ingest_side(
@@ -318,62 +444,38 @@ def _ingest_side(
     solve: dict | None,
     info: dict | None,
     extract: dict | None,
+    align_rows: list[dict] | None = None,
 ) -> SideState:
     mem_id = _memory_bus_id(data)
     assert mem_id is not None
     n = _memory_interaction_count(data)
     facts = [IdFacts() for _ in range(n)]
     mults = _json_mult_const(data, mem_id)
+    order_edges: list[dict] = []
+    unordered: list[dict] = []
 
     if info:
         for raw in info.get("interactions") or []:
             o = raw.get("ordinal")
             if o is None or o >= n:
                 continue
-            f = facts[o]
-            if raw.get("kind"):
-                f.kind = raw["kind"]
-            as_raw = raw.get("address_space")
-            if as_raw is not None and as_raw != "sym":
-                f.addr_space = int(as_raw)
-            if raw.get("key"):
-                f.key = parse_membus_key(raw["key"])
-            t = _parse_time(raw.get("time"))
-            if t is not None:
-                f.time = t
+            _merge_info(facts[o], raw)
 
     if extract:
-        ts_by_ord = {
-            r["ordinal"]: r["abstract_ts"]
-            for r in extract.get("interactions") or []
-            if r.get("ordinal") is not None
-        }
-        for o, ts in ts_by_ord.items():
-            if o < n:
-                facts[o].abstract_ts = ts
+        order_edges = list(extract.get("order_edges") or [])
+        unordered = list(extract.get("unordered") or [])
+        for raw in extract.get("interactions") or []:
+            o = raw.get("ordinal")
+            if o is None or o >= n:
+                continue
+            _merge_extract(facts[o], raw)
 
     if solve:
         for raw in solve.get("interactions") or []:
             o = raw.get("ordinal")
             if o is None or o >= n:
                 continue
-            f = facts[o]
-            if raw.get("kind") and not f.kind:
-                f.kind = raw["kind"]
-            if raw.get("key") and not f.key:
-                f.key = parse_membus_key(raw["key"])
-            if raw.get("io"):
-                f.solve_io = raw["io"]
-            vint = raw.get("vtime_int")
-            if vint is not None:
-                f.time = TimeInfo("exact", int(vint))
-            elif raw.get("io") == "in":
-                f.time = TimeInfo("upper", 0)
-            rf = raw.get("reads_from")
-            if rf is not None:
-                f.interior_partners.add(int(rf))
-            for rb in raw.get("read_by") or []:
-                f.interior_partners.add(int(rb))
+            _merge_solve(facts[o], raw)
 
     for o in range(n):
         if o < len(mults):
@@ -381,6 +483,27 @@ def _ingest_side(
 
     matches = [set(range(n)) for _ in range(n)]
     status = [[None, None, None, None] for _ in range(n)]
+    removed = [False] * n
+
+    if align_rows:
+        for raw in align_rows:
+            o = raw.get("before_id")
+            if o is None or o >= n:
+                continue
+            if raw.get("status") == "removed":
+                removed[o] = True
+            if raw.get("kind") and not facts[o].kind:
+                facts[o].kind = raw["kind"]
+            if raw.get("key") and not facts[o].key:
+                facts[o].key = parse_membus_key(raw["key"])
+            _apply_local_role(
+                status,
+                o,
+                facts[o],
+                role=raw.get("local_role"),
+                partners=list(raw.get("local_partners") or []),
+                io=raw.get("io"),
+            )
 
     for i in range(n):
         f = facts[i]
@@ -405,18 +528,30 @@ def _ingest_side(
                 elif mc == 1:
                     _set_flag(status[i], 0, False)
 
-        match f.solve_io:
-            case "in":
-                _set_flag(status[i], 1, False)
-                _set_flag(status[i], 3, False)
-            case "out":
-                _set_flag(status[i], 0, False)
-                _set_flag(status[i], 3, False)
+        if f.solve_io:
+            if f.solve_forced:
+                _apply_forced_io(status, i, f.solve_io)
+            else:
+                _apply_boundary_io(status, i, f.solve_io)
 
-    return SideState(n=n, facts=facts, matches=matches, status=status)
+    if unordered:
+        _LOG.warning(
+            "membus analysis: %s has %d unordered abstract timestamp(s)",
+            path,
+            len(unordered),
+        )
+
+    return SideState(
+        n=n,
+        facts=facts,
+        matches=matches,
+        status=status,
+        removed=removed,
+        order_edges=order_edges,
+    )
 
 
-def _rule_out_pairs(state: SideState, ordered_ts: set[frozenset[str]]) -> None:
+def _rule_out_pairs(state: SideState, ordered_ts: set[tuple[str, str]]) -> None:
     n = state.n
     for i, j in itertools.combinations(range(n), 2):
         a, b = state.facts[i], state.facts[j]
@@ -427,7 +562,7 @@ def _rule_out_pairs(state: SideState, ordered_ts: set[frozenset[str]]) -> None:
             _remove_match(state, i, j)
             continue
         tai, taj = a.abstract_ts, b.abstract_ts
-        if tai and taj and frozenset({tai, taj}) in ordered_ts:
+        if tai and taj and ((tai, taj) if tai < taj else (taj, tai)) in ordered_ts:
             _remove_match(state, i, j)
 
 
@@ -441,15 +576,9 @@ def _restrict_partners(state: SideState) -> None:
     for i, f in enumerate(state.facts):
         if not f.interior_partners:
             continue
-        # The self-match m(i,i) covers the disabled/input/output cases. It is
-        # only truly ruled out when the multiplicity is a non-zero constant:
-        # then the row can never be disabled (is_valid == 0 would still leave
-        # mult != 0), so it is genuinely interior. For an is_valid-gated
-        # multiplicity the row is disabled (and self-matches) when is_valid == 0,
-        # so the self-match must be kept.
         self_ruled_out = f.mult_const is not None and f.mult_const % p != 0
         allowed = set(f.interior_partners)
-        if not self_ruled_out:
+        if not self_ruled_out and not f.solve_forced:
             allowed.add(i)
         drop = [j for j in state.matches[i] if j not in allowed]
         for j in drop:
@@ -480,7 +609,7 @@ def _apply_exactly_one(st: list[Tri]) -> bool:
             if v is None:
                 st[k] = True
                 return True
-    return changed
+    return False
 
 
 def _run_worklist(state: SideState) -> None:
@@ -573,16 +702,18 @@ def _resolve_status(st: list[Tri]) -> None:
             break
 
 
-def _finalize_side(
-    state: SideState,
-) -> tuple[list[list[int]], list[Status], list[TimeInfo | None], list[MembusParsedKey | None]]:
+def _finalize_side(state: SideState) -> tuple[list[list[int]], list[Info]]:
     for i in range(state.n):
         _resolve_status(state.status[i])
     matches = [sorted(s) for s in state.matches]
-    status = [_status_tuple(st) for st in state.status]
-    times = [f.time for f in state.facts]
-    keys = [f.key for f in state.facts]
-    return matches, status, times, keys
+    # One `Info` per interaction: resolved role flags + removed bit + parsed
+    # time/key. `removed` is index-guarded so a hand-built state that omits it
+    # (shorter list) finalizes as not-removed instead of truncating the output.
+    info = [
+        _make_info(st, i < len(state.removed) and bool(state.removed[i]), f)
+        for i, (st, f) in enumerate(zip(state.status, state.facts))
+    ]
+    return matches, info
 
 
 def _analyze_side(
@@ -592,14 +723,99 @@ def _analyze_side(
     solve: dict | None,
     info: dict | None,
     extract: dict | None,
-    order_edges: list[dict],
-) -> tuple[list[set[int]], list[Status], list[TimeInfo | None], list[MembusParsedKey | None]]:
-    state = _ingest_side(data, path, solve=solve, info=info, extract=extract)
-    ordered_ts = _ordered_ts_pairs(order_edges)
+    align_rows: list[dict] | None = None,
+) -> SideState:
+    state = _ingest_side(
+        data,
+        path,
+        solve=solve,
+        info=info,
+        extract=extract,
+        align_rows=align_rows,
+    )
+    ordered_ts = _ordered_ts_pairs(state.order_edges)
     _rule_out_pairs(state, ordered_ts)
     _restrict_partners(state)
     _run_worklist(state)
-    return _finalize_side(state)
+    return state
+
+
+def _exchange_across_alignment(
+    before: SideState, after: SideState, before_to_after: dict[int, int]
+) -> None:
+    """Transfer resolved role/match knowledge across a genuine 1:1 kept
+    alignment, then re-run each side's worklist once (a single pass suffices --
+    see the note at the transfer below).
+
+    For a kept pair ``(i_b, i_a)`` the two interactions are the SAME memory
+    operation up to ``is_valid`` gating, so under ``is_valid==1`` they share
+    roles and matches. Filling an unresolved status flag / narrowing a match set
+    on one side from the other is a sound *instantiation* of that side's
+    quantified permutation variables: instantiating a forall-bound variable can
+    only fail to close a proof, never cause a false PASS, and the transferred
+    value is exactly the ``is_valid==1`` witness (which is also the determined
+    value on the ``is_valid``-asserting soundness side). The symbolic-mult side
+    (typically ``after``, whose multiplicities are ``+-is_valid``) thus inherits
+    the constant side's resolution and its permutation booleans stop being free
+    -- eliminating the residual ``forall`` that made completeness not-qf.
+
+    No explicit ``is_valid`` guard is needed: the alignment already carries the
+    ``is_valid==1`` assumption (see ``keyed_io_relation``'s aligned-pair I/O
+    ``Iff``s), and forall-instantiation is unconditionally sound regardless."""
+    pairs = {
+        b: a
+        for b, a in before_to_after.items()
+        if b < before.n and a < after.n
+    }
+    if not pairs:
+        return
+    inverse = {a: b for b, a in pairs.items()}
+
+    def xfer_status(src: SideState, dst: SideState, src2dst: dict[int, int]) -> bool:
+        changed = False
+        for si, di in src2dst.items():
+            for k in range(4):
+                if src.status[si][k] is not None and dst.status[di][k] is None:
+                    dst.status[di][k] = src.status[si][k]
+                    changed = True
+        return changed
+
+    def xfer_matches(src: SideState, dst: SideState, src2dst: dict[int, int]) -> bool:
+        changed = False
+        for si, di in src2dst.items():
+            # image of src's candidate partners in dst's index space
+            image = {src2dst[j] for j in src.matches[si] if j in src2dst}
+            # only narrow when the resolved partner is still reachable, so we
+            # never empty di's own match set on a (rare) misaligned pair
+            if not (image & dst.matches[di]):
+                continue
+            for k in [x for x in dst.matches[di] if x not in image]:
+                # don't strand the partner `k` either: on a misaligned pair k's
+                # only candidate can be di, and `_remove_match` would leave k
+                # with an empty match set (which crashes downstream recovery).
+                # Skip such a removal -- an over-matched di is harmless (at worst
+                # a residual unpinned var); an empty match set is not.
+                if dst.matches[k] == {di}:
+                    continue
+                _remove_match(dst, di, k)  # keeps matches symmetric
+                changed = True
+        return changed
+
+    # A single pass suffices: `before` is fully resolved by its constant
+    # multiplicities, so the transfer is one-directional (before -> after). One
+    # pass fills every aligned `after` slot, the worklist propagates it, and a
+    # second pass would move nothing new -- `before` is unchanged and after's
+    # newly-resolved vars map only back to already-resolved `before`
+    # interactions. (Verified: `_040` blocks need exactly one round, interface
+    # zero.) A missed transfer would only leave a var unpinned (residual
+    # not-qf), never be unsound, so dropping the fixpoint loop is safe.
+    changed = xfer_status(before, after, pairs)
+    changed |= xfer_status(after, before, inverse)
+    changed |= xfer_matches(before, after, pairs)
+    changed |= xfer_matches(after, before, inverse)
+    if changed:
+        _run_worklist(before)
+        _run_worklist(after)
 
 
 def _collect_internal_pairs(
@@ -676,13 +892,14 @@ def run_membus_analysis(
     after: dict[str, Any],
     before_path: Path,
     after_path: Path,
+    *,
+    after_assume_is_valid: bool = False,
 ) -> MembusAnalysis:
     before = _normalize_dump(before)
     after = _normalize_dump(after)
     before_to_after: dict[int, int] = {}
-    align_ok = False
-    internal_pairs: list[InternalPair] = []
-    inert_removed: set[int] = set()
+    before_align_rows: list[dict] = []
+    align_ran = False
     present = _memory_address_spaces(before)
 
     # Align every constant address space present (native AS3 blocks exist in
@@ -692,16 +909,20 @@ def run_membus_analysis(
         al = fetch_align_json(before_path, after_path, addr_space=addr_space)
         if al is None:
             continue
-        align_ok = True
+        align_ran = True
         rows = al.get("interactions") or []
+        before_align_rows.extend(rows)
         for raw in rows:
             aid = raw.get("after_id")
             bid = raw.get("before_id")
             if aid is not None and bid is not None and raw.get("status") == "kept":
                 before_to_after[bid] = aid
+        # Validation gate only: raises on any malformed removed-interaction shape
+        # (unclaimed send, non-mutual partner, non-interior removed row). The
+        # `removed` classification is stamped per-interaction in `_ingest_side`
+        # and the pairing is recovered downstream from `matches`; we keep this
+        # trusted align-side check because those pairs become SMT equalities.
         pairs, inert = _collect_internal_pairs(rows, addr_space)
-        internal_pairs.extend(pairs)
-        inert_removed |= inert
         if pairs or inert:
             _LOG.info(
                 "membus align as=%d: %d internal recv<->send pair(s), %d inert removed",
@@ -710,41 +931,89 @@ def run_membus_analysis(
                 len(inert),
             )
 
-    if not align_ok:
-        before_to_after = _heuristic_before_to_after(before, after)
+    # Snapshot the genuine kept map (align "kept" rows only) before the fallback
+    # and identity fill mutate/replace before_to_after; empty when no align ran.
+    # The interface encoding trusts only this.
+    kept_pairs = dict(before_to_after)
 
-    kept_pairs = dict(before_to_after) if align_ok else {}
+    if not align_ran:
+        before_to_after = _heuristic_before_to_after(before, after)
 
     n_before = _memory_interaction_count(before)
     n_after = _memory_interaction_count(after)
     _fill_identity_map(before_to_after, n_before, n_after)
 
-    before_info = fetch_info_json(before_path)
-    after_info = fetch_info_json(after_path)
+    before_info_json = fetch_info_json(before_path)
+    after_info_json = fetch_info_json(after_path)
     before_extract = fetch_extract_json(before_path)
     after_extract = fetch_extract_json(after_path)
-    before_solve = fetch_solve_json(before_path, addr_space=1)
-    after_solve = fetch_solve_json(after_path, addr_space=1)
 
-    before_edges = (before_extract or {}).get("order_edges") or []
-    after_edges = (after_extract or {}).get("order_edges") or []
+    # The membus `solve` (~11s symbolic AS2) recovers the read<->write matching
+    # that only the PLAIN permutation encoding needs to pin its vars. When the
+    # interface encoding will be used, the alignment (kept_pairs) + align-supplied
+    # roles/internal-pairs suffice, so skip it. The decision is fully determined
+    # here, pre-solve, from align + the syntactic mult-const check (validated: the
+    # emitted interface VC is identical with vs without the solve, up to forall
+    # binder order). Conservative -- plain always keeps the solve.
+    from .preanalysis import presolve_interface_eligible  # lazy: avoid import cycle
 
-    before_matches, before_status, before_times, before_keys = _analyze_side(
+    removed_ids = {
+        r["before_id"]
+        for r in before_align_rows
+        if r.get("status") == "removed" and r.get("before_id") is not None
+    }
+    skip_solve = align_ran and presolve_interface_eligible(
+        before,
+        after,
+        kept_pairs,
+        removed_ids,
+        n_before,
+        n_after,
+        after_assume_is_valid=after_assume_is_valid,
+    )
+    if skip_solve:
+        _LOG.warning(
+            "membus analysis: interface eligible pre-solve; skipping the membus solve"
+        )
+        before_solve = after_solve = None
+    else:
+        before_solve = fetch_solve_json_all(before_path, present=present)
+        after_solve = fetch_solve_json_all(
+            after_path, present=present, assume_is_valid=after_assume_is_valid
+        )
+
+    before_state = _analyze_side(
         before,
         before_path,
         solve=before_solve,
-        info=before_info,
+        info=before_info_json,
         extract=before_extract,
-        order_edges=before_edges,
+        align_rows=before_align_rows,
     )
-    after_matches, after_status, after_times, after_keys = _analyze_side(
+    after_state = _analyze_side(
         after,
         after_path,
         solve=after_solve,
-        info=after_info,
+        info=after_info_json,
         extract=after_extract,
-        order_edges=after_edges,
     )
+    # With a genuine kept alignment, share resolved roles/matches across the
+    # aligned pairs so the symbolic-mult (is_valid) side inherits the constant
+    # side's pins -- otherwise its permutation booleans stay free and make the
+    # completeness VC not-qf. Only the genuine kept map (never the heuristic
+    # fill) is trusted here.
+    #
+    # Gated on `after_assume_is_valid`: the transfer asserts after == before,
+    # which only holds under is_valid==1. The is_valid special-soundness path
+    # runs a SECOND, inactive analysis (after_assume_is_valid=False) for its
+    # is_valid==0 sub-checks (zero-is-model / invalid-all-mult-zero); pinning
+    # after == before there would force is_valid==1 into after.C and wrongly
+    # flip the "all-zero is a model" check unsat. Non-is_valid steps have
+    # constant mults on both sides, so the transfer is a no-op there anyway.
+    if align_ran and kept_pairs and after_assume_is_valid:
+        _exchange_across_alignment(before_state, after_state, kept_pairs)
+    before_matches, before_info = _finalize_side(before_state)
+    after_matches, after_info = _finalize_side(after_state)
 
     _LOG.info(
         "membus analysis: n_before=%d n_after=%d aligned_pairs=%d",
@@ -759,14 +1028,8 @@ def run_membus_analysis(
         before_to_after=before_to_after,
         before_matches=before_matches,
         after_matches=after_matches,
-        before_status=before_status,
-        after_status=after_status,
-        before_times=before_times,
-        after_times=after_times,
-        before_keys=before_keys,
-        after_keys=after_keys,
-        align_ok=align_ok,
+        before_info=before_info,
+        after_info=after_info,
         kept_pairs=kept_pairs,
-        internal_pairs_before=internal_pairs if align_ok else [],
-        inert_removed_before=frozenset(inert_removed) if align_ok else frozenset(),
+        after_assume_is_valid=after_assume_is_valid,
     )

@@ -41,7 +41,6 @@ def parse_membus_key(key: str | None) -> MembusParsedKey | None:
 class AlignRowInfo:
     kind: str | None = None
     key: MembusParsedKey | None = None
-    alias_class: int | None = None
     local_role: str | None = None
     local_partners: list[int] = field(default_factory=list)
     status: str | None = None

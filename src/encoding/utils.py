@@ -9,6 +9,16 @@ def as_script(status: str):
         return inner
     return wrapped
 
+def dump_has_is_valid(data: dict) -> bool:
+    """True if the APC dump mentions an ``is_valid@`` column."""
+    return "is_valid@" in str(data)
+
+
+def dump_introduces_is_valid(before: dict, after: dict) -> bool:
+    """True when ``after`` gains ``is_valid`` (special soundness encoding)."""
+    return not dump_has_is_valid(before) and dump_has_is_valid(after)
+
+
 def get_is_valid(vars: frozenset[FNode], prefix: str) -> FNode | None:
     match [v for v in vars if v.symbol_name().startswith(f"{prefix}-is_valid@")]:
         case []:
