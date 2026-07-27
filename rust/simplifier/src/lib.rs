@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use smt2::{dump_string, ensure_declarations_for_asserts, pretty_print_script, Script};
 
 use crate::budget::Budget;
-use crate::passes::{bitwise, bounds, demod, domain_probe, evaluator, isqf, lift, mod_inv, nnf, normalize, pretty, rewrite, skolem, ufnorm, witness, z3};
+use crate::passes::{bitwise, bounds, demod, domain_probe, evaluator, factor_reduce, isqf, lift, mod_inv, nnf, normalize, pretty, rewrite, skolem, ufnorm, witness, z3};
 use crate::tactic::split_tactic;
 
 #[derive(Debug)]
@@ -76,6 +76,7 @@ pub fn apply_pass(raw_tactic: &str, script: &Script) -> Result<(Script, StepResu
         "mod_inv" => mod_inv::apply(script)?,
         "domain_probe" => domain_probe::apply(script)?,
         "rewrite" => rewrite::apply(script)?,
+        "factor_reduce" => factor_reduce::apply(script)?,
         "ufnorm" => ufnorm::apply(script)?,
         "isqf" => isqf::apply(script)?,
         "pretty" | "p" => pretty::apply(script)?,

@@ -3,6 +3,7 @@ pub mod bounds;
 pub mod demod;
 pub mod domain_probe;
 pub mod evaluator;
+pub mod factor_reduce;
 pub mod isqf;
 pub mod lift;
 pub mod mod_inv;
