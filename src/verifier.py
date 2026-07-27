@@ -12,7 +12,7 @@ from .report.action import Action
 from .smt.conversion import FormulaWithAxioms, SmtConverter
 from .smt.utils import *
 from .utils.basic_block import BasicBlock
-from .utils.io import load_apc_dump, load_json
+from .utils.io import load_apc_dump, load_json, open_file, SMT_ENCODING
 from .utils.stats import init_stats_run, set_stats_tag, stats_enabled
 from .verify.bug_injection import apply_injection
 from .verify.preanalysis import analyze_memory_bus_alignment, apply_skip_trivial
@@ -216,8 +216,8 @@ def verify():
 
             if not ARGS().skip_completeness:
                 outfile = ARGS().output.with_suffix(".completeness.smt2")
-                with open(outfile, "w") as dump:
-                    dump.write(";; completeness check\n")
+                with open_file(outfile, "w") as dump:
+                    dump.write(";; completeness check\n".encode(SMT_ENCODING))
                     completeness = encoding(
                         before_smt,
                         after_smt,
@@ -239,8 +239,8 @@ def verify():
             if not ARGS().skip_soundness and is_valid_before is None and is_valid_after is not None:
                 logging.warning("is_valid was introduced, perform special soundness check")
                 outfile = ARGS().output.with_suffix(".soundness.smt2")
-                with open(outfile, "w") as dump:
-                    dump.write(";; soundness check\n")
+                with open_file(outfile, "w") as dump:
+                    dump.write(";; soundness check\n".encode(SMT_ENCODING))
                     soundness = encoding(
                         after_smt,
                         before_smt,
@@ -262,8 +262,8 @@ def verify():
                     action += ("outputs", outfile)
 
                 outfile = ARGS().output.with_suffix(".soundness.zero-is-model.smt2")
-                with open(outfile, "w") as dump:
-                    dump.write(";; check that all zero is a model\n")
+                with open_file(outfile, "w") as dump:
+                    dump.write(";; check that all zero is a model\n".encode(SMT_ENCODING))
                     logging.info(f"dumping zero is model check to {dump.name}")
                     intvars = [ v for v in (var2 - auxiliaries) if v.get_type() == INT ]
                     intvars = sorted(intvars, key=lambda x: x.symbol_name())
@@ -282,8 +282,8 @@ def verify():
                     action += ("outputs", outfile)
 
                 outfile = ARGS().output.with_suffix(".soundness.invalid-all-mult-zero.smt2")
-                with open(outfile, "w") as dump:
-                    dump.write(";; check that all is_valid zero makes all multiplicities zero\n")
+                with open_file(outfile, "w") as dump:
+                    dump.write(";; check that all is_valid zero makes all multiplicities zero\n".encode(SMT_ENCODING))
                     logging.info(f"dumping invalid makes all multiplicities zero check to {dump.name}")
 
                     multiplicities = []
@@ -302,8 +302,8 @@ def verify():
                     action += ("outputs", outfile)
             elif not ARGS().skip_soundness:
                 outfile = ARGS().output.with_suffix(".soundness.smt2")
-                with open(outfile, "w") as dump:
-                    dump.write(";; soundness check\n")
+                with open_file(outfile, "w") as dump:
+                    dump.write(";; soundness check\n".encode(SMT_ENCODING))
                     soundness = encoding(
                         after_smt,
                         before_smt,

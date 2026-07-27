@@ -7,7 +7,7 @@ from .encoding import encode_trace, encode_trace_sanity
 from .report.dumpers import Action
 from .utils.args import ARGS
 from .utils.basic_block import BasicBlock
-from .utils.io import load_apc_dump
+from .utils.io import load_apc_dump, open_file
 from .smt.conversion import SmtConverter
 from .smt.utils import *
 
@@ -28,11 +28,11 @@ def trace():
                 formula = conv.to_formula_with_axioms(input)
 
         with action.action("out-core"):
-            with open(out_core, "w") as dump:
+            with open_file(out_core, "w") as dump:
                 write_smtlib_script(encode_trace(formula), dump)
 
         with action.action("out-sanity"):
-            with open(out_sanity, "w") as dump:
+            with open_file(out_sanity, "w") as dump:
                 write_smtlib_script(encode_trace_sanity(conv, formula), dump)
 
         return action
