@@ -17,7 +17,7 @@ from .report.action import Action
 from .smt.utils import *
 from .smt_backends.pysmt import write_smtlib_script
 from .utils.args import ARGS
-from .utils.io import open_file
+from .utils.io import open_file, load_smt_script
 from .utils.stats import init_stats_run, set_stats_tag, stats_enabled, stats_tag_from_path, clear_pass_action, set_pass_action
 
 from .simplify.witness import simplify_witnesses
@@ -27,6 +27,7 @@ from .simplify import (
     simplify_bounds,
     simplify_cvc5,
     simplify_demod,
+    simplify_diff_vars,
     simplify_evaluate,
     simplify_flatten_outer_array,
     simplify_bitwise,
@@ -34,7 +35,6 @@ from .simplify import (
     simplify_intervals2,
     simplify_lift_forall,
     simplify_mod_inv,
-    simplify_diff_vars,
     simplify_normalize,
     simplify_model,
     simplify_nnf,
@@ -50,18 +50,68 @@ from .simplify.rust import run_rust_pipeline, rust_step_action_props
 
 _T = TypeVar("_T")
 
+def _pipe(*parts: str) -> str:
+    """Join pipeline fragments into a colon-separated tactic string."""
+    return ":".join(parts)
+
+
+# Pipeline building blocks. A tactic is a colon-separated sequence of passes
+# applied in order; the pipelines below are composed from these fragments.
+
+# Quantifier elimination: reduce the ForAll soundness obligation to a ground
+# (quantifier-free) formula. Bus-heavy steps need the full skolem/lift/witness
+# sequence -- nnf alone does not make them ground.
 TACTIC_QEPREFIX = "nnf:skolem:lift:witness:demod:isqf"
 
-DEFAULT_TACTIC = (
-    TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:rewrite:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:ufnorm:normalize:demod"
+# Modular normalization of the ground formula; excludes rewrite and z3 passes.
+_NORM = "bounds:demod:normalize:bitwise:mod_inv:demod"
+
+# z3 equality propagation. Must precede a trailing `rewrite` (see below).
+_Z3_EQ = "z3-propagate-values:z3-solve-eqs"
+
+# Ground + normalize, no z3/rewrite: base pipeline for bus-interaction steps.
+_BUS = _pipe(TACTIC_QEPREFIX, _NORM)
+
+# `rewrite`, when present, is always the FINAL pass: it factors modular products
+# (e.g. the `bit^2 - bit = 0` encoding) into `(or (var - r_i = 0 mod P))`
+# congruence disjunctions for z3 to case-split, and any later pass (demod /
+# solve-eqs) would mangle those back into a spurious sat. It also runs after
+# `_Z3_EQ`, which solve-eqs would otherwise undo.
+
+# Default: ground, normalize, then a final normalize/demod cleanup.
+DEFAULT_TACTIC = _pipe(_BUS, "normalize", "demod")
+
+# Special-soundness auxiliary checks (`.zero-is-model` / `.invalid-all-mult-zero`)
+# run the full rewrite + z3 pipeline.
+TACTIC_AUX = _pipe(
+    TACTIC_QEPREFIX,
+    "bounds:demod:normalize:bitwise:rewrite:mod_inv:demod",
+    "domain_probe",
+    _Z3_EQ,
+    "ufnorm:normalize:demod",
 )
 
-# Custom colon-separated pipelines keyed by powdr optimization pass name (e.g. ``remove_free``).
 STEP_TACTICS: dict[str, str] = {
-    "exec_bus": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod",
-    "loop_iteration": TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:z3-propagate-values:normalize:demod",
-    "solver": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod",
-    "substitute_bus_interactio_fields": TACTIC_QEPREFIX + ":bounds:bitwise:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:normalize:demod",
+    # Bus-interaction steps: ground + normalize only.
+    "substitute_bus_interactio_fields": _BUS,
+    "low_degree_bus": _BUS,
+    "memory": _BUS,
+    "remove_disconnected": _BUS,
+    "inlining": _BUS,
+    "rule_based": _BUS,
+    "range_constraints": _BUS,
+    # ... plus z3 equality propagation.
+    "exec_bus": _pipe(_BUS, _Z3_EQ),
+    # ... plus z3 equality propagation, then a final `rewrite` case-split.
+    "solver": _pipe(_BUS, _Z3_EQ, "rewrite"),
+    # trivial_simp drops `A*B = 0` when a factor `B = 0` is already kept;
+    # z3-solve-eqs links the before/after columns so `factor_reduce` sees that
+    # the kept hypothesis polynomial-divides the dropped goal and rewrites it to
+    # true. Sound: B = 0 is a global conjunct and B | Q => Q = 0 (mod P).
+    "trivial_simp": _pipe(_BUS, "z3-solve-eqs", "factor_reduce"),
+    # Identical to the default pipeline.
+    "loop_iteration": DEFAULT_TACTIC,
+    "simplify_exhaustive": DEFAULT_TACTIC,
 }
 
 
@@ -91,28 +141,35 @@ def _split_tactic(raw_tactic: str) -> TacticParts:
     return TacticParts(executor=executor, base=base, suffix=dash_suffix)
 
 
-def resolve_tactic(tactic: str, optimization_step: str | None = None) -> str:
+def resolve_tactic(
+    tactic: str,
+    optimization_step: str | None = None,
+    input_path: Path | None = None,
+) -> str:
     """Resolve ``default`` and per-step overrides to a colon-separated pipeline."""
     if tactic != "default":
         return tactic
-    if optimization_step and optimization_step in STEP_TACTICS:
+    if input_path is not None:
+        stem = Path(input_path).stem
+        if ".zero-is-model" in stem or ".invalid-all-mult-zero" in stem:
+            return TACTIC_AUX
+    if optimization_step is not None and optimization_step in STEP_TACTICS:
         return STEP_TACTICS[optimization_step]
     return DEFAULT_TACTIC
 
 
 def _pipeline_groups(
-    tactic: str, optimization_step: str | None = None
+    tactic: str,
+    optimization_step: str | None = None,
+    input_path: Path | None = None,
 ) -> list[tuple[str, list[str]]]:
-    resolved = resolve_tactic(tactic, optimization_step)
+    resolved = resolve_tactic(tactic, optimization_step, input_path)
     default_executor = getattr(ARGS(), "default_executor", "p")
     return _group_tactics(resolved.split(":"), default_executor=default_executor)
 
 
 def _load_script(path: Path) -> script.SmtLibScript:
-    with open_file(path, "r") as f:
-        parser = SmtLibParser()
-        logging.info(f"loading from {f.name}")
-        return parser.get_script(f)
+    return load_smt_script(path)
 
 
 class _PassTimeout(Exception):
@@ -468,7 +525,7 @@ def simplify_smt_script(
 ) -> tuple[script.SmtLibScript | None, bool]:
     """Run colon-separated tactics. Returns ``(script, wrote_final_output)``."""
     parent = parent_action or Action("simplify-programmatic")
-    groups = _pipeline_groups(tactic, optimization_step)
+    groups = _pipeline_groups(tactic, optimization_step, input_path)
     deadline = time.monotonic() + float(timeout)
     step_index = 0
     wrote_final_output = False
@@ -562,7 +619,7 @@ def simplify():
         init_stats_run(wipe=False)
         set_stats_tag(getattr(ARGS(), "stats_tag", None) or stats_tag_from_path(ARGS().input))
 
-    groups = _pipeline_groups(ARGS().tactic, optimization_step)
+    groups = _pipeline_groups(ARGS().tactic, optimization_step, ARGS().input)
     rust_first = bool(groups and groups[0][0] == "r")
 
     with Action("simplifier") as action:
