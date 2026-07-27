@@ -21,6 +21,7 @@ from .lift_forall import simplify_lift_forall
 from .intervals import simplify_intervals2
 from .bitwise import simplify_bitwise
 from .mod_inv import simplify_mod_inv
+from .diff_vars import simplify_diff_vars
 from .normalize import simplify_normalize
 from .skolem import simplify_skolem
 
