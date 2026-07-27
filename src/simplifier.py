@@ -17,7 +17,7 @@ from .report.action import Action
 from .smt.utils import *
 from .smt_backends.pysmt import write_smtlib_script
 from .utils.args import ARGS
-from .utils.io import open_file, SMT_ENCODING, load_smt_script
+from .utils.io import open_file, load_smt_script
 from .utils.stats import init_stats_run, set_stats_tag, stats_enabled, stats_tag_from_path, clear_pass_action, set_pass_action
 
 from .simplify.witness import simplify_witnesses
@@ -35,7 +35,6 @@ from .simplify import (
     simplify_intervals2,
     simplify_lift_forall,
     simplify_mod_inv,
-    simplify_diff_vars,
     simplify_normalize,
     simplify_model,
     simplify_nnf,
@@ -51,63 +50,68 @@ from .simplify.rust import run_rust_pipeline, rust_step_action_props
 
 _T = TypeVar("_T")
 
-# Regular prefix to eliminate quantifiers.
-#
-# NOTE: ``diff_vars`` is intentionally NOT in these prefixes. It was wired in
-# here (commit f92881d) to help a narrow set of solver VCs by collapsing
-# ``(x - y)²`` quadratics, but it makes MOST VCs materially HARDER for z3 -- e.g.
-# a remove_trivial soundness VC that is ``unsat`` in 0s without it becomes
-# ``unknown``@60s with it, and it didn't even help the solver VC it targeted.
-# That regressed the keccak benchmark from ~242 to ~903 check timeouts. The pass
-# itself (``diff_vars`` / src/simplify/diff_vars.py + its rust pass) is kept so
-# it can be re-enabled in a TARGETED, validated way, but never as a blanket
-# prefix. See [[verifier-ec2-z3-multithread-timeouts]].
+def _pipe(*parts: str) -> str:
+    """Join pipeline fragments into a colon-separated tactic string."""
+    return ":".join(parts)
+
+
+# Pipeline building blocks. A tactic is a colon-separated sequence of passes
+# applied in order; the pipelines below are composed from these fragments.
+
+# Quantifier elimination: reduce the ForAll soundness obligation to a ground
+# (quantifier-free) formula. Bus-heavy steps need the full skolem/lift/witness
+# sequence -- nnf alone does not make them ground.
 TACTIC_QEPREFIX = "nnf:skolem:lift:witness:demod:isqf"
-# Bus-heavy powdr steps still need skolem/lift/witness: soundness VCs keep a
-# ForAll until those passes run (nnf alone does not make them ground).
-TACTIC_BUS_QE = "nnf:skolem:lift:witness:demod:isqf"
 
-# Tail without rewrite/z3: on large keccak VCs rewrite is a no-op and z3 passes
-# are skipped above the assert threshold but still pay setup cost.
-TACTIC_BUS_TAIL = ":bounds:demod:normalize:bitwise:mod_inv:demod"
+# Modular normalization of the ground formula; excludes rewrite and z3 passes.
+_NORM = "bounds:demod:normalize:bitwise:mod_inv:demod"
 
-# zero-is-model / invalid-all-mult-zero: need rewrite + z3 passes (pre-d918f09 DEFAULT).
-TACTIC_AUX = (
-    TACTIC_QEPREFIX
-    + ":bounds:demod:normalize:bitwise:rewrite:mod_inv:demod:domain_probe:z3-propagate-values:z3-solve-eqs:ufnorm:normalize:demod"
+# z3 equality propagation. Must precede a trailing `rewrite` (see below).
+_Z3_EQ = "z3-propagate-values:z3-solve-eqs"
+
+# Ground + normalize, no z3/rewrite: base pipeline for bus-interaction steps.
+_BUS = _pipe(TACTIC_QEPREFIX, _NORM)
+
+# `rewrite`, when present, is always the FINAL pass: it factors modular products
+# (e.g. the `bit^2 - bit = 0` encoding) into `(or (var - r_i = 0 mod P))`
+# congruence disjunctions for z3 to case-split, and any later pass (demod /
+# solve-eqs) would mangle those back into a spurious sat. It also runs after
+# `_Z3_EQ`, which solve-eqs would otherwise undo.
+
+# Default: ground, normalize, then a final normalize/demod cleanup.
+DEFAULT_TACTIC = _pipe(_BUS, "normalize", "demod")
+
+# Special-soundness auxiliary checks (`.zero-is-model` / `.invalid-all-mult-zero`)
+# run the full rewrite + z3 pipeline.
+TACTIC_AUX = _pipe(
+    TACTIC_QEPREFIX,
+    "bounds:demod:normalize:bitwise:rewrite:mod_inv:demod",
+    "domain_probe",
+    _Z3_EQ,
+    "ufnorm:normalize:demod",
 )
 
-DEFAULT_TACTIC = TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:normalize:demod"
-
 STEP_TACTICS: dict[str, str] = {
-    "exec_bus": TACTIC_BUS_QE + TACTIC_BUS_TAIL + ":z3-propagate-values:z3-solve-eqs",
-    "loop_iteration": TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:normalize:demod",
-    # z3-propagate-values:z3-solve-eqs are restored now that diff_vars is gone
-    # from the prefix (f92881d had dropped them here only because solve-eqs undid
-    # diff_vars' difference reduction). They run BEFORE ``rewrite``, which must
-    # stay the FINAL pass: it factors modular products (e.g. the ``bit^2-bit=0``
-    # to_pc/least-sig-bit encoding) into ``(or (var - r_i = 0 mod P))`` congruence
-    # disjunctions for z3 to case-split, and a following pass (demod, or solve-eqs)
-    # mangles those disjunctions back into a spurious sat. (rewrite emits modular
-    # congruences, not the old exact-equality + [min,max] range, which was unsound
-    # for unbounded diff vars -- see [[verifier-rulebased-notqf-spurious]].)
-    "solver": TACTIC_BUS_QE + TACTIC_BUS_TAIL + ":z3-propagate-values:z3-solve-eqs:rewrite",
-    "substitute_bus_interactio_fields": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
-    "low_degree_bus": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
-    "memory": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
-    "remove_disconnected": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
-    "inlining": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
-    "rule_based": TACTIC_BUS_QE + TACTIC_BUS_TAIL,
-    "range_constraints": TACTIC_QEPREFIX + TACTIC_BUS_TAIL,
-    # trivial_simp drops `A*B = 0` constraints when `B = 0` is kept (factor
-    # redundancy, remove_redundant_constraints). z3 can't re-derive `A*B = 0`
-    # from the expanded mod-poly `B = 0` (ideal-membership / flag case-split ->
-    # timeout on the soundness side). z3-solve-eqs unifies the before/after
-    # columns via their linking equalities so `factor_reduce` can see that a kept
-    # hypothesis polynomial-divides the dropped goal constraint and rewrite it to
+    # Bus-interaction steps: ground + normalize only.
+    "substitute_bus_interactio_fields": _BUS,
+    "low_degree_bus": _BUS,
+    "memory": _BUS,
+    "remove_disconnected": _BUS,
+    "inlining": _BUS,
+    "rule_based": _BUS,
+    "range_constraints": _BUS,
+    # ... plus z3 equality propagation.
+    "exec_bus": _pipe(_BUS, _Z3_EQ),
+    # ... plus z3 equality propagation, then a final `rewrite` case-split.
+    "solver": _pipe(_BUS, _Z3_EQ, "rewrite"),
+    # trivial_simp drops `A*B = 0` when a factor `B = 0` is already kept;
+    # z3-solve-eqs links the before/after columns so `factor_reduce` sees that
+    # the kept hypothesis polynomial-divides the dropped goal and rewrites it to
     # true. Sound: B = 0 is a global conjunct and B | Q => Q = 0 (mod P).
-    "trivial_simp": TACTIC_QEPREFIX + TACTIC_BUS_TAIL + ":z3-solve-eqs:factor_reduce",
-    "simplify_exhaustive": TACTIC_QEPREFIX + ":bounds:demod:normalize:bitwise:mod_inv:demod:normalize:demod",
+    "trivial_simp": _pipe(_BUS, "z3-solve-eqs", "factor_reduce"),
+    # Identical to the default pipeline.
+    "loop_iteration": DEFAULT_TACTIC,
+    "simplify_exhaustive": DEFAULT_TACTIC,
 }
 
 
@@ -445,8 +449,6 @@ def _apply_tactic_pass(
             return simplify_evaluate(smt_script, subaction)
         case "skolem":
             return simplify_skolem(smt_script, subaction)
-        case "diff_vars":
-            return simplify_diff_vars(smt_script, subaction)
         case "intervals":
             return simplify_intervals(smt_script, subaction)
         case "intervals2":
