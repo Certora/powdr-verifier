@@ -209,9 +209,13 @@ class OpenVMMemoryEncoder(
         ts = self.ordered_timestamp_check()
         pval = ARGS().field_type.value
 
+        _align = self._cur_state.memory_bus_alignment
+        _assume_is_valid = _align is not None and getattr(
+            _align, "after_assume_is_valid", False
+        )
+
         def _active_mult(idx: int) -> int | None:
-            m = wrap_mod(self._interactions[idx].mult).simplify()
-            return m.constant_value() % pval if m.is_int_constant() else None
+            return _const_mult(self._interactions[idx].mult, pval, _assume_is_valid)
 
         interface = ARGS().memory_encoding == "interface"
         match ARGS().memory_encoding:
@@ -296,30 +300,6 @@ class OpenVMMemoryEncoder(
             )
             for id, isinput in enumerate(isinputs)
         ]
-        # Every value exchanged on the memory bus is a field element, so its
-        # raw column is in [0, P) — for both sends and recvs, because the guest
-        # is field arithmetic and powdr optimizations preserve that (they cannot
-        # introduce a non-reduced value). Non-reduced values only ever arise
-        # from our own side: an incorrect demod, or modeling constraints we add
-        # beyond what the circuit expresses. Emitting the bound HERE, in the
-        # encoder on the original field-valued columns (before any simplifier
-        # pass), faithfully models that fact and lets demod discharge the
-        # (mod _ P) wrappers on memory data. Only unconditionally-active
-        # interactions (constant nonzero multiplicity) qualify; a
-        # possibly-disabled interaction has unconstrained data.
-        field_bounds = [
-            with_comment(
-                And(
-                    *[
-                        And(LE(Int(0), d), LT(d, Int(pval)))
-                        for d in self._interactions[id].args[2]
-                    ]
-                ),
-                f"membus #{id}: exchanged values are field elements in [0,P)",
-            )
-            for id in range(len(self._interactions))
-            if _active_mult(id) not in (None, 0)
-        ]
         # Key reconstruction: membus identifies each key as base+offset (a
         # trusted syntactic reading of the circuit, independent of its guessed
         # solve). Relate interactions that share a base to a common anchor:
@@ -334,11 +314,11 @@ class OpenVMMemoryEncoder(
         alignment = self._cur_state.memory_bus_alignment
         source_path = self._cur_state.source_path
         if not interface and alignment is not None and source_path is not None:
-            keys = alignment.keys_for(source_path)
-            if len(keys) == len(self._interactions):
+            info = alignment.info_for(source_path)
+            if len(info) == len(self._interactions):
                 anchor: dict[str, tuple[FNode, int]] = {}
                 for id in range(len(self._interactions)):
-                    k = keys[id]
+                    k = info[id].key
                     if (
                         k is None
                         or k.kind != "base_offset"
@@ -383,13 +363,35 @@ class OpenVMMemoryEncoder(
         ts_recon = []
         ts_bounds = []
         if not interface and alignment is not None and source_path is not None:
-            times = alignment.time_for(source_path)
-            if len(times) == len(self._interactions):
-                ts_anchor: tuple[FNode, int] | None = None
+            info = alignment.info_for(source_path)
+            if len(info) == len(self._interactions):
+                # An interaction is active exactly when its multiplicity is
+                # nonzero; the timestamp facts hold only while it is active. We
+                # guard each fact by `mult != 0` -- a plain term over the stored
+                # multiplicity, whatever it is -- instead of requiring the
+                # multiplicity to const-evaluate. For a constant +-1 mult this
+                # folds to TRUE (facts stay unguarded, unchanged); for a
+                # flag-gated `+-is_valid` mult it becomes the activation
+                # condition, WITHOUT the encoder having to identify or evaluate
+                # the gating column. This is what makes the `is_valid` (after)
+                # program emit the same ts_recon/ts_bounds the constant-mult
+                # (before) program does, so soundness (which asserts is_valid=1)
+                # sees a symmetric timestamp story on both sides. The send/recv
+                # kind still comes from the membus analysis (`ti.kind`).
+                def _active_guard(idx: int) -> FNode:
+                    return Not(field_eq(self._interactions[idx].mult))
+
+                def _guarded(guard: FNode, fact: FNode) -> FNode:
+                    g = guard.simplify()
+                    return fact if g.is_true() else Implies(g, fact)
+
+                ts_anchor: tuple[FNode, int, int] | None = None
                 for id in range(len(self._interactions)):
-                    ti = times[id]
-                    if ti is None or ti.offset is None or _active_mult(id) in (None, 0):
+                    ti = info[id].time
+                    if ti is None or ti.offset is None:
                         continue
+                    if field_eq(self._interactions[id].mult).simplify().is_true():
+                        continue  # multiplicity is identically 0 (disabled)
                     tcol = self._interactions[id].args[3]
                     # Bound every recognized clock independently: the field-only
                     # tie to the anchor still admits `ts = anchor + off + p` (a
@@ -397,44 +399,59 @@ class OpenVMMemoryEncoder(
                     # clocks. A per-column `< 2^29` is the sound, complete bound.
                     ts_bounds.append(
                         with_comment(
-                            And(LE(Int(0), tcol), LT(tcol, Int(TS_MAX))),
+                            _guarded(
+                                _active_guard(id),
+                                And(LE(Int(0), tcol), LT(tcol, Int(TS_MAX))),
+                            ),
                             f"ts #{id} in [0, 2^29) (TS_BOUND)",
                         )
                     )
                     if ts_anchor is None:
                         if ti.kind == "exact":  # anchor must be an exact clock
-                            ts_anchor = (tcol, ti.offset)
+                            ts_anchor = (tcol, ti.offset, id)
                         continue
-                    atcol, aoff = ts_anchor
+                    atcol, aoff, aidx = ts_anchor
                     rhs = Plus(atcol, Int(ti.offset - aoff))
+                    # The relation ties ts_i to the anchor, so it is meaningful
+                    # only when BOTH interactions are active -- guard by both.
+                    guard = And(_active_guard(id), _active_guard(aidx))
                     if ti.kind == "exact":
                         ts_recon.append(
-                            with_comment(field_eq(Minus(tcol, rhs)),
+                            with_comment(_guarded(guard, field_eq(Minus(tcol, rhs))),
                                          f"ts #{id} = T+{ti.offset}")
                         )
                     else:
                         ts_recon.append(
-                            with_comment(LE(tcol, rhs), f"ts #{id} <= T+{ti.offset}")
+                            with_comment(_guarded(guard, LE(tcol, rhs)),
+                                         f"ts #{id} <= T+{ti.offset}")
                         )
         #yield with_comment(ts, f"{self.NAME} timestamp check")
         yield with_comment(And(*permutation_axioms), f"{self.NAME} permutation axioms")
         yield with_comment(And(*assume_bytes), f"{self.NAME} assume bytes")
-        if field_bounds:
-            yield with_comment(And(*field_bounds), f"{self.NAME} field bounds")
         if key_recon:
             yield with_comment(And(*key_recon), f"{self.NAME} key reconstruction")
-        # TS_BOUND is a granted assumption (the same assumption membus's own
-        # analysis grants, [[membus/facts.py]] Assumption.TS_BOUND), not a
-        # constraint the circuit commits to. Route it through the axioms
-        # channel: `encoding()` asserts axioms of BOTH sides at top level, so
-        # the bounds stay available as premises, but they never join the
-        # negated obligation side of the check — as constraints, each
-        # goal-side copy became a per-interaction proof obligation in the
-        # goal disjunction (hundreds of mod-arithmetic disjuncts per block,
-        # the dominant solve cost on TS_BOUND-heavy blocks).
-        # Key/timestamp reconstruction stay committed: equally granted in
-        # principle, but routing them as axioms measurably regressed 2100224
-        # (3x assert blowup after propagate-values, unknowns on the
+        # TS_BOUND (0 <= ts < 2^29, the same fact membus's own analysis grants,
+        # [[membus/facts.py]] Assumption.TS_BOUND) is a *derived consequence* of
+        # the circuit, not a commitment it makes. Route it through the
+        # consequences channel, NOT the axioms channel:
+        #
+        #   * As a constraint it became a per-interaction proof obligation in
+        #     the goal disjunction (hundreds of mod-arithmetic disjuncts, the
+        #     dominant solve cost on TS_BOUND-heavy blocks) — must stay off the
+        #     obligation side.
+        #   * As an *axiom* it was asserted for BOTH sides at top level, i.e.
+        #     OUTSIDE the ForAll. On the quantified side that binds a FREE copy
+        #     of the timestamp column while the checked constraints (inside the
+        #     ForAll) use the BOUND copy — the two shadow/decouple, so the bound
+        #     never reaches the quantified vars, yet the free copy floats and
+        #     z3 can pick it adversarially (spurious sat on is_valid soundness).
+        #   * As a *consequence* it is asserted for the reference (premise) side
+        #     only: it binds the timestamps that genuinely appear as free
+        #     premises and introduces no free shadow copy on the checked side.
+        #
+        # Key/timestamp reconstruction stay committed (yielded above): equally
+        # granted in principle, but routing them off-goal measurably regressed
+        # 2100224 (3x assert blowup after propagate-values, unknowns on the
         # pointer-distinctness family), and as obligations they are cheap.
         if ts_bounds:
             self.consequences.append(
@@ -499,7 +516,7 @@ class OpenVMMemoryEncoder(
             pairs = alignment.internal_pairs_for(source_path)
             if pairs:
                 eqs = internal_pair_equalities(
-                    self.NAME, self._bus_interactions(), pairs
+                    self.NAME, self._bus_interactions(), pairs, _assume_is_valid
                 )
                 logging.info(
                     "%s interface internal pairs: %d pair(s) -> %d equalities",
@@ -608,9 +625,11 @@ class OpenVMMemoryEncoder(
         source_path = self._cur_state.source_path
         ts_off: list[int | None] = [None] * n
         if alignment is not None and source_path is not None:
-            times = alignment.time_for(source_path)
-            if len(times) == n:
-                ts_off = [t.offset if t is not None else None for t in times]
+            info = alignment.info_for(source_path)
+            if len(info) == n:
+                ts_off = [
+                    x.time.offset if x.time is not None else None for x in info
+                ]
 
         def flat_args(i: int) -> list[FNode]:
             a, ptr, data, t = self._interactions[i].args
@@ -647,6 +666,14 @@ class OpenVMMemoryEncoder(
             if _ts_severed(i, j):
                 return True
             for x, y in zip(flat_args(i), flat_args(j)):
+                if x == y:
+                    continue
+                if x.is_int_constant() and y.is_int_constant():
+                    if (x.constant_value() - y.constant_value()) % p != 0:
+                        return True
+                    continue
+                if x.is_symbol() and y.is_symbol():
+                    continue
                 d = wrap_mod(Minus(x, y)).simplify()
                 if d.is_int_constant() and d.constant_value() % p != 0:
                     return True
@@ -762,14 +789,10 @@ class OpenVMMemoryEncoder(
                     "interface memory encoding requires a membus alignment"
                 )
             # kept_pairs, not before_to_after: only the genuine align "kept"
-            # rows (never the identity fill). The internal-pair legs and inert
-            # rows are the certified remainder — their equalities live on
-            # their own side (see `internal_pair_equalities`).
-            internal_a = frozenset(
-                {p.recv for p in alignment.internal_pairs_before}
-                | {p.send for p in alignment.internal_pairs_before}
-                | alignment.inert_removed_before
-            )
+            # rows (never the identity fill). The removed interactions (internal
+            # pair legs + inert rows) are the certified remainder — their
+            # equalities live on their own side (see `internal_pair_equalities`).
+            internal_a = alignment.removed_for(alignment.before_path)
             return interface_io_relation(
                 f"IO RELATION for {self.NAME}",
                 self._bus_interactions(),
@@ -778,6 +801,9 @@ class OpenVMMemoryEncoder(
                 bounds_a=self._syntactic_bounds,
                 bounds_b=other._syntactic_bounds,
                 internal_a=internal_a,
+                assume_is_valid=getattr(
+                    alignment, "after_assume_is_valid", False
+                ),
             )
         if ARGS().memory_encoding == "plain":
             alignment = self._cur_state.memory_bus_alignment
@@ -876,10 +902,31 @@ def _interface_pointer_eq(
     return [field_eq(px[0], py[0]), field_eq(px[1], py[1])]
 
 
+def _const_mult(mult: FNode, p: int, assume_is_valid: bool = False) -> int | None:
+    """Const-evaluate a memory multiplicity mod p, or None if not constant.
+
+    [is_valid=1 interface] When ``assume_is_valid`` (the analysis assumed the
+    openvm is_valid activation selector == 1), is_valid columns are folded to 1
+    first, so a gated ``0 - is_valid`` const-evaluates to ``p - 1`` (i.e. -1).
+    Remove the ``assume_is_valid`` handling once the interface encoder resolves
+    is_valid-gated mults natively."""
+    if assume_is_valid:
+        subs = {
+            v: Int(1)
+            for v in mult.get_free_variables()
+            if "is_valid" in v.symbol_name()
+        }
+        if subs:
+            mult = mult.substitute(subs)
+    m = wrap_mod(mult).simplify()
+    return m.constant_value() % p if m.is_int_constant() else None
+
+
 def internal_pair_equalities(
     name: str,
     interactions: list[BusInteraction],
-    pairs: list["InternalPair"],  # noqa: F821 — src.verify.membus_analysis
+    pairs: list[tuple[int, int]],
+    assume_is_valid: bool = False,
 ) -> list[FNode]:
     """Equalities compiling away a circuit's internal forced recv<->send pairs.
 
@@ -891,27 +938,34 @@ def internal_pair_equalities(
     holds its prev_timestamp, so recv.prev_ts == send.ts is the positional
     equality. Field equalities throughout: the expressions feeding the membus
     are not normalized, so syntactic Int `=` would be unsound.
+
+    ``pairs`` are unordered ordinal pairs (the recv/send roles are erased once
+    the match analysis resolves both legs); recv (mult -1) and send (mult +1)
+    are recovered here from the multiplicities, which doubles as the guard.
     """
     p = ARGS().field_type.value
 
     def cmult(inter: BusInteraction) -> int | None:
-        w = wrap_mod(inter.mult).simplify()
-        return w.constant_value() % p if w.is_int_constant() else None
+        return _const_mult(inter.mult, p, assume_is_valid)
 
     parts: list[FNode] = []
-    for pair in pairs:
-        recv, send = interactions[pair.recv], interactions[pair.send]
-        mr, ms = cmult(recv), cmult(send)
-        if (mr, ms) != (p - 1, 1):
+    for a, b in pairs:
+        ia, ib = interactions[a], interactions[b]
+        ma, mb = cmult(ia), cmult(ib)
+        if (ma, mb) == (p - 1, 1):
+            recv, send = ia, ib
+        elif (mb, ma) == (p - 1, 1):
+            recv, send = ib, ia
+        else:
             raise RuntimeError(
-                f"interface internal pair ({pair.recv},{pair.send}): mults are "
-                f"not (recv -1, send +1): {recv.mult} vs {send.mult}"
+                f"interface internal pair ({a},{b}): mults are "
+                f"not (recv -1, send +1): {ia.mult} vs {ib.mult}"
             )
         for k, (x, y) in enumerate(zip(recv.args, send.args, strict=True)):
             parts.append(
                 with_comment(
                     field_eq(x, y),
-                    f"{name}: internal pair ({pair.recv},{pair.send}) arg {k}",
+                    f"{name}: internal pair ({a},{b}) arg {k}",
                 )
             )
     return parts
@@ -926,6 +980,7 @@ def interface_io_relation(
     bounds_a: dict[FNode, int],
     bounds_b: dict[FNode, int],
     internal_a: frozenset[int] = frozenset(),
+    assume_is_valid: bool = False,
 ) -> tuple[FNode, frozenset[FNode]]:
     """Cross-circuit io relation for the uninterpreted-interface encoding.
 
@@ -956,8 +1011,7 @@ def interface_io_relation(
         )
 
     def cmult(inter: BusInteraction) -> int | None:
-        w = wrap_mod(inter.mult).simplify()
-        return w.constant_value() % p if w.is_int_constant() else None
+        return _const_mult(inter.mult, p, assume_is_valid)
 
     parts: list[FNode] = []
     splits = applied = 0

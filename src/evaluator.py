@@ -15,6 +15,13 @@ from .smt.utils import *
 def evaluate():
     """Check which parts of the SMT encoding hold under a provided variable assignment."""
 
+    if ARGS().memory_encoding == "auto":
+        # Single-sided like the tracer: the two-sided "auto" alignment decision
+        # (resolved in verify's preanalysis) never runs here, and the interface
+        # encoding requires an aligned before/after pair. Fall back to the
+        # always-sound plain encoding.
+        ARGS().memory_encoding = "plain"
+
     input = load_apc_dump(ARGS().input)
     model = load_json(ARGS().model)
 

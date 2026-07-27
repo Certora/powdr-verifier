@@ -34,7 +34,7 @@ _BOOL_CONNECTIVES = frozenset(
 )
 
 
-def bool_simplify(formula: FNode) -> FNode:
+def bool_simplify(formula: FNode, memo: dict[FNode, FNode] | None = None) -> FNode:
     """Simplify only the boolean skeleton, leaving theory atoms untouched.
 
     Recurses through boolean connectives (And/Or/Not/Implies/Iff) applying pysmt's
@@ -46,20 +46,23 @@ def bool_simplify(formula: FNode) -> FNode:
     skeleton), not O(whole formula)). Used as a presimplifier when only boolean
     unit structure matters and theory atoms are either already simplified or
     irrelevant.
+
+    Pass a shared ``memo`` when simplifying many formulas that reuse subexpressions
+    (e.g. plain permutation conjunct batches).
     """
     simp = get_env().simplifier
     fns = simp.functions
-    memo: dict[FNode, FNode] = {}
+    local_memo = memo if memo is not None else {}
 
     def go(f: FNode) -> FNode:
-        cached = memo.get(f)
+        cached = local_memo.get(f)
         if cached is not None:
             return cached
         if f.node_type() in _BOOL_CONNECTIVES:
             r = fns[f.node_type()](f, [go(a) for a in f.args()])
         else:
             r = f
-        memo[f] = r
+        local_memo[f] = r
         return r
 
     return go(formula)

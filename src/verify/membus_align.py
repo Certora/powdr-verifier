@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from .membus_subprocess import fetch_align_json, fetch_info_json, fetch_solve_json
+from .membus_subprocess import fetch_align_json, fetch_info_json, fetch_solve_json_all
 from .membus_types import AlignRowInfo, MembusAlignment, parse_membus_key
 
 _LOG = logging.getLogger(__name__)
@@ -147,8 +147,6 @@ def _merge_info_rows(rows: dict[int, AlignRowInfo], info: dict) -> None:
             row.kind = raw["kind"]
         if raw.get("key"):
             row.key = parse_membus_key(raw["key"]) or row.key
-        if raw.get("alias_class") is not None:
-            row.alias_class = raw["alias_class"]
 
 
 def _local_role_from_solve(raw: dict) -> tuple[str | None, list[int]]:
@@ -221,7 +219,6 @@ def _transport_after_rows(
         after_rows[after_ord] = AlignRowInfo(
             kind=br.kind,
             key=br.key,
-            alias_class=br.alias_class,
             local_role=br.local_role,
             local_partners=partners,
             status="kept",
@@ -284,7 +281,7 @@ def run_membus_alignment(
         (before_path, before_rows, solve_skip_before),
         (after_path, after_rows, solve_skip_after),
     ):
-        solve = fetch_solve_json(path, addr_space=1)
+        solve = fetch_solve_json_all(path, present=present)
         if solve is not None:
             _merge_solve_rows(rows, solve, skip_ordinals=skip)
 

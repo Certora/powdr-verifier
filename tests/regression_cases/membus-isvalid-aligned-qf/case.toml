@@ -1,0 +1,103 @@
+[case]
+tags = ["dumps", "verify", "isqf", "membus", "is_valid", "alignment"]
+description = """
+Alignment-preserving regression for the is_valid (_040) not-qf fix.
+
+The full guest-keccak 2099512 039_trivial_simp -> 040 pair: before is constant
++-1 mults (fully resolved), after is +-is_valid (symbolic) with a full 10-pair
+membus alignment. WITHOUT the cross-alignment transfer this completeness VC is
+not quantifier-free (the after-side memory permutation booleans stay free);
+WITH it (`_exchange_across_alignment`) the after roles/matches are pinned from
+the aligned before side and completeness becomes qf (and unsat).
+
+This is the positive counterpart to `membus-isvalid-notqf`, which is the
+degenerate NO-alignment variant (kept_pairs=0) that the transfer cannot help
+and that stays not-qf. If the transfer regresses, the isqf assertion here flips
+back to not-qf.
+"""
+
+[inputs]
+type = "dumps"
+base = "apc_candidate_2099512_000_unopt.json"
+substitutions = "apc_candidate_2099512_substitutions.json"
+before = "apc_candidate_2099512_039_trivial_simp.json"
+after = "apc_candidate_2099512_040.json"
+
+# 1) Encode the equivalence VC.
+[[steps]]
+script = "main.py"
+args = [
+  "--base-dump", "{base}",
+  "--substitutions", "{substitutions}",
+  "verify", "{before}", "{after}", "{work}/v.smt2",
+  "--optimization-step", "",
+]
+timeout = 60
+capture_json = true
+
+[[assert]]
+kind = "exit_ok"
+
+# 2) Simplify completeness; the cross-alignment transfer makes it qf.
+[[steps]]
+script = "main.py"
+args = [
+  "simplify",
+  "{work}/v.completeness.smt2",
+  "nnf:skolem:lift:witness:demod:z3-propagate-values:isqf:bounds:demod",
+  "{work}/comp.rewrite.smt2",
+]
+timeout = 60
+capture_json = true
+
+[[assert]]
+kind = "exit_ok"
+
+[[assert]]
+kind = "isqf"
+result = "qf"
+
+# 3) And it is (correctly) unsat.
+[[steps]]
+script = "main.py"
+args = ["check", "{work}/comp.rewrite.smt2", "--dump-model", "{work}/comp.model"]
+timeout = 60
+capture_json = true
+
+[[assert]]
+kind = "exit_ok"
+
+[[assert]]
+kind = "check_result"
+result = "unsat"
+
+# 4) The is_valid==0 "all-zero is a model" sub-check must stay sat. The transfer
+# is gated on after_assume_is_valid precisely so it does NOT run on this
+# inactive analysis; without the gate it pinned after==before, forced is_valid==1
+# into after.C and flipped this to unsat (a false PASS). Regression guard.
+[[steps]]
+script = "main.py"
+args = [
+  "simplify",
+  "{work}/v.soundness.zero-is-model.smt2",
+  "nnf:skolem:lift:witness:demod:z3-propagate-values:isqf:bounds:demod",
+  "{work}/zim.rewrite.smt2",
+]
+timeout = 60
+capture_json = true
+
+[[assert]]
+kind = "exit_ok"
+
+[[steps]]
+script = "main.py"
+args = ["check", "{work}/zim.rewrite.smt2", "--dump-model", "{work}/zim.model"]
+timeout = 60
+capture_json = true
+
+[[assert]]
+kind = "exit_ok"
+
+[[assert]]
+kind = "check_result"
+result = "sat"

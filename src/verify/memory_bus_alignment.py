@@ -66,12 +66,13 @@ def _plain_encoding_symbol_pairs(
             "plain_permutation_io missing: plain memory encoding did not run on both sides"
         )
     m = alignment.before_to_after
-    nm = before_conv.bus_interaction_encoder.memory.NAME
     subs: dict[FNode, FNode] = {}
 
     for i_b, i_a in m.items():
-        subs[Symbol(f"{nm}_xmatch_{i_b}_{i_a}", BOOL)] = TRUE()
-
+        # No xmatch pin here: keyed_io_relation folds every aligned pair
+        # (i_b, i_a) in before_to_after directly to TRUE(), so the symbol
+        # `memory_xmatch_{i_b}_{i_a}` is never minted. Pinning it would only
+        # equate a fresh, formula-absent boolean to TRUE() -- a dead pin.
         subs[before_io.is_inputs[i_b]] = after_io.is_inputs[i_a]
         subs[before_io.is_outputs[i_b]] = after_io.is_outputs[i_a]
         subs[before_io.is_disableds[i_b]] = after_io.is_disableds[i_a]
