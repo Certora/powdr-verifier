@@ -358,7 +358,6 @@ def test_rust_first_then_python_parses_intermediate(tmp_path):
 
 
 def test_simplify_skips_python_io_for_full_rust(tmp_path):
-    from src.report.action import Action
     from src.simplifier import simplify
 
     smt_in = tmp_path / "in.smt2"

@@ -316,6 +316,7 @@ def wrap_mod(input: FNode, modulus: Optional[FNode] = None) -> FNode:
 
 _field_eq_pair_cache: dict[tuple[int, int | None], FNode] = {}
 
+
 def field_eq(a: FNode, b: FNode = None) -> FNode:
     if a == b:
         return TRUE()
@@ -339,7 +340,6 @@ def clear_encode_caches() -> None:
         memo = getattr(oracle, "memoization", None)
         if memo is not None:
             memo.clear()
-
 
 
 def field_lt(a: FNode, b: FNode) -> FNode:
