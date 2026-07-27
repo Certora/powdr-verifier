@@ -243,10 +243,10 @@ def test_does_not_descend_into_negated_and():
 
 def test_dispatcher_recognizes_tactic():
     """Smoke test that the tactic name is wired into the dispatcher."""
-    from src.simplifier import _apply_tactic_pass
+    from src.simplifier import _apply_tactic_pass, _split_tactic
     smt = _script([])
     # Should not raise; returns the script unchanged.
-    out = _apply_tactic_pass("solve_eqs", [], smt, _DummyAction())
+    out = _apply_tactic_pass(_split_tactic("solve_eqs"), smt, _DummyAction())
     assert out is smt
 
 

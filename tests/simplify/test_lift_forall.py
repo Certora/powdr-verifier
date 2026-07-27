@@ -48,10 +48,12 @@ def test_lift_int_defined_from_array_select():
     f = ForAll([a, v], inner)
     script = simplify_lift_forall(_script_assert(f))
     out = script.commands[-1].args[0]
-    assert out.is_forall()
-    assert list(out.quantifier_vars()) == [a]
-    assert out.arg(0) == LT(v, Int(0))
-    assert Equals(v, Select(a, key)) in _top_asserts(script)
+    # v is defined from a Select of the bound array a; lifting v out while a
+    # stays universally bound would decouple them (unsound), so the forall is
+    # left unchanged.
+    assert out == f
+    assert list(out.quantifier_vars()) == [a, v]
+    assert _top_asserts(script) == [f]
 
 
 def test_lift_int_chain_defined_from_array_selects():
@@ -66,12 +68,10 @@ def test_lift_int_chain_defined_from_array_selects():
     f = ForAll([base, mid, v2], inner)
     script = simplify_lift_forall(_script_assert(f))
     out = script.commands[-1].args[0]
-    assert out.is_forall()
-    assert list(out.quantifier_vars()) == [base]
-    assert out.arg(0) == LT(v2, Int(0))
-    top = _top_asserts(script)
-    assert Equals(v2, Select(mid, Int(2))) in top
-    assert Equals(mid, Select(base, Int(1))) in top
+    # v2 depends (through mid) on the bound array base; not liftable.
+    assert out == f
+    assert list(out.quantifier_vars()) == [base, mid, v2]
+    assert _top_asserts(script) == [f]
 
 
 def test_lift_array_defined_from_select():
@@ -81,9 +81,10 @@ def test_lift_array_defined_from_select():
     f = ForAll([base, mid], inner)
     script = simplify_lift_forall(_script_assert(f))
     out = script.commands[-1].args[0]
-    assert out.is_forall()
-    assert list(out.quantifier_vars()) == [base]
-    assert Equals(mid, Select(base, Int(1))) in _top_asserts(script)
+    # mid is defined from a Select of the bound array base; not liftable.
+    assert out == f
+    assert list(out.quantifier_vars()) == [base, mid]
+    assert _top_asserts(script) == [f]
 
 
 def test_removes_lifted_disjunct_from_or():
