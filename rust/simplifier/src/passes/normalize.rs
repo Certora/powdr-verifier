@@ -750,6 +750,13 @@ fn collect_quad_rels(term: &Bool, ctx: &NormalizeCtx<'_>, out: &mut Vec<Poly>) {
             }
         }
     }
+    // Only applications expose children via `Z3_to_app`; quantifier and
+    // bound-variable nodes are not apps, so `nth_child` on them panics inside
+    // the z3 binding. diff_vars runs after quantifier elimination, so there is
+    // nothing to collect under a quantifier -- skip rather than crash.
+    if term.kind() != AstKind::App {
+        return;
+    }
     for k in 0..term.num_children() {
         if let Some(child) = term.nth_child(k).and_then(|c| c.as_bool()) {
             collect_quad_rels(&child, ctx, out);
