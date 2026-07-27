@@ -72,8 +72,8 @@ class MembusAnalysis:
     before_path: Path
     after_path: Path
     before_to_after: dict[int, int]
-    before_matches: list[set[int]]
-    after_matches: list[set[int]]
+    before_matches: list[list[int]]
+    after_matches: list[list[int]]
     before_status: list[Status]
     after_status: list[Status]
     before_times: list["TimeInfo | None"] = field(default_factory=list)
@@ -101,7 +101,7 @@ class MembusAnalysis:
     def n_after(self) -> int:
         return len(self.after_matches)
 
-    def matches_for(self, path: Path) -> list[set[int]]:
+    def matches_for(self, path: Path) -> list[list[int]]:
         path = path.resolve()
         if path == self.before_path.resolve():
             return self.before_matches
@@ -575,10 +575,10 @@ def _resolve_status(st: list[Tri]) -> None:
 
 def _finalize_side(
     state: SideState,
-) -> tuple[list[set[int]], list[Status], list[TimeInfo | None], list[MembusParsedKey | None]]:
+) -> tuple[list[list[int]], list[Status], list[TimeInfo | None], list[MembusParsedKey | None]]:
     for i in range(state.n):
         _resolve_status(state.status[i])
-    matches = [set(s) for s in state.matches]
+    matches = [sorted(s) for s in state.matches]
     status = [_status_tuple(st) for st in state.status]
     times = [f.time for f in state.facts]
     keys = [f.key for f in state.facts]
