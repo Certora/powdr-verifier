@@ -10,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from io import StringIO
@@ -70,17 +71,20 @@ def load_files_by_block(args):
     
     return files
 
-def parallelize(func):
-    def wrapped(*args, **kwargs):
-        if _ARGS.jobs == 1:
-            for t in args:
-                func(*t, **kwargs)
-        else:
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=_ARGS.jobs) as executor:
-                for t in args:
-                    executor.submit(func, *t, **kwargs)
-    return wrapped
+# Per-block ``--base-dump`` / ``--substitutions`` are read by ``__run_main`` from
+# ``_ARGS._additional_args``. When several blocks run concurrently in one pool
+# (see ``run_all``) that global would race, so a worker binds its block's
+# args in this thread-local; ``__run_main`` prefers it, falling back to the global
+# for the sequential / single-block paths (powdr-opt, verify-opt).
+_TLS = threading.local()
+_UNSET = object()
+
+
+def _current_additional_args():
+    val = getattr(_TLS, "additional_args", _UNSET)
+    return val if val is not _UNSET else _ARGS._additional_args
+
+
 
 __FILENAMERE = re.compile("apc_candidate_(\\d+)_(\\d+)(.*)\\.json")
 def parse_range(files: dict, steps):
@@ -231,7 +235,7 @@ def __run_main(
         *memory_limit_cmd_prefix(_ARGS.jobs),
         PYTHON,
         MAIN_SCRIPT,
-        *map(__cmd_arg, _ARGS._additional_args),
+        *map(__cmd_arg, _current_additional_args()),
         *map(__cmd_arg, _ARGS._main_args),
         *map(__cmd_arg, stats),
         command,
@@ -267,7 +271,7 @@ def __run_main(
                 error_message=stderr or str(proc.returncode),
             )
         try:
-            return load_json(StringIO(stdout or ""))
+            data = load_json(StringIO(stdout or ""))
         except json.JSONDecodeError:
             logging.error(f"failed to parse output of {cmdstr}:\n{stdout}")
             return Action(
@@ -275,6 +279,7 @@ def __run_main(
                 result="invalid-json",
                 error_message=(stdout[:400] if stdout else ""),
             )
+        return data
     proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True, cwd=WORKSPACE_DIR)
     _, _, timed_out = communicate_with_timeout(proc, timeout)
     if timed_out:
@@ -379,6 +384,7 @@ def run_trace(*files):
                         "--dump-model",
                         rewritten.with_suffix(".model"),
                         parse_output=True,
+                        extra_args=["--timeout", str(TIMEOUT_CHECK_SEC)],
                         timeout=TIMEOUT_CHECK_SEC,
                     )
 
@@ -431,9 +437,8 @@ def run_verify_opt(files: dict, pairs):
         if 0 in files:
             powdr_opt_args += ["--base-dump", files[0]]
         __run_main("powdr-opt", *powdr_opt_args)
-        run_verify((input_file, output))
+        run_verify(input_file, output)
 
-@parallelize
 def run_verify(a, b):
     _, optimization_step = _parse_step_and_pass(b)
     stats_run_id = verify_run_id(a, b) if _ARGS.stats else None
@@ -473,9 +478,82 @@ def run_verify(a, b):
                     rewritten,
                     "--dump-model", file.with_suffix(".model"),
                     parse_output=True,
+                    extra_args=[
+                        "--timeout", str(TIMEOUT_CHECK_SEC),
+                        "--optimization-step", optimization_step,
+                    ],
                     timeout=TIMEOUT_CHECK_SEC,
                     stats_args=__stats_extra(stats_run_id, rewritten),
                 )
+
+def _block_additional_args(files: dict) -> list:
+    additional = []
+    if 0 in files:
+        additional += ["--base-dump", files[0]]
+    if "substitutions" in files:
+        additional += ["--substitutions", files["substitutions"]]
+    return additional
+
+
+def _tasks_for(command: str, all_files: dict) -> list:
+    """Flatten every block's work into ``(additional_args, thunk)`` units.
+
+    Each command's natural unit (a step file for trace/eval/evaluate, a pair for
+    diff/verify/verify-opt) becomes one thunk, tagged with its block's base-dump /
+    substitutions so ``run_all`` can bind them per-thread."""
+    tasks: list = []
+    for block, files in sorted(all_files.items()):
+        additional = _block_additional_args(files)
+        match command:
+            case 'trace':
+                for f in parse_range(files, _ARGS.steps):
+                    tasks.append((additional, functools.partial(run_trace, f)))
+            case 'diff':
+                for pair in parse_paired_range(files, _ARGS.steps):
+                    tasks.append((additional, functools.partial(run_diff, pair)))
+            case 'evaluate':
+                for f in parse_range(files, _ARGS.steps):
+                    tasks.append((additional, functools.partial(run_evaluate, files[0], f)))
+            case 'eval':
+                for f in parse_range(files, _ARGS.steps):
+                    tasks.append((additional, functools.partial(run_eval, f)))
+            case 'verify':
+                for a, b in parse_paired_range(files, _ARGS.steps):
+                    tasks.append((additional, functools.partial(run_verify, a, b)))
+            case 'verify-opt':
+                for pair in parse_paired_range(files, _ARGS.steps):
+                    tasks.append((additional, functools.partial(run_verify_opt, files, [pair])))
+            case _:
+                logging.error(f"unknown command: {command}")
+                sys.exit(1)
+    return tasks
+
+
+def run_all(tasks: list):
+    """Run ``(additional_args, thunk)`` work units through a SINGLE shared pool.
+
+    Previously each block was processed with its own pool (``@parallelize`` called
+    once per block for verify; other commands ran fully sequentially), so a block
+    drained to completion — long tail included — before the next could start,
+    leaving workers idle. Flattening every block's units into one pool lets a
+    later block's units fill idle workers during an earlier block's tail. Each
+    unit binds its block's base-dump / substitutions via ``_TLS`` (see
+    ``_current_additional_args``), since ``__run_main`` reads them per-thread."""
+    logging.warning("running %d work unit(s) with %d job(s)", len(tasks), _ARGS.jobs)
+
+    def _run(additional, thunk):
+        _TLS.additional_args = additional
+        thunk()
+
+    if _ARGS.jobs == 1:
+        for additional, thunk in tasks:
+            _run(additional, thunk)
+    else:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_ARGS.jobs) as executor:
+            for additional, thunk in tasks:
+                executor.submit(_run, additional, thunk)
+
 
 if __name__ == '__main__':
     args = parse_args()
@@ -498,31 +576,10 @@ if __name__ == '__main__':
                 if not all_files:
                     logging.warning(f"no files found for {args.test}, did you run powdr?")
 
-                for i,(block,files) in enumerate(sorted(all_files.items())):
-                    logging.warning(f"processing block {i+1} of {len(all_files)}")
-                    args._additional_args = []
-                    if 0 in files:
-                        args._additional_args += ["--base-dump", files[0]]
-                    if "substitutions" in files:
-                        args._additional_args += ["--substitutions", files["substitutions"]]
-
-                    match args.command:
-                        case 'trace':
-                            run_trace(*parse_range(files, args.steps))
-                        case 'diff':
-                            run_diff(*parse_paired_range(files, args.steps))
-                        case 'evaluate':
-                            run_evaluate(files[0], *parse_range(files, args.steps))
-                        case 'eval':
-                            run_eval(*parse_range(files, args.steps))
-                        case 'verify':
-                            run_verify(*parse_paired_range(files, args.steps))
-                        case 'verify-opt':
-                            run_verify_opt(files, parse_paired_range(files, args.steps))
-
-                        case _:
-                            logging.error(f"unknown command: {args.command}")
-                            exit(1)
+                # One shared pool over every block's work units (see run_all) so a
+                # block's long tail overlaps the next block's units instead of the
+                # pool draining per block. Applies to all per-block commands.
+                run_all(_tasks_for(args.command, all_files))
 
     except subprocess.CalledProcessError as e:
         logging.error("%s", e)
