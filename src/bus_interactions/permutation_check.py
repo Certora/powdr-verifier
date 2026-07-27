@@ -217,9 +217,10 @@ def keyed_io_relation(
 
     def full_eq(i: int, j: int) -> FNode:
         """All args (key, data, timestamp) agree at indices ``i`` and ``j``."""
+        # args are stored reduced mod P, so a plain Equals is a field equality.
         return And(
             *[
-                field_eq(a, b)
+                Equals(a, b)
                 for a, b in zip(interactions_a[i].args, interactions_b[j].args, strict=True)
             ]
         )
@@ -332,10 +333,11 @@ class TimestampCheckMixin:
             if len(batch) != 2:
                 continue
             a, b = batch
+            # mult and args are stored reduced mod P.
             # for now we assume that zeroness of a.mult and b.mult are equivalent
             res.append(
                 Implies(
-                    Not(Equals(wrap_mod(a.mult), Int(0))), field_lt(a.args[-1], b.args[-1])
+                    Not(Equals(a.mult, Int(0))), field_lt(a.args[-1], b.args[-1])
                 )
             )
 
@@ -784,9 +786,10 @@ class PermutationCheckMixin:
             return a.is_int_constant() and not b.is_int_constant(a.constant_value())
 
         def mem_key_eq(ii: int, jj: int) -> tuple[FNode, FNode]:
+            # args are stored reduced mod P -> plain Equals is a field equality.
             return (
-                field_eq(args(ii)[0], args(jj)[0]),
-                field_eq(args(ii)[1], args(jj)[1]),
+                Equals(args(ii)[0], args(jj)[0]),
+                Equals(args(ii)[1], args(jj)[1]),
             )
         
         # multiplicity range constraints
@@ -794,9 +797,9 @@ class PermutationCheckMixin:
             conjuncts.append(
                 with_comment(
                     Or(
-                        field_eq(mult(i), Int(-1)),
-                        field_eq(mult(i), Int(0)),
-                        field_eq(mult(i), Int(1)),
+                        Equals(mult(i), Int(p - 1)),
+                        Equals(mult(i), Int(0)),
+                        Equals(mult(i), Int(1)),
                     ),
                     f"multiplicity {i} in {-1, 0, 1}"
                 )
@@ -821,7 +824,7 @@ class PermutationCheckMixin:
                 with_comment(
                     Iff(
                         is_disabled(i),
-                        And(m(i, i), field_eq(mult(i)))
+                        And(m(i, i), Equals(mult(i), Int(0)))
                     ),
                     f"disabled {i}: self-match and mult == 0"
                 )
@@ -830,7 +833,7 @@ class PermutationCheckMixin:
                 with_comment(
                     Iff(
                         is_input(i),
-                        And(m(i, i), field_eq(mult(i), Int(-1)))
+                        And(m(i, i), Equals(mult(i), Int(p - 1)))
                     ),
                     f"input {i}: self-match and mult == -1"
                 )
@@ -839,7 +842,7 @@ class PermutationCheckMixin:
                 with_comment(
                     Iff(
                         is_output(i),
-                        And(m(i, i), field_eq(mult(i), Int(1)))
+                        And(m(i, i), Equals(mult(i), Int(1)))
                     ),
                     f"output {i}: self-match and mult == 1"
                 )
@@ -853,7 +856,7 @@ class PermutationCheckMixin:
                             Not(is_disabled(i)),
                             Not(is_input(i)),
                             Not(is_output(i)),
-                            Not(field_eq(mult(i))),
+                            Not(Equals(mult(i), Int(0))),
                         )
                     ),
                     f"no self-match {i}: neither disabled, input, nor output, mult != 0"
@@ -870,9 +873,11 @@ class PermutationCheckMixin:
                         Implies(
                             m(i, j),
                             And(
-                                field_eq(Plus(mult(i), mult(j))),
-                                Not(field_eq(mult(i))),
-                                Not(field_eq(mult(j)))
+                                # mult(i)+mult(j) is a sum of two wrapped values,
+                                # so it still needs a mod before the == 0 test.
+                                Equals(wrap_mod(Plus(mult(i), mult(j))), Int(0)),
+                                Not(Equals(mult(i), Int(0))),
+                                Not(Equals(mult(j), Int(0)))
                             )
                         ),
                         f"match {i} and {j}: {mult(i)} + {mult(j)} == 0"
@@ -884,7 +889,7 @@ class PermutationCheckMixin:
                         Implies(
                             m(i, j),
                             And(
-                                field_eq(*z) for z in zip(args(i), args(j), strict=True)
+                                Equals(*z) for z in zip(args(i), args(j), strict=True)
                             )
                         ),
                         f"match {i} and {j}: equal data"
@@ -917,8 +922,8 @@ class PermutationCheckMixin:
                                 And(is_output(i), is_output(j)),
                             ),
                             Or(
-                                Not(field_eq(args(i)[0], args(j)[0])),
-                                Not(field_eq(args(i)[1], args(j)[1])),
+                                Not(Equals(args(i)[0], args(j)[0])),
+                                Not(Equals(args(i)[1], args(j)[1])),
                             )
                         ),
                         f"inputs or outputs {i} and {j} have different address spaces or pointers"
@@ -999,7 +1004,7 @@ class PermutationCheckMixin:
                                         m(i, k),
                                         *mem_key_eq(i, j),
                                     ),
-                                    field_eq(mult(j)),
+                                    Equals(mult(j), Int(0)),
                                 ),
                                 f"match {i} and {k}: index {j} between with same key => mult==0",
                             )
@@ -1019,7 +1024,7 @@ class PermutationCheckMixin:
                                 And(is_input(i), is_input(j)),
                                 And(is_output(i), is_output(j)),
                             ),
-                            Not(field_eq(args(i)[-1], args(j)[-1])),
+                            Not(Equals(args(i)[-1], args(j)[-1])),
                         ),
                         f"inputs or outputs {i} and {j} have different timestamps"
                     )
