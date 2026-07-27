@@ -97,6 +97,11 @@ def verify():
     with Action("encode") as action:
         action += {"outputs": []}
 
+        # Encoding builds well-typed formulas programmatically, so pysmt's
+        # per-node type check is redundant work here (~30% of encode on
+        # 2099828 step 0).
+        disable_typecheck()
+
         before = load_apc_dump(ARGS().input_before)
         after = load_apc_dump(ARGS().input_after)
 

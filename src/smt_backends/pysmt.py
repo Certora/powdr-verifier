@@ -319,12 +319,32 @@ def wrap_mod(input: FNode, modulus: Optional[FNode] = None) -> FNode:
         modulus = Int(ARGS().field_type.value)
     return Mod(input, modulus)
 
+_field_eq_pair_cache: dict[tuple[int, int | None], FNode] = {}
+
+
 def field_eq(a: FNode, b: FNode = None) -> FNode:
     if a == b:
         return TRUE()
+    cache_key = (id(a), id(b))
+    if cached := _field_eq_pair_cache.get(cache_key):
+        return cached
     if b is None:
-        return Equals(wrap_mod(a), Int(0))
-    return Equals(wrap_mod(Minus(a, b)), Int(0))
+        result = Equals(wrap_mod(a), Int(0))
+    else:
+        result = Equals(wrap_mod(Minus(a, b)), Int(0))
+    _field_eq_pair_cache[cache_key] = result
+    return result
+
+
+def clear_encode_caches() -> None:
+    """Drop encode-phase caches so later steps do not retain stale AST keys or oracle memos."""
+    _field_eq_pair_cache.clear()
+    env = get_env()
+    for name in ("typeso", "fvo", "theoryo", "qfo", "substituter", "_sizeo", "stc"):
+        oracle = getattr(env, name, None)
+        memo = getattr(oracle, "memoization", None)
+        if memo is not None:
+            memo.clear()
 
 
 def field_lt(a: FNode, b: FNode) -> FNode:
