@@ -34,6 +34,7 @@ from .simplify import (
     simplify_intervals2,
     simplify_lift_forall,
     simplify_mod_inv,
+    simplify_diff_vars,
     simplify_normalize,
     simplify_model,
     simplify_nnf,
@@ -383,6 +384,8 @@ def _apply_tactic_pass(
             return simplify_bitwise(smt_script, subaction)
         case "mod_inv":
             return simplify_mod_inv(smt_script, subaction)
+        case "diff_vars":
+            return simplify_diff_vars(smt_script, subaction)
         case "normalize":
             return simplify_normalize(smt_script, subaction)
         case "evaluator":
