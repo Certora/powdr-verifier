@@ -129,7 +129,8 @@ def test_flatten_hard_fails_when_outer_used_outside_array_positions():
     # Use Ite to "consume" the outer-typed value in a non-select/store/eq slot.
     M = Symbol("M4", OuterTy)
     N = Symbol("N4", OuterTy)
-    cond = Symbol("c", BOOL)
+    cond = Symbol("cond_flag", BOOL)  # not "c": pysmt's global symbol cache clashes
+    # with an INT "c" defined by another test collected earlier in the same run
     inner = Symbol("inner4", InnerTy)
     expr = Ite(cond, M, N)  # outer-typed result, in an Ite (parent is array-typed)
     s = _script(
@@ -179,9 +180,9 @@ def test_flatten_outer_array_equality_expands():
                 stack.extend(node.args())
                 continue
             if node.is_equals():
-                l, r = node.arg(0), node.arg(1)
-                if l.is_symbol() and r.is_symbol():
-                    ln, rn = l.symbol_name(), r.symbol_name()
+                lhs, r = node.arg(0), node.arg(1)
+                if lhs.is_symbol() and r.is_symbol():
+                    ln, rn = lhs.symbol_name(), r.symbol_name()
                     if ln.startswith("A") and rn.startswith("B") or \
                        ln.startswith("B") and rn.startswith("A"):
                         paired = True

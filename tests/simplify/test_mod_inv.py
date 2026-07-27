@@ -30,7 +30,12 @@ def test_mod_inv_replaces_uf_call_with_fresh_symbol_and_adds_constraint():
     fresh = main.arg(0) if main.arg(0).is_symbol() else main.arg(1)
     assert fresh.symbol_name().startswith("__mod_inv_")
     assert fresh in declares
-    assert side == Equals(wrap_mod(Times(fresh, Symbol("x", INT))), Int(1))
+    # The fallback inverse axiom is guarded: the inverse is undefined at 0, so
+    # `fresh * T ≡ 1` is asserted only under `T ≠ 0` (else it would force T ≠ 0).
+    assert side == Implies(
+        Not(Equals(wrap_mod(Symbol("x", INT)), Int(0))),
+        Equals(wrap_mod(Times(fresh, Symbol("x", INT))), Int(1)),
+    )
 
 
 def test_mod_inv_is_noop_without_uf_mod_inv_terms():
@@ -72,8 +77,12 @@ def test_mod_inv_creates_distinct_fresh_symbols():
     assert s1 != s2
     assert s1.symbol_name().startswith("__mod_inv_")
     assert s2.symbol_name().startswith("__mod_inv_")
-    assert asserts[1] == Equals(wrap_mod(Times(s2, Symbol("y", INT))), Int(1)) or asserts[1] == Equals(wrap_mod(Times(s1, Symbol("x", INT))), Int(1))
-    assert asserts[2] == Equals(wrap_mod(Times(s2, Symbol("y", INT))), Int(1)) or asserts[2] == Equals(wrap_mod(Times(s1, Symbol("x", INT))), Int(1))
+    inv_x = Implies(Not(Equals(wrap_mod(Symbol("x", INT)), Int(0))),
+                    Equals(wrap_mod(Times(s1, Symbol("x", INT))), Int(1)))
+    inv_y = Implies(Not(Equals(wrap_mod(Symbol("y", INT)), Int(0))),
+                    Equals(wrap_mod(Times(s2, Symbol("y", INT))), Int(1)))
+    assert asserts[1] in (inv_x, inv_y)
+    assert asserts[2] in (inv_x, inv_y)
     assert asserts[1] != asserts[2]
     assert s1 in declares
     assert s2 in declares
