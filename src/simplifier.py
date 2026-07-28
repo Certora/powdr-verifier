@@ -69,8 +69,21 @@ _NORM = "bounds:demod:normalize:bitwise:mod_inv:demod"
 # z3 equality propagation. Must precede a trailing `rewrite` (see below).
 _Z3_EQ = "z3-propagate-values:z3-solve-eqs"
 
-# Ground + normalize, no z3/rewrite: base pipeline for bus-interaction steps.
-_BUS = _pipe(TACTIC_QEPREFIX, _NORM)
+# Eliminate the `before-column = after-column` identity pins (the eliminated-
+# column reconstructions QE lifts to top-level `q = expr` asserts) by Gaussian
+# elimination, RIGHT AFTER the QE prefix and BEFORE `_NORM`. Ordering is the
+# whole point: if `mod_inv`/`bitwise` normalize the before- and after-columns
+# while they are still separate variables, the two semantically-equal sides get
+# baked into different modular representations and z3 can no longer see the
+# congruence cheaply (the inlining-step check timeouts). Running solve-eqs first
+# keeps both sides in lockstep. Measured: 2099556/035 inlining soundness solves
+# in 0.03s vs a 60s sliced timeout without it -- matching --lift-substitute but
+# WITHOUT its inlining duplication (which blew up large blocks like 2099828).
+_EARLY_EQ = "z3-solve-eqs"
+
+# Ground + early equality elimination + normalize, no rewrite: base pipeline for
+# bus-interaction steps.
+_BUS = _pipe(TACTIC_QEPREFIX, _EARLY_EQ, _NORM)
 
 # `rewrite`, when present, is always the FINAL pass: it factors modular products
 # (e.g. the `bit^2 - bit = 0` encoding) into `(or (var - r_i = 0 mod P))`

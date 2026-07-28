@@ -70,12 +70,15 @@ def __build_parser(skip_subparsers=False):
     parser.add_argument(
         "--lift-substitute",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="In the lift pass, substitute a pinned quantified variable by its "
         "pinned expression (rest[q:=e]) instead of hoisting `q = e` as a free "
         "variable + assert. Equivalence-preserving; collapses the before-side "
-        "onto the after-side so soundness VCs close by congruence (fixes the "
-        "inlining-step check timeouts).",
+        "onto the after-side so soundness VCs close by congruence. Default OFF: "
+        "the inlining-step timeouts are now fixed by running z3-solve-eqs early "
+        "in the pipeline (see _BUS in simplifier.py), which achieves the same "
+        "before/after identification without the inlining duplication that blew "
+        "up large blocks.",
     )
     parser.add_argument(
         "--memory-presolve",
