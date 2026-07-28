@@ -112,7 +112,7 @@ fn total_degree(e: &Int) -> usize {
 
 fn rewrite_choice(expr: &Int, p: i128, stats: &mut RewriteStats) -> Option<Bool> {
     stats.factor_calls += 1;
-    let fac = match factor(expr) {
+    let fac = match factor(expr, p as u64) {
         Ok(f) => f,
         Err(FactorError::BuildFailed) | Err(FactorError::FactorFailed) => {
             return rewrite_quadratic(expr, p);
@@ -546,6 +546,7 @@ mod tests {
     }
 
     fn with_field(f: impl FnOnce()) {
+        let _field_env = crate::field_env_guard();
         std::env::set_var("SIMPLIFIER_FIELD_MOD", field().to_string());
         f();
     }

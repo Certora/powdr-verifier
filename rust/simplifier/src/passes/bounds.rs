@@ -141,6 +141,7 @@ mod tests {
 
     #[test]
     fn adds_top_level_asserts_for_matching_free_vars() {
+        let _field_env = crate::field_env_guard();
         let f = field();
         std::env::set_var("SIMPLIFIER_FIELD_MOD", f.to_string());
         let script = Script::parse("(assert (= x@0 y))\n(check-sat)\n").unwrap();
@@ -157,6 +158,7 @@ mod tests {
 
     #[test]
     fn preserves_declare_fun_commands() {
+        let _field_env = crate::field_env_guard();
         let f = field();
         std::env::set_var("SIMPLIFIER_FIELD_MOD", f.to_string());
         let script = Script::parse(

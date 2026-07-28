@@ -19,6 +19,10 @@
 //! (`fmpz = slong = c_long = i64`, `ulong = c_ulong = u64`), so the rest of
 //! `poly_factor` is backend-agnostic: it imports every symbol from here.
 
+// We factor over GF(P) (prime field), not over Z: `fmpz_mod_mpoly_*` with the
+// field modulus. Factoring over Z fails on polynomials whose factorization only
+// exists mod P -- e.g. `L*(L-1)` after `normalize` rewrites coefficients to
+// positive mod-P residues (`-2` -> `P-2`), which is irreducible over Z.
 #[cfg(not(feature = "flint3"))]
 pub(crate) use flint_sys::{
     flint::{flint_free, fmpz},
@@ -26,28 +30,32 @@ pub(crate) use flint_sys::{
         fmpz_add, fmpz_clear, fmpz_get_str, fmpz_init, fmpz_is_zero, fmpz_mul, fmpz_neg,
         fmpz_set_si, fmpz_set_str,
     },
-    fmpz_mpoly::{
-        fmpz_mpoly_clear, fmpz_mpoly_combine_like_terms, fmpz_mpoly_ctx_clear,
-        fmpz_mpoly_ctx_init, fmpz_mpoly_divides, fmpz_mpoly_get_term_coeff_fmpz,
-        fmpz_mpoly_get_term_exp_ui, fmpz_mpoly_init, fmpz_mpoly_is_zero, fmpz_mpoly_length,
-        fmpz_mpoly_push_term_fmpz_ui, fmpz_mpoly_sort_terms, fmpz_mpoly_zero,
+    fmpz_mod_mpoly::{
+        fmpz_mod_mpoly_clear, fmpz_mod_mpoly_combine_like_terms, fmpz_mod_mpoly_ctx_clear,
+        fmpz_mod_mpoly_ctx_init, fmpz_mod_mpoly_divides, fmpz_mod_mpoly_get_term_coeff_fmpz,
+        fmpz_mod_mpoly_get_term_exp_ui, fmpz_mod_mpoly_init, fmpz_mod_mpoly_is_zero,
+        fmpz_mod_mpoly_length, fmpz_mod_mpoly_push_term_fmpz_ui, fmpz_mod_mpoly_sort_terms,
+        fmpz_mod_mpoly_zero,
     },
-    fmpz_mpoly_factor::{
-        fmpz_mpoly_factor, fmpz_mpoly_factor_clear, fmpz_mpoly_factor_get_base,
-        fmpz_mpoly_factor_get_exp_si, fmpz_mpoly_factor_init, fmpz_mpoly_factor_length,
+    fmpz_mod_mpoly_factor::{
+        fmpz_mod_mpoly_factor, fmpz_mod_mpoly_factor_clear, fmpz_mod_mpoly_factor_get_base,
+        fmpz_mod_mpoly_factor_get_exp_si, fmpz_mod_mpoly_factor_init,
+        fmpz_mod_mpoly_factor_length,
     },
-    fmpz_types::{fmpz_mpoly_factor_struct, fmpz_mpoly_struct},
-    mpoly_types::{fmpz_mpoly_ctx_struct, ordering_t_ORD_LEX},
+    fmpz_mod_types::{fmpz_mod_mpoly_factor_struct, fmpz_mod_mpoly_struct},
+    mpoly_types::{fmpz_mod_mpoly_ctx_struct, ordering_t_ORD_LEX},
 };
 
 #[cfg(feature = "flint3")]
 pub(crate) use flint3_sys::{
     flint_free, fmpz, fmpz_add, fmpz_clear, fmpz_get_str, fmpz_init, fmpz_is_zero,
-    fmpz_mpoly_clear, fmpz_mpoly_combine_like_terms, fmpz_mpoly_ctx_clear, fmpz_mpoly_ctx_init,
-    fmpz_mpoly_ctx_struct, fmpz_mpoly_divides, fmpz_mpoly_factor, fmpz_mpoly_factor_clear,
-    fmpz_mpoly_factor_get_base, fmpz_mpoly_factor_get_exp_si, fmpz_mpoly_factor_init,
-    fmpz_mpoly_factor_length, fmpz_mpoly_factor_struct, fmpz_mpoly_get_term_coeff_fmpz,
-    fmpz_mpoly_get_term_exp_ui, fmpz_mpoly_init, fmpz_mpoly_is_zero, fmpz_mpoly_length,
-    fmpz_mpoly_push_term_fmpz_ui, fmpz_mpoly_sort_terms, fmpz_mpoly_struct, fmpz_mpoly_zero,
-    fmpz_mul, fmpz_neg, fmpz_set_si, fmpz_set_str, ordering_t_ORD_LEX,
+    fmpz_mod_mpoly_clear, fmpz_mod_mpoly_combine_like_terms, fmpz_mod_mpoly_ctx_clear,
+    fmpz_mod_mpoly_ctx_init, fmpz_mod_mpoly_ctx_struct, fmpz_mod_mpoly_divides,
+    fmpz_mod_mpoly_factor, fmpz_mod_mpoly_factor_clear, fmpz_mod_mpoly_factor_get_base,
+    fmpz_mod_mpoly_factor_get_exp_si, fmpz_mod_mpoly_factor_init, fmpz_mod_mpoly_factor_length,
+    fmpz_mod_mpoly_factor_struct, fmpz_mod_mpoly_get_term_coeff_fmpz,
+    fmpz_mod_mpoly_get_term_exp_ui, fmpz_mod_mpoly_init, fmpz_mod_mpoly_is_zero,
+    fmpz_mod_mpoly_length, fmpz_mod_mpoly_push_term_fmpz_ui, fmpz_mod_mpoly_sort_terms,
+    fmpz_mod_mpoly_struct, fmpz_mod_mpoly_zero, fmpz_mul, fmpz_neg, fmpz_set_si, fmpz_set_str,
+    ordering_t_ORD_LEX,
 };

@@ -39,16 +39,19 @@ impl GeneratorMap {
     }
 }
 
-pub fn factor(expr: &Int) -> Result<Factorization, FactorError> {
+/// Factor `expr` over GF(`modulus`). `modulus` must be the (prime) field
+/// modulus: factoring over Z misses factorizations that only exist mod P (e.g.
+/// `L*(L-1)` written with mod-P-reduced coefficients).
+pub fn factor(expr: &Int, modulus: u64) -> Result<Factorization, FactorError> {
     let mut gens = GeneratorMap::new();
-    let built = z3_to_fmpz_mpoly(expr, &mut gens)?;
+    let built = z3_to_fmpz_mpoly(expr, &mut gens, modulus)?;
     let flint = factor_mpoly(built)?;
     flint_to_factorization(flint, &gens)
 }
 
-/// True iff `divisor` divides `dividend` as integer polynomials. Returns
+/// True iff `divisor` divides `dividend` over GF(`modulus`). Returns
 /// `Ok(false)` if either is not a plain polynomial in Int variables.
-pub fn divides(dividend: &Int, divisor: &Int) -> Result<bool, FactorError> {
+pub fn divides(dividend: &Int, divisor: &Int, modulus: u64) -> Result<bool, FactorError> {
     let mut gens = GeneratorMap::new();
     let num = match extract_terms(dividend, &mut gens) {
         Ok(t) => t,
@@ -61,18 +64,19 @@ pub fn divides(dividend: &Int, divisor: &Int) -> Result<bool, FactorError> {
     if num.is_empty() || den.is_empty() {
         return Ok(false);
     }
-    divides_terms(&num, &den, gens.gens.len())
+    divides_terms(&num, &den, gens.gens.len(), modulus)
 }
 
 fn z3_to_fmpz_mpoly(
     expr: &Int,
     gens: &mut GeneratorMap,
+    modulus: u64,
 ) -> Result<BuiltMpoly, FactorError> {
     let terms = extract_terms(expr, gens)?;
     if terms.is_empty() {
         return Err(FactorError::BuildFailed);
     }
-    BuiltMpoly::from_terms(&terms, gens.gens.len())
+    BuiltMpoly::from_terms(&terms, gens.gens.len(), modulus)
 }
 
 unsafe fn set_fmpz_from_z3(z: *mut super::ffi::fmpz, expr: &Int) -> Result<(), FactorError> {
@@ -168,7 +172,7 @@ fn flint_to_factorization(
     Ok(Factorization { factors })
 }
 
-pub fn build_failure_reason(expr: &Int) -> &'static str {
+pub fn build_failure_reason(expr: &Int, modulus: u64) -> &'static str {
     let mut gens = GeneratorMap::new();
     let terms = match extract_terms(expr, &mut gens) {
         Ok(t) if t.is_empty() => return "zero polynomial",
@@ -176,7 +180,7 @@ pub fn build_failure_reason(expr: &Int) -> &'static str {
         Err(FactorError::BuildFailed) => return "non-polynomial Z3 subtree (non-Int in +/−/×)",
         Err(FactorError::FactorFailed) => return "internal error during extract",
     };
-    match BuiltMpoly::from_terms(&terms, gens.gens.len()) {
+    match BuiltMpoly::from_terms(&terms, gens.gens.len(), modulus) {
         Ok(built) => match factor_mpoly(built) {
             Ok(flint) => {
                 for (s, _) in flint.factors {
@@ -406,7 +410,7 @@ mod tests {
     fn factors_univariate() {
         let x = Int::new_const("x");
         let p = int_add(&int_mul(&x, &x), &Int::from_i64(-1));
-        let fac = factor(&p).expect("factor");
+        let fac = factor(&p, 2013265921).expect("factor");
         assert!(fac.factor_count() >= 2);
     }
 
@@ -414,7 +418,7 @@ mod tests {
     fn factors_product_form() {
         let x = Int::new_const("x");
         let p = int_mul(&x, &Int::sub(&[&x, &Int::from_i64(1)]));
-        let fac = factor(&p).expect("factor");
+        let fac = factor(&p, 2013265921).expect("factor");
         assert!(fac.factor_count() >= 2);
     }
 
@@ -426,7 +430,7 @@ mod tests {
             &Int::from_str("61847529062400").unwrap(),
         ]);
         let p = int_mul(&c, &x);
-        factor(&p).expect("factor large coeff");
+        factor(&p, 2013265921).expect("factor large coeff");
     }
 
     #[test]
@@ -437,7 +441,7 @@ mod tests {
             &Int::from_str("61847529062400").unwrap(),
         ]);
         let p = Int::mul(&[&c, &x]);
-        factor(&p).expect("factor nested constant mul");
+        factor(&p, 2013265921).expect("factor nested constant mul");
     }
 
     #[test]
@@ -445,6 +449,6 @@ mod tests {
         let x = Int::new_const("x");
         let g = x.div(&Int::from_i64(2));
         let p = int_add(&int_mul(&g, &x), &Int::from_i64(1));
-        assert!(matches!(factor(&p), Err(FactorError::BuildFailed)));
+        assert!(matches!(factor(&p, 2013265921), Err(FactorError::BuildFailed)));
     }
 }

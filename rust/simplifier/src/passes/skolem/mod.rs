@@ -264,6 +264,7 @@ mod tests {
 
     #[test]
     fn skolem_applies_memory_bus_pins() {
+        let _field_env = crate::field_env_guard();
         std::env::set_var("SIMPLIFIER_FIELD_MOD", "2013265921");
         let script = Script::parse(
             "(declare-fun after-memory_isinput_0 () Bool)\n\
@@ -285,6 +286,7 @@ mod tests {
 
     #[test]
     fn pins_same_name_program_var() {
+        let _field_env = crate::field_env_guard();
         let script = Script::parse(
             "(declare-fun before-x@0 () Int)\n\
              (declare-fun after-x@0 () Int)\n\
@@ -301,6 +303,7 @@ mod tests {
 
     #[test]
     fn pins_same_name_prefers_partner_over_own_declaration() {
+        let _field_env = crate::field_env_guard();
         // Granted membus axioms declare the quantified side's columns at top
         // level too; the qvar's own (later) declaration must not shadow the
         // opposite-side partner in the stripped-name lookup.
@@ -321,6 +324,7 @@ mod tests {
 
     #[test]
     fn witness_contribute_handles_quantifier_bound_vars() {
+        let _field_env = crate::field_env_guard();
         std::env::set_var("SIMPLIFIER_FIELD_MOD", "2013265921");
         let script = Script::parse(
             "(declare-fun marker () Int)\n\

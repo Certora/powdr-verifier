@@ -17,6 +17,16 @@ use crate::budget::Budget;
 use crate::passes::{bitwise, bounds, demod, domain_probe, evaluator, factor_reduce, isqf, lift, mod_inv, nnf, normalize, pretty, rewrite, skolem, ufnorm, witness, z3};
 use crate::tactic::split_tactic;
 
+/// Serializes tests that mutate the global `SIMPLIFIER_FIELD_MOD` env var.
+/// They race otherwise (a test can read another's modulus mid-run), which
+/// matters now that polynomial factoring is done over GF(modulus). Hold the
+/// returned guard for the whole test body.
+#[cfg(test)]
+pub(crate) fn field_env_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[derive(Debug)]
 pub struct StepResult {
     pub pass: String,

@@ -942,6 +942,7 @@ mod tests {
 
     #[test]
     fn field_monic_scales_coeffs() {
+        let _field_env = crate::field_env_guard();
         let p = p();
         std::env::set_var("SIMPLIFIER_FIELD_MOD", p.to_string());
         let script = Script::parse(&format!(
@@ -959,6 +960,7 @@ mod tests {
 
     #[test]
     fn orders_terms_grlex() {
+        let _field_env = crate::field_env_guard();
         let p = p();
         std::env::set_var("SIMPLIFIER_FIELD_MOD", p.to_string());
         let script = Script::parse(&format!(
@@ -1004,6 +1006,7 @@ mod tests {
 
     #[test]
     fn skips_int_bool_products() {
+        let _field_env = crate::field_env_guard();
         let p = 2013265921i128;
         std::env::set_var("SIMPLIFIER_FIELD_MOD", p.to_string());
         let script = Script::parse(&format!(
@@ -1022,6 +1025,7 @@ mod tests {
 
     #[test]
     fn skips_quantifier_bound_int_relations() {
+        let _field_env = crate::field_env_guard();
         let p = 2013265921i128;
         std::env::set_var("SIMPLIFIER_FIELD_MOD", p.to_string());
         let script = Script::parse(&format!(
@@ -1043,6 +1047,7 @@ mod tests {
 
     #[test]
     fn field_monic_negative_leading_coeff() {
+        let _field_env = crate::field_env_guard();
         let p = 2013265921i128;
         std::env::set_var("SIMPLIFIER_FIELD_MOD", p.to_string());
         let script = Script::parse(&format!(
@@ -1111,6 +1116,7 @@ mod tests {
 
     #[test]
     fn modular_lt_left_intact() {
+        let _field_env = crate::field_env_guard();
         // (mod (y+x) P) < (mod x P): a genuine modular comparison. The old code
         // rewrote it to the always-false (mod y P) < 0 -- the guest-keccak
         // 2102932 034->035 vacuous-unsat bug. It must be left intact, because
@@ -1132,6 +1138,7 @@ mod tests {
 
     #[test]
     fn modular_le_range_check_left_intact() {
+        let _field_env = crate::field_env_guard();
         // (mod (x+y) P) <= 255 is a range check; the old code folded it into
         // the equality x+y == 255 (mod P). It must be left intact.
         let p = 2013265921i128;

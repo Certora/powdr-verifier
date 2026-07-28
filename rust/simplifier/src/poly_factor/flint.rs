@@ -3,12 +3,14 @@ use std::mem::MaybeUninit;
 
 use super::ffi::{
     flint_free, fmpz, fmpz_add, fmpz_clear, fmpz_get_str, fmpz_init, fmpz_is_zero,
-    fmpz_mpoly_clear, fmpz_mpoly_combine_like_terms, fmpz_mpoly_ctx_clear, fmpz_mpoly_ctx_init,
-    fmpz_mpoly_ctx_struct, fmpz_mpoly_divides, fmpz_mpoly_factor, fmpz_mpoly_factor_clear, fmpz_mpoly_factor_get_base,
-    fmpz_mpoly_factor_get_exp_si, fmpz_mpoly_factor_init, fmpz_mpoly_factor_length,
-    fmpz_mpoly_factor_struct, fmpz_mpoly_get_term_coeff_fmpz, fmpz_mpoly_get_term_exp_ui,
-    fmpz_mpoly_init, fmpz_mpoly_is_zero, fmpz_mpoly_length, fmpz_mpoly_push_term_fmpz_ui,
-    fmpz_mpoly_sort_terms, fmpz_mpoly_struct, fmpz_mpoly_zero, fmpz_mul, fmpz_neg, fmpz_set_si,
+    fmpz_mod_mpoly_clear, fmpz_mod_mpoly_combine_like_terms, fmpz_mod_mpoly_ctx_clear,
+    fmpz_mod_mpoly_ctx_init, fmpz_mod_mpoly_ctx_struct, fmpz_mod_mpoly_divides,
+    fmpz_mod_mpoly_factor, fmpz_mod_mpoly_factor_clear, fmpz_mod_mpoly_factor_get_base,
+    fmpz_mod_mpoly_factor_get_exp_si, fmpz_mod_mpoly_factor_init, fmpz_mod_mpoly_factor_length,
+    fmpz_mod_mpoly_factor_struct, fmpz_mod_mpoly_get_term_coeff_fmpz,
+    fmpz_mod_mpoly_get_term_exp_ui, fmpz_mod_mpoly_init, fmpz_mod_mpoly_is_zero,
+    fmpz_mod_mpoly_length, fmpz_mod_mpoly_push_term_fmpz_ui, fmpz_mod_mpoly_sort_terms,
+    fmpz_mod_mpoly_struct, fmpz_mod_mpoly_zero, fmpz_mul, fmpz_neg, fmpz_set_si,
     ordering_t_ORD_LEX,
 };
 
@@ -94,35 +96,31 @@ pub(crate) struct FlintFactorization {
 }
 
 pub(crate) struct BuiltMpoly {
-    ctx: ZzCtx,
+    ctx: ZpCtx,
     poly: MpolyInner,
     pub nvars: usize,
 }
 
-struct MpolyInner(fmpz_mpoly_struct);
+struct MpolyInner(fmpz_mod_mpoly_struct);
 
 impl BuiltMpoly {
-    pub fn from_terms(terms: &TermMap, nvars: usize) -> Result<Self, FactorError> {
+    pub fn from_terms(terms: &TermMap, nvars: usize, modulus: u64) -> Result<Self, FactorError> {
         if nvars == 0 || terms.is_empty() {
             return Err(FactorError::BuildFailed);
         }
-        let ctx = ZzCtx::new(nvars);
+        let ctx = ZpCtx::new(nvars, modulus);
         let mut poly = MpolyInner::new(&ctx);
         unsafe {
-            build_fmpz_mpoly_from_terms(poly.as_mut(), ctx.as_ptr(), nvars, terms)?;
+            build_mpoly_from_terms(poly.as_mut(), ctx.as_ptr(), nvars, terms)?;
         }
-        Ok(Self {
-            ctx,
-            poly,
-            nvars,
-        })
+        Ok(Self { ctx, poly, nvars })
     }
 
-    fn ctx_ptr(&self) -> *const fmpz_mpoly_ctx_struct {
+    fn ctx_ptr(&self) -> *const fmpz_mod_mpoly_ctx_struct {
         self.ctx.as_ptr()
     }
 
-    fn poly(&self) -> *const fmpz_mpoly_struct {
+    fn poly(&self) -> *const fmpz_mod_mpoly_struct {
         self.poly.as_ptr()
     }
 }
@@ -130,50 +128,53 @@ impl BuiltMpoly {
 impl Drop for BuiltMpoly {
     fn drop(&mut self) {
         unsafe {
-            fmpz_mpoly_clear(self.poly.as_mut(), self.ctx.as_ptr());
+            fmpz_mod_mpoly_clear(self.poly.as_mut(), self.ctx.as_ptr());
         }
     }
 }
 
 impl MpolyInner {
-    fn new(ctx: &ZzCtx) -> Self {
-        let mut poly = MaybeUninit::<fmpz_mpoly_struct>::uninit();
+    fn new(ctx: &ZpCtx) -> Self {
+        let mut poly = MaybeUninit::<fmpz_mod_mpoly_struct>::uninit();
         unsafe {
-            fmpz_mpoly_init(poly.as_mut_ptr(), ctx.as_ptr());
+            fmpz_mod_mpoly_init(poly.as_mut_ptr(), ctx.as_ptr());
             Self(poly.assume_init())
         }
     }
 
-    fn as_ptr(&self) -> *const fmpz_mpoly_struct {
+    fn as_ptr(&self) -> *const fmpz_mod_mpoly_struct {
         &self.0
     }
 
-    fn as_mut(&mut self) -> *mut fmpz_mpoly_struct {
+    fn as_mut(&mut self) -> *mut fmpz_mod_mpoly_struct {
         &mut self.0
     }
 }
 
-/// True iff `divisor` divides `dividend` as integer polynomials (both built in a
-/// shared context so generator indices align). Used by the `factor_reduce` pass.
+/// True iff `divisor` divides `dividend` over GF(`modulus`) (both built in a
+/// shared context so generator indices align). Used by the `factor_reduce`
+/// pass; divisibility over the field is exactly the `B | Q => Q = 0 (mod P)`
+/// implication that pass relies on.
 pub(crate) fn divides_terms(
     dividend: &TermMap,
     divisor: &TermMap,
     nvars: usize,
+    modulus: u64,
 ) -> Result<bool, FactorError> {
     if nvars == 0 || dividend.is_empty() || divisor.is_empty() {
         return Err(FactorError::BuildFailed);
     }
-    let ctx = ZzCtx::new(nvars);
+    let ctx = ZpCtx::new(nvars, modulus);
     let mut num = MpolyInner::new(&ctx);
     let mut den = MpolyInner::new(&ctx);
     let mut quo = MpolyInner::new(&ctx);
     let divides = unsafe {
-        build_fmpz_mpoly_from_terms(num.as_mut(), ctx.as_ptr(), nvars, dividend)?;
-        build_fmpz_mpoly_from_terms(den.as_mut(), ctx.as_ptr(), nvars, divisor)?;
-        let r = fmpz_mpoly_divides(quo.as_mut(), num.as_ptr(), den.as_ptr(), ctx.as_ptr());
-        fmpz_mpoly_clear(num.as_mut(), ctx.as_ptr());
-        fmpz_mpoly_clear(den.as_mut(), ctx.as_ptr());
-        fmpz_mpoly_clear(quo.as_mut(), ctx.as_ptr());
+        build_mpoly_from_terms(num.as_mut(), ctx.as_ptr(), nvars, dividend)?;
+        build_mpoly_from_terms(den.as_mut(), ctx.as_ptr(), nvars, divisor)?;
+        let r = fmpz_mod_mpoly_divides(quo.as_mut(), num.as_ptr(), den.as_ptr(), ctx.as_ptr());
+        fmpz_mod_mpoly_clear(num.as_mut(), ctx.as_ptr());
+        fmpz_mod_mpoly_clear(den.as_mut(), ctx.as_ptr());
+        fmpz_mod_mpoly_clear(quo.as_mut(), ctx.as_ptr());
         r != 0
     };
     Ok(divides)
@@ -184,54 +185,63 @@ pub(crate) fn factor_mpoly(built: BuiltMpoly) -> Result<FlintFactorization, Fact
     let ctx_ptr = built.ctx_ptr();
     let poly_ptr = built.poly();
     unsafe {
-        let mut fac = MaybeUninit::<fmpz_mpoly_factor_struct>::uninit();
-        fmpz_mpoly_factor_init(fac.as_mut_ptr(), ctx_ptr);
+        let mut fac = MaybeUninit::<fmpz_mod_mpoly_factor_struct>::uninit();
+        fmpz_mod_mpoly_factor_init(fac.as_mut_ptr(), ctx_ptr);
         let mut fac = fac.assume_init();
-        if fmpz_mpoly_factor(&mut fac, poly_ptr, ctx_ptr) == 0 {
-            fmpz_mpoly_factor_clear(&mut fac, ctx_ptr);
+        if fmpz_mod_mpoly_factor(&mut fac, poly_ptr, ctx_ptr) == 0 {
+            fmpz_mod_mpoly_factor_clear(&mut fac, ctx_ptr);
             return Err(FactorError::FactorFailed);
         }
-        let out = read_fmpz_mpoly_factor(&fac, ctx_ptr, nvars)?;
-        fmpz_mpoly_factor_clear(&mut fac, ctx_ptr);
+        let out = read_mpoly_factor(&fac, ctx_ptr, nvars)?;
+        fmpz_mod_mpoly_factor_clear(&mut fac, ctx_ptr);
         Ok(out)
     }
 }
 
-struct ZzCtx {
-    ctx: fmpz_mpoly_ctx_struct,
+/// A polynomial context over GF(`modulus`). The modulus must be prime for the
+/// factorization to be well-defined (the BabyBear field prime here).
+struct ZpCtx {
+    ctx: fmpz_mod_mpoly_ctx_struct,
+    modulus: fmpz,
 }
 
-impl ZzCtx {
-    fn new(nvars: usize) -> Self {
-        let mut ctx = MaybeUninit::<fmpz_mpoly_ctx_struct>::uninit();
+impl ZpCtx {
+    fn new(nvars: usize, modulus: u64) -> Self {
+        let mut m: fmpz = 0;
+        let mut ctx = MaybeUninit::<fmpz_mod_mpoly_ctx_struct>::uninit();
         unsafe {
-            fmpz_mpoly_ctx_init(ctx.as_mut_ptr(), nvars as i64, ordering_t_ORD_LEX);
+            fmpz_init(&mut m);
+            // BabyBear P < 2^31, so it fits in an i64.
+            fmpz_set_si(&mut m, modulus as i64);
+            fmpz_mod_mpoly_ctx_init(ctx.as_mut_ptr(), nvars as i64, ordering_t_ORD_LEX, &m);
             Self {
                 ctx: ctx.assume_init(),
+                modulus: m,
             }
         }
     }
 
-    fn as_ptr(&self) -> *const fmpz_mpoly_ctx_struct {
+    fn as_ptr(&self) -> *const fmpz_mod_mpoly_ctx_struct {
         &self.ctx
     }
 }
 
-impl Drop for ZzCtx {
+impl Drop for ZpCtx {
     fn drop(&mut self) {
         unsafe {
-            fmpz_mpoly_ctx_clear(&mut self.ctx);
+            fmpz_mod_mpoly_ctx_clear(&mut self.ctx);
+            fmpz_clear(&mut self.modulus);
         }
     }
 }
 
-unsafe fn build_fmpz_mpoly_from_terms(
-    poly: *mut fmpz_mpoly_struct,
-    ctx: *const fmpz_mpoly_ctx_struct,
+unsafe fn build_mpoly_from_terms(
+    poly: *mut fmpz_mod_mpoly_struct,
+    ctx: *const fmpz_mod_mpoly_ctx_struct,
     nvars: usize,
     terms: &TermMap,
 ) -> Result<(), FactorError> {
-    fmpz_mpoly_zero(poly, ctx);
+    fmpz_mod_mpoly_zero(poly, ctx);
 
     for (mono, coeff) in terms {
         let mut exps = vec![0u64; nvars];
@@ -241,49 +251,53 @@ unsafe fn build_fmpz_mpoly_from_terms(
             }
             exps[g] = e as u64;
         }
-        fmpz_mpoly_push_term_fmpz_ui(poly, coeff.as_ptr(), exps.as_ptr(), ctx);
+        // Coefficients are plain integers (possibly negative or >= P); the
+        // modular context reduces them mod P on insertion, so any coefficient
+        // representation of the same GF(P) polynomial factors identically.
+        fmpz_mod_mpoly_push_term_fmpz_ui(poly, coeff.as_ptr(), exps.as_ptr(), ctx);
     }
-    fmpz_mpoly_combine_like_terms(poly, ctx);
-    fmpz_mpoly_sort_terms(poly, ctx);
+    fmpz_mod_mpoly_combine_like_terms(poly, ctx);
+    fmpz_mod_mpoly_sort_terms(poly, ctx);
     Ok(())
 }
 
-unsafe fn read_fmpz_mpoly_factor(
-    fac: &fmpz_mpoly_factor_struct,
-    ctx: *const fmpz_mpoly_ctx_struct,
+unsafe fn read_mpoly_factor(
+    fac: &fmpz_mod_mpoly_factor_struct,
+    ctx: *const fmpz_mod_mpoly_ctx_struct,
     nvars: usize,
 ) -> Result<FlintFactorization, FactorError> {
-    let len = fmpz_mpoly_factor_length(fac, ctx);
+    let len = fmpz_mod_mpoly_factor_length(fac, ctx);
     let mut factors = Vec::with_capacity(len as usize);
     for i in 0..len {
-        let exp = fmpz_mpoly_factor_get_exp_si(fac as *const _ as *mut _, i, ctx).max(0) as usize;
-        let mut base = MaybeUninit::<fmpz_mpoly_struct>::uninit();
-        fmpz_mpoly_init(base.as_mut_ptr(), ctx);
+        let exp =
+            fmpz_mod_mpoly_factor_get_exp_si(fac as *const _ as *mut _, i, ctx).max(0) as usize;
+        let mut base = MaybeUninit::<fmpz_mod_mpoly_struct>::uninit();
+        fmpz_mod_mpoly_init(base.as_mut_ptr(), ctx);
         let mut base = base.assume_init();
-        fmpz_mpoly_factor_get_base(&mut base, fac, i, ctx);
-        let sparse = fmpz_mpoly_to_sparse(&base, ctx, nvars)?;
-        fmpz_mpoly_clear(&mut base, ctx);
+        fmpz_mod_mpoly_factor_get_base(&mut base, fac, i, ctx);
+        let sparse = mpoly_to_sparse(&base, ctx, nvars)?;
+        fmpz_mod_mpoly_clear(&mut base, ctx);
         factors.push((sparse, exp));
     }
     Ok(FlintFactorization { factors })
 }
 
-unsafe fn fmpz_mpoly_to_sparse(
-    poly: &fmpz_mpoly_struct,
-    ctx: *const fmpz_mpoly_ctx_struct,
+unsafe fn mpoly_to_sparse(
+    poly: &fmpz_mod_mpoly_struct,
+    ctx: *const fmpz_mod_mpoly_ctx_struct,
     nvars: usize,
 ) -> Result<SparsePoly, FactorError> {
-    if fmpz_mpoly_is_zero(poly, ctx) != 0 {
+    if fmpz_mod_mpoly_is_zero(poly, ctx) != 0 {
         return Ok(SparsePoly { terms: vec![] });
     }
-    let n = fmpz_mpoly_length(poly, ctx);
+    let n = fmpz_mod_mpoly_length(poly, ctx);
     let mut terms = Vec::with_capacity(n as usize);
     let mut coeff = 0i64;
     fmpz_init(&mut coeff);
     let mut exps = vec![0u64; nvars];
     for i in 0..n {
-        fmpz_mpoly_get_term_exp_ui(exps.as_mut_ptr(), poly, i, ctx);
-        fmpz_mpoly_get_term_coeff_fmpz(&mut coeff, poly, i, ctx);
+        fmpz_mod_mpoly_get_term_exp_ui(exps.as_mut_ptr(), poly, i, ctx);
+        fmpz_mod_mpoly_get_term_coeff_fmpz(&mut coeff, poly, i, ctx);
         let coeff_str = fmpz_to_string(&coeff);
         let exp: Vec<u32> = exps.iter().map(|&e| e as u32).collect();
         if coeff_str != "0" {

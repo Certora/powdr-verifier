@@ -95,7 +95,7 @@ fn reduce_once(
             if bd == 0 || bd >= qd {
                 continue;
             }
-            if divides(&q, b).unwrap_or(false) {
+            if divides(&q, b, p as u64).unwrap_or(false) {
                 *count += 1;
                 return Some(Bool::from_bool(true));
             }
@@ -148,6 +148,7 @@ mod tests {
 
     #[test]
     fn reduces_proper_multiple() {
+        let _field_env = crate::field_env_guard();
         std::env::set_var("SIMPLIFIER_FIELD_MOD", P.to_string());
         // hypothesis (x-1)(x-2) = 0; goal atom x*(x-1)(x-2) = 0 is a proper
         // multiple -> reduced to true (the disjunct under `not` drops).
@@ -165,6 +166,7 @@ mod tests {
 
     #[test]
     fn keeps_non_multiple_and_hypothesis() {
+        let _field_env = crate::field_env_guard();
         std::env::set_var("SIMPLIFIER_FIELD_MOD", P.to_string());
         // (x-1)=0 neither divides (y-3) (different var) nor is a proper divisor
         // of itself (equal degree) -> nothing reduced.
