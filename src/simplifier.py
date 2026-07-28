@@ -72,16 +72,19 @@ _Z3_EQ = "z3-propagate-values:z3-solve-eqs"
 # Gaussian-eliminate the `before-column = after-column` identity pins before
 # `_NORM`, so `mod_inv`/`bitwise` normalize both sides in lockstep instead of
 # into diverging modular forms z3 can't reconcile (the inlining check timeouts).
+# `z3-solve-eqs` is globally nomod (see src/simplify/z3.py), so this mints no
+# `mod!` witnesses.
 _EARLY_EQ = "z3-solve-eqs"
 
 # Ground + normalize, no z3/rewrite: base pipeline for bus-interaction steps.
 _BUS = _pipe(TACTIC_QEPREFIX, _NORM)
 
-# `_BUS` with `_EARLY_EQ`. For steps that otherwise run no equality elimination,
-# so the identity pins survive into the check and time out. Steps that already
-# run `z3-solve-eqs` after `_NORM` (exec_bus/loop_iteration/trivial_simp) must
-# NOT use it: the double elimination across `_NORM` regresses the check (`solver`
-# is the exception -- its trailing `rewrite` absorbs it and it benefits).
+# `_BUS` with `_EARLY_EQ`, for steps that otherwise run no equality-elimination
+# pass (so the identity pins would survive into the check and time out).
+# exec_bus/loop_iteration already run `z3-solve-eqs` after `_NORM`, so they don't
+# need it and stay on plain `_BUS`. trivial_simp must NOT get an early solve-eqs:
+# its `factor_reduce` relies on the columns being linked by the LATE solve-eqs,
+# and an early pass disturbs that setup (times out regardless of the nomod fix).
 _BUS_EQ = _pipe(TACTIC_QEPREFIX, _EARLY_EQ, _NORM)
 
 # `rewrite`, when present, is always the FINAL pass: it factors modular products

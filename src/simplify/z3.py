@@ -36,12 +36,16 @@ def _declares_from_z3_not_in_prefix(
 def _mk_tactic(t: str):
     """Tactic by name, with parameterized variants.
 
-    ``solve-eqs-nomod`` = ``(using-params solve-eqs :eliminate_mod false)``:
-    disables ``solve_mod`` (z3 ``extract_eqs.cpp:233``), the rewrite
-    ``(= (mod u P) y) => u := P*mod!k + y`` that mints the ``mod!``
-    quotient witnesses goal-wide — including inside uf arguments.
+    ``solve-eqs`` is ALWAYS run with ``:eliminate_mod false``. That disables
+    ``solve_mod`` (z3 ``extract_eqs.cpp:233``), the rewrite
+    ``(= (mod u P) y) => u := P*mod!k + y`` that mints ``mod!`` quotient
+    witnesses goal-wide — including inside uf arguments. Those witnesses are
+    nonlinear and blow up the arithmetic check (measured: an early solve-eqs
+    mints 5x more of them and turns a 1.5s check into a 60s timeout), so we
+    never want the mod-eliminating variant. ``solve-eqs-nomod`` is kept as an
+    explicit alias for the same thing.
     """
-    if t == "solve-eqs-nomod":
+    if t in ("solve-eqs", "solve-eqs-nomod"):
         return z3.With("solve-eqs", eliminate_mod=False)
     return z3.Tactic(t)
 

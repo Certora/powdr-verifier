@@ -16,21 +16,37 @@ const DEFAULT_TACTICS: &[&str] = &[
 
 const REPEAT_MAX: u32 = 1024;
 
+/// Tactic by name. `solve-eqs` is ALWAYS built with `:eliminate_mod false`,
+/// disabling the `solve_mod` rewrite `(= (mod u P) y) => u := P*mod!k + y` that
+/// mints `mod!` quotient witnesses. Those witnesses are nonlinear and blow up
+/// the arithmetic check, so we never want the mod-eliminating variant. Mirrors
+/// `_mk_tactic` in `src/simplify/z3.py`.
+fn mk_tactic(name: &str) -> Tactic {
+    let t = Tactic::new(name);
+    if name == "solve-eqs" {
+        let mut params = z3::Params::new();
+        params.set_bool("eliminate_mod", false);
+        t.with(&params)
+    } else {
+        t
+    }
+}
+
 pub fn build_tactic(tactic_args: &[String]) -> Tactic {
     let base = match tactic_args {
         [] => {
-            let mut chain = Tactic::new(DEFAULT_TACTICS[0]);
+            let mut chain = mk_tactic(DEFAULT_TACTICS[0]);
             for name in &DEFAULT_TACTICS[1..] {
-                let next = Tactic::new(name);
+                let next = mk_tactic(name);
                 chain = chain.and_then(&next);
             }
             Tactic::repeat(&chain, REPEAT_MAX)
         }
-        [single] => Tactic::new(single),
+        [single] => mk_tactic(single),
         many => {
-            let mut chain = Tactic::new(&many[0]);
+            let mut chain = mk_tactic(&many[0]);
             for name in &many[1..] {
-                let next = Tactic::new(name);
+                let next = mk_tactic(name);
                 chain = chain.and_then(&next);
             }
             chain
