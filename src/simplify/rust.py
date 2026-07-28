@@ -366,6 +366,7 @@ def run_rust_pipeline(
 
     env = os.environ.copy()
     env["SIMPLIFIER_FIELD_MOD"] = str(ARGS().field_type.value)
+    env["LIFT_SUBSTITUTE"] = "1" if ARGS().lift_substitute else "0"
     proc = subprocess.run(
         cmd,
         input=smt_in,

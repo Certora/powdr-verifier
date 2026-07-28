@@ -3,14 +3,14 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use smt2::ast_util::{
-    ast_hash_bool, bound_var_index, flatten_or, is_forall, or_body_parts,
+    ast_children, ast_hash_bool, bound_var_index, flatten_or, is_forall, or_body_parts,
     quantifier_body_bool, quantifier_body_deps, quantifier_bound_symbol_ids,
     quantifier_bounds_de_bruijn, rebuild_forall_dyn, resolve_bound_or_free_name,
     substitute_bound_vars_dyn,
     contains_bound_var_dyn, de_bruijn_bound_symbol_id,
     free_symbol_ids_bool, symbol_id_dyn, symbol_id_from_name, symbol_name_for_id, SymbolId,
 };
-use smt2::ast_build::{count_nodes_dyn, iter_nodes_dyn, symbol_name_dyn};
+use smt2::ast_build::{count_nodes_dyn, iter_nodes_dyn, substitute_dyn, symbol_name_dyn};
 use smt2::{declare_fun_name_cmd, map_bool_children, parse_single_command, Script, SExpr, SmtCommand};
 use z3::ast::{Ast, AstKind, Bool, Dynamic, Int};
 use z3::DeclKind;
@@ -355,6 +355,12 @@ impl LiftWalker {
 }
 
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
+    // Driven by the `--lift-substitute` CLI flag (default on): the python side
+    // sets LIFT_SUBSTITUTE=1/0 for this subprocess. Unset (e.g. direct/test use)
+    // keeps the legacy hoisting so the pin-mode unit tests below stay valid.
+    let substitute = std::env::var("LIFT_SUBSTITUTE")
+        .map(|v| v != "0")
+        .unwrap_or(false);
     let sorts = collect_symbol_sorts(script);
     let mut walker = LiftWalker::new(sorts);
 
@@ -383,6 +389,72 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         } else {
             suffix.push(cmd.clone());
         }
+    }
+
+    if substitute && !walker.lifted.is_empty() {
+        // Substitute each lifted qvar by its pinned expr in the bodies instead of
+        // hoisting `q = expr` as a free var. Equivalence-preserving
+        // (`forall q. (q != e or rest)` == `rest[q := e]`); collapses the
+        // before-side onto the after-side so the soundness VC closes by EQ.
+        let mut resolved: Vec<(String, Dynamic)> = Vec::new();
+        for (id, eq) in &walker.lifted {
+            let Some(name) = symbol_name_for_id(*id) else {
+                continue;
+            };
+            let kids = ast_children(&Dynamic::from_ast(eq));
+            if kids.len() != 2 {
+                continue;
+            }
+            // `eq` was built as `qname.eq(&rhs)`, so the expr is the 2nd child.
+            resolved.push((name, kids[1].clone()));
+        }
+        // Resolve chains so no expr still references a lifted qvar (lift can pin
+        // `q2 = f(q1)` after `q1` left the prefix; see `lift_ordered_dependencies`).
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for i in 0..resolved.len() {
+                let mut e = resolved[i].1.clone();
+                for j in 0..resolved.len() {
+                    if i == j {
+                        continue;
+                    }
+                    let jn = resolved[j].0.clone();
+                    let je = resolved[j].1.clone();
+                    e = substitute_dyn(&e, jn.as_str(), &je);
+                }
+                if !e.ast_eq(&resolved[i].1) {
+                    resolved[i].1 = e;
+                    changed = true;
+                }
+            }
+        }
+        let mut out_suffix = Vec::new();
+        for cmd in &suffix {
+            if let Some(b) = cmd.assert_bool() {
+                let mut d = Dynamic::from_ast(b);
+                for (name, expr) in &resolved {
+                    d = substitute_dyn(&d, name.as_str(), expr);
+                }
+                let nb = d
+                    .as_bool()
+                    .ok_or_else(|| "lift substitute: body not bool".to_string())?;
+                out_suffix.push(SmtCommand::new_assert(nb));
+            } else {
+                out_suffix.push(cmd.clone());
+            }
+        }
+        let mut commands = prefix;
+        commands.extend(out_suffix);
+        let stats = serde_json::json!({
+            "mode": "substitute",
+            "pins_substituted": resolved.len(),
+            "pins_lifted": walker.lifted.len(),
+            "new_declarations": 0,
+            "hoisted_pin_asserts": 0,
+            "unused_qvars_dropped": walker.unused_qvars_dropped,
+        });
+        return Ok((Script::from_commands(&script.source, commands), stats));
     }
 
     let mut hoisted_decls = 0usize;

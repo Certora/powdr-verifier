@@ -68,6 +68,16 @@ def __build_parser(skip_subparsers=False):
         "--sliced-class-routing", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
+        "--lift-substitute",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="In the lift pass, substitute a pinned quantified variable by its "
+        "pinned expression (rest[q:=e]) instead of hoisting `q = e` as a free "
+        "variable + assert. Equivalence-preserving; collapses the before-side "
+        "onto the after-side so soundness VCs close by congruence (fixes the "
+        "inlining-step check timeouts).",
+    )
+    parser.add_argument(
         "--memory-presolve",
         type=MemoryPresolve,
         default=MemoryPresolve.NONE,
