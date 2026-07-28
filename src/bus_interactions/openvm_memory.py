@@ -267,15 +267,15 @@ class OpenVMMemoryEncoder(
                     for i in range(len(self._interactions))
                     if _active_mult(i) not in (0, 1, pval - 1)
                 ]
-                if nonconst and ARGS().interface_identity_fallback:
+                if nonconst and ARGS().interface_ignore_checks:
                     # Same escape hatch as the alignment identity fallback
-                    # (--interface-identity-fallback): skip the const-mult gate
+                    # (--interface-ignore-checks): skip the const-mult gate
                     # and let the io_relation equate the
                     # aligned pairs' argument tuples unconditionally. Only sound
                     # when aligned pairs are the same interaction (so their args
                     # coincide regardless of the gated activation).
                     logging.warning(
-                        "interface-identity-fallback: skipping the const-mult gate "
+                        "interface-ignore-checks: skipping the const-mult gate "
                         "for %d memory interaction(s) with symbolic (is_valid/flag-"
                         "gated) multiplicities; the interface io_relation will equate "
                         "aligned argument tuples WITHOUT resolving activation.",
@@ -1034,7 +1034,7 @@ def interface_io_relation(
 
     parts: list[FNode] = []
     splits = applied = 0
-    if ARGS().interface_identity_fallback:
+    if ARGS().interface_ignore_checks:
         _bad = [
             (i, j)
             for i, j in aligned_pairs.items()
@@ -1044,7 +1044,7 @@ def interface_io_relation(
         ]
         if _bad:
             logging.warning(
-                "interface-identity-fallback: %d/%d aligned pair(s) have "
+                "interface-ignore-checks: %d/%d aligned pair(s) have "
                 "non-const/mismatched (is_valid/flag-gated) mults; equating mult "
                 "and args UNCONDITIONALLY (no gated-status resolution -- may make "
                 "the obligation stronger than reality for inactive interactions).",
@@ -1055,7 +1055,7 @@ def interface_io_relation(
         ia, ib = interactions_a[i], interactions_b[j]
         ma, mb = cmult(ia), cmult(ib)
         if ma is None or mb is None or ma != mb:
-            if not ARGS().interface_identity_fallback:
+            if not ARGS().interface_ignore_checks:
                 raise RuntimeError(
                     f"interface memory encoding: aligned pair ({i},{j}) mult "
                     f"mismatch or non-const: {ia.mult} vs {ib.mult}"

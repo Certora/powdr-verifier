@@ -43,7 +43,17 @@ def analyze_memory_bus_alignment(
         # downstream reader (encode / io-relation / pins) sees a concrete mode.
         problems = _alignment_problems(analysis)
         if not problems and not _interface_mults_const(before, after, after_assume_is_valid):
-            problems = ["memory multiplicities are not const-evaluable (is_valid/flag-gated); interface v1 aborts"]
+            if ARGS().interface_ignore_checks:
+                # Same escape hatch as the explicit-interface path: with a clean
+                # (identity-filled) kept alignment, still pick interface despite
+                # non-const (is_valid/flag-gated) mults. The io_relation then
+                # equates aligned args unconditionally (openvm_memory warns).
+                logger.warning(
+                    "interface-ignore-checks: auto selecting interface despite "
+                    "non-const (is_valid/flag-gated) memory multiplicities"
+                )
+            else:
+                problems = ["memory multiplicities are not const-evaluable (is_valid/flag-gated); interface v1 aborts"]
         resolved = "plain" if problems else "interface"
         logger.warning(
             "auto memory-encoding -> %s (%s)",
