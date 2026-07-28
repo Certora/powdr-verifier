@@ -69,21 +69,20 @@ _NORM = "bounds:demod:normalize:bitwise:mod_inv:demod"
 # z3 equality propagation. Must precede a trailing `rewrite` (see below).
 _Z3_EQ = "z3-propagate-values:z3-solve-eqs"
 
-# Eliminate the `before-column = after-column` identity pins (the eliminated-
-# column reconstructions QE lifts to top-level `q = expr` asserts) by Gaussian
-# elimination, RIGHT AFTER the QE prefix and BEFORE `_NORM`. Ordering is the
-# whole point: if `mod_inv`/`bitwise` normalize the before- and after-columns
-# while they are still separate variables, the two semantically-equal sides get
-# baked into different modular representations and z3 can no longer see the
-# congruence cheaply (the inlining-step check timeouts). Running solve-eqs first
-# keeps both sides in lockstep. Measured: 2099556/035 inlining soundness solves
-# in 0.03s vs a 60s sliced timeout without it -- matching --lift-substitute but
-# WITHOUT its inlining duplication (which blew up large blocks like 2099828).
+# Gaussian-eliminate the `before-column = after-column` identity pins before
+# `_NORM`, so `mod_inv`/`bitwise` normalize both sides in lockstep instead of
+# into diverging modular forms z3 can't reconcile (the inlining check timeouts).
 _EARLY_EQ = "z3-solve-eqs"
 
-# Ground + early equality elimination + normalize, no rewrite: base pipeline for
-# bus-interaction steps.
-_BUS = _pipe(TACTIC_QEPREFIX, _EARLY_EQ, _NORM)
+# Ground + normalize, no z3/rewrite: base pipeline for bus-interaction steps.
+_BUS = _pipe(TACTIC_QEPREFIX, _NORM)
+
+# `_BUS` with `_EARLY_EQ`. For steps that otherwise run no equality elimination,
+# so the identity pins survive into the check and time out. Steps that already
+# run `z3-solve-eqs` after `_NORM` (exec_bus/loop_iteration/trivial_simp) must
+# NOT use it: the double elimination across `_NORM` regresses the check (`solver`
+# is the exception -- its trailing `rewrite` absorbs it and it benefits).
+_BUS_EQ = _pipe(TACTIC_QEPREFIX, _EARLY_EQ, _NORM)
 
 # `rewrite`, when present, is always the FINAL pass: it factors modular products
 # (e.g. the `bit^2 - bit = 0` encoding) into `(or (var - r_i = 0 mod P))`
@@ -91,8 +90,8 @@ _BUS = _pipe(TACTIC_QEPREFIX, _EARLY_EQ, _NORM)
 # solve-eqs) would mangle those back into a spurious sat. It also runs after
 # `_Z3_EQ`, which solve-eqs would otherwise undo.
 
-# Default: ground, normalize, then a final normalize/demod cleanup.
-DEFAULT_TACTIC = _pipe(_BUS, "normalize", "demod")
+# Default: ground, early eq elim, normalize, then a final normalize/demod cleanup.
+DEFAULT_TACTIC = _pipe(_BUS_EQ, "normalize", "demod")
 
 # Special-soundness auxiliary checks (`.zero-is-model` / `.invalid-all-mult-zero`)
 # run the full rewrite + z3 pipeline.
@@ -105,18 +104,18 @@ TACTIC_AUX = _pipe(
 )
 
 STEP_TACTICS: dict[str, str] = {
-    # Bus-interaction steps: ground + normalize only.
-    "substitute_bus_interactio_fields": _BUS,
-    "low_degree_bus": _BUS,
-    "memory": _BUS,
-    "remove_disconnected": _BUS,
-    "inlining": _BUS,
-    "rule_based": _BUS,
-    "range_constraints": _BUS,
-    # ... plus z3 equality propagation.
+    # Bus-interaction steps: ground + early eq elim + normalize.
+    "substitute_bus_interactio_fields": _BUS_EQ,
+    "low_degree_bus": _BUS_EQ,
+    "memory": _BUS_EQ,
+    "remove_disconnected": _BUS_EQ,
+    "inlining": _BUS_EQ,
+    "rule_based": _BUS_EQ,
+    "range_constraints": _BUS_EQ,
+    # ... plus z3 equality propagation (plain `_BUS`: no early eq, see `_BUS_EQ`).
     "exec_bus": _pipe(_BUS, _Z3_EQ),
     # ... plus z3 equality propagation, then a final `rewrite` case-split.
-    "solver": _pipe(_BUS, _Z3_EQ, "rewrite"),
+    "solver": _pipe(_BUS_EQ, _Z3_EQ, "rewrite"),
     # trivial_simp drops `A*B = 0` when a factor `B = 0` is already kept;
     # z3-solve-eqs links the before/after columns so `factor_reduce` sees that
     # the kept hypothesis polynomial-divides the dropped goal and rewrites it to
