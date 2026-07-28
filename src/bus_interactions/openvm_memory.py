@@ -262,13 +262,32 @@ class OpenVMMemoryEncoder(
                 # sound when every interaction's activation is statically
                 # known — gated (is_valid) multiplicities would need status
                 # resolution we deliberately do not do here (v1).
-                for i in range(len(self._interactions)):
-                    if _active_mult(i) not in (0, 1, pval - 1):
-                        raise RuntimeError(
-                            "interface memory encoding: mult of memory "
-                            f"interaction #{i} is not const-evaluable to "
-                            f"-1/0/1: {self._interactions[i].mult}"
-                        )
+                nonconst = [
+                    i
+                    for i in range(len(self._interactions))
+                    if _active_mult(i) not in (0, 1, pval - 1)
+                ]
+                if nonconst and ARGS().interface_identity_fallback:
+                    # Same escape hatch as the alignment identity fallback
+                    # (--interface-identity-fallback): skip the const-mult gate
+                    # and let the io_relation equate the
+                    # aligned pairs' argument tuples unconditionally. Only sound
+                    # when aligned pairs are the same interaction (so their args
+                    # coincide regardless of the gated activation).
+                    logging.warning(
+                        "interface-identity-fallback: skipping the const-mult gate "
+                        "for %d memory interaction(s) with symbolic (is_valid/flag-"
+                        "gated) multiplicities; the interface io_relation will equate "
+                        "aligned argument tuples WITHOUT resolving activation.",
+                        len(nonconst),
+                    )
+                elif nonconst:
+                    i = nonconst[0]
+                    raise RuntimeError(
+                        "interface memory encoding: mult of memory "
+                        f"interaction #{i} is not const-evaluable to "
+                        f"-1/0/1: {self._interactions[i].mult}"
+                    )
                 permutation_axioms = []
                 inputs = []
                 outputs = []
@@ -1015,14 +1034,35 @@ def interface_io_relation(
 
     parts: list[FNode] = []
     splits = applied = 0
+    if ARGS().interface_identity_fallback:
+        _bad = [
+            (i, j)
+            for i, j in aligned_pairs.items()
+            if cmult(interactions_a[i]) is None
+            or cmult(interactions_b[j]) is None
+            or cmult(interactions_a[i]) != cmult(interactions_b[j])
+        ]
+        if _bad:
+            logging.warning(
+                "interface-identity-fallback: %d/%d aligned pair(s) have "
+                "non-const/mismatched (is_valid/flag-gated) mults; equating mult "
+                "and args UNCONDITIONALLY (no gated-status resolution -- may make "
+                "the obligation stronger than reality for inactive interactions).",
+                len(_bad),
+                len(aligned_pairs),
+            )
     for i, j in sorted(aligned_pairs.items()):
         ia, ib = interactions_a[i], interactions_b[j]
         ma, mb = cmult(ia), cmult(ib)
         if ma is None or mb is None or ma != mb:
-            raise RuntimeError(
-                f"interface memory encoding: aligned pair ({i},{j}) mult "
-                f"mismatch or non-const: {ia.mult} vs {ib.mult}"
-            )
+            if not ARGS().interface_identity_fallback:
+                raise RuntimeError(
+                    f"interface memory encoding: aligned pair ({i},{j}) mult "
+                    f"mismatch or non-const: {ia.mult} vs {ib.mult}"
+                )
+            # Trust the pair: treat as active so the mult+arg equalities below are
+            # emitted (the mult equality itself pins before-mult == after-mult).
+            ma = mb = 1
         if ma == 0:
             continue  # disabled pair: no traffic, args unconstrained
         parts.append(

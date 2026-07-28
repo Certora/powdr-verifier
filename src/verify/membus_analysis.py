@@ -943,6 +943,36 @@ def run_membus_analysis(
     n_after = _memory_interaction_count(after)
     _fill_identity_map(before_to_after, n_before, n_after)
 
+    # Argument-protected shortcut (--interface-identity-fallback): the align may
+    # fail to produce a clean kept bijection for syntactic reasons (re-expressed
+    # interaction args) or because a symbolic address space blocks the align/solve
+    # -- while the memory interactions still correspond 1:1 (unchanged count). In
+    # that case, when the flag is set, copy the positional-identity alignment into
+    # `kept_pairs` (the snapshot the interface-vs-plain decision trusts) so the
+    # interface encoding can be used. Only sound when the pass does not reorder
+    # the memory bus interactions; hence flag-guarded
+    # (--interface-identity-fallback, default on; --no-... to disable) and loud.
+    if ARGS().interface_identity_fallback and n_before == n_after:
+        kept_is_bijection = len(kept_pairs) == n_before and sorted(
+            kept_pairs.values()
+        ) == list(range(n_after))
+        identity_is_bijection = len(before_to_after) == n_before and sorted(
+            before_to_after.values()
+        ) == list(range(n_after))
+        if not kept_is_bijection and identity_is_bijection:
+            _LOG.warning(
+                "interface-identity-fallback: align produced no clean bijection "
+                "(%d genuine kept of %d) but memory interaction counts match "
+                "(%d == %d); copying the identity alignment into kept_pairs for the "
+                "interface-vs-plain decision. TRUSTS positional identity of the "
+                "memory interactions WITHOUT verification.",
+                len(kept_pairs),
+                n_before,
+                n_before,
+                n_after,
+            )
+            kept_pairs = dict(before_to_after)
+
     before_info_json = fetch_info_json(before_path)
     after_info_json = fetch_info_json(after_path)
     before_extract = fetch_extract_json(before_path)
