@@ -396,6 +396,14 @@ def _parse_z3_model(stdout: str | None) -> dict[str, Any] | None:
     """
     if not stdout:
         return None
+    # z3 prints ``(error "... check annotation that says <status>")`` to stdout
+    # when the result contradicts the file's ``(set-info :status ...)`` (e.g. a
+    # ``sat`` on a VC annotated ``unsat``). That line precedes the model, so the
+    # first-paren/last-paren slice below would swallow it and hand invalid input
+    # to the SMT parser. Drop any ``(error ...)`` lines first.
+    stdout = "\n".join(
+        line for line in stdout.splitlines() if not line.lstrip().startswith("(error")
+    )
     start = stdout.find("(")
     end = stdout.rfind(")")
     if start < 0 or end <= start:
