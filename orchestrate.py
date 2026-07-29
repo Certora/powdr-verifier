@@ -183,11 +183,11 @@ def __job_report_path(test: str) -> Path:
     return REPORTS_DIR / test / "job.json"
 
 
-def __git_commit(repo: Path) -> Optional[str]:
-    """Short git commit hash of ``repo``'s HEAD, or ``None`` if unavailable."""
+def __git_rev_parse(repo: Path, *args: str) -> Optional[str]:
+    """``git rev-parse`` output for ``repo``, or ``None`` if unavailable."""
     try:
         out = subprocess.run(
-            ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
+            ["git", "-C", str(repo), "rev-parse", *args],
             capture_output=True,
             text=True,
             timeout=10,
@@ -195,6 +195,18 @@ def __git_commit(repo: Path) -> Optional[str]:
     except (OSError, subprocess.SubprocessError):
         return None
     return out.stdout.strip() or None if out.returncode == 0 else None
+
+
+def __git_commit(repo: Path) -> Optional[str]:
+    """``<branch> @ <short commit>`` of ``repo``'s HEAD, or ``None`` if unavailable.
+
+    Falls back to the bare hash on a detached HEAD, where there is no branch.
+    """
+    commit = __git_rev_parse(repo, "--short", "HEAD")
+    if not commit:
+        return None
+    branch = __git_rev_parse(repo, "--abbrev-ref", "HEAD")
+    return f"{branch} @ {commit}" if branch and branch != "HEAD" else commit
 
 
 def __dump_job_report(test: str, command: str, *, started_at: str, started: float) -> None:
