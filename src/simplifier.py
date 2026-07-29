@@ -87,11 +87,13 @@ _BUS = _pipe(TACTIC_QEPREFIX, _NORM)
 # and an early pass disturbs that setup (times out regardless of the nomod fix).
 _BUS_EQ = _pipe(TACTIC_QEPREFIX, _EARLY_EQ, _NORM)
 
-# `rewrite`, when present, is always the FINAL pass: it factors modular products
-# (e.g. the `bit^2 - bit = 0` encoding) into `(or (var - r_i = 0 mod P))`
-# congruence disjunctions for z3 to case-split, and any later pass (demod /
-# solve-eqs) would mangle those back into a spurious sat. It also runs after
-# `_Z3_EQ`, which solve-eqs would otherwise undo.
+# `rewrite` factors modular products (e.g. the `bit^2 - bit = 0` encoding) into
+# `(or (var - r_i = 0 mod P))` congruence disjunctions for z3 to case-split. It
+# runs after `_Z3_EQ` (a later `solve-eqs` would undo it), but a trailing `demod`
+# is both safe and important: rewrite emits `(mod bounded-var P) = r` atoms, and
+# demod collapses `(mod v P) -> v` for range-bounded `v`. Left in, those residual
+# mods push z3 into needless nonlinear-mod reasoning and it times out -- one extra
+# demod on the solver-completeness VC turns z3 unknown@60s into unsat in seconds.
 
 # Default: ground, early eq elim, normalize, then a final normalize/demod cleanup.
 DEFAULT_TACTIC = _pipe(_BUS_EQ, "normalize", "demod")
@@ -117,8 +119,10 @@ STEP_TACTICS: dict[str, str] = {
     "range_constraints": _BUS_EQ,
     # ... plus z3 equality propagation (plain `_BUS`: no early eq, see `_BUS_EQ`).
     "exec_bus": _pipe(_BUS, _Z3_EQ),
-    # ... plus z3 equality propagation, then a final `rewrite` case-split.
-    "solver": _pipe(_BUS_EQ, _Z3_EQ, "rewrite"),
+    # ... plus z3 equality propagation, a final `rewrite` case-split, then a
+    # trailing `demod` to collapse the `(mod bounded-var P)` atoms rewrite emits
+    # (residual mods otherwise time z3 out; see the `rewrite` note above).
+    "solver": _pipe(_BUS_EQ, _Z3_EQ, "rewrite", "demod"),
     # trivial_simp drops `A*B = 0` when a factor `B = 0` is already kept;
     # z3-solve-eqs links the before/after columns so `factor_reduce` sees that
     # the kept hypothesis polynomial-divides the dropped goal and rewrites it to
