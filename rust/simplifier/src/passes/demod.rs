@@ -19,6 +19,7 @@ struct DemodStats {
     const_eval: usize,
     into_ite: usize,
     elim_by_range: usize,
+    elim_eqmod_range: usize,
 }
 
 pub fn field_mod() -> Option<i128> {
@@ -32,34 +33,58 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let total = assert_commands(script).len();
     let mut changed = 0usize;
     let mut stats = DemodStats::default();
-    // Learn per-symbol integer ranges from all top-level asserted facts first,
-    // then use them to eliminate `mod(x, m)` where `0 <= x < m` is proven
-    // (mirrors demod.py's extract_symbol_ranges + elim_by_range).
-    let ranges = collect_ranges(script);
-    let out = map_asserts(script, |b| {
-        // A `x = mod(x, m)` witness is left verbatim: it is the justification for
-        // x's learned [0, m) range, so stripping its own mod would remove the
-        // fact that licenses eliminating x's other mods.
-        if self_mod_witness(b).is_some() {
-            return Ok(b.clone());
-        }
-        match rewrite_bool(b, field_mod, &ranges, &mut stats) {
-            Some(next) => {
-                changed += 1;
-                Ok(next)
+    // Iterate to a fixpoint: a reduction can pin a variable to a constant
+    // (e.g. `demod_rewrite_eqmod_zero_equals` turning `mod(a*x, p) = 0` into
+    // `x = c`), which tightens `collect_ranges` on the next round and unlocks
+    // range-based eliminations that were out of reach before. A single pass
+    // therefore leaves reducible mods behind; re-collecting ranges after each
+    // round and repeating drains them. Capped so a pathological non-converging
+    // input can't loop forever.
+    const MAX_ITERS: usize = 8;
+    let mut cur = script.clone();
+    let mut range_symbols = 0usize;
+    let mut iters = 0usize;
+    for _ in 0..MAX_ITERS {
+        iters += 1;
+        // Learn per-symbol integer ranges from all top-level asserted facts
+        // first, then use them to eliminate `mod(x, m)` where `0 <= x < m` is
+        // proven (mirrors demod.py's extract_symbol_ranges + elim_by_range).
+        let ranges = collect_ranges(&cur);
+        range_symbols = ranges.len();
+        let mut round_changed = 0usize;
+        let out = map_asserts(&cur, |b| {
+            // A `x = mod(x, m)` witness is left verbatim: it is the
+            // justification for x's learned [0, m) range, so stripping its own
+            // mod would remove the fact that licenses eliminating x's other mods.
+            if self_mod_witness(b).is_some() {
+                return Ok(b.clone());
             }
-            None => Ok(b.clone()),
+            match rewrite_bool(b, field_mod, &ranges, &mut stats) {
+                Some(next) => {
+                    round_changed += 1;
+                    Ok(next)
+                }
+                None => Ok(b.clone()),
+            }
+        })?;
+        cur = out;
+        changed += round_changed;
+        if round_changed == 0 {
+            break;
         }
-    })?;
+    }
+    let out = cur;
     let stats_json = serde_json::json!({
         "asserts_total": total,
         "asserts_changed": changed,
-        "range_symbols": ranges.len(),
+        "iterations": iters,
+        "range_symbols": range_symbols,
         "protected_range_constraints": 0,
         "eqmod_asserts_changed": stats.eqmod_asserts_changed,
         "const_eval": stats.const_eval,
         "into_ite": stats.into_ite,
         "elim_by_range": stats.elim_by_range,
+        "elim_eqmod_range": stats.elim_eqmod_range,
     });
     Ok((out, stats_json))
 }
@@ -216,6 +241,13 @@ fn rewrite_bool(b: &Bool, field_mod: Option<i128>, ranges: &Ranges, stats: &mut 
         if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
             if let Some(eq) = demod_rewrite_eqmod_zero_equals(&lhs, &rhs, field_mod) {
                 stats.eqmod_asserts_changed += 1;
+                return Some(eq);
+            }
+            // Multi-variable, any-residue generalization using learned ranges:
+            // `(mod LIN p) = R` collapses to a plain integer equation when the
+            // balanced linear form LIN has a unique multiple of p in its range.
+            if let Some(eq) = demod_rewrite_eqmod_range(&lhs, &rhs, field_mod, ranges) {
+                stats.elim_eqmod_range += 1;
                 return Some(eq);
             }
         }
@@ -447,6 +479,117 @@ fn demod_rewrite_eqmod_zero_equals(lhs: &Int, rhs: &Int, field_mod: Option<i128>
     Some(var.eq(int_from_i128(val)))
 }
 
+/// Balanced residue of `c` modulo `p`: the representative in `(-p/2, p/2]`.
+/// Balancing before the range analysis keeps coefficients small (e.g. `p-1`
+/// becomes `-1`), which is what makes a linear form's integer range tight
+/// enough to admit a unique multiple of `p`.
+fn balance(c: i128, p: i128) -> i128 {
+    let r = c.rem_euclid(p);
+    if r > p / 2 {
+        r - p
+    } else {
+        r
+    }
+}
+
+/// Multi-variable generalization of [`demod_rewrite_eqmod_zero_equals`].
+///
+/// `(mod LIN p) = R` (either operand order) with `LIN` a linear form over
+/// range-bounded variables is equivalent to `LIN ≡ R (mod p)`. Balancing the
+/// coefficients into `(-p/2, p/2]` gives an equivalent form `LIN_bal` (same
+/// value mod p) with a tight integer range `[lo, hi]`; the atom then holds iff
+/// `LIN_bal` equals one of `{R + m·p}` inside that range. When exactly one such
+/// multiple exists the mod disappears entirely, leaving the plain integer
+/// equation `LIN_bal = R + m·p` — no quotient for z3 to branch on. When none
+/// exists the congruence is unsatisfiable (`false`).
+///
+/// Reduced-only by design: if two or more multiples fall in range we return
+/// `None` rather than emit a disjunction — introducing an `(or ...)` adds a
+/// branch that empirically hurts z3 more than the surviving mod.
+///
+/// Sound because the variable ranges come from top-level asserted facts
+/// ([`collect_ranges`]); a variable without a finite bound aborts the rewrite.
+fn demod_rewrite_eqmod_range(
+    a: &Int,
+    b: &Int,
+    field_mod: Option<i128>,
+    ranges: &Ranges,
+) -> Option<Bool> {
+    // Orient: one side is `(mod EXPR p)`, the other an integer literal residue.
+    let (expr, p, r) = if let Some((e, p)) = mod_parts_int(a) {
+        (e, p, int_lit(&Dynamic::from_ast(b))?)
+    } else if let Some((e, p)) = mod_parts_int(b) {
+        (e, p, int_lit(&Dynamic::from_ast(a))?)
+    } else {
+        return None;
+    };
+    if let Some(fp) = field_mod {
+        if p != fp {
+            return None;
+        }
+    }
+    // A residue equality only makes sense for `0 <= R < p`.
+    if p <= 0 || r < 0 || r >= p {
+        return None;
+    }
+    let (terms, const_) = linear_form(&expr)?;
+
+    // Balanced linear form + its integer range from the per-variable bounds.
+    let cb = balance(const_, p);
+    let mut lo = cb;
+    let mut hi = cb;
+    let mut bal_terms: Vec<(Int, i128)> = Vec::new();
+    for (var, coeff) in terms {
+        let c = balance(coeff, p);
+        if c == 0 {
+            continue;
+        }
+        let &(vlo, vhi) = ranges.get(&var)?;
+        if vlo == NEG_INF || vhi == POS_INF {
+            return None;
+        }
+        let (clo, chi) = if c > 0 { (c * vlo, c * vhi) } else { (c * vhi, c * vlo) };
+        lo = lo.checked_add(clo)?;
+        hi = hi.checked_add(chi)?;
+        bal_terms.push((var, c));
+    }
+
+    // Multiples `m` with `R + m·p` in `[lo, hi]`: m in [ceil((lo-R)/p), floor((hi-R)/p)].
+    let m_max = (hi - r).div_euclid(p); // floor for p > 0
+    let m_min = -((-(lo - r)).div_euclid(p)); // ceil for p > 0
+    if m_min > m_max {
+        // No achievable value: the congruence is unsatisfiable.
+        return Some(Bool::from_bool(false));
+    }
+    if m_min < m_max {
+        // Two or more candidates: skip rather than introduce a disjunction.
+        return None;
+    }
+    let val = r + m_min * p;
+
+    // Rebuild the balanced linear form as an Int term and equate it to `val`.
+    let mut parts: Vec<Int> = Vec::new();
+    for (var, c) in &bal_terms {
+        if *c == 1 {
+            parts.push(var.clone());
+        } else {
+            parts.push(Int::mul(&[&int_from_i128(*c), var]));
+        }
+    }
+    if cb != 0 {
+        parts.push(int_from_i128(cb));
+    }
+    let expr_bal = match parts.len() {
+        0 => int_from_i128(0),
+        1 => parts.into_iter().next().unwrap(),
+        _ => {
+            let refs: Vec<&Int> = parts.iter().collect();
+            Int::add(&refs)
+        }
+    };
+    Some(expr_bal.eq(&int_from_i128(val)))
+}
+
 fn linear_form(e: &Int) -> Option<(HashMap<Int, i128>, i128)> {
     let mut terms = HashMap::new();
     let mut const_ = 0i128;
@@ -532,4 +675,64 @@ fn mod_inverse(a: i128, m: i128) -> Option<i128> {
         return None;
     }
     Some(t.rem_euclid(m))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const P: i128 = 2013265921;
+
+    fn run(src: &str) -> (String, serde_json::Value) {
+        let _g = crate::field_env_guard();
+        std::env::set_var("SIMPLIFIER_FIELD_MOD", P.to_string());
+        let script = Script::parse(src).unwrap();
+        let (out, stats) = apply(&script).unwrap();
+        (smt2::dump_string(&out), stats)
+    }
+
+    #[test]
+    fn eqmod_zero_difference_of_bounded_vars_becomes_equality() {
+        // a, b in [0, P) via self-mod witnesses; (a - b) ≡ 0 (mod P) has the
+        // single multiple 0 in range (-(P-1), P-1), so it collapses to a - b = 0
+        // with the mod gone entirely.
+        let (dump, stats) = run(&format!(
+            "(declare-fun a () Int)\n(declare-fun b () Int)\n\
+             (assert (= a (mod a {P})))\n(assert (= b (mod b {P})))\n\
+             (assert (= (mod (- a b) {P}) 0))\n(check-sat)\n"
+        ));
+        assert!(stats["elim_eqmod_range"].as_u64().unwrap() >= 1, "{dump}");
+        // the reduced conjunct no longer wraps (a - b) in a mod
+        assert!(!dump.contains("(mod (- a b)"), "{dump}");
+    }
+
+    #[test]
+    fn eqmod_zero_multivar_byte_word_becomes_equality() {
+        // A two-byte word (256 x + y) with x, y in [0, 255] ≡ 0 (mod P) ranges
+        // over [0, 65535], whose only multiple of P is 0. Two variables, so the
+        // single-var modular-inverse path does not apply and the range reducer
+        // is what collapses it to 256 x + y = 0 (no quotient for z3).
+        let (dump, stats) = run(&format!(
+            "(declare-fun x () Int)\n(declare-fun y () Int)\n\
+             (assert (>= x 0))\n(assert (<= x 255))\n\
+             (assert (>= y 0))\n(assert (<= y 255))\n\
+             (assert (= (mod (+ (* 256 x) y) {P}) 0))\n(check-sat)\n"
+        ));
+        assert!(stats["elim_eqmod_range"].as_u64().unwrap() >= 1, "{dump}");
+        assert!(!dump.contains("(mod (+"), "{dump}");
+    }
+
+    #[test]
+    fn eqmod_two_multiples_in_range_is_left_alone() {
+        // a in [0, P); (a - 5) ≡ 0 (mod P) admits a = 5 and a = 5 - P ... but
+        // with a in [0,P) only a=5; use a wider form (a + b) with a,b in [0,P)
+        // so the range [0, 2P-2] holds two multiples {0, P} -> reduced-only skips.
+        let (dump, stats) = run(&format!(
+            "(declare-fun a () Int)\n(declare-fun b () Int)\n\
+             (assert (= a (mod a {P})))\n(assert (= b (mod b {P})))\n\
+             (assert (= (mod (+ a b) {P}) 0))\n(check-sat)\n"
+        ));
+        assert_eq!(stats["elim_eqmod_range"].as_u64().unwrap(), 0, "{dump}");
+        assert!(dump.contains("mod"), "{dump}");
+    }
 }
