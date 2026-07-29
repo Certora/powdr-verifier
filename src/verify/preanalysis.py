@@ -48,14 +48,14 @@ def analyze_memory_bus_alignment(
                 # (identity-filled) kept alignment, still pick interface despite
                 # non-const (is_valid/flag-gated) mults. The io_relation then
                 # equates aligned args unconditionally (openvm_memory warns).
-                logger.warning(
+                logger.info(
                     "interface-ignore-checks: auto selecting interface despite "
                     "non-const (is_valid/flag-gated) memory multiplicities"
                 )
             else:
                 problems = ["memory multiplicities are not const-evaluable (is_valid/flag-gated); interface v1 aborts"]
         resolved = "plain" if problems else "interface"
-        logger.warning(
+        logger.info(
             "auto memory-encoding -> %s (%s)",
             resolved,
             "; ".join(problems) if problems else "perfect 1:1 kept alignment",

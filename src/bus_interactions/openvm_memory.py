@@ -274,7 +274,7 @@ class OpenVMMemoryEncoder(
                     # aligned pairs' argument tuples unconditionally. Only sound
                     # when aligned pairs are the same interaction (so their args
                     # coincide regardless of the gated activation).
-                    logging.warning(
+                    logging.info(
                         "interface-ignore-checks: skipping the const-mult gate "
                         "for %d memory interaction(s) with symbolic (is_valid/flag-"
                         "gated) multiplicities; the interface io_relation will equate "
@@ -488,24 +488,71 @@ class OpenVMMemoryEncoder(
         # algorithm (`infer_unconditional_ranges`) — it must not join the
         # equivalence VC.
         if interface and ARGS().interface_assume_bytes:
+            # Memory data limbs are bytes. We *assume* it for reads and *ensure*
+            # it for writes:
+            #   * recv (read, mult ≡ -1): ASSUME -- granted premise; the value
+            #     was range-checked by whatever wrote it. Routed through the
+            #     consequences channel (reference/before side only, never an
+            #     obligation), like the timestamp bounds above.
+            #   * send (write, mult ≡ +1): ENSURE -- a proof obligation; the
+            #     circuit that writes must write bytes. Emitted as a constraint
+            #     (both sides), so the before side carries it as a premise and
+            #     the after side as an obligation.
+            # Guarding by mult ≡ ∓1 (instead of a const-mult test) covers
+            # is_valid/flag-gated accesses too: when inactive the mult folds to 0
+            # and neither guard fires -- so no byte claim is made on an inactive
+            # interaction's (unconstrained) data. This mirrors the plain
+            # encoding's `Implies(isinput, bytes)`, where the permutation's input
+            # flag is exactly `mult ≡ -1`. (Prototype: the old code only granted
+            # recv bytes for statically-const recvs, missing gated reads like the
+            # branch-flag-gated rs1/rs2 register reads -- the source of the
+            # spurious `a__3_12 = 256` completeness counterexample.)
+            def _data_are_bytes(id):
+                return And(
+                    *[
+                        And(LE(Int(0), wrap_mod(d)), LE(wrap_mod(d), Int(255)))
+                        for d in self._interactions[id].args[2]
+                    ]
+                )
+
+            def _is_recv(id):  # mult ≡ -1 (mod p)
+                return Equals(
+                    wrap_mod(Plus(self._interactions[id].mult, Int(1))), Int(0)
+                )
+
+            def _is_send(id):  # mult ≡ +1 (mod p)
+                return Equals(
+                    wrap_mod(Minus(self._interactions[id].mult, Int(1))), Int(0)
+                )
+
+            ids_with_data = [
+                id
+                for id in range(len(self._interactions))
+                if self._interactions[id].args[2]
+            ]
             recv_bytes = [
                 with_comment(
-                    And(
-                        *[
-                            And(LE(Int(0), wrap_mod(d)), LE(wrap_mod(d), Int(255)))
-                            for d in self._interactions[id].args[2]
-                        ]
-                    ),
-                    f"membus #{id} recv data are bytes (granted)",
+                    Implies(_is_recv(id), _data_are_bytes(id)),
+                    f"membus #{id} recv data are bytes if active (granted)",
                 )
-                for id in range(len(self._interactions))
-                if _active_mult(id) == pval - 1
+                for id in ids_with_data
             ]
             if recv_bytes:
                 self.consequences.append(
                     with_comment(
                         And(*recv_bytes), f"{self.NAME} recv byte assumption"
                     )
+                )
+            send_bytes = [
+                with_comment(
+                    Implies(_is_send(id), _data_are_bytes(id)),
+                    f"membus #{id} send data are bytes if active (ensured)",
+                )
+                for id in ids_with_data
+            ]
+            if send_bytes:
+                yield with_comment(
+                    And(*send_bytes), f"{self.NAME} send byte obligation"
                 )
         # Internal (single-circuit) forced recv<->send pairs: memory is a
         # deterministic environment, so a recv whose forced source is a local
@@ -1043,6 +1090,8 @@ def interface_io_relation(
             or cmult(interactions_a[i]) != cmult(interactions_b[j])
         ]
         if _bad:
+            # Kept at WARNING (the others are info): fires once per verification
+            # when --interface-ignore-checks actually bypassed a check.
             logging.warning(
                 "interface-ignore-checks: %d/%d aligned pair(s) have "
                 "non-const/mismatched (is_valid/flag-gated) mults; equating mult "

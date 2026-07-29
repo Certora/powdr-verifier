@@ -960,7 +960,7 @@ def run_membus_analysis(
             before_to_after.values()
         ) == list(range(n_after))
         if not kept_is_bijection and identity_is_bijection:
-            _LOG.warning(
+            _LOG.info(
                 "interface-ignore-checks: align produced no clean bijection "
                 "(%d genuine kept of %d) but memory interaction counts match "
                 "(%d == %d); copying the identity alignment into kept_pairs for the "
@@ -1002,9 +1002,6 @@ def run_membus_analysis(
         after_assume_is_valid=after_assume_is_valid,
     )
     if skip_solve:
-        _LOG.warning(
-            "membus analysis: interface eligible pre-solve; skipping the membus solve"
-        )
         before_solve = after_solve = None
     else:
         before_solve = fetch_solve_json_all(before_path, present=present)
