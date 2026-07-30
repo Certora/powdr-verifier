@@ -367,6 +367,20 @@ def run_rust_pipeline(
     env = os.environ.copy()
     env["SIMPLIFIER_FIELD_MOD"] = str(ARGS().field_type.value)
     env["LIFT_SUBSTITUTE"] = "1" if ARGS().lift_substitute else "0"
+    # or_small only helps the `solver`/`memory` steps; elsewhere it just adds
+    # branch cost and times z3 out. Gate it off outside those steps, unless
+    # DEMOD_OR_SMALL is pinned explicitly.
+    if "DEMOD_OR_SMALL" not in os.environ:
+        _step = getattr(ARGS(), "optimization_step", None)
+        if _step is None:
+            _src = input_path if input_path is not None else getattr(ARGS(), "input", None)
+            if _src is not None:
+                _m = re.search(
+                    r"_\d+_([a-z][a-z_]*)\.(?:soundness|completeness)", Path(_src).name
+                )
+                _step = _m.group(1) if _m else None
+        if _step not in ("solver", "memory"):
+            env["DEMOD_OR_SMALL"] = "1"
     proc = subprocess.run(
         cmd,
         input=smt_in,
