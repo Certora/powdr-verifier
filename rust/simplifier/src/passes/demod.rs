@@ -28,6 +28,46 @@ pub fn field_mod() -> Option<i128> {
         .and_then(|s| s.parse().ok())
 }
 
+/// or_small cap: a `(mod LIN P)=R` atom whose balanced range admits up to this
+/// many multiples of P is rewritten to a small disjunction of plain equalities
+/// instead of being left as a mod (see `demod_rewrite_eqmod_range`). Default 5
+/// -- enough for the mem_ptr address carry-chain gadgets (16/32-bit add-with-
+/// carry, max 5 candidates; see 2099828), which otherwise force z3 into modular
+/// NIA. Only applied to in-scope atoms (see `scope_substrs`); every other atom
+/// stays reduced-only (cap 1). Overridable via `DEMOD_OR_SMALL=N`. Cached so the
+/// per-atom hot path pays nothing.
+fn or_small_cap() -> i128 {
+    use std::sync::OnceLock;
+    static CAP: OnceLock<i128> = OnceLock::new();
+    *CAP.get_or_init(|| {
+        std::env::var("DEMOD_OR_SMALL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5)
+    })
+}
+
+/// Variable-name substrings that a `(mod LIN P)=R` atom must touch for or_small
+/// to expand it (else it stays reduced-only, cap 1). `DEMOD_SCOPE_GROUP` is a
+/// comma-separated substring list (`*` matches all). Default targets the two
+/// range/carry gadget families that force z3 into modular NIA: `mem_ptr_limbs`
+/// (memory address 16/32-bit add-with-carry) and `timestamp_lt_aux__lower_decomp`
+/// (timestamp less-than decomposition). Expanding exactly these fixes 2099828
+/// (22s) and even speeds up 2100224 soundness (3.8s); expanding everything (`*`)
+/// instead regresses 2100224 (the non-carry groups add branches for no NIA win).
+fn scope_substrs() -> &'static Vec<String> {
+    use std::sync::OnceLock;
+    static S: OnceLock<Vec<String>> = OnceLock::new();
+    S.get_or_init(|| {
+        std::env::var("DEMOD_SCOPE_GROUP")
+            .unwrap_or_else(|_| "mem_ptr_limbs,timestamp_lt_aux__lower_decomp".into())
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    })
+}
+
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let field_mod = field_mod();
     let total = assert_commands(script).len();
@@ -561,13 +601,27 @@ fn demod_rewrite_eqmod_range(
         // No achievable value: the congruence is unsatisfiable.
         return Some(Bool::from_bool(false));
     }
-    if m_min < m_max {
-        // Two or more candidates: skip rather than introduce a disjunction.
-        return None;
+    // A single candidate always collapses the mod to one equality. A small
+    // disjunction (2+ candidates, up to `or_small_cap`) is only enumerated for
+    // in-scope atoms -- by default the mem_ptr limb reconstructions, the address
+    // carry-chain gadgets that otherwise force z3 into modular NIA (2099828).
+    // Every other atom stays reduced-only (cap 1): enabling or_small globally
+    // regressed the soundness VC of huge-membus blocks like 2100224 (~6x more
+    // eligible atoms), and no other variable group is unique to the block it
+    // helps, so name-scoping to mem_ptr is what keeps 2100224 safe.
+    let count = m_max - m_min + 1;
+    if count > 1 {
+        let in_scope = bal_terms.iter().any(|(v, _)| {
+            let s = v.to_string();
+            scope_substrs().iter().any(|p| p == "*" || s.contains(p.as_str()))
+        });
+        let cap = if in_scope { or_small_cap() } else { 1 };
+        if count > cap {
+            return None;
+        }
     }
-    let val = r + m_min * p;
 
-    // Rebuild the balanced linear form as an Int term and equate it to `val`.
+    // Rebuild the balanced linear form as an Int term.
     let mut parts: Vec<Int> = Vec::new();
     for (var, c) in &bal_terms {
         if *c == 1 {
@@ -587,7 +641,15 @@ fn demod_rewrite_eqmod_range(
             Int::add(&refs)
         }
     };
-    Some(expr_bal.eq(&int_from_i128(val)))
+    if count == 1 {
+        return Some(expr_bal.eq(&int_from_i128(r + m_min * p)));
+    }
+    // or_small: LIN_bal equals one of the few candidate values R + m·p.
+    let eqs: Vec<Bool> = (m_min..=m_max)
+        .map(|m| expr_bal.eq(&int_from_i128(r + m * p)))
+        .collect();
+    let refs: Vec<&Bool> = eqs.iter().collect();
+    Some(Bool::or(&refs))
 }
 
 fn linear_form(e: &Int) -> Option<(HashMap<Int, i128>, i128)> {
