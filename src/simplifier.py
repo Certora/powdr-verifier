@@ -115,7 +115,9 @@ STEP_TACTICS: dict[str, str] = {
     "memory": _BUS_EQ,
     "remove_disconnected": _BUS_EQ,
     "inlining": _BUS_EQ,
-    "rule_based": _BUS_EQ,
+    # `rewrite` factors the selector gadgets rule_based leaves (booleanity,
+    # ternary flags); trailing `demod` clears the residual mods.
+    "rule_based": _pipe(_BUS_EQ, "rewrite", "demod"),
     "range_constraints": _BUS_EQ,
     # ... plus z3 equality propagation (plain `_BUS`: no early eq, see `_BUS_EQ`).
     "exec_bus": _pipe(_BUS, _Z3_EQ),
