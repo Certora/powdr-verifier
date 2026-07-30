@@ -4,7 +4,9 @@ Loads before/after APC dumps, builds the cross-dump I/O relation, emits annotate
 scripts for external solvers, and records outputs via ``Action`` telemetry objects.
 """
 import copy
+import json
 import logging
+import re
 from pathlib import Path
 
 from .encoding.utils import dump_introduces_is_valid, get_is_valid
@@ -178,9 +180,26 @@ def verify():
             before_smt = before_conv.to_formula_with_axioms(before)
             after_smt = after_conv.to_formula_with_axioms(after)
 
-            substitutions = {}
-            if ARGS().substitutions is not None:
-                substitutions = before_conv.convert_substitutions(load_json(ARGS().substitutions))
+            subs_data = load_json(ARGS().substitutions) if ARGS().substitutions is not None else []
+            substitutions = before_conv.convert_substitutions(subs_data) if subs_data else {}
+            # Completeness: the solver eliminated some columns on the after side
+            # (present in before, gone from after). Reconstruct exactly those as
+            # extra `forall after` quantified variables pinned by their
+            # substitution witnesses -- mirroring soundness, which quantifies and
+            # pins the whole before side. The skolem pass then injects the
+            # forwarding `col = expr` that aligns before<->after by instantiating
+            # the reconstructed variable, instead of leaving an equality for
+            # solve-eqs to eliminate (the mod=mod route, which expanded and
+            # regressed). Only the eliminated columns are reconstructed; columns
+            # the after side keeps stay untouched.
+            _cols = lambda d: set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*@\d+", json.dumps(d)))
+            _eliminated = _cols(before) - _cols(after)
+            completeness_subs = (
+                after_conv.convert_substitutions(
+                    [kv for kv in subs_data if kv[0] in _eliminated]
+                )
+                if subs_data else {}
+            )
 
             io_relation, iorelvars = before_conv.bus_interaction_encoder.build_io_relation(
                 after_conv.bus_interaction_encoder
@@ -191,7 +210,7 @@ def verify():
             completeness_qvars = _encoding_qvars(
                 after_smt, io_relation, globals,
                 side_prefix=AFTER_PREFIX, iorelvars=iorelvars,
-            )
+            ) | frozenset(completeness_subs.keys())
             soundness_qvars = _encoding_qvars(
                 before_smt, io_relation, globals,
                 side_prefix=BEFORE_PREFIX, iorelvars=iorelvars,
@@ -245,7 +264,7 @@ def verify():
                         completeness_qvars,
                         io_relation,
                     )
-                    info = pin_metadata(completeness, after_derived_pins, reverse=True, smt_outfile=outfile)
+                    info = pin_metadata(completeness, after_derived_pins, substitutions_map=completeness_subs, reverse=True, smt_outfile=outfile)
 
                     logging.info(f"dumping completeness check to {dump.name}")
                     smtlib = convert_to_smt_script(
