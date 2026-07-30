@@ -24,9 +24,14 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     let mut changed = 0usize;
     let mut global = RewriteStats::default();
 
+    // Selector vars whose root-product cross-multiplies another selector: for
+    // those we emit only the range bound, never the disjunction (see
+    // `roots_with_range`).
+    let coupled = coupled_selectors(script, field);
+
     let out = map_asserts(script, |b: &Bool| {
         let mut stats = RewriteStats::default();
-        let rewritten = rewrite_formula(b, field, &mut stats);
+        let rewritten = rewrite_formula(b, field, &coupled, &mut stats);
         global.rewrites += stats.rewrites;
         global.factor_calls += stats.factor_calls;
         let new = match rewritten {
@@ -50,11 +55,16 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     ))
 }
 
-fn rewrite_formula(term: &Bool, p: i128, stats: &mut RewriteStats) -> Option<Bool> {
+fn rewrite_formula(
+    term: &Bool,
+    p: i128,
+    coupled: &HashSet<Int>,
+    stats: &mut RewriteStats,
+) -> Option<Bool> {
     let mut cur: Option<Bool> = None;
     for _ in 0..MAX_REWRITE_COUNT {
         let base = cur.as_ref().unwrap_or(term);
-        match rewrite_once(base, p, stats) {
+        match rewrite_once(base, p, coupled, stats) {
             Some(next) => cur = Some(next),
             None => break,
         }
@@ -63,19 +73,29 @@ fn rewrite_formula(term: &Bool, p: i128, stats: &mut RewriteStats) -> Option<Boo
 }
 
 /// Returns ``Some`` only when a rewrite occurred; ``None`` leaves ``term`` untouched.
-fn rewrite_once(term: &Bool, p: i128, stats: &mut RewriteStats) -> Option<Bool> {
-    if let Some(rewritten) = try_rewrite_equality(term, p, stats) {
+fn rewrite_once(
+    term: &Bool,
+    p: i128,
+    coupled: &HashSet<Int>,
+    stats: &mut RewriteStats,
+) -> Option<Bool> {
+    if let Some(rewritten) = try_rewrite_equality(term, p, coupled, stats) {
         return Some(rewritten);
     }
-    map_bool_children_opt(term, &mut |child| rewrite_once(child, p, stats))
+    map_bool_children_opt(term, &mut |child| rewrite_once(child, p, coupled, stats))
 }
 
-fn try_rewrite_equality(term: &Bool, p: i128, stats: &mut RewriteStats) -> Option<Bool> {
+fn try_rewrite_equality(
+    term: &Bool,
+    p: i128,
+    coupled: &HashSet<Int>,
+    stats: &mut RewriteStats,
+) -> Option<Bool> {
     let expr = unwrap_zero_mod_eq(term, p)?;
     if total_degree(&expr) < 2 {
         return None;
     }
-    let rewritten = rewrite_choice(&expr, p, stats)?;
+    let rewritten = rewrite_choice(&expr, p, coupled, stats)?;
     stats.rewrites += 1;
     Some(rewritten)
 }
@@ -110,12 +130,17 @@ fn total_degree(e: &Int) -> usize {
     }
 }
 
-fn rewrite_choice(expr: &Int, p: i128, stats: &mut RewriteStats) -> Option<Bool> {
+fn rewrite_choice(
+    expr: &Int,
+    p: i128,
+    coupled: &HashSet<Int>,
+    stats: &mut RewriteStats,
+) -> Option<Bool> {
     stats.factor_calls += 1;
     let fac = match factor(expr, p as u64) {
         Ok(f) => f,
         Err(FactorError::BuildFailed) | Err(FactorError::FactorFailed) => {
-            return rewrite_quadratic(expr, p);
+            return rewrite_quadratic(expr, p, coupled);
         }
     };
 
@@ -131,7 +156,7 @@ fn rewrite_choice(expr: &Int, p: i128, stats: &mut RewriteStats) -> Option<Bool>
     }
     if flat.len() >= 2 {
         if let Some((var, roots)) = solved_roots(&flat, p) {
-            return Some(roots_with_range(&var, &roots, p));
+            return Some(roots_with_range(&var, &roots, p, coupled));
         }
         let parts: Vec<Bool> = flat
             .iter()
@@ -139,15 +164,15 @@ fn rewrite_choice(expr: &Int, p: i128, stats: &mut RewriteStats) -> Option<Bool>
             .collect();
         return Some(or_terms(parts));
     }
-    rewrite_quadratic(expr, p)
+    rewrite_quadratic(expr, p, coupled)
 }
 
-fn rewrite_quadratic(expr: &Int, p: i128) -> Option<Bool> {
+fn rewrite_quadratic(expr: &Int, p: i128, coupled: &HashSet<Int>) -> Option<Bool> {
     let (var, roots) = solved_quadratic(expr, p)?;
     if roots.is_empty() {
         return Some(Bool::from_bool(false));
     }
-    Some(roots_with_range(&var, &roots, p))
+    Some(roots_with_range(&var, &roots, p, coupled))
 }
 
 fn mod_zero_eq(expr: &Int, p: i128) -> Bool {
@@ -168,7 +193,7 @@ fn and_terms(mut parts: Vec<Bool>) -> Bool {
     Bool::and(&parts.iter().collect::<Vec<_>>())
 }
 
-fn roots_with_range(var: &Int, values: &BTreeSet<i128>, p: i128) -> Bool {
+fn roots_with_range(var: &Int, values: &BTreeSet<i128>, p: i128, coupled: &HashSet<Int>) -> Bool {
     // `poly ≡ 0 (mod P)` with roots {rᵢ} ⟺ `(mod var P) ∈ {rᵢ}`. Wrap `var` in
     // `mod P` so the exact root equalities and the `[min,max]` range constrain
     // the field residue -- always in `[0,P)` -- rather than `var` itself, which
@@ -180,12 +205,79 @@ fn roots_with_range(var: &Int, values: &BTreeSet<i128>, p: i128) -> Bool {
     let vr = var.modulo(&int_from_i128(p));
     let min_v = *values.iter().next().unwrap();
     let max_v = *values.iter().next_back().unwrap();
+    let lo = int_from_i128(min_v).le(&vr);
+    let hi = vr.le(&int_from_i128(max_v));
+    // Structural bound-vs-factor choice: when this selector cross-multiplies
+    // another selector (coupled), factoring its root-product would explode into
+    // the Cartesian product of the coupled selectors' roots (e.g. the four
+    // ternary `flags` in 009_rule_based -> 3^4 branches) and z3 times out. Emit
+    // the interval only -- it lets z3 bound-propagate the cross-terms without
+    // enumerating. Sound only for a full contiguous root range {min..max}: then
+    // `min <= vr <= max` <=> `vr in {roots}` over integers in [0,P).
+    let contiguous = max_v - min_v + 1 == values.len() as i128;
+    if contiguous && coupled.contains(var) {
+        return and_terms(vec![lo, hi]);
+    }
     let disj = or_terms(values.iter().map(|v| vr.eq(&int_from_i128(*v))).collect());
-    and_terms(vec![
-        disj,
-        int_from_i128(min_v).le(&vr),
-        vr.le(&int_from_i128(max_v)),
-    ])
+    and_terms(vec![disj, lo, hi])
+}
+
+/// Selector vars whose root-product co-occurs in a product with another
+/// selector. A "selector" here is a var carrying a single-variable root-product
+/// `(mod P(x) P) = 0` (degree ≥ 2 in `x` alone) -- booleanity `x²-x`, ternary
+/// `x(x-1)(x-2)`, etc. Coupling = two distinct selectors share a `(* ...)` term.
+fn coupled_selectors(script: &Script, p: i128) -> HashSet<Int> {
+    let mut selectors: HashSet<Int> = HashSet::new();
+    for cmd in &script.commands {
+        if let Some(b) = cmd.assert_bool() {
+            collect_selectors(&b, p, &mut selectors);
+        }
+    }
+    let mut coupled: HashSet<Int> = HashSet::new();
+    if selectors.len() < 2 {
+        return coupled;
+    }
+    for cmd in &script.commands {
+        if let Some(b) = cmd.assert_bool() {
+            collect_coupled(&Dynamic::from_ast(b), &selectors, &mut coupled);
+        }
+    }
+    coupled
+}
+
+fn collect_selectors(term: &Bool, p: i128, out: &mut HashSet<Int>) {
+    if let Some(expr) = unwrap_zero_mod_eq(term, p) {
+        if total_degree(&expr) >= 2 {
+            let syms = free_z3_symbols(&expr);
+            if syms.len() == 1 {
+                out.insert(syms.into_iter().next().unwrap());
+            }
+        }
+        return;
+    }
+    let d = Dynamic::from_ast(term);
+    if d.kind() == AstKind::App && d.decl().kind() == DeclKind::And {
+        for ch in d.children() {
+            if let Some(cb) = ch.as_bool() {
+                collect_selectors(&cb, p, out);
+            }
+        }
+    }
+}
+
+fn collect_coupled(d: &Dynamic, selectors: &HashSet<Int>, coupled: &mut HashSet<Int>) {
+    if let (Some(ArithOp::Mul), Some(i)) = (arithmetic_op(d), d.as_int()) {
+        let sels: Vec<Int> = free_z3_symbols(&i)
+            .into_iter()
+            .filter(|s| selectors.contains(s))
+            .collect();
+        if sels.len() >= 2 {
+            coupled.extend(sels);
+        }
+    }
+    for ch in d.children() {
+        collect_coupled(&ch, selectors, coupled);
+    }
 }
 
 fn solved_roots(factors: &[Int], p: i128) -> Option<(Int, BTreeSet<i128>)> {
@@ -554,8 +646,49 @@ mod tests {
     fn rewrite_assert(body: &str) -> Bool {
         let script = Script::parse(&format!("(assert {body})\n(check-sat)\n")).unwrap();
         let term = script.commands[0].assert_bool().unwrap().clone();
+        let coupled = coupled_selectors(&script, field());
         let mut stats = RewriteStats::default();
-        rewrite_formula(&term, field(), &mut stats).unwrap_or(term)
+        rewrite_formula(&term, field(), &coupled, &mut stats).unwrap_or(term)
+    }
+
+    #[test]
+    fn coupled_selector_drops_disjunction() {
+        with_field(|| {
+            let p = field();
+            let m1 = p - 1;
+            // Two boolean selectors x, y that cross-multiply (x*y => coupled).
+            // Rewriting x^2 - x = 0 must yield just the [0,1] bound, no disjunction.
+            let script = Script::parse(&format!(
+                "(declare-fun x () Int)\n(declare-fun y () Int)\n\
+                 (assert (= (mod (+ (* x x) (* {m1} x)) {p}) 0))\n\
+                 (assert (= (mod (+ (* y y) (* {m1} y)) {p}) 0))\n\
+                 (assert (= (mod (* x y) {p}) 0))\n(check-sat)\n"
+            ))
+            .unwrap();
+            let coupled = coupled_selectors(&script, p);
+            assert_eq!(coupled.len(), 2, "x and y should be coupled");
+            let target = script.commands[2].assert_bool().unwrap().clone();
+            let mut stats = RewriteStats::default();
+            let out = rewrite_formula(&target, p, &coupled, &mut stats).unwrap_or(target);
+            let s = out.to_string();
+            assert!(!s.contains("or"), "coupled selector must be bound-only, no disjunction: {s}");
+            assert!(s.contains("<="), "must still carry the interval bound: {s}");
+        });
+    }
+
+    #[test]
+    fn uncoupled_selector_keeps_disjunction() {
+        with_field(|| {
+            let p = field();
+            // Isolated ternary selector (no cross-product): keep disjunction+range.
+            let out = rewrite_assert(&format!(
+                "(= (mod (* (* x (+ x {m1})) (+ x {m2})) {p}) 0)",
+                m1 = p - 1,
+                m2 = p - 2
+            ));
+            let s = out.to_string();
+            assert!(s.contains("or"), "uncoupled selector should keep the disjunction: {s}");
+        });
     }
 
     #[test]
