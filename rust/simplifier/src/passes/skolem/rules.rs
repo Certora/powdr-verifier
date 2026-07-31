@@ -369,7 +369,18 @@ fn gadget_scan(script: &Script, field: i128) -> (HashMap<u32, u32>, HashSet<(Str
                     }
                 }
             }
-            if count == 1 {
+            // The marker *booleanity* `dm·(dm − 1) = 0` also has exactly one bare
+            // diff_marker factor, so counting factors alone false-positives on it
+            // and then makes contribute_free treat a rewritten-away leftover as
+            // still constrained (leaving its markers/diff_val unpinned → spurious
+            // sat). The real DiffMarkerConstraint references `diff_val`;
+            // booleanity does not.
+            let refs_diff_val = iter_nodes_dyn(&Dynamic::from_ast(&sum)).any(|nd| {
+                symbol_name_dyn(&nd)
+                    .map(|nm| strip_prefix(&nm).starts_with("diff_val"))
+                    .unwrap_or(false)
+            });
+            if count == 1 && refs_diff_val {
                 constrained.insert(marker.unwrap());
             }
         }
@@ -565,20 +576,24 @@ fn build_marker_skolems(matches: &HashMap<u32, LimbMatch>) -> Vec<(String, Dynam
     let eq2 = Int::new_const(b2.as_str()).eq(&int_from_i128(0));
     let eq1 = Int::new_const(b1.as_str()).eq(&int_from_i128(0));
     let eq0 = Int::new_const(b0.as_str()).eq(&int_from_i128(1));
+    // marker[i] = 1 exactly at the highest limb that differs from c=(1,0,0,0),
+    // i.e. dmᵢ = 1 iff (all higher limbs match c) ∧ (limb i differs). The outer
+    // `eq3` (b3==0) gate must therefore be the THEN branch (higher limb matched);
+    // a swapped THEN/ELSE would assert dmᵢ=1 when b3≠0, contradicting dm3 and the
+    // gadget product. (dm3 = 1 iff b3≠0 needs no higher-limb gate.)
     let dm3 = eq3.ite(&int_from_i128(0), &int_from_i128(1));
     let dm2 = eq3.ite(
-        &int_from_i128(0),
         &eq2.ite(&int_from_i128(0), &int_from_i128(1)),
+        &int_from_i128(0),
     );
     let dm1 = eq3.ite(
-        &int_from_i128(0),
         &eq2.ite(
             &eq1.ite(&int_from_i128(0), &int_from_i128(1)),
             &int_from_i128(0),
         ),
+        &int_from_i128(0),
     );
     let dm0 = eq3.ite(
-        &int_from_i128(0),
         &eq2.ite(
             &eq1.ite(
                 &eq0.ite(&int_from_i128(0), &int_from_i128(1)),
@@ -586,6 +601,7 @@ fn build_marker_skolems(matches: &HashMap<u32, LimbMatch>) -> Vec<(String, Dynam
             ),
             &int_from_i128(0),
         ),
+        &int_from_i128(0),
     );
     vec![
         (matches[&0].dm.clone(), Dynamic::from_ast(&dm0)),
