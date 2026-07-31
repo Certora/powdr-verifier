@@ -68,8 +68,15 @@ DEFAULT_CHECK_STRATEGY = CHECK_PLAIN
 # script solve times out (e.g. guest-keccak 2104736/035 soundness); the
 # ``sliced`` strategy's cone-of-influence + one-shot per-disjunct solving clears
 # them where a whole-script solve does not.
+#   ``rule_based`` soundness/completeness VCs, after the OpenVM gadget columns
+# are witnessed, are wide conjunctions with a large goal ``Or`` whose per-disjunct
+# queries are individually trivial but whose whole-script nonlinear solve times
+# out (e.g. guest-keccak 2104736/2106368/2103324/... 009 soundness: >60s plain,
+# <1s sliced). The ``sliced`` strategy's 5s plain pre-try keeps the many easy
+# rule_based blocks fast while its COI + per-disjunct solving clears the hard ones.
 CHECK_STRATEGIES: dict[str, str] = {
     "inlining": CHECK_SLICED,
+    "rule_based": CHECK_SLICED,
 }
 
 
