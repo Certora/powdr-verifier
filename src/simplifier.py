@@ -121,10 +121,20 @@ STEP_TACTICS: dict[str, str] = {
     "range_constraints": _BUS_EQ,
     # ... plus z3 equality propagation (plain `_BUS`: no early eq, see `_BUS_EQ`).
     "exec_bus": _pipe(_BUS, _Z3_EQ),
-    # ... plus z3 equality propagation, a final `rewrite` case-split, then a
-    # trailing `demod` to collapse the `(mod bounded-var P)` atoms rewrite emits
-    # (residual mods otherwise time z3 out; see the `rewrite` note above).
-    "solver": _pipe(_BUS_EQ, _Z3_EQ, "rewrite", "demod"),
+    # ... plus z3 equality propagation, a `rewrite` case-split, and a trailing
+    # `demod` to collapse the `(mod bounded-var P)` atoms rewrite emits (residual
+    # mods otherwise time z3 out; see the `rewrite` note above). Then
+    # `domain_probe` pins opcode selectors: their small integer domains gate the
+    # degree-3 write-data products the completeness check times out on. It runs
+    # *after* `rewrite` because forcing a selector needs the clean `(<= 0 v)
+    # (<= v c)` range form (rewrite produces it; z3 cannot force the pre-rewrite
+    # modular-polynomial domain). It proves each forced value from a same-side
+    # selector-only slice -- sound -- and a final `z3-propagate-values:demod`
+    # substitutes the pins, collapsing the cubics.
+    "solver": _pipe(
+        _BUS_EQ, _Z3_EQ, "rewrite", "demod",
+        "domain_probe", "z3-propagate-values", "demod",
+    ),
     # trivial_simp drops `A*B = 0` when a factor `B = 0` is already kept;
     # z3-solve-eqs links the before/after columns so `factor_reduce` sees that
     # the kept hypothesis polynomial-divides the dropped goal and rewrites it to
