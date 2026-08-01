@@ -129,11 +129,16 @@ STEP_TACTICS: dict[str, str] = {
     # *after* `rewrite` because forcing a selector needs the clean `(<= 0 v)
     # (<= v c)` range form (rewrite produces it; z3 cannot force the pre-rewrite
     # modular-polynomial domain). It proves each forced value from a same-side
-    # selector-only slice -- sound -- and a final `z3-propagate-values:demod`
-    # substitutes the pins, collapsing the cubics.
+    # selector-only slice -- sound -- and a final `_Z3_EQ:demod` substitutes the
+    # pins and collapses the cubics. The `z3-solve-eqs` in that trailing `_Z3_EQ`
+    # matters: once `z3-propagate-values` inlines the pinned constants it exposes
+    # further eliminable equalities, and eliminating them shrinks the residual
+    # nonlinear formula enough to pull borderline blocks (e.g. 2104512) back under
+    # the check timeout more often. It does not make the z3-boundary-flaky blocks
+    # dependable, but it strictly helps and costs the easy blocks nothing.
     "solver": _pipe(
         _BUS_EQ, _Z3_EQ, "rewrite", "demod",
-        "domain_probe", "z3-propagate-values", "demod",
+        "domain_probe", _Z3_EQ, "demod",
     ),
     # trivial_simp drops `A*B = 0` when a factor `B = 0` is already kept;
     # z3-solve-eqs links the before/after columns so `factor_reduce` sees that
