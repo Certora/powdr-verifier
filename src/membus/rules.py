@@ -56,6 +56,7 @@ Rules (names follow the R0/R1/R2 scheme of the busat prototype):
 from __future__ import annotations
 
 import functools
+import itertools
 import math
 from dataclasses import replace
 from typing import Any
@@ -167,6 +168,33 @@ class Analysis:
         return propagate._all_constraint_cols(self.machine)
 
     @functools.cached_property
+    def _constraint_linforms(self) -> dict[int, LinForm]:
+        """Constraint index → parsed :class:`LinForm`, for the linear constraints
+        (nonlinear ones are absent; every consumer here declines on them anyway).
+
+        Parsed once per machine because the bound seeding below re-reads the
+        constraint list per range-check row: parsing on each visit made
+        ``extract`` on the widest guest-keccak blocks (30k constraints, 4k memory
+        interactions) spend minutes re-parsing the same expressions."""
+        out: dict[int, LinForm] = {}
+        for idx, con in enumerate(self.machine.get("constraints", [])):
+            lf = linform(con)
+            if lf is not None:
+                out[idx] = lf
+        return out
+
+    @functools.cached_property
+    def _constraints_by_support(self) -> dict[frozenset[str], tuple[int, ...]]:
+        """Column support → the constraint indices having exactly that support.
+
+        The lookup index for :meth:`_range_mult_evidence`'s proportionality
+        search; see there for why an exact-support match is the right filter."""
+        out: dict[frozenset[str], list[int]] = {}
+        for idx, lf in self._constraint_linforms.items():
+            out.setdefault(frozenset(lf.columns), []).append(idx)
+        return {sup: tuple(idxs) for sup, idxs in out.items()}
+
+    @functools.cached_property
     def _const_pins(self) -> dict[str, int]:
         """Columns pinned to a constant residue by the fixpoint of single-column
         linear constraints (substitute known pins, repeat). Kinds-independent, no
@@ -177,10 +205,7 @@ class Analysis:
         changed = True
         while changed:
             changed = False
-            for con in self.machine.get("constraints", []):
-                lf = linform(con)
-                if lf is None:
-                    continue
+            for lf in self._constraint_linforms.values():
                 r = _single_col_residue(lf.subst(pins))
                 if r is not None and r[0] not in pins:
                     pins[r[0]] = r[1]
@@ -192,9 +217,8 @@ class Analysis:
         """col → (residue value, constraint idx) for single-column linear
         constraints — the citable evidence that a column holds a constant."""
         out: dict[str, tuple[int, int]] = {}
-        for idx, con in enumerate(self.machine.get("constraints", [])):
-            lf = linform(con)
-            r = _single_col_residue(lf) if lf is not None else None
+        for idx, lf in self._constraint_linforms.items():
+            r = _single_col_residue(lf)
             if r is not None and r[0] not in out:
                 out[r[0]] = (r[1], idx)
         return out
@@ -237,12 +261,32 @@ class Analysis:
                 and len(resid.coeffs) == 1 and resid.coeffs[0][0] == sel):
             return (tuple(srcs), frozenset({Assumption.ACTIVE_SELECTOR}))
         # Symbolic residual: a constraint pinning it to a NONZERO constant (e.g.
-        # sum(opcode flags) = 1) proves the row is sent.
-        for idx, con in enumerate(self.machine.get("constraints", [])):
-            lc = linform(con)
-            if lc is None:
-                continue
-            lc = lc.subst(subs)
+        # sum(opcode flags) = 1) proves the row is sent. Only constraints whose
+        # post-substitution support equals ``resid``'s can qualify, since
+        # `_proportional` demands the same column set — and `subst` merely folds
+        # the pinned columns into the constant (a surviving coefficient is
+        # canonical and nonzero, so it is never dropped), i.e.
+        #   support(lc.subst(subs)) == support(lc) - subs.keys()
+        # exactly. The candidates are therefore the constraints whose support is
+        # ``resid``'s support plus any subset of the pinned columns: a few index
+        # lookups, where scanning every constraint per range-check row cost
+        # rows x constraints and took minutes on the widest blocks.
+        want = frozenset(resid.columns)
+        pinned = tuple(subs)
+        index = self._constraints_by_support
+        cand: list[int] = []
+        if 2 ** len(pinned) <= len(index):
+            for size in range(len(pinned) + 1):
+                for extra in itertools.combinations(pinned, size):
+                    cand.extend(index.get(want.union(extra), ()))
+        else:
+            # Degenerate shape (more pinned mult columns than distinct supports):
+            # walking the index is cheaper than enumerating subsets.
+            for sup, idxs in index.items():
+                if sup.difference(pinned) == want:
+                    cand.extend(idxs)
+        for idx in sorted(cand):
+            lc = self._constraint_linforms[idx].subst(subs)
             k = _proportional(lc.coeffs, resid.coeffs)
             if k is None:
                 continue
