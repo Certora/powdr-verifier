@@ -131,10 +131,25 @@ STEP_TACTICS: dict[str, str] = {
     # collapses the after side onto the before side (identity on an unchanged bus),
     # which is what lets the huge-memory-bus exec_bus VCs discharge.
     "exec_bus": _pipe(_BUS_EQ, _Z3_EQ),
-    # ... plus z3 equality propagation, a final `rewrite` case-split, then a
-    # trailing `demod` to collapse the `(mod bounded-var P)` atoms rewrite emits
-    # (residual mods otherwise time z3 out; see the `rewrite` note above).
-    "solver": _pipe(_BUS_EQ, _Z3_EQ, "rewrite", "demod"),
+    # ... plus z3 equality propagation, a `rewrite` case-split, and a trailing
+    # `demod` to collapse the `(mod bounded-var P)` atoms rewrite emits (residual
+    # mods otherwise time z3 out; see the `rewrite` note above). Then
+    # `domain_probe` pins opcode selectors: their small integer domains gate the
+    # degree-3 write-data products the completeness check times out on. It runs
+    # *after* `rewrite` because forcing a selector needs the clean `(<= 0 v)
+    # (<= v c)` range form (rewrite produces it; z3 cannot force the pre-rewrite
+    # modular-polynomial domain). It proves each forced value from a same-side
+    # selector-only slice -- sound -- and a final `_Z3_EQ:demod` substitutes the
+    # pins and collapses the cubics. The `z3-solve-eqs` in that trailing `_Z3_EQ`
+    # matters: once `z3-propagate-values` inlines the pinned constants it exposes
+    # further eliminable equalities, and eliminating them shrinks the residual
+    # nonlinear formula enough to pull borderline blocks (e.g. 2104512) back under
+    # the check timeout more often. It does not make the z3-boundary-flaky blocks
+    # dependable, but it strictly helps and costs the easy blocks nothing.
+    "solver": _pipe(
+        _BUS_EQ, _Z3_EQ, "rewrite", "demod",
+        "domain_probe", _Z3_EQ, "demod",
+    ),
     # trivial_simp drops `A*B = 0` when a factor `B = 0` is already kept;
     # z3-solve-eqs links the before/after columns so `factor_reduce` sees that
     # the kept hypothesis polynomial-divides the dropped goal and rewrites it to
