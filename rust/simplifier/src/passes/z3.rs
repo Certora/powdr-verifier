@@ -2,9 +2,9 @@
 
 use smt2::{
     declared_symbol_names, ensure_declarations_for_asserts, strip_annotations_deep, Script,
-    SmtCommand,
+    ScriptParts, SmtCommand,
 };
-use z3::{SatResult, Tactic};
+use z3::{Goal, SatResult, Tactic};
 
 const DEFAULT_TACTICS: &[&str] = &[
     "propagate-values",
@@ -73,6 +73,37 @@ fn processed_asserts(solver: &z3::Solver) -> Vec<SmtCommand> {
         .collect()
 }
 
+/// Apply the tactic to a fresh `Goal` and return the transformed formulas.
+///
+/// `solver.get_assertions()` surfaces the *model-complete* form, in which a
+/// variable eliminated by `solve-eqs` (e.g. an `after = before` same-name pin)
+/// is restored so every declared symbol stays defined -- hiding the
+/// elimination. A goal transformation exposes z3's actual reduced result (the
+/// same formulas the python pass reads from `solver.sexpr()`), and returns the
+/// AST directly -- no string round-trip. Returns `None` (fall back to the
+/// solver form) when the tactic errors or splits into a case analysis (≠ 1
+/// subgoal); the simplification tactics used here never split.
+fn goal_apply_asserts(tactic: &Tactic, parts: &ScriptParts) -> Option<Vec<SmtCommand>> {
+    let goal = Goal::new(true, false, false);
+    for cmd in &parts.z3_feed {
+        if let Some(b) = cmd.assert_bool() {
+            goal.assert(b);
+        }
+    }
+    let subgoals: Vec<Goal> = tactic.apply(&goal, None).ok()?.list_subgoals().collect();
+    let [g] = subgoals.as_slice() else {
+        return None;
+    };
+    Some(
+        g.get_formulas()
+            .into_iter()
+            .map(|b| strip_annotations_deep(&b))
+            .filter(|b| b.as_bool() != Some(true))
+            .map(SmtCommand::new_assert)
+            .collect(),
+    )
+}
+
 fn assemble_output(
     parts: &smt2::ScriptParts,
     new_asserts: Vec<SmtCommand>,
@@ -103,7 +134,12 @@ pub fn apply(script: &Script, tactic_args: &[String]) -> Result<(Script, serde_j
     }
 
     let z3_check = solver.check();
-    let new_asserts = processed_asserts(&solver);
+    // Prefer the goal-transformed formulas (they surface variable elimination
+    // that `get_assertions` hides); fall back to the solver form on error or a
+    // case split.
+    let goal_form = goal_apply_asserts(&tactic, &parts);
+    let used_goal_apply = goal_form.is_some();
+    let new_asserts = goal_form.unwrap_or_else(|| processed_asserts(&solver));
     let prefix_names = declared_symbol_names(&parts.prefix);
 
     let out = if new_asserts.is_empty() && asserts_in > 0 && z3_check == SatResult::Sat {
@@ -142,6 +178,7 @@ pub fn apply(script: &Script, tactic_args: &[String]) -> Result<(Script, serde_j
         "z3_check": sat_result_str(z3_check),
         "asserts_in": asserts_in,
         "asserts_out": asserts_out,
+        "goal_apply": used_goal_apply,
         "extra_declarations": extra_declarations,
         "ensured_declarations": 0,
         "tactic_args": if tactic_args.is_empty() { serde_json::Value::Null } else { serde_json::json!(tactic_args) },

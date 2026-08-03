@@ -73,18 +73,21 @@ _Z3_EQ = "z3-propagate-values:z3-solve-eqs"
 # `_NORM`, so `mod_inv`/`bitwise` normalize both sides in lockstep instead of
 # into diverging modular forms z3 can't reconcile (the inlining check timeouts).
 # `z3-solve-eqs` is globally nomod (see src/simplify/z3.py), so this mints no
-# `mod!` witnesses.
-_EARLY_EQ = "z3-solve-eqs"
+# `mod!` witnesses. `z3-propagate-values` runs first: it folds the statically
+# constant columns, shrinking the formula so the (costlier) `solve-eqs` variable
+# elimination has less to chew through.
+_EARLY_EQ = "z3-propagate-values:z3-solve-eqs"
 
 # Ground + normalize, no z3/rewrite: base pipeline for bus-interaction steps.
 _BUS = _pipe(TACTIC_QEPREFIX, _NORM)
 
-# `_BUS` with `_EARLY_EQ`, for steps that otherwise run no equality-elimination
-# pass (so the identity pins would survive into the check and time out).
-# exec_bus/loop_iteration already run `z3-solve-eqs` after `_NORM`, so they don't
-# need it and stay on plain `_BUS`. trivial_simp must NOT get an early solve-eqs:
-# its `factor_reduce` relies on the columns being linked by the LATE solve-eqs,
-# and an early pass disturbs that setup (times out regardless of the nomod fix).
+# `_BUS` with `_EARLY_EQ`, eliminating the identity pins BEFORE `_NORM`. This is
+# required whenever same-name `after = before` pins must collapse: `normalize`
+# rewrites equalities into modular form and the LATE `solve-eqs` runs
+# `eliminate_mod=false`, so a pin left until after `_NORM` can never be solved
+# (see `exec_bus`). trivial_simp is the one exception -- it must NOT get an early
+# solve-eqs: its `factor_reduce` relies on the columns being linked by the LATE
+# solve-eqs, and an early pass disturbs that setup (times out regardless).
 _BUS_EQ = _pipe(TACTIC_QEPREFIX, _EARLY_EQ, _NORM)
 
 # `rewrite` factors modular products (e.g. the `bit^2 - bit = 0` encoding) into
@@ -119,8 +122,15 @@ STEP_TACTICS: dict[str, str] = {
     # ternary flags); trailing `demod` clears the residual mods.
     "rule_based": _pipe(_BUS_EQ, "rewrite", "demod"),
     "range_constraints": _BUS_EQ,
-    # ... plus z3 equality propagation (plain `_BUS`: no early eq, see `_BUS_EQ`).
-    "exec_bus": _pipe(_BUS, _Z3_EQ),
+    # `_BUS_EQ` runs `z3-solve-eqs` BEFORE `_NORM` (normalize). This matters for
+    # the memory interface encoding: skolem emits same-name pins `after-X =
+    # before-X` as plain equalities, but `normalize` rewrites every equality into
+    # modular form `(mod (after-X - before-X) P) = 0`, and the trailing
+    # `z3-solve-eqs` runs `eliminate_mod=false` (it must not mint `mod!`
+    # witnesses), so it can no longer solve them. Eliminating the pins pre-normalize
+    # collapses the after side onto the before side (identity on an unchanged bus),
+    # which is what lets the huge-memory-bus exec_bus VCs discharge.
+    "exec_bus": _pipe(_BUS_EQ, _Z3_EQ),
     # ... plus z3 equality propagation, a final `rewrite` case-split, then a
     # trailing `demod` to collapse the `(mod bounded-var P)` atoms rewrite emits
     # (residual mods otherwise time z3 out; see the `rewrite` note above).
@@ -132,7 +142,9 @@ STEP_TACTICS: dict[str, str] = {
     "trivial_simp": _pipe(_BUS, "z3-solve-eqs", "factor_reduce"),
     # ... plus z3 equality propagation, which eliminates the statically-fixed
     # `from_state__pc` constants (both sides) and concretizes the pc-lookup UFs.
-    "loop_iteration": _pipe(_BUS, _Z3_EQ),
+    # `_BUS_EQ` (early `z3-solve-eqs`, pre-normalize) so the same-name memory pins
+    # collapse before normalize mod-wraps them (see `exec_bus`).
+    "loop_iteration": _pipe(_BUS_EQ, _Z3_EQ),
     # Identical to the default pipeline.
     "simplify_exhaustive": DEFAULT_TACTIC,
 }
