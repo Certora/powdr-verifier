@@ -149,6 +149,8 @@ def __build_parser(skip_subparsers=False):
 
     sub_text = sub.add_parser("text")
     sub_text.add_argument("input", type=Path)
+    sub_text.add_argument("--with-encoding", action="store_true")
+    sub_text.add_argument("--with-model", type=Path)
 
     sub_simplify = sub.add_parser("simplify")
     sub_simplify.add_argument("input", type=Path)
