@@ -5,6 +5,7 @@ import copy
 import json
 import logging
 import subprocess
+import sys
 from pathlib import Path
 
 _LOG = logging.getLogger(__name__)
@@ -47,7 +48,10 @@ def _run_membus_json(args: list[str]) -> dict | None:
 def _run_membus_json_uncached(args: list[str]) -> dict | None:
     try:
         proc = subprocess.run(
-            [_MEMBUS_SCRIPT, *args],
+            # Run under *this* interpreter, not membus.py's `python3` shebang:
+            # the shebang picks up whatever python3 is on PATH, which misses the
+            # verifier venv (and its z3) unless the venv is activated.
+            [sys.executable, str(_MEMBUS_SCRIPT), *args],
             capture_output=True,
             text=True,
             timeout=30,
