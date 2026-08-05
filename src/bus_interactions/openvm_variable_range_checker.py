@@ -18,23 +18,41 @@ class OpenVMVariableRangeCheckerEncoder(SingleInteractionEncoder):
     def __init__(self) -> None:
         super().__init__()
 
+    # Widest row the checker is instantiated for; a larger `bits` is not a table
+    # row, so it gets the widest bound we can justify.
+    MAX_BITS = 25
+
     @none_if(lambda: ARGS().no_varrange)
     def encode_pointwise(self, mult: Any, x: Any, bits: Any) -> FNode:
         """Constrain `x` to be in [0, 2^bits) when the interaction is enabled."""
-        curbits = 25
-        if bits.is_int_constant() and bits.constant_value() <= 25:
-            curbits = bits.constant_value()
-
-        # `x` and `mult` are stored already reduced mod P (see
+        # `x`, `mult` and `bits` are stored already reduced mod P (see
         # SingleInteractionEncoder._wrap_field), so plain relational operators
         # apply directly.
-        if mult.is_int_constant() and mult.constant_value() != 0:
-            fact = LT(x, Int(2**curbits))
+        if bits.is_int_constant():
+            bound = LT(x, Int(2 ** min(bits.constant_value(), self.MAX_BITS)))
         else:
-            fact = Implies(
-                Not(Equals(mult, Int(0))),
-                LT(x, Int(2**curbits)),
+            # Symbolic width. The shift chips range-check `bit_shift_carry[i]`
+            # against the *decoded* shift amount (`Σ k·bit_shift_marker__k`), so
+            # collapsing this to the widest row (`x < 2^25`) throws almost all of
+            # the fact away: for a shift by a multiple of 8 the true width is 0,
+            # i.e. the carry is *zero*, and without that the shift's limb
+            # relation stops pinning the output limbs -- which showed up as
+            # spurious `solver` completeness counterexamples (reth 2099608 and
+            # 2099872, where powdr substitutes `b__3_k := a__0_k` for an
+            # srl-by-24). The width comes from a small finite set, so case-split
+            # over it and keep the widest row as the fallback bound.
+            bound = And(
+                LT(x, Int(2**self.MAX_BITS)),
+                *[
+                    Implies(Equals(bits, Int(k)), LT(x, Int(2**k)))
+                    for k in range(self.MAX_BITS)
+                ],
             )
+
+        if mult.is_int_constant() and mult.constant_value() != 0:
+            fact = bound
+        else:
+            fact = Implies(Not(Equals(mult, Int(0))), bound)
         # The range is table semantics — the lookup table only contains
         # valid rows, so the circuit RELIES on `x < 2^bits`; it does not
         # establish it. As a constraint, each goal-side copy becomes a
