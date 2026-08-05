@@ -44,6 +44,11 @@ impl SkolemMap {
         self.pins.contains_key(&q)
     }
 
+    /// The term `q` is already pinned to, if any.
+    pub fn pinned_expr(&self, q: SymbolId) -> Option<&Dynamic> {
+        self.pins.get(&q)
+    }
+
     pub fn emit_disjuncts(&self) -> Vec<Bool> {
         let p = field_mod();
         let mut pinned: Vec<(SymbolId, &Dynamic)> =

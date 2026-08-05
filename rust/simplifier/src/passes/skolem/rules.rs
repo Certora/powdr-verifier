@@ -24,28 +24,47 @@ use super::map::SkolemMap;
 /// markers they stay quantified with no same-name / substitution / derived pin,
 /// so lifting cannot eliminate the forall and the solver sees a spurious model.
 ///
-/// Because each marker occurs only in that constraint, a valid witness for
-/// *every* marker of a gadget is the same ``QuotientOrZero(cmp_result, Σaᵢ)``
-/// value — identical to the after ``free_var``.
-///
 /// We prefer to pin the markers to the after-side ``free_var`` *variable*
 /// itself: it survives as a declared, range-bounded variable that the after
 /// constraints pin via ``Σ(after-aᵢ)·free_var = after-cmp``. Since the a-limbs
 /// and cmp are same-name-pinned (before==after), that makes the before-side
 /// constraint ``Σ(before-aᵢ)·marker = before-cmp`` provably hold — with no
-/// unconstrained ``uf_mod_inv`` for the solver to exploit. If we cannot locate
-/// the after ``free_var`` (e.g. it was substituted away), we fall back to
-/// rendering the value directly like the encoder's free_var substitution:
-///   ``ite(mod(Σaᵢ)=0, 0, mod(cmp_result)·uf_mod_inv(mod(Σaᵢ)))``
+/// unconstrained ``uf_mod_inv`` for the solver to exploit. That only works for
+/// powdr's *unsquared* rewrite; when a cofactor's range allows negatives powdr
+/// squares it (``Σ(after-aᵢ)²·free_var = after-cmp``), and one shared value
+/// cannot witness the markers.
+///
+/// Otherwise we witness each marker separately, letting the first marker whose
+/// cofactor is nonzero carry the whole value:
+///   ``markerᵢ = ite(cᵢ≠0 ∧ ⋀_{j<i} cⱼ=0, cmp_result·uf_mod_inv(cᵢ), 0)``
 /// Instantiating a universally-quantified variable is always sound, so either
 /// witness can only fail to close a case, never cause a false PASS.
 pub fn contribute(skolem: &mut SkolemMap, script: &Script, body: &Bool, field: i128) {
-    // Names of the quantified diff_inv_marker variables we may witness.
+    // How often each symbol occurs in the body (a full tree walk, no dedup).
+    let mut occurrences: HashMap<String, usize> = HashMap::new();
+    for node in iter_nodes_dyn(&Dynamic::from_ast(body)) {
+        if let Some(n) = symbol_name_dyn(&node) {
+            *occurrences.entry(n).or_default() += 1;
+        }
+    }
+
+    // Names of the quantified variables we may witness: diff_inv_marker
+    // columns, plus single-occurrence `free_var`s. powdr's rewrite is
+    // iterative, so a later pass can combine a marker with the `free_var` an
+    // *earlier* pass already introduced into one new free_var. The before-side
+    // `free_var` is then single-occurrence with no after-side same-name partner
+    // to pin it, which leaves the soundness VC not-qf (and z3's `sat` on a
+    // not-qf goal is not a counterexample). Both kinds are consumed by the same
+    // gadget constraint below, so the same witness construction covers them.
     let marker_names: HashMap<String, SymbolId> = skolem
         .qvars
         .iter()
         .filter_map(|id| symbol_name_for_id(*id).map(|n| (n, *id)))
-        .filter(|(n, _)| strip_prefix(n).contains("diff_inv_marker__"))
+        .filter(|(n, _)| {
+            let stripped = strip_prefix(n);
+            stripped.contains("diff_inv_marker__")
+                || (stripped.starts_with("free_var") && occurrences.get(n) == Some(&1))
+        })
         .collect();
     if marker_names.is_empty() {
         return;
@@ -120,26 +139,84 @@ pub fn contribute(skolem: &mut SkolemMap, script: &Script, body: &Bool, field: i
             .and_then(|n| swap_prefix(n))
             .and_then(|after_a| find_after_free_var(script, &after_a, field));
 
-        let (witness, source) = match free_var {
-            Some(fv) => (
-                Dynamic::from_ast(&Int::new_const(fv.as_str())),
-                "rules-inv-marker-freevar",
-            ),
+        match free_var {
+            Some(fv) => {
+                let witness = Dynamic::from_ast(&Int::new_const(fv.as_str()));
+                for id in markers_here {
+                    skolem.pin(id, witness.clone(), "rules-inv-marker-freevar");
+                }
+            }
             None => {
-                let factor = wrap_mod_expr_int(sum_or_zero(&factor_terms), field);
-                let r = sum_or_zero(&rest_terms);
+                // Cascade witness: `Σ cᵢ·markerᵢ = -r` is solved by letting the
+                // FIRST marker with a nonzero cofactor carry the whole value and
+                // zeroing the rest:
+                //   markerᵢ = ite(cᵢ≠0 ∧ ⋀_{j<i} cⱼ=0, (-r)·uf_mod_inv(cᵢ), 0)
+                // `mod_inv` constrains `uf_mod_inv(cᵢ)·cᵢ ≡ 1` whenever `cᵢ ≠ 0`
+                // (its guard), so the selected term contributes exactly `-r` and
+                // every other one contributes 0.
+                //
+                // A single shared `QuotientOrZero(-r, Σcᵢ)` (what this used to
+                // pin) is NOT a witness: cofactors are field elements, so `Σcᵢ`
+                // can vanish while individual `cᵢ` do not -- e.g. the IsZero
+                // gadget over limb differences with `c = (1,0,3,-4)` -- which
+                // zeroed every marker and left the goal open (spurious sat).
+                //
+                // The cascade splits one value across the markers it pins, so a
+                // marker an earlier contributor already pinned (same-name, say)
+                // must not be counted as carrying it: its contribution
+                // `cᵢ·pinᵢ` is a known term, so fold it into the rest and
+                // cascade over the markers we actually own.
+                //
+                // Only fold a pin that is quantifier-free though. `derived` pins
+                // (powdr's own substitutions) can be defined *in terms of* the
+                // other markers of the same gadget, and folding one of those in
+                // makes this witness reference a qvar that in turn references
+                // this one -- a dependency cycle `lift` cannot break, so the
+                // forall survives and the VC goes not-qf, which is strictly
+                // worse than an un-folded witness (an instantiation is sound
+                // either way, it just may not close the goal).
+                let mut rest = rest_terms.clone();
+                let mut open: Vec<(SymbolId, Int)> = Vec::new();
+                for (k, id) in markers_here.iter().enumerate() {
+                    match skolem.pinned_expr(*id).and_then(|e| e.as_int()) {
+                        Some(t) if !refs_qvar(&t, skolem) => {
+                            rest.push(Int::mul(&[&factor_terms[k], &t]))
+                        }
+                        Some(_) => {}
+                        None => open.push((*id, factor_terms[k].clone())),
+                    }
+                }
+                if open.is_empty() {
+                    continue;
+                }
+                let zero = int_from_i128(0);
+                let r = sum_or_zero(&rest);
                 // -r mod p
                 let neg_r = wrap_mod_expr_int(Int::sub(&[&int_from_i128(0), &r]), field);
-                // QuotientOrZero(-r, factor) = ite(factor==0, 0, (-r)·uf_mod_inv(factor))
-                let prod = Int::mul(&[&neg_r, &uf_mod_inv(&factor)]);
-                let w = factor.eq(&int_from_i128(0)).ite(&int_from_i128(0), &prod);
-                (Dynamic::from_ast(&w), "rules-inv-marker")
+                let cofactors: Vec<Int> = open
+                    .iter()
+                    .map(|(_, c)| wrap_mod_expr_int(c.clone(), field))
+                    .collect();
+                for (k, (id, _)) in open.iter().enumerate() {
+                    let cof = &cofactors[k];
+                    let mut conds = vec![cof.eq(&zero).not()];
+                    conds.extend(cofactors[..k].iter().map(|earlier| earlier.eq(&zero)));
+                    let cond = Bool::and(&conds.iter().collect::<Vec<_>>());
+                    let prod = Int::mul(&[&neg_r, &uf_mod_inv(cof)]);
+                    let w = cond.ite(&prod, &zero);
+                    skolem.pin(*id, Dynamic::from_ast(&w), "rules-inv-marker");
+                }
             }
-        };
-        for id in markers_here {
-            skolem.pin(id, witness.clone(), source);
         }
     }
+}
+
+/// Does `expr` mention any of the quantifier's variables? The contributors see
+/// the body with its qvars as named symbols, so a name lookup suffices.
+fn refs_qvar(expr: &Int, skolem: &SkolemMap) -> bool {
+    iter_nodes_dyn(&Dynamic::from_ast(expr)).any(|node| {
+        symbol_name_dyn(&node).is_some_and(|n| skolem.qvars.contains(&symbol_id_from_name(&n)))
+    })
 }
 
 fn sum_or_zero(terms: &[Int]) -> Int {
