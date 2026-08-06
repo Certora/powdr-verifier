@@ -107,19 +107,32 @@ class TestInterfaceIoRelation:
         rel, _ = interface_io_relation("t", a, b, {0: 0}, bounds_a={}, bounds_b={})
         assert rel.is_true()
 
+    # `--interface-ignore-checks` (default ON) downgrades these aborts to a warning
+    # and equates the pair anyway; the abort is what the flag switches back on. The
+    # flag postdates these tests, which is why they need it explicitly.
     def test_nonconst_mult_aborts(self):
-        _args()
+        _args("--no-interface-ignore-checks")
         a = [BusInteraction(_sym("is_valid"), [Int(1), Int(8), _sym("x"), Int(5)])]
         b = [_inter(1, [1, 8, _sym("y"), 5])]
         with pytest.raises(RuntimeError, match="mult mismatch or non-const"):
             interface_io_relation("t", a, b, {0: 0}, bounds_a={}, bounds_b={})
 
     def test_mult_mismatch_aborts(self):
-        _args()
+        _args("--no-interface-ignore-checks")
         a = [_inter(1, [1, 8, _sym("x"), 5])]
         b = [_inter(P - 1, [1, 8, _sym("y"), 5])]
         with pytest.raises(RuntimeError, match="mult mismatch"):
             interface_io_relation("t", a, b, {0: 0}, bounds_a={}, bounds_b={})
+
+    def test_nonconst_mult_is_equated_when_checks_ignored(self):
+        """The default path: no abort, a loud warning, and the pair is equated
+        anyway (`--interface-ignore-checks`). Pins the behaviour the two tests above
+        switch off, so a change to either direction is visible."""
+        _args()
+        a = [BusInteraction(_sym("is_valid"), [Int(1), Int(8), _sym("x"), Int(5)])]
+        b = [_inter(1, [1, 8, _sym("y"), 5])]
+        rel, _ = interface_io_relation("t", a, b, {0: 0}, bounds_a={}, bounds_b={})
+        assert not rel.is_false()
 
     def test_recv_mult_expression_folds(self):
         """`(- 1)`-style mults (the inlining pass output) const-eval to p-1."""
