@@ -8,6 +8,33 @@ from .enums import BusInteractionHandlers, FieldTypes, MemoryPresolve, XOrEncodi
 
 __ARGS: Optional[argparse.Namespace] = None
 
+SOUNDNESS_CONSEQUENCE_KINDS = (
+    "none",
+    "bytes",
+    "timestamps",
+    "range-inference",
+    "untagged",
+    "all",
+)
+
+
+def _consequence_kinds(raw: str) -> list[str]:
+    """Parse a comma-separated kind list.
+
+    Comma-separated rather than ``nargs="+"``: the latter greedily swallows the
+    following positional, so `--soundness-before-consequences bytes verify a b c`
+    would consume the subcommand.
+    """
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    unknown = [p for p in parts if p not in SOUNDNESS_CONSEQUENCE_KINDS]
+    if unknown:
+        raise argparse.ArgumentTypeError(
+            f"invalid kind(s): {', '.join(unknown)} "
+            f"(choose from {', '.join(SOUNDNESS_CONSEQUENCE_KINDS)})"
+        )
+    return parts
+
+
 def __build_parser(skip_subparsers=False):
     """Build the command line parser."""
 
@@ -62,10 +89,9 @@ def __build_parser(skip_subparsers=False):
     # may be given (union). Each is a fact the VC no longer checks -- keep it short.
     parser.add_argument(
         "--soundness-before-consequences",
-        nargs="+",
-        choices=["none", "bytes", "timestamps", "range-inference", "untagged", "all"],
+        type=_consequence_kinds,
         default=["bytes"],
-        metavar="KIND",
+        metavar="KIND[,KIND...]",
     )
     parser.add_argument(
         "--interface-ignore-checks", action=argparse.BooleanOptionalAction, default=True
