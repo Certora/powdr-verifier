@@ -98,18 +98,21 @@ _BUS_EQ = _pipe(TACTIC_QEPREFIX, _EARLY_EQ, _NORM)
 # mods push z3 into needless nonlinear-mod reasoning and it times out -- one extra
 # demod on the solver-completeness VC turns z3 unknown@60s into unsat in seconds.
 
-# `_BUS_EQ` plus a trailing `rewrite:demod`. 8138823 dropped `rewrite` from the
-# bus pipelines and was gated on keccak only ("must be validated on the keccak
-# set before merge"); keccak stayed flat but reth regressed 53 steps to check
-# timeouts. Without the congruence case-split z3 has to crack the mod-P selector
-# products whole, and the emitted VC is ~1.4x larger. Restoring it recovers 12 of
-# the 19 timeouts in the passes below (reth 2099476/007 completeness: >70s ->
-# 0.06s, 303KB -> 215KB) for ~0.1s mean extra simplify time, with no step
-# regressing over a 66-step reth+keccak A/B (0 new sat, 0 new timeouts).
+# `_BUS_EQ` plus a trailing `rewrite:demod`. The congruence case-split rescues
+# blocks whose plain check cannot close at all (reth 2099476/007 completeness:
+# >70s timeout -> unsat in 0.06s), but it is NOT free where the plain check is
+# already easy: on guest-keccak 2100224/034 (the 4056-interaction block, ~5-8MB
+# per VC) it turns unsat-in-0.8s into 51s completeness / 87s soundness -- still
+# provable, just 65-110x slower, which crosses the 60s budget. 7e41dc3 put this on
+# the default and `low_degree_bus` too and cost the 08-06 keccak run 11 timeouts,
+# all on 2100224. So it stays only where a regression was actually ruled out.
 _BUS_EQ_RW = _pipe(_BUS_EQ, "rewrite", "demod")
 
-# Default: ground, early eq elim, normalize, then the rewrite case-split.
-DEFAULT_TACTIC = _BUS_EQ_RW
+# Default: ground, early eq elim, normalize, then a final normalize/demod cleanup.
+# Deliberately WITHOUT `rewrite` -- see `_BUS_EQ_RW`: the passes that fall through
+# to the default (`remove_trivial`, `remove_free`, `simplify_exhaustive`) are where
+# 9 of those 11 keccak regressions landed.
+DEFAULT_TACTIC = _pipe(_BUS_EQ, "normalize", "demod")
 
 # Special-soundness auxiliary checks (`.zero-is-model` / `.invalid-all-mult-zero`)
 # run the full rewrite + z3 pipeline.
@@ -124,12 +127,15 @@ TACTIC_AUX = _pipe(
 STEP_TACTICS: dict[str, str] = {
     # Bus-interaction steps: ground + early eq elim + normalize.
     "substitute_bus_interactio_fields": _BUS_EQ,
-    # `low_degree_bus` and `inlining` need the `rewrite` case-split (see
-    # `_BUS_EQ_RW`): without it reth 2099476/023, 3653144/023 and 3464784/035
-    # completeness all time out whole-script and solve in <3s with it.
-    "low_degree_bus": _BUS_EQ_RW,
+    # No `rewrite` here: it fixes reth 2099448/2099476/3653072/3653144 023
+    # completeness but cost 2100224 its 034/045 steps (unsat 0.8s -> 51s/87s).
+    "low_degree_bus": _BUS_EQ,
     "memory": _BUS_EQ,
     "remove_disconnected": _BUS_EQ,
+    # `inlining` keeps the `rewrite` case-split: it fixes reth 2099476/035,
+    # 2702628/035, 3464784/035, 3653072/046 and 3653144/046 completeness, and is
+    # the one family where the 08-06 keccak run regressed nothing (0 of 61 steps;
+    # 2100224's own inlining step times out with and without it).
     "inlining": _BUS_EQ_RW,
     # `rewrite` factors the selector gadgets rule_based leaves (booleanity,
     # ternary flags); trailing `demod` clears the residual mods.
