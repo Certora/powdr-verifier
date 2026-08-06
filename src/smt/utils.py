@@ -1,9 +1,10 @@
 """Shared PySMT helpers: comments, models, field axioms, and SMT-LIB I/O."""
+import enum
 import functools
 import itertools
 import logging
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, NamedTuple
 from types import GeneratorType
 
 from ..smt_backends.pysmt import *
@@ -238,6 +239,60 @@ def attach_comment(comment: str):
         return wrapper
 
     return inner
+
+
+class ConsequenceKind(enum.Enum):
+    """What a consequence *is*, attached by whoever produced it.
+
+    Consumers that need a particular class of granted fact (rather than all of
+    them) select on this instead of guessing. Guessing was the alternative and
+    both forms of it are bad: matching the emitter's comment only works with the
+    local pysmt comment patch, and pattern-matching the formula (e.g. "the one
+    carrying the literal 255") silently rots as the encoders change.
+    """
+
+    UNTAGGED = "untagged"
+    MEMORY_RECV_BYTES = "memory-recv-bytes"
+    MEMORY_TIMESTAMP_BOUNDS = "memory-timestamp-bounds"
+    RANGE_INFERENCE = "range-inference"
+
+
+class Consequence(NamedTuple):
+    """A granted fact plus its kind. See ``ConsequenceKind``.
+
+    Producers may append either a ``Consequence`` or a bare ``FNode`` to their
+    ``consequences`` list; ``as_consequence`` normalises the latter to
+    ``UNTAGGED``, so tagging is opt-in per producer.
+    """
+
+    kind: ConsequenceKind
+    formula: FNode
+
+
+def as_consequence(c) -> Consequence:
+    """Normalise a bare ``FNode`` to an ``UNTAGGED`` ``Consequence``."""
+    return c if isinstance(c, Consequence) else Consequence(ConsequenceKind.UNTAGGED, c)
+
+
+def consequence_formulas(cs: Iterable) -> list[FNode]:
+    """The formulas of ``cs``, accepting tagged and bare entries alike."""
+    return [as_consequence(c).formula for c in cs]
+
+
+def consequences_of_kind(cs: Iterable, *kinds: ConsequenceKind) -> list[FNode]:
+    """Formulas of ``cs`` whose kind is one of ``kinds``."""
+    wanted = frozenset(kinds)
+    return [c.formula for c in map(as_consequence, cs) if c.kind in wanted]
+
+
+def without_true_consequences(cs: Iterable) -> list[Consequence]:
+    """``without_trues`` for consequences: normalises and drops None/true."""
+    out = []
+    for c in cs:
+        n = as_consequence(c)
+        if n.formula is not None and not n.formula.is_true():
+            out.append(n)
+    return out
 
 
 def without_trues(fs: Iterable[FNode]) -> Iterable[FNode]:

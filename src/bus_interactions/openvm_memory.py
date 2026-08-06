@@ -474,7 +474,10 @@ class OpenVMMemoryEncoder(
         # pointer-distinctness family), and as obligations they are cheap.
         if ts_bounds:
             self.consequences.append(
-                with_comment(And(*ts_bounds), f"{self.NAME} timestamp bounds")
+                Consequence(
+                    ConsequenceKind.MEMORY_TIMESTAMP_BOUNDS,
+                    with_comment(And(*ts_bounds), f"{self.NAME} timestamp bounds"),
+                )
             )
         # Interface mode: "memory holds bytes" is a VM environment assumption
         # (like TS_BOUND), not a circuit commitment — each recv's data limbs
@@ -538,10 +541,11 @@ class OpenVMMemoryEncoder(
                 for id in ids_with_data
             ]
             if recv_bytes:
+                grant = with_comment(
+                    And(*recv_bytes), f"{self.NAME} recv byte assumption"
+                )
                 self.consequences.append(
-                    with_comment(
-                        And(*recv_bytes), f"{self.NAME} recv byte assumption"
-                    )
+                    Consequence(ConsequenceKind.MEMORY_RECV_BYTES, grant)
                 )
             send_bytes = [
                 with_comment(

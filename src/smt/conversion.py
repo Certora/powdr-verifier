@@ -226,13 +226,18 @@ class SmtConverter:
             without_trues(self.constraints),
             without_trues(self.bus_interaction_encoder.encode())
         ))
-        consequences = list(without_trues(self.bus_interaction_encoder.get_consequences()))
+        consequences = without_true_consequences(
+            self.bus_interaction_encoder.get_consequences()
+        )
         if not ARGS().skip_range_inference:
             # Ranges inferred from the constraints are derived facts, not
             # circuit commitments -> consequences, not constraints.
-            consequences += self.bus_interaction_encoder.memory.infer_unconditional_ranges(
-                constraints
-            )
+            consequences += [
+                Consequence(ConsequenceKind.RANGE_INFERENCE, f)
+                for f in self.bus_interaction_encoder.memory.infer_unconditional_ranges(
+                    constraints
+                )
+            ]
         axioms = list(without_trues(self.bus_interaction_encoder.get_axioms()))
         derived = {k: list(v) for k, v in self.derived_columns.items()}
         fwa = FormulaWithAxioms(

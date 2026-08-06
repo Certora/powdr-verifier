@@ -88,7 +88,7 @@ def encoding(before, after, qvars, io_relation, additional_asserts=[]):
         after = _filter_mirrored_constraints(before, after)
     res = And(
         *before.constraints,
-        *before.consequences,
+        *consequence_formulas(before.consequences),
         ForAll(
             qvars,
             Or(

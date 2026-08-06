@@ -80,7 +80,7 @@ def _dump_single_conversion(out: TextIO, data: Any, basic_block: BasicBlock, eva
         formula = conv.to_formula_with_axioms(data)
         for c in formula.constraints:
             _print(out, eval, "->\t{}", c)
-        for c in formula.consequences:
+        for c in consequence_formulas(formula.consequences):
             _print(out, eval, "->\t{}", c)
         for a in formula.axioms:
             _print(out, eval, "->\t{}", a)

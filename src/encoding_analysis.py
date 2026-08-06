@@ -30,7 +30,7 @@ def analyze_aliases():
 
     f = And(
         *smt.constraints,
-        *smt.consequences,
+        *consequence_formulas(smt.consequences),
         *smt.axioms,
     )
     f = rewrite(f)

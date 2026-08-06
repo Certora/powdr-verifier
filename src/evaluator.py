@@ -47,7 +47,7 @@ def evaluate():
         logging.debug(f"evaluate on\n{json.dumps(model, indent=4)}")
         if eval_list(smt.constraints):
             res["constraints"] = True
-        if eval_list(smt.consequences):
+        if eval_list(consequence_formulas(smt.consequences)):
             res["consequences"] = True
         if eval_list(smt.axioms):
             res["axioms"] = True
