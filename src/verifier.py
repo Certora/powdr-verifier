@@ -66,7 +66,7 @@ def _filter_mirrored_constraints(before, after):
         return after._replace(constraints=kept)
     return after
 
-def encoding(before, after, qvars, io_relation, additional_asserts=[]):
+def encoding(before, after, qvars, io_relation, additional_asserts=[], granted_inner=()):
     """Build the verification formula without any encoder-side model map.
 
     The forall body is the negation of (after.constraints AND
@@ -74,6 +74,16 @@ def encoding(before, after, qvars, io_relation, additional_asserts=[]):
     later attaches per-qvar witnesses (rules / derived /
     same-name) as ``Not(q = expr)`` disjuncts which ``simplify_lift_forall``
     hoists out as top-level assertions.
+
+    ``granted_inner`` are facts granted to the *inner* (quantified) side. They become
+    an ANTECEDENT of its obligation, inside the quantifier: the inner side then only
+    has to hold *given* them, which is what makes a granted fact a premise rather
+    than something to establish. Keeping them inside matters -- asserted at top level
+    they would reference the free copies of columns the ForAll binds, shadowing the
+    bound ones (that is the whole point of the consequences channel below), and `lift`
+    cannot hoist them itself since it only hoists `q = expr` pins. Written over the
+    bound columns, `lift`'s pin substitution rewrites them to the other side's columns
+    for free.
 
     Only ``before.consequences`` (the reference side) are asserted, as premises
     at the top level; ``after.consequences`` are deliberately NOT added to the
@@ -86,13 +96,16 @@ def encoding(before, after, qvars, io_relation, additional_asserts=[]):
     """
     if ARGS().filter_constraints:
         after = _filter_mirrored_constraints(before, after)
+    inner = And(*after.constraints)
+    if granted_inner:
+        inner = Implies(And(*granted_inner), inner)
     res = And(
         *before.constraints,
         *consequence_formulas(before.consequences),
         ForAll(
             qvars,
             Or(
-                Not(And(*after.constraints)),
+                Not(inner),
                 # Not(And(*after.consequences)), # NOT HERE!
                 Not(io_relation),
             ),
@@ -118,9 +131,12 @@ def _soundness_before_premises(before_smt):
 
     The `memory` pass deletes memory recvs and with them their byte grants, so the
     after side -- where soundness draws its premises -- loses facts the before-side
-    send obligations still demand. Asserting the before side's grants at top level
-    lets the same-name pins (made free and pinned to their after counterparts by
-    `lift`) carry them onto the after values, no renaming needed.
+    send obligations still demand. These are handed to `encoding(granted_inner=...)`,
+    which makes them an antecedent of the before-side obligation *inside* the
+    quantifier; `lift`'s pin substitution then rewrites them onto the after columns.
+    Deliberately not asserted at top level: there they would shadow the columns the
+    ForAll binds (measured: 32 extra shadowed binders and a surviving `forall` on 8
+    guest-keccak `004_remove_trivial` blocks).
 
     Set-valued selection over ``ConsequenceKind``, so the tag comes from the producer
     rather than a guess; ``none`` wins over anything else, ``all`` grants everything.
@@ -325,6 +341,7 @@ def verify():
                         soundness_qvars,
                         io_relation,
                         additional_asserts=[Equals(is_valid_after, Int(1))],
+                        granted_inner=_soundness_before_premises(before_smt),
                     )
                     info = pin_metadata(
                         soundness,
@@ -434,7 +451,7 @@ def verify():
                         before_smt,
                         soundness_qvars,
                         io_relation,
-                        additional_asserts=_soundness_before_premises(before_smt),
+                        granted_inner=_soundness_before_premises(before_smt),
                     )
                     info = pin_metadata(
                         soundness,
