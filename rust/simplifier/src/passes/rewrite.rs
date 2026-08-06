@@ -27,7 +27,7 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
     // Selector vars whose root-product cross-multiplies another selector: for
     // those we emit only the range bound, never the disjunction (see
     // `roots_with_range`).
-    let coupled = coupled_selectors(script, field);
+    let (coupled, n_selectors) = coupled_selectors(script, field);
 
     let out = map_asserts(script, |b: &Bool| {
         let mut stats = RewriteStats::default();
@@ -51,6 +51,8 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
             "asserts_changed": changed,
             "rewrites": global.rewrites,
             "factor_calls": global.factor_calls,
+            "selectors": n_selectors,
+            "coupled_selectors": coupled.len(),
         }),
     ))
 }
@@ -226,23 +228,29 @@ fn roots_with_range(var: &Int, values: &BTreeSet<i128>, p: i128, coupled: &HashS
 /// selector. A "selector" here is a var carrying a single-variable root-product
 /// `(mod P(x) P) = 0` (degree ≥ 2 in `x` alone) -- booleanity `x²-x`, ternary
 /// `x(x-1)(x-2)`, etc. Coupling = two distinct selectors share a `(* ...)` term.
-fn coupled_selectors(script: &Script, p: i128) -> HashSet<Int> {
+/// Returns the coupled set plus the total selector count (reported as the
+/// `selectors` / `coupled_selectors` pass stats: the two numbers that say whether
+/// a slow `rewrite` is the selector machinery or the general product
+/// factorization -- guest-keccak 2100224/034 has 1 selector and 0 coupled yet 234
+/// rewrites from 237 factor calls, i.e. the cost is all in the latter).
+fn coupled_selectors(script: &Script, p: i128) -> (HashSet<Int>, usize) {
     let mut selectors: HashSet<Int> = HashSet::new();
     for cmd in &script.commands {
         if let Some(b) = cmd.assert_bool() {
             collect_selectors(&b, p, &mut selectors);
         }
     }
+    let n_selectors = selectors.len();
     let mut coupled: HashSet<Int> = HashSet::new();
     if selectors.len() < 2 {
-        return coupled;
+        return (coupled, n_selectors);
     }
     for cmd in &script.commands {
         if let Some(b) = cmd.assert_bool() {
             collect_coupled(&Dynamic::from_ast(b), &selectors, &mut coupled);
         }
     }
-    coupled
+    (coupled, n_selectors)
 }
 
 fn collect_selectors(term: &Bool, p: i128, out: &mut HashSet<Int>) {
