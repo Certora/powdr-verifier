@@ -88,26 +88,32 @@ def test_untagged_is_selectable_but_not_part_of_bytes():
     assert _soundness_before_premises(_mixed()) == [BARE_F]
 
 
-def test_constant_guards_are_decided():
-    """A grant is `mult = -1 mod P -> data are bytes` per row with the guard left
-    unevaluated (`demod` runs after `lift`). Selecting it simplifies: a live recv keeps
-    the bare range, a disabled `mult = 0` row folds to true and drops out."""
+def test_consequences_are_not_simplified():
+    """Selection must hand back the formulas verbatim, guards and all.
+
+    Tempting to fold here -- a `mult = 0` row's guard is constantly false, so the whole
+    consequence is vacuous. Two measured reasons not to:
+
+    * cost: simplifying every consequence (and again per side via `_formula_symbols`)
+      added ~24s of encode on guest-keccak 2100224, 40.5s -> 59.7s against a 60s
+      budget, and that block then timed out at 19 further passes;
+    * a vacuous consequence can be a dead column's last occurrence, and declarations
+      are generated from occurrences while `skolem_names` resolves same-name pins among
+      *declared* symbols -- so folding it un-pins the twin qvar and the `forall`
+      survives (55 keccak 003_solver soundness VCs came back not-qf).
+    """
     _args()
     d = _sym("d")
+    vacuous = Implies(Equals(wrap_mod(Plus(Int(0), Int(1))), Int(0)), _byte(d))
+    live = Implies(Equals(wrap_mod(Plus(Int(-1), Int(1))), Int(0)), _byte(d))
+    assert vacuous.simplify().is_true(), "precondition: this is the vacuous shape"
 
-    def grant(mult: int) -> Consequence:
-        guard = Equals(wrap_mod(Plus(Int(mult), Int(1))), Int(0))
-        return Consequence(ConsequenceKind.MEMORY_RECV_BYTES, Implies(guard, _byte(d)))
-
-    # (simplify is set-based over `And`, so compare against the simplified range)
-    assert _soundness_before_premises(_formula([grant(-1)])) == [_byte(d).simplify()]
-    assert _soundness_before_premises(_formula([grant(0)])) == []
-    # ... and a symbolic multiplicity is undecidable here, so it keeps its guard.
-    m = _sym("m")
-    sym = Implies(Equals(wrap_mod(Plus(m, Int(1))), Int(0)), _byte(d))
-    assert _soundness_before_premises(
-        _formula([Consequence(ConsequenceKind.MEMORY_RECV_BYTES, sym)])
-    ) == [sym]
+    for f in (vacuous, live):
+        got = _soundness_before_premises(
+            _formula([Consequence(ConsequenceKind.MEMORY_RECV_BYTES, f)])
+        )
+        assert got == [f], "returned verbatim, not folded"
+        assert d in got[0].get_free_variables(), "the column keeps its occurrence"
 
 
 # --------------------------------------------------------------------------- #

@@ -277,22 +277,20 @@ def as_consequence(c) -> Consequence:
 def consequence_formulas(cs: Iterable) -> list[FNode]:
     """The formulas of ``cs``, accepting tagged and bare entries alike.
 
-    Simplified, which decides constant guards: a disabled (``mult = 0``) memory row's
-    byte grant folds to true and drops out. A symbolic mult keeps its guard.
+    Verbatim: do NOT simplify here. Measured on guest-keccak 2100224 (the widest
+    block), simplifying every consequence -- and again per side via
+    ``_formula_symbols`` -- cost ~24s of encode, taking it from 40.5s to 59.7s against
+    a 60s budget. That one block then timed out at 19 further passes, since each pass
+    re-encodes. It bought nothing: the 8 keccak 004_remove_trivial and 11 reth
+    011_memory blocks stay qf + unsat without it.
     """
-    return list(
-        without_trues(
-            keep_comment(f.simplify(), f)
-            for f in (as_consequence(c).formula for c in cs)
-            if f is not None
-        )
-    )
+    return [as_consequence(c).formula for c in cs]
 
 
 def consequences_of_kind(cs: Iterable, *kinds: ConsequenceKind) -> list[FNode]:
     """Formulas of ``cs`` whose kind is one of ``kinds``."""
     wanted = frozenset(kinds)
-    return consequence_formulas(c for c in map(as_consequence, cs) if c.kind in wanted)
+    return [c.formula for c in map(as_consequence, cs) if c.kind in wanted]
 
 
 def without_true_consequences(cs: Iterable) -> list[Consequence]:
