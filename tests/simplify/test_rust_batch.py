@@ -292,6 +292,11 @@ def test_rust_batch_forwards_pretty():
                 parse.return_value = smt_script
                 with mock.patch("src.simplify.rust.ARGS") as args:
                     args.return_value.pretty = True
+                    # Unset attributes on a Mock are truthy, so leaving `cprofile`
+                    # alone engaged the perf wrapper wherever perf happens to be
+                    # installed and made cmd[0] `/usr/bin/perf`. The sibling
+                    # profiling test sets this True on purpose; this one needs False.
+                    args.return_value.cprofile = False
                     simplify_smt_script(smt_script, tactic=tactic, timeout=60.0)[0]
         cmd = run.call_args.args[0]
         assert cmd[0] == "/bin/simplifier"

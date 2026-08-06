@@ -3,8 +3,28 @@ from io import StringIO
 from pathlib import Path
 from textwrap import dedent
 
+import pytest
+from pysmt.environment import pop_env, push_env
+
 from src.simplify.nnf import NNFConverter, simplify_nnf
 from src.smt.utils import *
+
+
+@pytest.fixture(autouse=True)
+def _isolated_pysmt_env():
+    """Give each test its own pysmt environment.
+
+    pysmt keeps one global symbol table, so a symbol declared with a different sort
+    by any earlier test in the session makes the parses here fail with "Trying to
+    redefine symbol 'q' with a new type" -- these tests pass alone and fail in the
+    full run. ``push_env``/``pop_env`` rather than ``reset_env`` so the surrounding
+    environment is restored afterwards and nothing leaks the other way either.
+    """
+    push_env()
+    try:
+        yield
+    finally:
+        pop_env()
 
 
 def _parse(script_text: str) -> script.SmtLibScript:

@@ -5,9 +5,11 @@
 //! stop matching syntactically and every congruence step needs an integer
 //! quotient side-proof. For each application ``f(a1,..,an)`` of ``uf_xor`` /
 //! ``uf_and`` / ``uf_or`` with a non-canonical argument, assert the ground
-//! connection axiom::
+//! connection axiom:
 //!
-//!     f(a1,..,an) = f(canon(a1),..,canon(an))
+//! ```text
+//! f(a1,..,an) = f(canon(a1),..,canon(an))
+//! ```
 //!
 //! where ``canon(a)`` is ``a``'s linear form with coefficients reduced into
 //! ``[0,P)`` (dropping P-multiple summands — exactly the ``mod!`` witnesses),
