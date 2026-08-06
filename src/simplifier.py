@@ -98,8 +98,18 @@ _BUS_EQ = _pipe(TACTIC_QEPREFIX, _EARLY_EQ, _NORM)
 # mods push z3 into needless nonlinear-mod reasoning and it times out -- one extra
 # demod on the solver-completeness VC turns z3 unknown@60s into unsat in seconds.
 
-# Default: ground, early eq elim, normalize, then a final normalize/demod cleanup.
-DEFAULT_TACTIC = _pipe(_BUS_EQ, "normalize", "demod")
+# `_BUS_EQ` plus a trailing `rewrite:demod`. 8138823 dropped `rewrite` from the
+# bus pipelines and was gated on keccak only ("must be validated on the keccak
+# set before merge"); keccak stayed flat but reth regressed 53 steps to check
+# timeouts. Without the congruence case-split z3 has to crack the mod-P selector
+# products whole, and the emitted VC is ~1.4x larger. Restoring it recovers 12 of
+# the 19 timeouts in the passes below (reth 2099476/007 completeness: >70s ->
+# 0.06s, 303KB -> 215KB) for ~0.1s mean extra simplify time, with no step
+# regressing over a 66-step reth+keccak A/B (0 new sat, 0 new timeouts).
+_BUS_EQ_RW = _pipe(_BUS_EQ, "rewrite", "demod")
+
+# Default: ground, early eq elim, normalize, then the rewrite case-split.
+DEFAULT_TACTIC = _BUS_EQ_RW
 
 # Special-soundness auxiliary checks (`.zero-is-model` / `.invalid-all-mult-zero`)
 # run the full rewrite + z3 pipeline.
@@ -114,13 +124,16 @@ TACTIC_AUX = _pipe(
 STEP_TACTICS: dict[str, str] = {
     # Bus-interaction steps: ground + early eq elim + normalize.
     "substitute_bus_interactio_fields": _BUS_EQ,
-    "low_degree_bus": _BUS_EQ,
+    # `low_degree_bus` and `inlining` need the `rewrite` case-split (see
+    # `_BUS_EQ_RW`): without it reth 2099476/023, 3653144/023 and 3464784/035
+    # completeness all time out whole-script and solve in <3s with it.
+    "low_degree_bus": _BUS_EQ_RW,
     "memory": _BUS_EQ,
     "remove_disconnected": _BUS_EQ,
-    "inlining": _BUS_EQ,
+    "inlining": _BUS_EQ_RW,
     # `rewrite` factors the selector gadgets rule_based leaves (booleanity,
     # ternary flags); trailing `demod` clears the residual mods.
-    "rule_based": _pipe(_BUS_EQ, "rewrite", "demod"),
+    "rule_based": _BUS_EQ_RW,
     "range_constraints": _BUS_EQ,
     # `_BUS_EQ` runs `z3-solve-eqs` BEFORE `_NORM` (normalize). This matters for
     # the memory interface encoding: skolem emits same-name pins `after-X =
