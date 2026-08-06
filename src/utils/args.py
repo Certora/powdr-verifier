@@ -58,6 +58,15 @@ def __build_parser(skip_subparsers=False):
     parser.add_argument(
         "--interface-internal-pairs", action=argparse.BooleanOptionalAction, default=True
     )
+    # Classes of before-side granted fact to assert as soundness premises; several
+    # may be given (union). Each is a fact the VC no longer checks -- keep it short.
+    parser.add_argument(
+        "--soundness-before-consequences",
+        nargs="+",
+        choices=["none", "bytes", "timestamps", "range-inference", "untagged", "all"],
+        default=["bytes"],
+        metavar="KIND",
+    )
     parser.add_argument(
         "--interface-ignore-checks", action=argparse.BooleanOptionalAction, default=True
     )

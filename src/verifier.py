@@ -113,6 +113,44 @@ def encoding(before, after, qvars, io_relation, additional_asserts=[]):
     return res
 
 
+def _soundness_before_premises(before_smt):
+    """Before-side consequences to assert as premises in the soundness VC.
+
+    The `memory` pass deletes memory recvs and with them their byte grants, so the
+    after side -- where soundness draws its premises -- loses facts the before-side
+    send obligations still demand. Asserting the before side's grants at top level
+    lets the same-name pins (made free and pinned to their after counterparts by
+    `lift`) carry them onto the after values, no renaming needed.
+
+    Set-valued selection over ``ConsequenceKind``, so the tag comes from the producer
+    rather than a guess; ``none`` wins over anything else, ``all`` grants everything.
+
+    Every granted fact is one the VC stops checking -- the byte grant trivialises the
+    send byte obligation on the same columns -- so grant the narrowest set that works.
+    Sound only for *pinned* columns: an unpinned qvar stays bound, so a top-level copy
+    is a free shadow z3 can pick adversarially (the is_valid spurious-sat family).
+    """
+    modes = set(ARGS().soundness_before_consequences or [])
+    if not modes or "none" in modes:
+        return []
+    if "all" in modes:
+        return consequence_formulas(before_smt.consequences)
+    selectors = {
+        "bytes": ConsequenceKind.MEMORY_RECV_BYTES,
+        "timestamps": ConsequenceKind.MEMORY_TIMESTAMP_BOUNDS,
+        "range-inference": ConsequenceKind.RANGE_INFERENCE,
+        "untagged": ConsequenceKind.UNTAGGED,
+    }
+    kinds = {selectors[m] for m in modes if m in selectors}
+    kept = consequences_of_kind(before_smt.consequences, *kinds)
+    logging.info(
+        "soundness before-consequences %s: granting %d of %d before-side consequence(s)",
+        sorted(modes),
+        len(kept),
+        len(before_smt.consequences),
+    )
+    return kept
+
 def verify():
     """Verify our versions of equivalence."""
 
@@ -396,6 +434,7 @@ def verify():
                         before_smt,
                         soundness_qvars,
                         io_relation,
+                        additional_asserts=_soundness_before_premises(before_smt),
                     )
                     info = pin_metadata(
                         soundness,
