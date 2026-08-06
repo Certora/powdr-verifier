@@ -75,15 +75,28 @@ def encoding(before, after, qvars, io_relation, additional_asserts=[], granted_i
     same-name) as ``Not(q = expr)`` disjuncts which ``simplify_lift_forall``
     hoists out as top-level assertions.
 
-    ``granted_inner`` are facts granted to the *inner* (quantified) side. They become
-    an ANTECEDENT of its obligation, inside the quantifier: the inner side then only
-    has to hold *given* them, which is what makes a granted fact a premise rather
-    than something to establish. Keeping them inside matters -- asserted at top level
-    they would reference the free copies of columns the ForAll binds, shadowing the
-    bound ones (that is the whole point of the consequences channel below), and `lift`
-    cannot hoist them itself since it only hoists `q = expr` pins. Written over the
-    bound columns, `lift`'s pin substitution rewrites them to the other side's columns
-    for free.
+    ``granted_inner`` are facts granted to the *inner* (quantified) side, added as one
+    more disjunct of the body -- the same place `simplify_skolem` puts its pins, and
+    for the same reason: written over the BOUND columns, so nothing at top level
+    shadows the columns the ForAll binds (asserting them at top level did: 32 shadowed
+    binders on guest-keccak 2099680), and the existing constraints are left untouched,
+    so the pins `skolem_isolate` recovers from them survive.
+
+    One disjunct, not folded into each implication: folding multiplied every grant into
+    every antecedent (~1.7k implications x 585 grants = 750k implications, 468MB) and
+    timed the largest reth blocks out.
+
+    NOTE ON POLARITY: as a disjunct this does not by itself weaken the obligation.
+    ``forall q. (B or not G)`` is ``forall q. (G -> B)``, so the witness must satisfy
+    ``G`` -- and where ``G`` is already a conjunct of ``inner`` (the byte obligation we
+    are trying to discharge) that is a no-op. Measured: reth 2099476/011 soundness
+    stays at `unknown-timeout`, exactly as with `--soundness-before-consequences none`.
+    It becomes a premise only once `lift` hoists the disjunct out with its pin map
+    applied, which puts ``G[q := after-...]`` at top level over the other side's
+    columns. `lift` cannot do that yet: it matches only ``q = expr`` pins, and it must
+    not hoist arbitrary ``Not(...)`` disjuncts (``Not(inner)`` is one, and hoisting it
+    would assert the inner program at top level and make the artifact vacuous), so the
+    grant needs a marker for `lift` to recognise.
 
     Only ``before.consequences`` (the reference side) are asserted, as premises
     at the top level; ``after.consequences`` are deliberately NOT added to the
@@ -96,16 +109,16 @@ def encoding(before, after, qvars, io_relation, additional_asserts=[], granted_i
     """
     if ARGS().filter_constraints:
         after = _filter_mirrored_constraints(before, after)
-    inner = And(*after.constraints)
-    if granted_inner:
-        inner = Implies(And(*granted_inner), inner)
     res = And(
         *before.constraints,
         *consequence_formulas(before.consequences),
         ForAll(
             qvars,
             Or(
-                Not(inner),
+                Not(And(*after.constraints)),
+                # One disjunct carrying the granted facts; see the note on polarity
+                # above -- inert until `lift` hoists it.
+                *([Not(And(*granted_inner))] if granted_inner else []),
                 # Not(And(*after.consequences)), # NOT HERE!
                 Not(io_relation),
             ),
@@ -132,10 +145,10 @@ def _soundness_before_premises(before_smt):
     The `memory` pass deletes memory recvs and with them their byte grants, so the
     after side -- where soundness draws its premises -- loses facts the before-side
     send obligations still demand. These are handed to `encoding(granted_inner=...)`,
-    which makes them an antecedent of the before-side obligation *inside* the
-    quantifier; `lift`'s pin substitution then rewrites them onto the after columns.
-    Deliberately not asserted at top level: there they would shadow the columns the
-    ForAll binds (measured: 32 extra shadowed binders and a surviving `forall` on 8
+    which adds them as one more disjunct of the quantified body -- where they are inert
+    until `lift` learns to hoist them with its pin map applied (see the polarity note
+    there). Deliberately not asserted at top level: there they would shadow the columns
+    the ForAll binds (measured: 32 extra shadowed binders and a surviving `forall` on 8
     guest-keccak `004_remove_trivial` blocks).
 
     Set-valued selection over ``ConsequenceKind``, so the tag comes from the producer
