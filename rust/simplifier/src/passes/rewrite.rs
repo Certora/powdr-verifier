@@ -16,6 +16,13 @@ const MAX_REWRITE_COUNT: usize = 5;
 struct RewriteStats {
     rewrites: usize,
     factor_calls: usize,
+    /// Rewrites that produced a single-variable root domain (`roots_with_range`):
+    /// booleanity / ternary selectors. This is the kind reth needs.
+    root_rewrites: usize,
+    /// Rewrites that produced a general `Or` over multi-variable factor
+    /// congruences. guest-keccak 2100224/034 has 1 selector yet 234 rewrites, so
+    /// nearly all of its cost is here.
+    factor_rewrites: usize,
 }
 
 pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
@@ -34,6 +41,8 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
         let rewritten = rewrite_formula(b, field, &coupled, &mut stats);
         global.rewrites += stats.rewrites;
         global.factor_calls += stats.factor_calls;
+        global.root_rewrites += stats.root_rewrites;
+        global.factor_rewrites += stats.factor_rewrites;
         let new = match rewritten {
             Some(new) => {
                 changed += 1;
@@ -53,6 +62,8 @@ pub fn apply(script: &Script) -> Result<(Script, serde_json::Value), String> {
             "factor_calls": global.factor_calls,
             "selectors": n_selectors,
             "coupled_selectors": coupled.len(),
+            "root_rewrites": global.root_rewrites,
+            "factor_rewrites": global.factor_rewrites,
         }),
     ))
 }
@@ -158,15 +169,21 @@ fn rewrite_choice(
     }
     if flat.len() >= 2 {
         if let Some((var, roots)) = solved_roots(&flat, p) {
+            stats.root_rewrites += 1;
             return Some(roots_with_range(&var, &roots, p, coupled));
         }
+        stats.factor_rewrites += 1;
         let parts: Vec<Bool> = flat
             .iter()
             .map(|f| mod_zero_eq(f, p))
             .collect();
         return Some(or_terms(parts));
     }
-    rewrite_quadratic(expr, p, coupled)
+    let out = rewrite_quadratic(expr, p, coupled);
+    if out.is_some() {
+        stats.root_rewrites += 1;
+    }
+    out
 }
 
 fn rewrite_quadratic(expr: &Int, p: i128, coupled: &HashSet<Int>) -> Option<Bool> {
