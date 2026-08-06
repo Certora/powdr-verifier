@@ -227,12 +227,13 @@ fn collect_from_bool(b: &Bool, ranges: &mut Ranges) {
     let (Some(ai), Some(bi)) = (a.as_int(), b2.as_int()) else {
         return;
     };
-    let mut terms: HashMap<Int, i128> = HashMap::new();
+    let mut acc = LinearAcc::default();
     let mut c0: i128 = 0;
-    if !linear_add(1, &ai, &mut terms, &mut c0) || !linear_add(-1, &bi, &mut terms, &mut c0) {
+    if !linear_add(1, &ai, &mut acc, &mut c0) || !linear_add(-1, &bi, &mut acc, &mut c0) {
         return;
     }
-    terms.retain(|_, c| *c != 0);
+    let mut terms = acc.terms;
+    terms.retain(|(_, c)| *c != 0);
     if terms.len() != 1 {
         return;
     }
@@ -502,7 +503,7 @@ fn demod_rewrite_eqmod_zero_equals(lhs: &Int, rhs: &Int, field_mod: Option<i128>
         return None;
     }
     let (mut terms, const_) = linear_form(&expr)?;
-    terms.retain(|_, a| {
+    terms.retain_mut(|(_, a)| {
         let r = a.rem_euclid(p);
         *a = r;
         r != 0
@@ -652,17 +653,46 @@ fn demod_rewrite_eqmod_range(
     Some(Bool::or(&refs))
 }
 
-fn linear_form(e: &Int) -> Option<(HashMap<Int, i128>, i128)> {
-    let mut terms = HashMap::new();
+/// Linear form terms in **first-encounter order** of the expression traversal.
+///
+/// The order is part of the contract, not an implementation detail:
+/// `try_reduce_residue_eq` rebuilds the balanced sum straight from this list, so
+/// collecting into a bare `HashMap` leaked rust's per-process hash seed into the
+/// emitted `.smt2` -- the same binary on the same input produced sums whose
+/// summands were permuted (240 of 3789 lines on reth 2099476/023). That made
+/// byte-comparison useless for A/B-ing simplifier changes. A `Vec` keyed by a
+/// side index keeps the O(1) accumulation while making the output reproducible.
+type LinearTerms = Vec<(Int, i128)>;
+
+#[derive(Default)]
+struct LinearAcc {
+    terms: LinearTerms,
+    idx: HashMap<Int, usize>,
+}
+
+impl LinearAcc {
+    fn add(&mut self, var: Int, c: i128) {
+        match self.idx.get(&var) {
+            Some(&i) => self.terms[i].1 += c,
+            None => {
+                self.idx.insert(var.clone(), self.terms.len());
+                self.terms.push((var, c));
+            }
+        }
+    }
+}
+
+fn linear_form(e: &Int) -> Option<(LinearTerms, i128)> {
+    let mut acc = LinearAcc::default();
     let mut const_ = 0i128;
-    if linear_add(1, e, &mut terms, &mut const_) {
-        Some((terms, const_))
+    if linear_add(1, e, &mut acc, &mut const_) {
+        Some((acc.terms, const_))
     } else {
         None
     }
 }
 
-fn linear_add(c: i128, e: &Int, terms: &mut HashMap<Int, i128>, const_: &mut i128) -> bool {
+fn linear_add(c: i128, e: &Int, terms: &mut LinearAcc, const_: &mut i128) -> bool {
     let d = Dynamic::from_ast(e);
     if let Some(v) = int_lit(&d) {
         *const_ += c * v;
@@ -670,7 +700,7 @@ fn linear_add(c: i128, e: &Int, terms: &mut HashMap<Int, i128>, const_: &mut i12
     }
     if is_int_const(&d) {
         if let Some(var) = d.as_int() {
-            *terms.entry(var).or_insert(0) += c;
+            terms.add(var, c);
             return true;
         }
     }

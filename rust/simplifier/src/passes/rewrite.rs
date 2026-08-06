@@ -654,7 +654,7 @@ mod tests {
     fn rewrite_assert(body: &str) -> Bool {
         let script = Script::parse(&format!("(assert {body})\n(check-sat)\n")).unwrap();
         let term = script.commands[0].assert_bool().unwrap().clone();
-        let coupled = coupled_selectors(&script, field());
+        let (coupled, _) = coupled_selectors(&script, field());
         let mut stats = RewriteStats::default();
         rewrite_formula(&term, field(), &coupled, &mut stats).unwrap_or(term)
     }
@@ -673,8 +673,9 @@ mod tests {
                  (assert (= (mod (* x y) {p}) 0))\n(check-sat)\n"
             ))
             .unwrap();
-            let coupled = coupled_selectors(&script, p);
+            let (coupled, n_selectors) = coupled_selectors(&script, p);
             assert_eq!(coupled.len(), 2, "x and y should be coupled");
+            assert_eq!(n_selectors, 2, "x and y are both selectors");
             let target = script.commands[2].assert_bool().unwrap().clone();
             let mut stats = RewriteStats::default();
             let out = rewrite_formula(&target, p, &coupled, &mut stats).unwrap_or(target);

@@ -188,18 +188,40 @@ pub fn ensure_free_symbols_declared(
     ctx: &mut ParseCtx,
     declared: &mut HashSet<SymbolId>,
 ) -> Result<(), String> {
+    // Declare in symbol-NAME order rather than in whatever order the collectors
+    // yield. `free_int_symbol_ids` returns a `HashSet`, so the emitted prefix
+    // varied run to run -- and because ingesting a declaration is what creates the
+    // z3 symbol, that also permuted the `SymbolId`s the UF `BTreeMap` below is
+    // keyed on, so even the ordered UF loop emitted `uf_and`/`uf_or` in a random
+    // order. Name order is stable across processes; `SymbolId` is not.
+    let mut ints: Vec<(String, SymbolId)> = Vec::new();
     for id in free_int_symbol_ids(b) {
-        if !declared.insert(id) {
+        if declared.contains(&id) {
             continue;
         }
         let sym = symbol_name_for_id(id).ok_or_else(|| format!("unknown symbol id {id:?}"))?;
+        ints.push((sym, id));
+    }
+    ints.sort();
+    for (sym, id) in ints {
+        if !declared.insert(id) {
+            continue;
+        }
         ctx.ingest_command(&format!("(declare-fun {sym} () Int)"))?;
     }
+    let mut ufs: Vec<(String, SymbolId, usize)> = Vec::new();
     for (id, arity) in free_uf_function_symbol_ids(b) {
-        if !declared.insert(id) {
+        if declared.contains(&id) {
             continue;
         }
         let sym = symbol_name_for_id(id).ok_or_else(|| format!("unknown symbol id {id:?}"))?;
+        ufs.push((sym, id, arity));
+    }
+    ufs.sort();
+    for (sym, id, arity) in ufs {
+        if !declared.insert(id) {
+            continue;
+        }
         let args = (0..arity).map(|_| "Int").collect::<Vec<_>>().join(" ");
         ctx.ingest_command(&format!("(declare-fun {sym} ({args}) Int)"))?;
     }
@@ -239,17 +261,31 @@ pub fn ensure_declarations_for_asserts(script: &Script) -> Result<Script, String
 
     let mut ctx = ParseCtx::new();
     seed_parser_context(&mut ctx, script)?;
-    let mut decls = Vec::new();
+    // Splice the missing declarations in symbol-NAME order. The maps above are
+    // keyed by `SymbolId`, which is assigned per process and is NOT stable across
+    // runs, so ordering by it emitted e.g. `uf_and`/`uf_or` in a random order and
+    // made the whole `.smt2` non-reproducible (guest-keccak 2100224/034 soundness
+    // alternated between two outputs differing in exactly these two lines).
+    let mut int_names: Vec<String> = Vec::with_capacity(missing_int.len());
     for id in missing_int.keys() {
-        let sym = symbol_name_for_id(*id).ok_or_else(|| format!("unknown symbol id {id:?}"))?;
+        int_names.push(symbol_name_for_id(*id).ok_or_else(|| format!("unknown symbol id {id:?}"))?);
+    }
+    int_names.sort();
+    let mut uf_names: Vec<(String, usize)> = Vec::with_capacity(missing_uf.len());
+    for (id, arity) in &missing_uf {
+        uf_names
+            .push((symbol_name_for_id(*id).ok_or_else(|| format!("unknown symbol id {id:?}"))?, *arity));
+    }
+    uf_names.sort();
+    let mut decls = Vec::new();
+    for sym in int_names {
         decls.push(parse_single_command(
             &format!("(declare-fun {sym} () Int)"),
             &mut ctx,
         )?);
     }
-    for (id, arity) in &missing_uf {
-        let sym = symbol_name_for_id(*id).ok_or_else(|| format!("unknown symbol id {id:?}"))?;
-        let args = (0..*arity).map(|_| "Int").collect::<Vec<_>>().join(" ");
+    for (sym, arity) in uf_names {
+        let args = (0..arity).map(|_| "Int").collect::<Vec<_>>().join(" ");
         decls.push(parse_single_command(
             &format!("(declare-fun {sym} ({args}) Int)"),
             &mut ctx,
