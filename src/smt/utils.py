@@ -275,14 +275,24 @@ def as_consequence(c) -> Consequence:
 
 
 def consequence_formulas(cs: Iterable) -> list[FNode]:
-    """The formulas of ``cs``, accepting tagged and bare entries alike."""
-    return [as_consequence(c).formula for c in cs]
+    """The formulas of ``cs``, accepting tagged and bare entries alike.
+
+    Simplified, which decides constant guards: a disabled (``mult = 0``) memory row's
+    byte grant folds to true and drops out. A symbolic mult keeps its guard.
+    """
+    return list(
+        without_trues(
+            keep_comment(f.simplify(), f)
+            for f in (as_consequence(c).formula for c in cs)
+            if f is not None
+        )
+    )
 
 
 def consequences_of_kind(cs: Iterable, *kinds: ConsequenceKind) -> list[FNode]:
     """Formulas of ``cs`` whose kind is one of ``kinds``."""
     wanted = frozenset(kinds)
-    return [c.formula for c in map(as_consequence, cs) if c.kind in wanted]
+    return consequence_formulas(c for c in map(as_consequence, cs) if c.kind in wanted)
 
 
 def without_true_consequences(cs: Iterable) -> list[Consequence]:

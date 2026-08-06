@@ -88,6 +88,28 @@ def test_untagged_is_selectable_but_not_part_of_bytes():
     assert _soundness_before_premises(_mixed()) == [BARE_F]
 
 
+def test_constant_guards_are_decided():
+    """A grant is `mult = -1 mod P -> data are bytes` per row with the guard left
+    unevaluated (`demod` runs after `lift`). Selecting it simplifies: a live recv keeps
+    the bare range, a disabled `mult = 0` row folds to true and drops out."""
+    _args()
+    d = _sym("d")
+
+    def grant(mult: int) -> Consequence:
+        guard = Equals(wrap_mod(Plus(Int(mult), Int(1))), Int(0))
+        return Consequence(ConsequenceKind.MEMORY_RECV_BYTES, Implies(guard, _byte(d)))
+
+    # (simplify is set-based over `And`, so compare against the simplified range)
+    assert _soundness_before_premises(_formula([grant(-1)])) == [_byte(d).simplify()]
+    assert _soundness_before_premises(_formula([grant(0)])) == []
+    # ... and a symbolic multiplicity is undecidable here, so it keeps its guard.
+    m = _sym("m")
+    sym = Implies(Equals(wrap_mod(Plus(m, Int(1))), Int(0)), _byte(d))
+    assert _soundness_before_premises(
+        _formula([Consequence(ConsequenceKind.MEMORY_RECV_BYTES, sym)])
+    ) == [sym]
+
+
 # --------------------------------------------------------------------------- #
 # the property
 #
