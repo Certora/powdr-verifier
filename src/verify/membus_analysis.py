@@ -887,6 +887,31 @@ def _collect_internal_pairs(
     return pairs, inert
 
 
+def _has_symbolic_address_space(data: dict[str, Any]) -> bool:
+    """Whether any memory interaction has a non-constant address space.
+
+    This is exactly the negation of ``busmodel.require_explicit_address_spaces``,
+    the *shared* precondition of the membus ``align`` and ``solve`` subprocesses:
+    both raise (subprocess exits non-zero, the fetch returns ``None``) as soon as
+    one memory row's address space is symbolic. Deciding it in-process lets us
+    skip those calls instead of paying ~10s per doomed spawn -- on the widest
+    guest-keccak block (2100224: 540 symbolic rows of 4056) the two align and two
+    solve attempts burned ~40s of the 60s encode budget to all return ``None``.
+
+    Distinct from ``_memory_address_spaces(...) is None``, which also reports
+    ``None`` when the memory bus is unresolved -- with no memory rows the
+    precondition holds vacuously, so that case must NOT skip.
+    """
+    mem_id = _memory_bus_id(data)
+    if mem_id is None:
+        return False
+    return any(
+        not isinstance(bi["args"][0], int)
+        for bi in data["machine"]["bus_interactions"]
+        if bi["id"] == mem_id
+    )
+
+
 def run_membus_analysis(
     before: dict[str, Any],
     after: dict[str, Any],
@@ -902,10 +927,28 @@ def run_membus_analysis(
     align_ran = False
     present = _memory_address_spaces(before)
 
+    # `align` and `solve` both require solved AS form; when either side violates
+    # it every attempt provably fails, so don't spawn them at all (the fallback
+    # path below is what runs today anyway, just ~40s later).
+    symbolic_as = _has_symbolic_address_space(before) or _has_symbolic_address_space(
+        after
+    )
+    if symbolic_as:
+        _LOG.info(
+            "membus: symbolic memory address space present; skipping align/solve "
+            "(both require solved AS form and would fail)"
+        )
+
     # Align every constant address space present (native AS3 blocks exist in
     # guest-keccak); fall back to the register/memory pair when the set is
     # unknown (symbolic address space).
-    for addr_space in sorted(present) if present is not None else (1, 2):
+    if symbolic_as:
+        align_spaces: tuple[int, ...] = ()
+    elif present is not None:
+        align_spaces = tuple(sorted(present))
+    else:
+        align_spaces = (1, 2)
+    for addr_space in align_spaces:
         al = fetch_align_json(before_path, after_path, addr_space=addr_space)
         if al is None:
             continue
@@ -992,7 +1035,7 @@ def run_membus_analysis(
         for r in before_align_rows
         if r.get("status") == "removed" and r.get("before_id") is not None
     }
-    skip_solve = align_ran and presolve_interface_eligible(
+    skip_solve = symbolic_as or (align_ran and presolve_interface_eligible(
         before,
         after,
         kept_pairs,
@@ -1000,7 +1043,7 @@ def run_membus_analysis(
         n_before,
         n_after,
         after_assume_is_valid=after_assume_is_valid,
-    )
+    ))
     if skip_solve:
         before_solve = after_solve = None
     else:
