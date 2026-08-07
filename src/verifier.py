@@ -75,13 +75,6 @@ def encoding(before, after, qvars, io_relation, additional_asserts=[]):
     same-name) as ``Not(q = expr)`` disjuncts which ``simplify_lift_forall``
     hoists out as top-level assertions.
 
-    Facts granted to the quantified side go through ``additional_asserts``, already
-    mapped onto *this* side's columns by ``_transported_before_grants``. There is no
-    channel for granting them over the bound columns: written inside the quantifier a
-    grant is an obligation on the witness, not a premise (``forall q. (B or not G)``
-    is ``forall q. (G -> B)``), and written at top level over the bound names it is a
-    free shadow of a column the ForAll binds. Only the renamed, top-level form grants.
-
     Only ``before.consequences`` (the reference side) are asserted, as premises
     at the top level; ``after.consequences`` are deliberately NOT added to the
     negated obligation. A consequence is a fact *derived from* the constraints
@@ -118,138 +111,6 @@ def encoding(before, after, qvars, io_relation, additional_asserts=[]):
                 subs[Symbol(name, INT)] = Int(value)
         res = res.substitute(subs)
     return res
-
-
-def _soundness_before_premises(before_smt):
-    """Before-side consequences to assert as premises in the soundness VC.
-
-    The `memory` pass deletes memory recvs and with them their byte grants, so the
-    after side -- where soundness draws its premises -- loses facts the before-side
-    send obligations still demand. Selected here, then renamed onto the after columns
-    by `_transported_before_grants`, which is what makes them premises.
-
-    Set-valued selection over ``ConsequenceKind``, so the tag comes from the producer
-    rather than a guess; ``none`` wins over anything else, ``all`` grants everything.
-
-    Every granted fact is one the VC stops checking -- the byte grant trivialises the
-    send byte obligation on the same columns -- so grant the narrowest set that works.
-    """
-    modes = set(ARGS().soundness_before_consequences or [])
-    if not modes or "none" in modes:
-        return []
-    if "all" in modes:
-        return consequence_formulas(before_smt.consequences)
-    selectors = {
-        "bytes": ConsequenceKind.MEMORY_RECV_BYTES,
-        "timestamps": ConsequenceKind.MEMORY_TIMESTAMP_BOUNDS,
-        "range-inference": ConsequenceKind.RANGE_INFERENCE,
-        "untagged": ConsequenceKind.UNTAGGED,
-    }
-    kinds = {selectors[m] for m in modes if m in selectors}
-    kept = consequences_of_kind(before_smt.consequences, *kinds)
-    logging.info(
-        "soundness before-consequences %s: granting %d of %d before-side consequence(s)",
-        sorted(modes),
-        len(kept),
-        len(before_smt.consequences),
-    )
-    return kept
-
-
-def _conjuncts(f: FNode) -> list[FNode]:
-    """``f``'s top-level conjuncts (``[f]`` if it is not a conjunction)."""
-    return list(f.args()) if f.is_and() else [f]
-
-
-def _formula_symbols(smt) -> set[FNode]:
-    """Every symbol occurring in a side's constraints, consequences or axioms.
-
-    The side's own free variables, deliberately -- not ``SmtConverter.symbols``, which
-    mints a symbol per dump column whether the encoding uses it or not.
-    """
-    out: set[FNode] = set()
-    for f in (*smt.constraints, *consequence_formulas(smt.consequences), *smt.axioms):
-        out |= f.get_free_variables()
-    return out
-
-
-def _same_name_map(before_smt, after_smt) -> dict[FNode, FNode]:
-    """``before-X@i -> after-X@i`` for every before column the after side also has.
-
-    The encoder-side twin of :mod:`src.simplify.skolem_names`: the soundness VC binds
-    the before columns and the skolem pass pins each to its same-name after counterpart,
-    so substituting along this map takes a fact about a bound before column to the same
-    fact about the free after column it is pinned to.
-    """
-    after_syms = {s.symbol_name(): s for s in _formula_symbols(after_smt)}
-    out = {}
-    for s in _formula_symbols(before_smt):
-        name = s.symbol_name()
-        if not name.startswith(f"{BEFORE_PREFIX}-"):
-            continue
-        twin = after_syms.get(f"{AFTER_PREFIX}-{name[len(BEFORE_PREFIX) + 1:]}")
-        if twin is not None and twin.get_type() == s.get_type():
-            out[s] = twin
-    return out
-
-
-def _transported_before_grants(before_smt, after_smt) -> list[FNode]:
-    """Granted before-side facts the after side lost, renamed onto the after columns.
-
-    Three steps, matching what the bug needs:
-
-    1. select the before side's grants (`_soundness_before_premises`);
-    2. drop the ones the after side still has -- both sides' grants come from the same
-       producer and are folded the same way, so a surviving fact is syntactically equal
-       to its before-side twin once renamed, and only the facts belonging to *deleted*
-       recvs are left;
-    3. rename what remains onto the after columns via the same-name pins.
-
-    The result mentions only after columns, so it is asserted at top level as an
-    ordinary premise -- no bound column is shadowed, and nothing has to survive `nnf`
-    in a liftable shape.
-
-    An atom that still mentions a before column after renaming has no same-name twin,
-    i.e. no pin to justify transporting it, and is dropped.
-
-    ACCEPTED RISK: a transported fact is one the VC stops checking. On a column that is
-    both read and written the grant and the send obligation are the same predicate, so
-    a circuit writing a non-byte there makes the premises contradictory and the check
-    passes vacuously. See ``test_corrupted_read_sourced_write_is_masked``.
-    """
-    granted = _soundness_before_premises(before_smt)
-    if not granted:
-        return []
-    subs = _same_name_map(before_smt, after_smt)
-    kinds = [ConsequenceKind.MEMORY_RECV_BYTES, ConsequenceKind.MEMORY_TIMESTAMP_BOUNDS]
-    still_there = {
-        c
-        for f in consequences_of_kind(after_smt.consequences, *kinds)
-        for c in _conjuncts(f)
-    }
-    out, seen, unpinned = [], set(), 0
-    for g in granted:
-        for c in _conjuncts(g):
-            t = c.substitute(subs)
-            if any(
-                v.symbol_name().startswith(f"{BEFORE_PREFIX}-")
-                for v in t.get_free_variables()
-            ):
-                unpinned += 1
-                continue
-            if t in still_there or t in seen:
-                continue
-            seen.add(t)
-            out.append(t)
-    logging.info(
-        "transported before-grants: %d fact(s) the after side lost (%d already there, "
-        "%d unpinned), over %d same-name pins",
-        len(out),
-        sum(len(_conjuncts(g)) for g in granted) - len(out) - unpinned,
-        unpinned,
-        len(subs),
-    )
-    return out
 
 
 def verify():
@@ -425,10 +286,7 @@ def verify():
                         before_smt,
                         soundness_qvars,
                         io_relation,
-                        additional_asserts=[
-                            Equals(is_valid_after, Int(1)),
-                            *_transported_before_grants(before_smt, after_smt),
-                        ],
+                        additional_asserts=[Equals(is_valid_after, Int(1))],
                     )
                     info = pin_metadata(
                         soundness,
@@ -538,9 +396,6 @@ def verify():
                         before_smt,
                         soundness_qvars,
                         io_relation,
-                        additional_asserts=_transported_before_grants(
-                            before_smt, after_smt
-                        ),
                     )
                     info = pin_metadata(
                         soundness,
