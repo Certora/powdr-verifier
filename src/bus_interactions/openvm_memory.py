@@ -491,11 +491,23 @@ class OpenVMMemoryEncoder(
         # algorithm (`infer_unconditional_ranges`) — it must not join the
         # equivalence VC.
         # Internal (single-circuit) forced recv<->send pairs, computed early so
-        # the send-byte obligation below can exclude them: an internal send's
-        # data is forced equal (positionally, via `internal_pair_equalities`
-        # below) to its paired recv's data, which is already a granted byte
-        # premise on this same side -- re-asserting bytes as an obligation for
-        # that send is redundant and only adds to the goal disjunction.
+        # the send-byte obligation below can exclude them. "Memory holds bytes"
+        # is a VM-environment invariant needed only because OTHER, later
+        # consumers read memory and lean on it via the recv-bytes grant above --
+        # it exists to make THAT premise sound for traffic something outside
+        # this circuit can actually observe. A forced internal pair is exactly
+        # the align-certified opposite: the write is immediately consumed by
+        # its one forced partner recv and the whole pair is compiled away --
+        # absent from `after`, hence absent from every later pass too. Nothing
+        # outside this circuit ever gets a chance to read it, so nothing ever
+        # relies on it being a byte; requiring it anyway was pure proof-cost
+        # with no corresponding safety payoff, not a documented property of
+        # the pair itself. (Team decision, 2026-08-11: block-internal,
+        # unobservable memory traffic is allowed to be non-bytes.) This is
+        # independent of `internal_pair_equalities` below, which still ties
+        # the pair's arguments together as a real constraint -- a *misclassified*
+        # pair (one that isn't actually forced/local) would surface as a
+        # failure there, not here.
         internal_pairs: list[tuple[int, int]] = []
         if (
             interface
