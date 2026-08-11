@@ -758,12 +758,18 @@ pub fn quantifier_bounds(ast: &Dynamic) -> Vec<Dynamic> {
         for i in 0..n {
             let sym = Z3_get_quantifier_bound_name(z3, ast.get_z3_ast(), i as u32).unwrap();
             let sort = Z3_get_quantifier_bound_sort(z3, ast.get_z3_ast(), i as u32).unwrap();
-            let name = z3_symbol_to_string(ctx, sym);
-            let bound: Dynamic = if quantifier_bound_sort_is_bool(&name, Z3_get_sort_kind(z3, sort)) {
-                Dynamic::from_ast(&Bool::new_const(name.as_str()))
-            } else {
-                Dynamic::from_ast(&Int::new_const(name.as_str()))
-            };
+            // Build the replacement directly from the bound variable's own
+            // symbol + sort, not a Bool/Int guess by sort kind: the array
+            // memory encoding binds Array (and nested Array) variables here
+            // too, and a wrong-sorted replacement (everything non-Bool used
+            // to become Int) makes the later rebuild_app on the substituted
+            // body call Z3_mk_app with a sort mismatch -- Z3 reports that by
+            // returning null, and the `.unwrap()` on it panics. Reusing the
+            // original `sym`/`sort` handles any sort Z3 hands back, not just
+            // the two spelled out here, and is exactly what Bool::new_const
+            // / Int::new_const did under the hood for the cases this used to
+            // cover.
+            let bound: Dynamic = Dynamic::wrap(&ctx, Z3_mk_const(z3, sym, sort).unwrap());
             out.push(bound);
         }
         out
@@ -1197,6 +1203,40 @@ mod tests {
         let rebuilt_ast = Dynamic::from_ast(&rebuilt);
         assert_eq!(quantifier_bound_names(&rebuilt_ast), vec!["x", "flag"]);
         assert_eq!(rebuilt.to_string(), b.to_string());
+    }
+
+    #[test]
+    fn quantifier_bounds_preserves_array_sort() {
+        // The array memory encoding binds Array (and nested Array) variables
+        // in quantifiers; `quantifier_bounds` used to hand back an Int
+        // replacement for anything non-Bool. Substituting that wrong-sorted
+        // replacement into `(select mem x)` made rebuild_app call Z3_mk_app
+        // with a sort mismatch, which Z3 reports by returning null, and the
+        // `.unwrap()` on that panicked -- this is the exact crash that made
+        // `--memory-encoding array` unusable.
+        if !has_z3() {
+            return;
+        }
+        let mut ctx = ParseCtx::new();
+        let b = ctx
+            .ingest_command(
+                "(assert (forall ((mem (Array Int Int)) (x Int)) (= (select mem x) 0)))",
+            )
+            .unwrap()
+            .unwrap();
+        let ast = Dynamic::from_ast(&b);
+        let bounds = quantifier_bounds(&ast);
+        assert_eq!(bounds.len(), 2);
+        assert!(bounds[0].get_sort().is_array());
+        assert_eq!(bounds[1].get_sort().kind(), SortKind::Int);
+
+        // Match the real crash path (lift.rs's name_debruijn_dyn): substitution
+        // is keyed by de Bruijn index, not declaration order.
+        let de_bruijn_bounds = quantifier_bounds_de_bruijn(&ast);
+        let body = quantifier_body(&ast).expect("body");
+        let substituted = substitute_bound_vars_dyn(&body, &de_bruijn_bounds);
+        assert!(!contains_bound_var_dyn(&substituted));
+        assert!(substituted.to_string().contains("(select mem x)"));
     }
 
     #[test]
