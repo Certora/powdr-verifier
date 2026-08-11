@@ -490,6 +490,21 @@ class OpenVMMemoryEncoder(
         # property, independently recoverable by the deterministic bound
         # algorithm (`infer_unconditional_ranges`) — it must not join the
         # equivalence VC.
+        # Internal (single-circuit) forced recv<->send pairs, computed early so
+        # the send-byte obligation below can exclude them: an internal send's
+        # data is forced equal (positionally, via `internal_pair_equalities`
+        # below) to its paired recv's data, which is already a granted byte
+        # premise on this same side -- re-asserting bytes as an obligation for
+        # that send is redundant and only adds to the goal disjunction.
+        internal_pairs: list[tuple[int, int]] = []
+        if (
+            interface
+            and ARGS().interface_internal_pairs
+            and alignment is not None
+            and source_path is not None
+        ):
+            internal_pairs = alignment.internal_pairs_for(source_path)
+        internal_pair_ids = {id for pair in internal_pairs for id in pair}
         if interface and ARGS().interface_assume_bytes:
             # Memory data limbs are bytes. We *assume* it for reads and *ensure*
             # it for writes:
@@ -500,7 +515,8 @@ class OpenVMMemoryEncoder(
             #   * send (write, mult ≡ +1): ENSURE -- a proof obligation; the
             #     circuit that writes must write bytes. Emitted as a constraint
             #     (both sides), so the before side carries it as a premise and
-            #     the after side as an obligation.
+            #     the after side as an obligation. Sends that are the internal
+            #     leg of a forced recv<->send pair are excluded (see above).
             # Guarding by mult ≡ ∓1 (instead of a const-mult test) covers
             # is_valid/flag-gated accesses too: when inactive the mult folds to 0
             # and neither guard fires -- so no byte claim is made on an inactive
@@ -553,6 +569,7 @@ class OpenVMMemoryEncoder(
                     f"membus #{id} send data are bytes if active (ensured)",
                 )
                 for id in ids_with_data
+                if id not in internal_pair_ids
             ]
             if send_bytes:
                 yield with_comment(
@@ -577,26 +594,19 @@ class OpenVMMemoryEncoder(
         # the other side's constraints through the same-name pins AT TOP LEVEL,
         # making the whole soundness artifact vacuously unsat — a false PASS
         # (measured on 2099600 010->011 with a corrupted send literal).
-        if (
-            interface
-            and ARGS().interface_internal_pairs
-            and alignment is not None
-            and source_path is not None
-        ):
-            pairs = alignment.internal_pairs_for(source_path)
-            if pairs:
-                eqs = internal_pair_equalities(
-                    self.NAME, self._bus_interactions(), pairs, _assume_is_valid
-                )
-                logging.info(
-                    "%s interface internal pairs: %d pair(s) -> %d equalities",
-                    self.NAME,
-                    len(pairs),
-                    len(eqs),
-                )
-                yield with_comment(
-                    And(*eqs), f"{self.NAME} internal pair equalities"
-                )
+        if internal_pairs:
+            eqs = internal_pair_equalities(
+                self.NAME, self._bus_interactions(), internal_pairs, _assume_is_valid
+            )
+            logging.info(
+                "%s interface internal pairs: %d pair(s) -> %d equalities",
+                self.NAME,
+                len(internal_pairs),
+                len(eqs),
+            )
+            yield with_comment(
+                And(*eqs), f"{self.NAME} internal pair equalities"
+            )
         if ts_recon:
             yield with_comment(And(*ts_recon), f"{self.NAME} timestamp reconstruction")
 
