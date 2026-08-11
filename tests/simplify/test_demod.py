@@ -2,7 +2,7 @@ from io import StringIO
 from textwrap import dedent
 
 from src.simplify.demod import extract_symbol_ranges, simplify_demod
-from src.simplify.intervals.domain import IntInterval
+from src.simplify.intervals.domain import INF, IntInterval
 from src.smt.utils import *
 
 
@@ -209,4 +209,26 @@ def test_extract_symbol_ranges_understands_negated_relations():
 
     assert ranges[x] == IntInterval(0, 16)
     assert ranges[y] == IntInterval(3, 16)
+    assert not protected
+
+
+def test_extract_symbol_ranges_ignores_non_arithmetic_equalities():
+    """Equalities between Array- (or Bool-) typed terms (e.g. array-encoded memory
+    state) must not reach the arithmetic `Minus` in `_single_var_linear_bound` --
+    it only type-checks over Int/Real and raised PysmtTypeError for every such
+    equality, breaking the python fallback for the whole array memory encoding."""
+    arr_ty = ArrayType(INT, ArrayType(INT, BOOL))
+    before_mem = Symbol("before-memory-0-hadinput", arr_ty)
+    after_mem = Symbol("after-memory-0-hadinput", arr_ty)
+    x = Symbol("x", INT)
+
+    ranges, protected = extract_symbol_ranges(
+        [
+            Equals(before_mem, after_mem),
+            Equals(Symbol("flag-p", BOOL), Symbol("flag-q", BOOL)),
+            LE(Int(0), x),
+        ]
+    )
+
+    assert ranges[x] == IntInterval(0, INF)
     assert not protected

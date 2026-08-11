@@ -71,6 +71,12 @@ def _single_var_linear_bound(
     from fractions import Fraction
     import math
 
+    # `=`/`!=` (unlike `<`/`<=`) type-check on any sort, so `a`/`b` here can be
+    # Array- or Bool-typed (e.g. memory-state equalities under the array
+    # encoding) — Minus() is only defined over Int/Real and would raise.
+    if not (a.get_type().is_int_type() and b.get_type().is_int_type()):
+        return None
+
     lf = linear_form(Minus(a, b))
     if lf is None:
         return None
