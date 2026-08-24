@@ -8,7 +8,10 @@ env:
 
 jobs:
   binaries:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     outputs:
       date: ${{ steps.get-date.outputs.date }}
 
@@ -18,25 +21,36 @@ jobs:
       with:
         path: verifier
         submodules: recursive
-    
+
     - name: get date for cache key
       id: get-date
-      run: echo "date=$(/bin/date -u "+%Y%m%d")" >> $GITHUB_OUTPUT
+      run: echo "date=$(date -u "+%Y%m%d")" >> "$GITHUB_OUTPUT"
       shell: bash
 
     - name: setup custom binary cache
       uses: actions/cache@v3
       with:
           path: ~/bin/
-          key: bin-sdk-${{ steps.get-date.outputs.date }}
-          restore-keys: bin-sdk-
+          # Keyed per-OS: these binaries (z3, libz3) aren't portable across
+          # platforms, and a shared prefix would let restore-keys pull in
+          # the wrong one.
+          key: bin-sdk-${{ runner.os }}-${{ steps.get-date.outputs.date }}
+          restore-keys: bin-sdk-${{ runner.os }}-
 
     - name: install custom binaries
+      shell: bash
       run: |
         mkdir -p ~/bin/
-        # Download the z3 release SDK (z3 binary + libz3.so/.a + headers) so the
-        # rust workspace links against this exact z3 instead of a system-wide one.
-        python3 verifier/download_z3.py z3-4.16.0 --bindir ~/bin/ --sdk ~/bin/z3-sdk
+        # download_z3.py needs `requests`. The system python is externally
+        # managed (PEP 668) on the macOS runner (not on Ubuntu's), so install
+        # it into a throwaway venv rather than touching the system/global
+        # site-packages -- this works uniformly on both.
+        python3 -m venv ~/bin/.download-z3-venv
+        ~/bin/.download-z3-venv/bin/pip install --quiet requests
+        # Download the z3 release SDK (z3 binary + libz3 + headers) so the
+        # rust workspace links against this exact z3 instead of a
+        # system-wide one; download_z3.py auto-selects the OS/arch asset.
+        ~/bin/.download-z3-venv/bin/python3 verifier/download_z3.py z3-4.16.0 --bindir ~/bin/ --sdk ~/bin/z3-sdk
         # The default --solver is z3-nightly (~/bin/z3-nightly); alias it to the
         # pinned release so CI solves with the exact z3 it downloaded instead of
         # a stale cached nightly.
@@ -74,7 +88,7 @@ jobs:
       with:
         path: ~/bin/
         fail-on-cache-miss: true
-        key: bin-sdk-${{ needs.binaries.outputs.date }}
+        key: bin-sdk-${{ runner.os }}-${{ needs.binaries.outputs.date }}
       
     - name: install python dependencies
       run: |
@@ -171,7 +185,7 @@ jobs:
       with:
         path: ~/bin/
         fail-on-cache-miss: true
-        key: bin-sdk-${{ needs.binaries.outputs.date }}
+        key: bin-sdk-${{ runner.os }}-${{ needs.binaries.outputs.date }}
     
     - name: install python dependencies
       run: |
@@ -266,51 +280,14 @@ jobs:
         path: verifier
         submodules: recursive
 
-    # Linux: the `binaries` job already built and cached this; just reuse it
-    # (same as lint/build) instead of redownloading z3 a second time.
-    - name: restore linux binary cache
-      if: runner.os == 'Linux'
+    # `binaries` already built and cached this for every OS in the matrix;
+    # just reuse it (same as lint/build) instead of redownloading z3 again.
+    - name: restore binary cache
       uses: actions/cache/restore@v5
       with:
         path: ~/bin/
         fail-on-cache-miss: true
-        key: bin-sdk-${{ needs.binaries.outputs.date }}
-
-    # macOS: `binaries` doesn't cover this platform, so set it up here.
-    - name: setup macos binary cache
-      if: runner.os == 'macOS'
-      uses: actions/cache@v3
-      with:
-          path: ~/bin/
-          key: bin-sdk-macos-${{ needs.binaries.outputs.date }}
-          restore-keys: bin-sdk-macos-
-
-    - name: install macos binaries
-      if: runner.os == 'macOS'
-      shell: bash
-      run: |
-        mkdir -p ~/bin/
-        # download_z3.py needs `requests`. The system python is externally
-        # managed (PEP 668) here, so install it into a throwaway venv rather
-        # than touching the system/global site-packages.
-        python3 -m venv ~/bin/.download-z3-venv
-        ~/bin/.download-z3-venv/bin/pip install --quiet requests
-        # Download the z3 release SDK (z3 binary + libz3 + headers) so the
-        # rust workspace links against this exact z3 instead of a
-        # system-wide one; download_z3.py auto-selects the OS/arch asset.
-        ~/bin/.download-z3-venv/bin/python3 verifier/download_z3.py z3-4.16.0 --bindir ~/bin/ --sdk ~/bin/z3-sdk
-        cp ~/bin/z3-4.16.0 ~/bin/z3-nightly
-        chmod +x ~/bin/*
-        # pkg-config file so z3-sys links the downloaded z3 (the parser-context
-        # API in smt2/z3_parse.rs needs a recent z3, newer than distro packages).
-        mkdir -p ~/bin/z3-sdk/pkgconfig
-        printf '%s\n' \
-          'Name: z3' \
-          'Description: Z3 theorem prover' \
-          'Version: 4.16.0' \
-          "Libs: -L$HOME/bin/z3-sdk/bin -lz3" \
-          "Cflags: -I$HOME/bin/z3-sdk/include" \
-          > ~/bin/z3-sdk/pkgconfig/z3.pc
+        key: bin-sdk-${{ runner.os }}-${{ needs.binaries.outputs.date }}
 
     - name: install autotools
       # flint3-sys builds FLINT (+ GMP/MPFR) from source via autotools on a
