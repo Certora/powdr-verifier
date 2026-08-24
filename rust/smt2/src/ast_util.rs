@@ -1209,7 +1209,7 @@ mod tests {
         // the same forall_const call). Compare logical equivalence instead of
         // the (weight-annotation-sensitive) string form.
         let solver = z3::Solver::new();
-        solver.assert(&rebuilt._eq(&b).not());
+        solver.assert(&rebuilt.eq(&b).not());
         assert_eq!(
             solver.check(),
             z3::SatResult::Unsat,
