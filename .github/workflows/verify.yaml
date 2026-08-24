@@ -39,6 +39,13 @@ jobs:
 
     - name: install custom binaries
       shell: bash
+      env:
+        # Unauthenticated api.github.com requests are capped at 60/hour per
+        # IP, which the shared runner pool exhausts easily; this raises it
+        # to 1000/hour. download_z3.py also now skips the API entirely once
+        # ~/bin/z3-sdk is already populated (a warm cache), so this mostly
+        # matters for a cold cache / first run of the day.
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         mkdir -p ~/bin/
         # download_z3.py needs `requests`. The system python is externally
