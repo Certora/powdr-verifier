@@ -253,6 +253,7 @@ jobs:
         archive: false
 
   build-rust:
+    needs: binaries
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -265,26 +266,33 @@ jobs:
         path: verifier
         submodules: recursive
 
-    - name: get date for cache key
-      id: get-date
-      run: echo "date=$(date -u "+%Y%m%d")" >> "$GITHUB_OUTPUT"
-      shell: bash
+    # Linux: the `binaries` job already built and cached this; just reuse it
+    # (same as lint/build) instead of redownloading z3 a second time.
+    - name: restore linux binary cache
+      if: runner.os == 'Linux'
+      uses: actions/cache/restore@v5
+      with:
+        path: ~/bin/
+        fail-on-cache-miss: true
+        key: bin-sdk-${{ needs.binaries.outputs.date }}
 
-    - name: setup custom binary cache
+    # macOS: `binaries` doesn't cover this platform, so set it up here.
+    - name: setup macos binary cache
+      if: runner.os == 'macOS'
       uses: actions/cache@v3
       with:
           path: ~/bin/
-          key: bin-sdk-${{ runner.os }}-${{ steps.get-date.outputs.date }}
-          restore-keys: bin-sdk-${{ runner.os }}-
+          key: bin-sdk-macos-${{ needs.binaries.outputs.date }}
+          restore-keys: bin-sdk-macos-
 
-    - name: install custom binaries
+    - name: install macos binaries
+      if: runner.os == 'macOS'
       shell: bash
       run: |
         mkdir -p ~/bin/
         # download_z3.py needs `requests`. The system python is externally
-        # managed (PEP 668) on the macOS runner (not on Ubuntu's, but a venv
-        # works uniformly on both), so install it into a throwaway venv
-        # rather than touching the system/global site-packages.
+        # managed (PEP 668) here, so install it into a throwaway venv rather
+        # than touching the system/global site-packages.
         python3 -m venv ~/bin/.download-z3-venv
         ~/bin/.download-z3-venv/bin/pip install --quiet requests
         # Download the z3 release SDK (z3 binary + libz3 + headers) so the
