@@ -282,14 +282,16 @@ jobs:
       shell: bash
       run: |
         mkdir -p ~/bin/
-        # download_z3.py needs `requests`; the Ubuntu runner image happens to
-        # ship it already, macOS's doesn't, so install it explicitly rather
-        # than relying on the image's preinstalled package set.
-        python3 -m pip install --quiet requests
+        # download_z3.py needs `requests`. The system python is externally
+        # managed (PEP 668) on the macOS runner (not on Ubuntu's, but a venv
+        # works uniformly on both), so install it into a throwaway venv
+        # rather than touching the system/global site-packages.
+        python3 -m venv ~/bin/.download-z3-venv
+        ~/bin/.download-z3-venv/bin/pip install --quiet requests
         # Download the z3 release SDK (z3 binary + libz3 + headers) so the
         # rust workspace links against this exact z3 instead of a
         # system-wide one; download_z3.py auto-selects the OS/arch asset.
-        python3 verifier/download_z3.py z3-4.16.0 --bindir ~/bin/ --sdk ~/bin/z3-sdk
+        ~/bin/.download-z3-venv/bin/python3 verifier/download_z3.py z3-4.16.0 --bindir ~/bin/ --sdk ~/bin/z3-sdk
         cp ~/bin/z3-4.16.0 ~/bin/z3-nightly
         chmod +x ~/bin/*
         # pkg-config file so z3-sys links the downloaded z3 (the parser-context
