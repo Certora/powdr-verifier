@@ -318,8 +318,30 @@ jobs:
           echo "LD_LIBRARY_PATH=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
         fi
 
+    - name: diagnose which z3 pkg-config resolves
+      shell: bash
+      run: |
+        echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+        cat ~/bin/z3-sdk/pkgconfig/z3.pc || true
+        echo "--- pkg-config --modversion z3 ---"
+        pkg-config --modversion z3 || echo "pkg-config could not resolve z3"
+        echo "--- pkg-config --libs --cflags z3 ---"
+        pkg-config --libs --cflags z3 || true
+        echo "--- our downloaded sdk contents ---"
+        ls -la ~/bin/z3-sdk/bin ~/bin/z3-sdk/include 2>&1 || true
+
     - name: build verifier rust workspace
       run: cargo build --release --workspace --manifest-path verifier/rust/Cargo.toml
+
+    - name: diagnose which z3 actually got linked
+      shell: bash
+      run: |
+        bin=verifier/rust/target/release/simplifier
+        if [ "${{ runner.os }}" = "macOS" ]; then
+          otool -L "$bin" | grep -i z3 || echo "no z3 dylib reference found via otool"
+        else
+          ldd "$bin" | grep -i z3 || echo "no z3 shared-object reference found via ldd"
+        fi
 
     - name: run rust tests
       run: cargo test --release --workspace --manifest-path verifier/rust/Cargo.toml
