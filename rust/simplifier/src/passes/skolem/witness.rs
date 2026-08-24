@@ -142,11 +142,6 @@ fn match_collapsed(f: &Bool, field: i128) -> Option<WitnessCandidate> {
     Some((factors, cmp, free_var))
 }
 
-#[cfg(test)]
-pub fn match_collapsed_for_test(f: &Bool, field: i128) -> Option<WitnessCandidate> {
-    match_collapsed(f, field)
-}
-
 pub fn contribute(map: &mut SkolemMap, body: &Bool, candidates: &[WitnessCandidate], field: i128) {
     if candidates.is_empty() {
         return;
