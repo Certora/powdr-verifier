@@ -1,6 +1,7 @@
 import argparse
 from io import BytesIO
 import logging
+import os
 import platform
 from pathlib import Path
 import re
@@ -36,8 +37,17 @@ if args.sdk is not None:
     args.sdk = args.sdk.expanduser()
 
 
+def _github_api_headers() -> dict[str, str]:
+    # Unauthenticated requests to api.github.com are capped at 60/hour per IP,
+    # which CI's shared runner pool can exhaust quickly. GH Actions exposes a
+    # token via GITHUB_TOKEN/GH_TOKEN that raises this to 1000/hour; use it
+    # when present, but don't require it for local/non-CI use.
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 def get_api_json(url: str):
-    r = requests.get(url)
+    r = requests.get(url, headers=_github_api_headers())
     if r.status_code != 200:
         raise Exception(f"Failed to get {url}: {r.status_code}")
     return r.json(), r.headers.get("Link", "")
@@ -152,17 +162,34 @@ def download_release_asset(*releases: dict):
             download_and_extract_binary(url, args.bindir / name)
 
 
-logging.warning("downloading %s...", args.version)
-match args.version:
-    case "all":
-        download_release_asset(*get_all_releases())
+def _already_installed() -> bool:
+    # "all"/"latest" inherently need the API to know what's available; only a
+    # concrete tag (our CI usage) can be checked against disk up front.
+    if args.version in ("all", "latest"):
+        return False
+    if args.sdk is not None:
+        return (args.sdk / ".installed").is_file()
+    return (args.bindir / args.version).exists()
 
-    case "latest":
-        release, _ = get_api_json("https://api.github.com/repos/Z3Prover/z3/releases/latest")
-        download_release_asset(release)
 
-    case _:
-        release, _ = get_api_json(
-            f"https://api.github.com/repos/Z3Prover/z3/releases/tags/{args.version}"
-        )
-        download_release_asset(release)
+if _already_installed():
+    logging.warning("%s already installed, skipping download", args.version)
+    if args.sdk is not None:
+        install_bin_link(args.sdk, args.version, args.bindir)
+else:
+    logging.warning("downloading %s...", args.version)
+    match args.version:
+        case "all":
+            download_release_asset(*get_all_releases())
+
+        case "latest":
+            release, _ = get_api_json(
+                "https://api.github.com/repos/Z3Prover/z3/releases/latest"
+            )
+            download_release_asset(release)
+
+        case _:
+            release, _ = get_api_json(
+                f"https://api.github.com/repos/Z3Prover/z3/releases/tags/{args.version}"
+            )
+            download_release_asset(release)
