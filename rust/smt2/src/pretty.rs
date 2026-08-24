@@ -377,6 +377,8 @@ mod tests {
             return;
         }
         let mut ctx = ParseCtx::new();
+        ctx.ingest_command("(declare-fun a () Bool)").unwrap();
+        ctx.ingest_command("(declare-fun b () Bool)").unwrap();
         let b = ctx
             .ingest_command("(assert (and a b))")
             .unwrap()
@@ -390,10 +392,14 @@ mod tests {
             return;
         }
         let mut ctx = ParseCtx::new();
-        ctx.ingest_command("(declare-fun a () Int)").unwrap();
-        ctx.ingest_command("(declare-fun b () Int)").unwrap();
+        for name in ["a", "b", "c", "d", "e", "f", "g"] {
+            ctx.ingest_command(&format!("(declare-fun {name} () Int)"))
+                .unwrap();
+        }
+        // Needs >= COLLAPSE_SIZE (10) AST nodes to stay uncollapsed: `not` +
+        // `<=` + `+` + 7 leaves + `0` = 11. `(+ a b)` alone (6 nodes) collapses.
         let b = ctx
-            .ingest_command("(assert (not (<= (+ a b) 0)))")
+            .ingest_command("(assert (not (<= (+ a b c d e f g) 0)))")
             .unwrap()
             .unwrap();
         let s = pretty_print_bool_in_script(&b);
@@ -413,7 +419,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let s = pretty_print_bool_in_script(&b);
-        assert!(s.contains("(forall ( (flag Bool) (x Int) )"), "got: {s}");
+        assert!(s.contains("(forall ((flag Bool) (x Int) )"), "got: {s}");
         assert!(s.contains("(or (not flag) (= x 0))"));
     }
 
@@ -437,7 +443,7 @@ mod tests {
             .unwrap();
         let s = pretty_print_bool_in_script(&b);
         assert!(s.contains("(forall\n"), "expected forall on its own line: {s}");
-        assert!(s.contains("\n                (v0 Int)\n"), "got: {s}");
+        assert!(s.contains("\n        (v0 Int)\n"), "got: {s}");
     }
 
     #[test]
@@ -476,6 +482,8 @@ mod tests {
             return;
         }
         let mut ctx = ParseCtx::new();
+        ctx.ingest_command("(declare-fun a () Bool)").unwrap();
+        ctx.ingest_command("(declare-fun b () Bool)").unwrap();
         let b = ctx
             .ingest_command("(assert (and a b))")
             .unwrap()
