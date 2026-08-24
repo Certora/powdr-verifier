@@ -4,7 +4,9 @@ fn link_z3(dir: &str) {
 }
 
 fn has_libz3(dir: &std::path::Path) -> bool {
-    dir.join("libz3.so").exists() || dir.join("libz3.a").exists()
+    dir.join("libz3.so").exists()
+        || dir.join("libz3.a").exists()
+        || dir.join("libz3.dylib").exists()
 }
 
 fn main() {

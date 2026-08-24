@@ -88,10 +88,12 @@ jobs:
       with:
           path: verifier/rust/target/
           # flint3-sys builds FLINT (+ GMP/MPFR) from source on a cache miss,
-          # which takes several minutes; cache it keyed on the lockfile.
-          key: verifier-rust-${{ hashFiles('verifier/rust/Cargo.lock') }}
+          # which takes several minutes; cache it keyed on the lockfile. Keyed
+          # per-OS too: target/ artifacts aren't portable across platforms, and
+          # a shared prefix would let restore-keys pull in the wrong one.
+          key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock') }}
           restore-keys: |
-            verifier-rust-
+            verifier-rust-${{ runner.os }}-
 
     - name: use the downloaded z3 for linking (no system-wide z3)
       run: |
@@ -157,10 +159,12 @@ jobs:
       with:
           path: verifier/rust/target/
           # flint3-sys builds FLINT (+ GMP/MPFR) from source on a cache miss,
-          # which takes several minutes; cache it keyed on the lockfile.
-          key: verifier-rust-${{ hashFiles('verifier/rust/Cargo.lock') }}
+          # which takes several minutes; cache it keyed on the lockfile. Keyed
+          # per-OS too: target/ artifacts aren't portable across platforms, and
+          # a shared prefix would let restore-keys pull in the wrong one.
+          key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock') }}
           restore-keys: |
-            verifier-rust-
+            verifier-rust-${{ runner.os }}-
 
     - name: setup custom binary cache
       uses: actions/cache/restore@v5
@@ -247,3 +251,84 @@ jobs:
       with:
         path: report_single_loadbu.html
         archive: false
+
+  build-rust:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: checkout verifier
+      uses: actions/checkout@v6
+      with:
+        path: verifier
+        submodules: recursive
+
+    - name: get date for cache key
+      id: get-date
+      run: echo "date=$(date -u "+%Y%m%d")" >> "$GITHUB_OUTPUT"
+      shell: bash
+
+    - name: setup custom binary cache
+      uses: actions/cache@v3
+      with:
+          path: ~/bin/
+          key: bin-sdk-${{ runner.os }}-${{ steps.get-date.outputs.date }}
+          restore-keys: bin-sdk-${{ runner.os }}-
+
+    - name: install custom binaries
+      shell: bash
+      run: |
+        mkdir -p ~/bin/
+        # Download the z3 release SDK (z3 binary + libz3 + headers) so the
+        # rust workspace links against this exact z3 instead of a
+        # system-wide one; download_z3.py auto-selects the OS/arch asset.
+        python3 verifier/download_z3.py z3-4.16.0 --bindir ~/bin/ --sdk ~/bin/z3-sdk
+        cp ~/bin/z3-4.16.0 ~/bin/z3-nightly
+        chmod +x ~/bin/*
+        # pkg-config file so z3-sys links the downloaded z3 (the parser-context
+        # API in smt2/z3_parse.rs needs a recent z3, newer than distro packages).
+        mkdir -p ~/bin/z3-sdk/pkgconfig
+        printf '%s\n' \
+          'Name: z3' \
+          'Description: Z3 theorem prover' \
+          'Version: 4.16.0' \
+          "Libs: -L$HOME/bin/z3-sdk/bin -lz3" \
+          "Cflags: -I$HOME/bin/z3-sdk/include" \
+          > ~/bin/z3-sdk/pkgconfig/z3.pc
+
+    - name: install autotools
+      # flint3-sys builds FLINT (+ GMP/MPFR) from source via autotools on a
+      # cache miss. Ubuntu's runner image ships these already; macOS's doesn't.
+      if: runner.os == 'macOS'
+      run: brew install autoconf automake libtool
+
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+    - name: setup verifier rust cache
+      uses: actions/cache@v3
+      with:
+          path: verifier/rust/target/
+          # Keyed per-OS too: target/ artifacts aren't portable across
+          # platforms, and a shared prefix would let restore-keys pull in
+          # the wrong one.
+          key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock') }}
+          restore-keys: |
+            verifier-rust-${{ runner.os }}-
+
+    - name: use the downloaded z3 for linking (no system-wide z3)
+      shell: bash
+      run: |
+        echo "PKG_CONFIG_PATH=$HOME/bin/z3-sdk/pkgconfig" >> "$GITHUB_ENV"
+        if [ "${{ runner.os }}" = "macOS" ]; then
+          echo "DYLD_LIBRARY_PATH=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
+        else
+          echo "LD_LIBRARY_PATH=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
+        fi
+
+    - name: build verifier rust workspace
+      run: cargo build --release --workspace --manifest-path verifier/rust/Cargo.toml
+
+    - name: run rust tests
+      run: cargo test --release --workspace --manifest-path verifier/rust/Cargo.toml

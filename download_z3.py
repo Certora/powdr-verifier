@@ -1,15 +1,30 @@
 import argparse
 from io import BytesIO
 import logging
+import platform
 from pathlib import Path
 import re
 import requests
 import zipfile
 
 re_link = re.compile(r"<(https://api.github.com/[^>]+)>")
-re_asset = re.compile(r"z3-.*-x64-glibc.*\.zip")
 
-SDK_REL_PATHS = frozenset({"bin/z3", "bin/libz3.so", "bin/libz3.a"})
+
+def _asset_pattern() -> str:
+    """Release-asset regex for the current OS/arch, e.g. z3-*-x64-glibc*.zip
+    on Linux x86_64 or z3-*-arm64-osx*.zip on Apple Silicon macOS."""
+    arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x64"
+    system = platform.system()
+    if system == "Linux":
+        return rf"z3-.*-{arch}-glibc.*\.zip"
+    if system == "Darwin":
+        return rf"z3-.*-{arch}-osx.*\.zip"
+    raise RuntimeError(f"no known z3 release asset pattern for {system}/{arch}")
+
+
+re_asset = re.compile(_asset_pattern())
+
+SDK_REL_PATHS = frozenset({"bin/z3", "bin/libz3.so", "bin/libz3.a", "bin/libz3.dylib"})
 
 parser = argparse.ArgumentParser()
 parser.add_argument("version")
