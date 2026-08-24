@@ -83,6 +83,16 @@ jobs:
 
     - uses: actions-rust-lang/setup-rust-toolchain@v1
 
+    - name: setup verifier rust cache
+      uses: actions/cache@v3
+      with:
+          path: verifier/rust/target/
+          # flint3-sys builds FLINT (+ GMP/MPFR) from source on a cache miss,
+          # which takes several minutes; cache it keyed on the lockfile.
+          key: verifier-rust-${{ hashFiles('verifier/rust/Cargo.lock') }}
+          restore-keys: |
+            verifier-rust-
+
     - name: use the downloaded z3 for linking (no system-wide z3)
       run: |
         echo "PKG_CONFIG_PATH=$HOME/bin/z3-sdk/pkgconfig" >> "$GITHUB_ENV"
@@ -141,6 +151,16 @@ jobs:
           key: cargo-${{ hashFiles('powdr/Cargo.toml') }}-${{ needs.binaries.outputs.date }}
           restore-keys: |
             cargo-
+
+    - name: setup verifier rust cache
+      uses: actions/cache@v3
+      with:
+          path: verifier/rust/target/
+          # flint3-sys builds FLINT (+ GMP/MPFR) from source on a cache miss,
+          # which takes several minutes; cache it keyed on the lockfile.
+          key: verifier-rust-${{ hashFiles('verifier/rust/Cargo.lock') }}
+          restore-keys: |
+            verifier-rust-
 
     - name: setup custom binary cache
       uses: actions/cache/restore@v5
