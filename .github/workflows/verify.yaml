@@ -32,7 +32,7 @@ jobs:
       with:
           path: ~/bin/
           # per-OS: binaries aren't portable across platforms
-          key: bin-sdk-${{ runner.os }}-${{ hashFiles('.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
+          key: bin-sdk-${{ runner.os }}-${{ hashFiles('verifier/.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
           restore-keys: bin-sdk-${{ runner.os }}-
 
     - name: install custom binaries
@@ -89,7 +89,7 @@ jobs:
       with:
         path: ~/bin/
         fail-on-cache-miss: true
-        key: bin-sdk-${{ runner.os }}-${{ hashFiles('.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
+        key: bin-sdk-${{ runner.os }}-${{ hashFiles('verifier/.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
 
     - name: install python dependencies
       run: |
@@ -115,7 +115,7 @@ jobs:
           # (e.g. adding ~/.cargo/registry) invalidate old incompatible caches
           # instead of getting stuck restoring them forever (actions/cache
           # never overwrites an existing key on a hit)
-          key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock', '.github/workflows/verify.yaml') }}
+          key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock', 'verifier/.github/workflows/verify.yaml') }}
           restore-keys: |
             verifier-rust-${{ runner.os }}-
 
@@ -201,7 +201,7 @@ jobs:
           # (e.g. adding ~/.cargo/registry) invalidate old incompatible caches
           # instead of getting stuck restoring them forever (actions/cache
           # never overwrites an existing key on a hit)
-          key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock', '.github/workflows/verify.yaml') }}
+          key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock', 'verifier/.github/workflows/verify.yaml') }}
           restore-keys: |
             verifier-rust-${{ runner.os }}-
 
@@ -210,7 +210,7 @@ jobs:
       with:
         path: ~/bin/
         fail-on-cache-miss: true
-        key: bin-sdk-${{ runner.os }}-${{ hashFiles('.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
+        key: bin-sdk-${{ runner.os }}-${{ hashFiles('verifier/.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
 
     - name: install autotools
       # needed for flint3-sys's from-source FLINT build; Ubuntu ships these already
@@ -324,7 +324,7 @@ jobs:
       with:
         path: ~/bin/
         fail-on-cache-miss: true
-        key: bin-sdk-${{ runner.os }}-${{ hashFiles('.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
+        key: bin-sdk-${{ runner.os }}-${{ hashFiles('verifier/.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
 
     - name: install autotools
       # needed for flint3-sys's from-source FLINT build; Ubuntu ships these already
@@ -350,7 +350,7 @@ jobs:
           # (e.g. adding ~/.cargo/registry) invalidate old incompatible caches
           # instead of getting stuck restoring them forever (actions/cache
           # never overwrites an existing key on a hit)
-          key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock', '.github/workflows/verify.yaml') }}
+          key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock', 'verifier/.github/workflows/verify.yaml') }}
           restore-keys: |
             verifier-rust-${{ runner.os }}-
 
