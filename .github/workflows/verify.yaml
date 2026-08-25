@@ -117,11 +117,10 @@ jobs:
     - name: checkout powdr
       uses: actions/checkout@v6
       with:
-        repository: Certora/powdr
-        ref: develop
+        repository: powdr-labs/powdr
+        ref: main
         path: powdr
         submodules: recursive
-        ssh-key: ${{ secrets.DEPLOY_KEY_POWDR }}
 
     - uses: actions/setup-python@v6
       with:
