@@ -92,46 +92,6 @@ kind = "exit_ok"
 kind = "check_result"
 result = "unsat"
 ''',
-    "powdr-opt-replay": '''[case]
-tags = [{tags}]
-requires = ["powdr"]
-description = """
-TODO: powdr-opt replay must match the recorded after-dump.
-"""
-
-[source]
-dataset = "DATASET"
-block = "BLOCK_ID"
-powdr_commit = "POWDR_COMMIT"
-base = "unopt"
-before = "BEFORE_PASS"
-after = "AFTER_PASS"
-
-[inputs]
-base = "BASE.json"
-before = "BEFORE.json"
-after = "AFTER.json"
-
-[[steps]]
-script = "main.py"
-args = [
-  "powdr-opt",
-  "{{before}}",
-  "OPTIMIZER_PASS",
-  "{{work}}/replay.json",
-  "--base-dump",
-  "{{base}}",
-]
-timeout = 300
-
-[[assert]]
-kind = "exit_ok"
-
-[[assert]]
-kind = "json_file_equals"
-actual = "{{work}}/replay.json"
-expected = "{{after}}"
-''',
     "orchestrate-verify": '''[case]
 tags = [{tags}]
 description = """

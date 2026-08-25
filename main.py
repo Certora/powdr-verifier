@@ -19,7 +19,6 @@ from src.simplifier import simplify
 from src.converter import convert_and_print
 from src.encoding_analysis import analyze_aliases
 from src.visualizer import visualize
-from src.powdr_opt import run_powdr_opt
 
 
 def _is_memout(exc: BaseException) -> bool:
@@ -79,9 +78,6 @@ if __name__ == '__main__':
                 from src.report.render import report
 
                 report()
-
-            case 'powdr-opt':
-                run_powdr_opt()
 
             case _:
                 logging.error(f"unknown command: {ARGS().command}")

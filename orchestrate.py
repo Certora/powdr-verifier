@@ -75,7 +75,7 @@ def load_files_by_block(args):
 # ``_ARGS._additional_args``. When several blocks run concurrently in one pool
 # (see ``run_all``) that global would race, so a worker binds its block's
 # args in this thread-local; ``__run_main`` prefers it, falling back to the global
-# for the sequential / single-block paths (powdr-opt, verify-opt).
+# for sequential / single-block paths.
 _TLS = threading.local()
 _UNSET = object()
 
@@ -116,7 +116,6 @@ def parse_args():
     parser.add_argument('command', choices=[
         'powdr',
         'powdr-guest',
-        'verify-opt',
         'trace',
         'diff',
         'evaluate',
@@ -434,23 +433,6 @@ def _parse_step_and_pass(file: Path) -> tuple[int, str]:
     passname = m.group(3).removeprefix("_")
     return step, passname
 
-def run_verify_opt(files: dict, pairs):
-    for input_file, next_file in pairs:
-        _, next_pass = _parse_step_and_pass(next_file)
-        if not next_pass:
-            logging.warning(f"could not infer next pass from {next_file.name}, skipping")
-            continue
-
-        output = input_file.with_name(f"{input_file.stem}.powdr-opt-{next_pass}.json")
-        logging.warning(
-            f"running powdr-opt {next_pass} on {display_path(input_file)}"
-        )
-        powdr_opt_args = [input_file, next_pass, output]
-        if 0 in files:
-            powdr_opt_args += ["--base-dump", files[0]]
-        __run_main("powdr-opt", *powdr_opt_args)
-        run_verify(input_file, output)
-
 def run_verify(a, b):
     _, optimization_step = _parse_step_and_pass(b)
     stats_run_id = verify_run_id(a, b) if _ARGS.stats else None
@@ -511,7 +493,7 @@ def _tasks_for(command: str, all_files: dict) -> list:
     """Flatten every block's work into ``(additional_args, thunk)`` units.
 
     Each command's natural unit (a step file for trace/eval/evaluate, a pair for
-    diff/verify/verify-opt) becomes one thunk, tagged with its block's base-dump /
+    diff/verify) becomes one thunk, tagged with its block's base-dump /
     substitutions so ``run_all`` can bind them per-thread."""
     tasks: list = []
     for block, files in sorted(all_files.items()):
@@ -532,9 +514,6 @@ def _tasks_for(command: str, all_files: dict) -> list:
             case 'verify':
                 for a, b in parse_paired_range(files, _ARGS.steps):
                     tasks.append((additional, functools.partial(run_verify, a, b)))
-            case 'verify-opt':
-                for pair in parse_paired_range(files, _ARGS.steps):
-                    tasks.append((additional, functools.partial(run_verify_opt, files, [pair])))
             case _:
                 logging.error(f"unknown command: {command}")
                 sys.exit(1)
