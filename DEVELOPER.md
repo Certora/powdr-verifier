@@ -1,0 +1,582 @@
+# Developer Guide
+
+This document is a map of the repository for engineers working on it: what the
+tool does, how the pieces fit together, and where to look when you need to
+change something. It intentionally favors *why* over *what* where the code's
+structure encodes a soundness argument — get those wrong and the tool can
+silently stop catching real bugs.
+
+Contents:
+
+- [What this repo does](#what-this-repo-does)
+- [Repository layout](#repository-layout)
+- [Getting set up](#getting-set-up)
+- [Core concepts](#core-concepts)
+- [The pipeline, end to end](#the-pipeline-end-to-end)
+- [`main.py` subcommands](#mainpy-subcommands)
+- [Bus-interaction encoders](#bus-interaction-encoders)
+- [The simplifier](#the-simplifier)
+- [The checker](#the-checker)
+- [The Rust workspace](#the-rust-workspace)
+- [Reporting, inspection and debugging tools](#reporting-inspection-and-debugging-tools)
+- [Testing](#testing)
+- [CI](#ci)
+- [Utility script reference](#utility-script-reference)
+- [Known rough edges](#known-rough-edges)
+
+## What this repo does
+
+`powdr-verifier` checks that [powdr](https://github.com/powdr-labs/powdr)'s
+optimizer — specifically its automatic precompile (APC) generation for the
+OpenVM RISC-V circuit — does not change program semantics. powdr's optimizer
+runs a sequence of named passes over a circuit (`remove_free`,
+`substitute_bus_interactio_fields`, `inlining`, `memory`, `loop_iteration`,
+...), each producing a new "APC candidate" dump. This repo takes any two
+adjacent dumps (before/after one pass) and proves, via an SMT solver, that
+they're behaviorally equivalent — or produces a counterexample if they
+aren't.
+
+There are two repos involved, checked out as **siblings**:
+
+- `verifier/` (this repo) — the SMT encoding, solving, and orchestration logic.
+- `powdr/` — a separate checkout of `powdr-labs/powdr` itself, whose build
+  produces the APC candidate dumps this repo consumes. It's not vendored or
+  submoduled in; you clone it next to `verifier/` (`setup.sh`/`ec2-setup.sh`
+  do this for you, and CI checks it out under `path: powdr` alongside
+  `path: verifier`).
+
+Everything downstream — tracing, simplifying, checking, evaluating,
+reporting — operates on JSON "APC dump" files produced by that separate
+`powdr` build.
+
+## Repository layout
+
+```
+verifier/
+├── main.py              # single-invocation CLI: one dump (pair) in, one result out
+├── orchestrate.py        # pipeline driver: runs main.py across a whole test's dumps
+├── evaluate.py            # standalone model-evaluation script (used by orchestrate's `evaluate` command)
+├── download_z3.py         # fetches prebuilt z3 SDKs/binaries from GitHub Releases
+├── setup.sh / ec2-setup.sh # workstation / throwaway-box provisioning
+├── ec2-z3-env.sh, ec2-run.sh, ec2-sync.sh  # remote-benchmark-box helpers
+├── benchmark_solvers.py, plot_benchmark_results.py, select_blocks.py,
+│   simplify_smt2.py, check-pp-pipeline.py, find_duplicated_ids.py  # standalone one-off tools
+├── membus.py, lens.py     # thin wrappers for the src/membus, src/lens CLIs
+├── src/
+│   ├── smt/               # FormulaWithAxioms + SmtConverter — dump → SMT structure
+│   ├── encoding/          # SMT structure → concrete SMT-LIB scripts (trace, sanity)
+│   ├── bus_interactions/  # per-OpenVM-bus SMT encoders (memory, bitwise, range checks, ...)
+│   ├── verifier.py         # before/after equivalence encoding (soundness + completeness)
+│   ├── checker.py          # runs a script through z3, classifies the result
+│   ├── simplifier.py, simplify/, rewriter/  # SMT-LIB simplification passes (Python reference impl)
+│   ├── tracer.py           # single-circuit "does a valid trace exist" encoding
+│   ├── evaluator.py         # evaluate a solver model against constraints
+│   ├── converter.py         # dump → human-readable text
+│   ├── diff.py              # before/after dump diff via `meld`
+│   ├── visualizer.py         # terminal trace visualizer (bus contents over time)
+│   ├── check/               # alternate checking strategies (rust.py, sliced.py, coi.py)
+│   ├── verify/               # bug_injection.py (mutation testing for the verifier itself)
+│   ├── report/                # SQLite-backed run telemetry → static HTML reports
+│   ├── lens/, membus/           # standalone dump-inspection CLIs
+│   ├── smt_backends/            # per-solver shims (pysmt is the real one; z3/cvc5 are stubs/legacy)
+│   ├── utils/args.py             # shared ARGS() argparse singleton
+│   └── paths.py                   # workspace layout constants (VERIFIER_DIR, POWDR_DIR, ...)
+├── rust/
+│   ├── smt2/         # SMT-LIB parsing/pretty-printing straight into real Z3 ASTs
+│   ├── simplifier/   # fast Rust reimplementation of the hottest simplify passes
+│   └── checker/      # fast Rust solver-invocation binary
+├── audit/rewrite-rules/   # per-pass soundness proof obligations (see "The simplifier")
+├── tests/                  # pytest unit tests, mirroring src/ + tests/regression_cases/
+└── .github/workflows/verify.yaml  # CI
+```
+
+## Getting set up
+
+Run `setup.sh` (checks for required tools and tells you what to install — never
+runs `sudo` itself) or `ec2-setup.sh` (assumes a throwaway box and installs
+everything for you) from a workspace directory. Either way you end up with:
+
+- this repo cloned into `verifier/`,
+- `powdr-labs/powdr` cloned into a sibling `powdr/`,
+- a Python venv with `requirements.txt` installed plus `pysmt-install --z3`,
+- a downloaded z3 SDK (`~/lib/z3-4.16.0`) and a `z3-nightly` alias in `~/bin/`,
+- the Rust `simplifier`/`checker` binaries built in release mode,
+- a `guest-keccak` smoke test run via `orchestrate.py` to confirm it all works.
+
+Before building the Rust workspace, `source ec2-z3-env.sh` — it points
+`Z3_LIB_DIR`/`Z3_SYS_Z3_HEADER` at the downloaded SDK (not whatever
+`pysmt-install` put in place) and bakes an rpath into `RUSTFLAGS` so the built
+binaries find `libz3` without `LD_LIBRARY_PATH` set globally. See
+[The Rust workspace](#the-rust-workspace) for the underlying `Z3_LIB_DIR`
+mechanism if you're building manually.
+
+## Core concepts
+
+### `FormulaWithAxioms`: the five-way split
+
+Every APC dump gets converted (`src/smt/conversion.py`'s `SmtConverter`) into
+a `FormulaWithAxioms` namedtuple with five fields. Getting this split right —
+and never collapsing it — is the single most important structural idea in the
+codebase:
+
+| field | meaning | asserted for both sides of an equivalence check? |
+|---|---|---|
+| `constraints` | things the circuit actually *commits to*: algebraic constraints and bus-interaction semantics | yes, symmetrically |
+| `consequences` | facts *derived from* the constraints (e.g. "this value is a byte", inferred ranges) — true whenever constraints hold, but not themselves commitments | **no — reference side only**, as a premise |
+| `axioms` | granted environment assumptions (VM-environment facts like range-table semantics) | yes, symmetrically |
+| `derived` | column → list of defining equalities (a column can have more than one definition) | — |
+| `globals` | symbols that must never be captured by a quantifier prefix | — |
+
+A `consequence` is tagged with a `ConsequenceKind` (`UNTAGGED`,
+`MEMORY_RECV_BYTES`, `MEMORY_TIMESTAMP_BOUNDS`, `RANGE_INFERENCE`) so
+consumers can select a *class* of fact instead of guessing from a comment
+string or the formula's shape — both were tried and both rot as encoders
+change. **Anything that assembles a list of consequences into a formula must
+go through `consequence_formulas()` / `consequences_of_kind()`
+(`src/smt/utils.py`) — never splat the raw list into `And()`/`Or()` directly.**
+A `Consequence` is a plain `NamedTuple`, not an `FNode`; pysmt's walker will
+crash trying to treat one as a formula node. (This exact mistake — a bare
+`*formula.consequences` splat in `src/encoding/trace.py` — was a real bug
+fixed during this repo's open-sourcing pass; every other call site already
+went through `consequence_formulas()`.)
+
+### Why consequences are reference-side-only
+
+`src/verifier.py`'s equivalence encoding asserts the *reference* circuit's
+`consequences` as a premise but never negates the *goal* circuit's
+consequences into the proof obligation (there's a deliberate dead-code
+comment marking the spot: `# Not(And(*after.consequences)), # NOT HERE!`).
+
+Why: a consequence is a fact entailed by the reference's constraints, not a
+constraint itself. If it were asserted as an obligation on the *goal* side, a
+value-preserving rewrite of the goal circuit (e.g. `-x → (P-1)*x`, sound
+modulo the field prime `P`) could produce a formula whose raw integer value
+falls outside a naively-stated range fact even though the rewrite is
+semantically correct — manufacturing a spurious counterexample. Kept
+reference-side-only, a consequence is always a sound premise and never
+produces a false positive. The same reasoning shows up concretely in
+`src/bus_interactions/openvm_memory.py`'s handling of the memory bus (see
+below) — that file has the most detailed worked examples of getting this
+polarity right and wrong.
+
+### Soundness vs. completeness
+
+For a `before`/`after` dump pair, `src/verifier.py` emits two independent SMT
+queries:
+
+- **Soundness** (`*.soundness.smt2`): every behavior of `after` is realizable
+  by `before` — i.e. the optimization didn't let the circuit do something new.
+- **Completeness** (`*.completeness.smt2`): every behavior of `before` is
+  still realizable by `after` — i.e. the optimization didn't drop a real
+  behavior.
+
+Both go through a shared `encoding(before, after, qvars, io_relation)`
+builder, with the two operands swapped between the two checks:
+
+```
+And(*before.constraints, *consequence_formulas(before.consequences),
+    ForAll(qvars, Or(Not(And(*after.constraints)), Not(io_relation))),
+    *before.axioms, *after.axioms)
+```
+
+Each query is expected `unsat` (no counterexample exists); a `sat` result is
+a genuine soundness or completeness bug, and the model is the counterexample.
+
+When the optimized (`after`) circuit introduces a fresh `is_valid` interface
+column not present in `before` (`dump_introduces_is_valid`), two extra checks
+are emitted: `is_valid=0` still admits an all-zero model
+(`*.soundness.zero-is-model.smt2`), and `is_valid=0` forces every
+bus-interaction multiplicity to zero
+(`*.soundness.invalid-all-mult-zero.smt2`) — an inactive/gated row must touch
+nothing observable.
+
+### Bus interactions
+
+A powdr circuit doesn't just have algebraic constraints — it also interacts
+with shared "buses" (memory, bitwise-lookup tables, range checkers, the
+execution bridge, program-counter lookup) that other parts of the VM read
+from and write to. `src/bus_interactions/` has one encoder per bus kind; see
+[Bus-interaction encoders](#bus-interaction-encoders).
+
+## The pipeline, end to end
+
+```
+powdr build (cargo test, APC_EXPORT_LEVEL=3)
+        │
+        ▼
+apc_candidate_<block>_<step>[_<passname>].json   (one dump per optimizer pass, per block)
+apc_candidate_<block>_substitutions.json          (companion: eliminated-variable substitutions)
+        │
+        ├─ main.py trace          → trace-<stem>.{core,sanity}.smt2   (single-circuit sat/unsat checks)
+        ├─ main.py verify a b out.smt2 --optimization-step <pass>
+        │        → out.{soundness,completeness}.smt2  (before/after equivalence)
+        ├─ main.py simplify <tactic> in out             (SMT-LIB rewriting, see below)
+        ├─ main.py check in                             (run through z3, classify sat/unsat/timeout)
+        ├─ main.py eval / evaluate.py                   (check a solver model actually satisfies things)
+        └─ main.py report <dir> out.html                (render an HTML dashboard from the run telemetry)
+```
+
+`orchestrate.py` drives this whole sequence across every block/step in a
+`powdr-dumps/<test>/` directory:
+
+```sh
+python3 orchestrate.py [common flags] <command> <test> [block[:block] [step[:step]]] [-- main.py flags]
+```
+
+`<command>` is one of `powdr` / `powdr-guest` (run the sibling `powdr/`
+checkout to produce dumps), `trace`, `diff`, `evaluate`, `eval`, or `verify`
+(the main workflow: verify → simplify → check for every adjacent step pair).
+`-j N` parallelizes across a shared thread pool. Many APC dump files on disk
+are *partial* (only the `machine` object changed between passes) — pass
+`--base-dump` (the pass-0 full dump) and `--substitutions` to reconstitute
+them; `orchestrate.py` wires these automatically.
+
+## `main.py` subcommands
+
+`main.py` is the low-level, single-invocation entry point (`main.py <global
+flags> <command> <command args>`), a thin dispatcher over one call into the
+corresponding `src/` module:
+
+| command | module | what it does |
+|---|---|---|
+| `trace` | `src.tracer.trace` | Encode one dump's single-circuit trace validity + sanity obligations. |
+| `verify` | `src.verifier.verify` | The core soundness+completeness equivalence check between two dumps. |
+| `check` | `src.checker.check` | Run an `.smt2` script through z3 (or another solver), classify the outcome. |
+| `simplify` | `src.simplifier.simplify` | Run a named tactic (pipeline of rewrite passes) over an `.smt2` script. |
+| `eval` | `src.evaluator.evaluate` | Evaluate a model against a dump's constraints/consequences/axioms/derived columns. |
+| `diff` | `src.diff.diff` | Visual before/after dump diff via `meld`. |
+| `text` | `src.converter.convert_and_print` | Render one dump as human-readable text. |
+| `visualize` | `src.visualizer.visualize` | Terminal visualization of bus contents over time under a model. |
+| `aliasing` | `src.encoding_analysis.analyze_aliases` | Diagnostic: enumerate consistent memory-pointer alias relations. |
+| `report` | `src.report.render.report` | Render a directory of run telemetry into a static HTML report. |
+
+Useful global flags: `--memory-encoding {array,busat,plain,interface,auto,none}`
+(default `auto`, upgrades to `interface` when a plain-membus analysis
+certifies perfect alignment), `--field-type` (default `babybear`),
+`--solver` (default `z3-nightly`), `--default-executor {p,r}` (`r` = Rust
+simplifier/checker backend by default), `--base-dump`/`--substitutions`
+(reconstituting partial dumps, see above), `--inject [seed]` (mutation
+testing, see [bug_injection](#bug-injection)), and a family of
+`--no-memory`/`--no-bitwise`/`--no-bridge`/`--no-pclookup`/`--no-varrange`/`--no-tuprange`
+toggles to disable individual bus encoders when debugging.
+
+## Bus-interaction encoders
+
+`src/bus_interactions/__init__.py` defines the base abstraction:
+`OpenVMBusInteractionEncoder` owns one `SingleInteractionEncoder` subclass per
+known OpenVM bus kind, dispatching each raw interaction record to the right
+one. Every encoder contributes to two channels — **axioms** (granted
+assumptions, both sides) and **consequences** (facts derived from *this
+encoder's own* constraints, reference side only; see
+[Core concepts](#core-concepts)).
+
+- **`openvm_memory.py`** (the largest, most soundness-sensitive file, ~1100
+  lines) — reads/writes keyed by `(address_space, pointer, timestamp)`, via
+  either a permutation argument ("plain") or a busat-style interface encoding
+  (`--memory-encoding`). Notable soundness history preserved in comments:
+  - `MEMORY_TIMESTAMP_BOUNDS` is a **consequence**, not a constraint or axiom
+    — as a constraint it dominated solve cost (hundreds of per-interaction
+    obligations); as a top-level axiom it bound a *free* copy of the
+    timestamp outside the `ForAll`, letting z3 pick that copy adversarially
+    and manufacture a spurious soundness counterexample.
+  - `MEMORY_RECV_BYTES` ("every value *read* is a byte") is granted via
+    consequences, reference-side only — it's a VM-environment assumption, not
+    a per-circuit commitment. The dual ("every value *written* is a byte")
+    is a real **constraint** on both sides — reversing this polarity was the
+    source of a real historical bug (see git history around "recv-byte
+    grant").
+  - Statically-certified same-block write-then-read pairs are asserted as
+    circuit **constraints**, never a granted axiom — an unconditional axiom
+    here previously produced a false pass (vacuous unsat) on a corrupted-dump
+    test case, because it contradicted the other side's constraints.
+- **`openvm_bitwise_lookup.py`** — bytes constrained via `(x, y, 0, 0)`;
+  `(x, y, z, 1)` additionally asserts `z = x xor y` via an overapproximating
+  uninterpreted function restricted by byte-range + a handful of algebraic
+  identities, not a fully bit-level definition (a deliberate tractability
+  tradeoff).
+- **`openvm_variable_range_checker.py`** — bounds `x < 2^bits`. When `bits`
+  is symbolic (e.g. a shift amount), it case-splits over the finite set of
+  table widths rather than collapsing to the widest — over-widening
+  previously threw away carry-is-zero facts and produced spurious
+  completeness counterexamples on real blocks.
+- **`openvm_tuple_range_checker.py`** — bounds a pair `(x, y)` against
+  configured maxima.
+- **`openvm_pc_lookup.py`** — a PC-keyed instruction lookup table, modeled
+  via uninterpreted functions restricted to the basic block's actual
+  instructions.
+- **`openvm_execution_bridge.py`** / **`permutation_check.py`** — a stateful,
+  timestamped permutation-check bus (shared machinery for any bus needing
+  multiset-permutation + timestamp-monotonicity reasoning).
+- **`memory_plain_utils.py`** — cone-of-influence and boolean-propagation
+  helpers specifically for the "plain" (permutation-style) memory encoding,
+  used to pre-resolve match-variable polarities before the main solve.
+
+## The simplifier
+
+An SMT-LIB script that's about to be handed to z3 is usually first run
+through a "tactic" — a `:`-separated pipeline of named rewrite passes
+(`main.py simplify <tactic> in out`, or via `orchestrate.py`'s `verify`
+command automatically). `src/simplifier.py` assembles pipelines from smaller
+fragments with load-bearing comments recording hard-won lessons — e.g.
+`TACTIC_QEPREFIX = "nnf:skolem:lift:witness:demod:isqf"` is the quantifier
+elimination sequence that reduces a soundness `ForAll` to ground form.
+`STEP_TACTICS` maps optimization-step names (parsed from the input filename,
+e.g. `memory`, `inlining`, `rule_based`) to pipeline overrides.
+
+Each pass has a **Python reference implementation** under `src/simplify/`
+(one module per pass — `nnf.py`, `demod.py`, `bounds.py`, `skolem*.py`,
+`normalize.py`, etc., plus `src/simplify/intervals/` for interval-arithmetic
+reasoning) and, for the hottest passes, a **Rust reimplementation** under
+`rust/simplifier/src/passes/` for speed (`src/simplify/rust.py` resolves the
+compiled binary and dispatches to it; the Python version remains the
+fallback and the audited reference). Pass names in both implementations line
+up 1:1 with proof directories under `audit/rewrite-rules/<pass-name>/*.smt2`
+— each of those is a standalone SMT-LIB obligation proving that specific pass
+sound; if you touch a pass, check whether its audit directory needs a new
+case. `src/rewriter/` implements the `rewrite` pass specifically, using
+SymPy for modular polynomial factoring (its `audit/rewrite-rules/
+rewriter-sympy/` proofs cover it).
+
+## The checker
+
+`main.py check` runs a script through z3 and classifies the result against
+any `(set-info :status ...)` expectation. Three strategies (`--strategy`, or
+per-optimization-step override via `CHECK_STRATEGIES`):
+
+- **`plain`** (default) — solve the whole script at once. Comment-documented
+  rationale: across the guest-keccak benchmark, almost every VC solves
+  whole-script in seconds, while splitting the goal disjunction into
+  per-disjunct solves can turn an instant solve into a slow case-split.
+- **`chunked`** — the Rust checker's per-disjunct chunked mode (with a Python
+  fallback).
+- **`sliced`** (`src/check/sliced.py`) — for the two step names where the VC
+  is a wide conjunction with a per-disjunct-easy/whole-script-hard goal
+  (`inlining`, `rule_based`): escalates each disjunct through increasingly
+  larger cone-of-influence slices (syntactic → arithmetic slice → memory
+  slice → union → full context) with an explicit invariant that a slice is
+  always a subset of the full context, so slice-UNSAT implies full-UNSAT and
+  a `sat` verdict is only ever reported once validated against the whole
+  context.
+
+Retries run a small grid of solver configs (varying z3's random seeds — its
+nonlinear/array tactics are seed-sensitive) before falling back to a longer
+single attempt, and distinguish real timeouts from memouts via `(get-info
+:reason-unknown)`.
+
+## The Rust workspace
+
+Three crates under `rust/`, sharing a workspace `Cargo.toml`:
+
+| crate | binary | depends on | purpose |
+|---|---|---|---|
+| `smt2` | *(library only)* | `z3`, `z3-sys` | SMT-LIB parsing/pretty-printing straight into real Z3 ASTs |
+| `simplifier` | `simplifier` | `smt2`, `z3`, `flint3-sys` | fast reimplementation of the hottest simplify passes |
+| `checker` | `checker` | `z3`, `regex` | fast solver-invocation binary (no `smt2` dep — it only solves, doesn't round-trip) |
+
+**Why `smt2` exists in-house**: it feeds SMT-LIB commands directly into real
+`z3::ast` nodes via Z3's own native parser context, rather than into an
+independent IR that would need a separate translation step — while *also*
+being able to faithfully pretty-print scripts back to text (needed by the
+simplifier's staged output). General-purpose SMT-LIB crates don't do both.
+Its `ast_util.rs` also has direct compatibility shims with the Python side —
+e.g. renaming Z3's internal `if` decl to SMT-LIB's `ite`, since pysmt expects
+the latter.
+
+**`simplifier`** (`rust/simplifier/src/passes/`) mirrors specific Python
+passes for speed — several modules literally say "Python `X` parity" in
+their doc comments (`nnf`, `normalize`, `pretty`). `poly_factor/` wraps
+[FLINT](https://flintlib.org/) (via `flint3-sys`, chosen over the older
+`flint-sys` specifically because it builds on macOS too) for multivariate
+polynomial factorization, used by the `rewrite` pass. `skolem/` is its own
+sub-module tree — skolemization is the most complex pass. Invocation:
+
+```
+simplifier [--timeout SEC] [--pretty] [--dump-steps] <input> <tactic> <output>
+```
+
+(`-` for stdin/stdout; per-step JSON stats go to stderr.)
+
+**`checker`** runs Z3 directly, with a chunked large-disjunction mode, and
+emits a generic `Action` JSON tree (`{"__Action": {name, props, actions,
+running_time}}`) — the same lightweight report shape the Python side already
+uses, so its output nests directly into a larger Python-side report.
+Invocation:
+
+```
+checker [--dump-model PATH] [--solve-chunked] [--timeout SEC] <input.smt2>
+```
+
+**Building**: `cd rust && cargo build --release --workspace` (or `just
+build`). `Z3_LIB_DIR` is the one environment variable to know — each crate's
+`build.rs` uses it (when set) to add an rpath link arg so the binary finds
+`libz3` at runtime without `LD_LIBRARY_PATH`; unset, it falls back to probing
+`~/lib/z3-4.16.0/bin` and `~/stuff/z3/build`. On macOS, `flint3-sys` builds
+FLINT from source and needs autotools (`autoconf automake libtool`, plus
+`nasm`/`m4`/`pkg-config`) — `just build-osx <z3dir>` checks for these and
+gives you the `brew install` command if missing (the same set `setup.sh`
+checks for). The toolchain is pinned via `rust-toolchain.toml`
+(`min-version = "1.85"`; CI additionally pins an exact `1.95.0` for
+build-cache-fingerprint stability across jobs).
+
+## Reporting, inspection and debugging tools
+
+- **`src/report/`** — `action.py`'s `Action` is the hierarchical
+  timing/result record used throughout the pipeline
+  (`with Action("encode") as a: a += {...}`); `database.py` persists these
+  into SQLite (`report-<name>.db` at repo root); `plots.py` builds the actual
+  charts (solve-percentage ECDFs, time-vs-size scatter, per-pass stats);
+  `render.py` assembles it all into the static `report-<name>.html` files.
+  Generate one with `main.py report <reports-dir> <output>.html`.
+- **`src/visualizer.py`** (`main.py visualize`) — colorized terminal
+  visualization of bus contents over time under a model; currently only
+  understands the `memory` and `execution bridge` buses.
+- **`src/diff.py`** (`main.py diff`) — opens two formatted dump renderings
+  side-by-side in `meld`.
+- **`src/evaluator.py`** (`main.py eval`) / **`evaluate.py`** (standalone) —
+  "show me exactly which constraint/consequence/axiom this model violates."
+  `evaluate.py` is a separate standalone re-implementation used directly by
+  `orchestrate.py evaluate` (as opposed to `main.py eval`, used by
+  `orchestrate.py eval`).
+- **`lens.py`** / **`src/lens/`** — a standalone statistics/inspection CLI
+  over the raw APC dump trail: `lens.py show|sweep|diff|subs|compare`, e.g.
+  `lens.py sweep all keccak --sort consF` to find the least-optimized
+  blocks, or `lens.py diff keccak <block> 010 011` to see exactly what one
+  pass changed. Can join against a report DB to annotate dumps with solve
+  time/status. Run `lens.py --agent` for a dense machine-readable guide.
+- **`membus.py`** / **`src/membus/`** — a standalone CLI focused on the
+  memory bus specifically: key recovery, alias-class structure, timestamp
+  ordering, whether a memory-pass removal is actually sound
+  (`stats|info|solve|extract|align|certify`). Its `facts.py`/`certify.py`
+  design is unusually rigorous: every deduction carries its `sources`,
+  `premises`, and named `assumptions`, and can be turned into its own
+  standalone UNSAT-checked proof obligation — a rule bug surfaces as a SAT
+  certificate, not a silently wrong downstream answer.
+- **`src/verify/bug_injection.py`** (`--inject [seed]` on `verify`/`diff`) —
+  nine deterministic mutation operators (drop/modify a constraint, drop/modify
+  a bus interaction, drop/swap an instruction, drop a derived column) used to
+  confirm the verifier actually rejects a broken circuit — the soundness-side
+  complement to the ordinary correctness test suite.
+- **`src/encoding_analysis.py`** (`main.py aliasing`) — diagnostic: enumerates
+  which memory-pointer alias relations are consistent with a dump's
+  constraints, by repeatedly asking the solver for a model and blocking it.
+
+## Testing
+
+`pytest` from the repo root runs everything (`pyproject.toml` sets
+`pythonpath = ["."]` so `from src.foo import bar` resolves without
+installing the package). Two kinds of tests:
+
+**Unit tests** under `tests/`, mirroring `src/`'s layout
+(`tests/simplify/`, `tests/membus/`, `tests/lens/`, `tests/check/`,
+`tests/bus_interactions/`, `tests/verify/`, `tests/report/`,
+`tests/rewriter/`, `tests/utils/`, `tests/misc/`). Style varies by area:
+`tests/simplify/` builds formulas directly via the pysmt API or parses
+hand-written SMT-LIB2 fixtures and asserts on pass output; most files that
+touch pysmt declare a local `push_env()`/`pop_env()` fixture (there's no
+shared `conftest.py`) because pysmt keeps one global symbol table and a
+symbol redeclared with a different sort in an earlier test breaks later
+ones.
+
+**Declarative end-to-end regressions** under `tests/regression_cases/`,
+driven by `tests/regressions.py`. Each subdirectory has a `case.toml`:
+
+- `[case]` — `tags`, `description` (often a detailed soundness-bug
+  post-mortem), `requires` (`"powdr"` skips unless the sibling checkout
+  exists; `"rust-simplifier"`/`"rust-checker"` skip unless those binaries are
+  built).
+- `[source]` (optional) — provenance for regenerating fixtures from a live
+  `powdr-dumps/` directory.
+- `[inputs]` — named fixture files (or a whole staged `powdr-dumps/` subtree).
+- `[[steps]]` — one or more `{script, args, timeout}` runs of `main.py` or
+  `orchestrate.py`, with `{placeholder}` substitution.
+- `[[assert]]` — checked against the immediately preceding step
+  (`exit_ok`, `check_result`, `pass_stats`/`pass_unchanged`, `isqf`,
+  `json_path`, `file_equals`, `json_file_equals`).
+
+Cases are picked up automatically by plain `pytest` (one `test_<name>`
+function is generated per case at import time) — no special invocation
+needed. `REGRESSION_TAGS=tag1,tag2` filters to matching cases;
+`REGRESSION_UPDATE=1` turns golden-file assertions into writers (use after an
+intentional behavior change). Add a new case with:
+
+```sh
+python3 tests/regression_cases/scaffold.py --name <name> --tags a,b \
+    --from <src_dir> --files "*.json" \
+    --template simplify-pass|verify-pipeline|orchestrate-verify
+```
+
+then fill in the description/steps/asserts by hand.
+
+`ruff format --diff .` / `ruff check .` cover formatting/lint (config in
+`pyproject.toml`: wildcard-import warnings are globally disabled since
+`from ..smt.utils import *` is a deliberate house style; `src/smt_backends/
+pysmt.py` and `test_*.py` files are excluded from lint).
+
+## CI
+
+Single workflow, `.github/workflows/verify.yaml` ("Generate rust cache for PR
+builds"), on every push, four jobs:
+
+- **`binaries`** (ubuntu + macos) — downloads/installs the z3 SDK into
+  `~/bin/` via `download_z3.py`; on macOS also rewrites the downloaded
+  `libz3.dylib`'s install-name to `@rpath/libz3.dylib` (bare install-names
+  aren't resolved via `LC_RPATH`).
+- **`build-rust`** (needs `binaries`; ubuntu + macos) — pins the Rust
+  toolchain to `1.95.0` and runs `cargo build --release --workspace` +
+  `cargo test --release --workspace`, purely to warm the shared build cache
+  before `lint`/`build` need the same artifacts.
+- **`lint`** (needs `binaries`, `build-rust`; ubuntu only) — `ruff
+  format --diff`, `ruff check`, `pytest`, all with `continue-on-error: true`
+  (visible in logs, doesn't fail the job).
+- **`build`** (needs `binaries`, `build-rust`; matrix
+  `{ubuntu: single_add_1 single_loadbu, macos: single_add_1}`) — the real
+  end-to-end job. Checks out this repo under `path: verifier` **and**
+  `powdr-labs/powdr` under `path: powdr`, then for each test case runs the
+  full `orchestrate.py` pipeline (`powdr` → `trace` → `eval` → `evaluate` →
+  `verify`) and uploads the generated HTML report as a build artifact.
+  macOS only runs the smaller test case, most likely a runner-cost/time
+  tradeoff (not stated explicitly in the workflow).
+
+Caching: `bin-sdk-<os>-<hash>` (z3 SDK, per-OS), `verifier-rust-<os>-<hash>`
+(this repo's `rust/target/` **and** `~/.cargo/registry`+`~/.cargo/git`
+together — both are needed, or every job re-extracts crate sources with
+fresh mtimes and Cargo treats the whole dependency tree as stale despite a
+`target/` cache hit; the key includes a hash of the workflow file itself so
+a caching-behavior change invalidates old incompatible cache entries instead
+of restoring them forever), and a separate `cargo-<hash>-<date>` cache for
+the sibling `powdr/` checkout's own independent `Cargo.lock`.
+
+## Utility script reference
+
+| script | for |
+|---|---|
+| `evaluate.py` | manually check a solver model is real, given a dump + model JSON |
+| `download_z3.py` | fetch a prebuilt z3 SDK/binary for the current OS/arch |
+| `benchmark_solvers.py` | run a batch of solver configs over a directory of `.rewrite.smt2` files, resumable |
+| `plot_benchmark_results.py` | plot `benchmark_solvers.py` output (needs `matplotlib`, not in `requirements.txt`) |
+| `select_blocks.py` | cut a large `powdr-dumps/` dir down to the top-N most-optimized blocks |
+| `simplify_smt2.py` | cheap regex-based textual `.smt2` cleanup (not the real simplifier) |
+| `find_duplicated_ids.py` | one-off check that powdr never reuses a variable id across programs |
+| `check-pp-pipeline.py` | personal debugging scratch script (hardcoded paths, `meld`-based); not a general tool |
+| `lens.py` / `membus.py` | wrappers for the `src/lens`/`src/membus` inspection CLIs — see above |
+| `setup.sh` | provision a regular workstation (checks deps, never sudo-installs) |
+| `ec2-setup.sh` | provision a throwaway box (installs everything automatically) |
+| `ec2-z3-env.sh` | `source` before building/running anything that links z3 |
+| `ec2-run.sh <scenario> [verify-args...]` | repeat a full benchmark run (`keccak`, `keccak-selection`, `pairing`, `reth`) on an already-provisioned box |
+| `ec2-sync.sh <scenario>` | rsync dumps/reports back from a remote benchmark box and regenerate its HTML report |
+
+## Known rough edges
+
+- `tests/regression_cases/inlining-replay/case.toml` still invokes
+  `main.py powdr-opt ...`, a subcommand that was removed when the
+  `powdr_opt` feature was deleted from this repo. It's gated by
+  `requires = ["powdr"]` so it silently no-ops without a sibling `powdr/`
+  checkout, but will error wherever one is present. Needs deleting or
+  rewriting.
+- `plot_benchmark_results.py` depends on `matplotlib`, which isn't listed in
+  `requirements.txt` — install it separately if you need that script.
+- `src/smt_backends/z3.py` and `cvc5.py` are, per their own docstrings, a
+  legacy/unused experiment and a reserved-but-unimplemented stub,
+  respectively. `pysmt.py` is the one actually in use.
+- `check-pp-pipeline.py` is a personal debugging scratchpad with hardcoded
+  filenames and a `meld` dependency — not part of any documented workflow.
