@@ -46,6 +46,12 @@ jobs:
         python3 -m venv ~/bin/.download-z3-venv
         ~/bin/.download-z3-venv/bin/pip install --quiet requests
         ~/bin/.download-z3-venv/bin/python3 verifier/download_z3.py z3-4.16.0 --bindir ~/bin/ --sdk ~/bin/z3-sdk
+        # the downloaded dylib's own install-name is a bare "libz3.dylib", which
+        # dyld won't resolve via LC_RPATH (only "@rpath/..."-prefixed refs are);
+        # rewrite it before anything links against it
+        if [ "${{ runner.os }}" = "macOS" ]; then
+          install_name_tool -id "@rpath/libz3.dylib" ~/bin/z3-sdk/bin/libz3.dylib
+        fi
         # The default --solver is z3-nightly (~/bin/z3-nightly); alias it to the
         # pinned release so CI solves with the exact z3 it downloaded instead of
         # a stale cached nightly.
