@@ -103,7 +103,13 @@ jobs:
     - name: setup verifier rust cache
       uses: actions/cache@v3
       with:
-          path: verifier/rust/target/
+          # ~/.cargo/registry must be cached alongside target/, otherwise every
+          # run re-extracts crate sources with fresh mtimes, which cargo sees as
+          # newer than the cached target/ fingerprints and rebuilds everything
+          path: |
+            verifier/rust/target/
+            ~/.cargo/registry
+            ~/.cargo/git
           # flint3-sys builds FLINT from source on a cache miss (~5 min)
           key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock') }}
           restore-keys: |
@@ -178,7 +184,13 @@ jobs:
     - name: setup verifier rust cache
       uses: actions/cache@v3
       with:
-          path: verifier/rust/target/
+          # ~/.cargo/registry must be cached alongside target/, otherwise every
+          # run re-extracts crate sources with fresh mtimes, which cargo sees as
+          # newer than the cached target/ fingerprints and rebuilds everything
+          path: |
+            verifier/rust/target/
+            ~/.cargo/registry
+            ~/.cargo/git
           # flint3-sys builds FLINT from source on a cache miss (~5 min)
           key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock') }}
           restore-keys: |
@@ -317,7 +329,13 @@ jobs:
     - name: setup verifier rust cache
       uses: actions/cache@v3
       with:
-          path: verifier/rust/target/
+          # ~/.cargo/registry must be cached alongside target/, otherwise every
+          # run re-extracts crate sources with fresh mtimes, which cargo sees as
+          # newer than the cached target/ fingerprints and rebuilds everything
+          path: |
+            verifier/rust/target/
+            ~/.cargo/registry
+            ~/.cargo/git
           # flint3-sys builds FLINT from source on a cache miss (~5 min)
           key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock') }}
           restore-keys: |
