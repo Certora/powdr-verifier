@@ -32,7 +32,7 @@ jobs:
       with:
           path: ~/bin/
           # per-OS: binaries aren't portable across platforms
-          key: bin-sdk-${{ runner.os }}-${{ steps.get-date.outputs.date }}
+          key: bin-sdk-${{ runner.os }}-${{ hashFiles('.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
           restore-keys: bin-sdk-${{ runner.os }}-
 
     - name: install custom binaries
@@ -89,7 +89,7 @@ jobs:
       with:
         path: ~/bin/
         fail-on-cache-miss: true
-        key: bin-sdk-${{ runner.os }}-${{ needs.binaries.outputs.date }}
+        key: bin-sdk-${{ runner.os }}-${{ hashFiles('.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
 
     - name: install python dependencies
       run: |
@@ -188,7 +188,7 @@ jobs:
       with:
         path: ~/bin/
         fail-on-cache-miss: true
-        key: bin-sdk-${{ runner.os }}-${{ needs.binaries.outputs.date }}
+        key: bin-sdk-${{ runner.os }}-${{ hashFiles('.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
 
     - name: install autotools
       # needed for flint3-sys's from-source FLINT build; Ubuntu ships these already
@@ -302,7 +302,7 @@ jobs:
       with:
         path: ~/bin/
         fail-on-cache-miss: true
-        key: bin-sdk-${{ runner.os }}-${{ needs.binaries.outputs.date }}
+        key: bin-sdk-${{ runner.os }}-${{ hashFiles('.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
 
     - name: install autotools
       # needed for flint3-sys's from-source FLINT build; Ubuntu ships these already
