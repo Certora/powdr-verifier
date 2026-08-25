@@ -238,9 +238,6 @@ jobs:
       # the binary finds the SDK's libz3.so.
       run: cargo build --release --workspace --manifest-path verifier/rust/Cargo.toml
 
-    - name: cargo clean
-      run: cd powdr && cargo clean
-
     - name: run test cases
       run: |
         for test in ${{ matrix.test_cases }}; do
