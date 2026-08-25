@@ -31,32 +31,20 @@ jobs:
       uses: actions/cache@v3
       with:
           path: ~/bin/
-          # Keyed per-OS: these binaries (z3, libz3) aren't portable across
-          # platforms, and a shared prefix would let restore-keys pull in
-          # the wrong one.
+          # per-OS: binaries aren't portable across platforms
           key: bin-sdk-${{ runner.os }}-${{ steps.get-date.outputs.date }}
           restore-keys: bin-sdk-${{ runner.os }}-
 
     - name: install custom binaries
       shell: bash
       env:
-        # Unauthenticated api.github.com requests are capped at 60/hour per
-        # IP, which the shared runner pool exhausts easily; this raises it
-        # to 1000/hour. download_z3.py also now skips the API entirely once
-        # ~/bin/z3-sdk is already populated (a warm cache), so this mostly
-        # matters for a cold cache / first run of the day.
+        # raises the api.github.com rate limit from 60/hour to 1000/hour
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         mkdir -p ~/bin/
-        # download_z3.py needs `requests`. The system python is externally
-        # managed (PEP 668) on the macOS runner (not on Ubuntu's), so install
-        # it into a throwaway venv rather than touching the system/global
-        # site-packages -- this works uniformly on both.
+        # macOS's system python is PEP 668 externally-managed; venv avoids it
         python3 -m venv ~/bin/.download-z3-venv
         ~/bin/.download-z3-venv/bin/pip install --quiet requests
-        # Download the z3 release SDK (z3 binary + libz3 + headers) so the
-        # rust workspace links against this exact z3 instead of a
-        # system-wide one; download_z3.py auto-selects the OS/arch asset.
         ~/bin/.download-z3-venv/bin/python3 verifier/download_z3.py z3-4.16.0 --bindir ~/bin/ --sdk ~/bin/z3-sdk
         # The default --solver is z3-nightly (~/bin/z3-nightly); alias it to the
         # pinned release so CI solves with the exact z3 it downloaded instead of
@@ -96,7 +84,7 @@ jobs:
         path: ~/bin/
         fail-on-cache-miss: true
         key: bin-sdk-${{ runner.os }}-${{ needs.binaries.outputs.date }}
-      
+
     - name: install python dependencies
       run: |
         pip install -r verifier/requirements.txt
@@ -108,10 +96,7 @@ jobs:
       uses: actions/cache@v3
       with:
           path: verifier/rust/target/
-          # flint3-sys builds FLINT (+ GMP/MPFR) from source on a cache miss,
-          # which takes several minutes; cache it keyed on the lockfile. Keyed
-          # per-OS too: target/ artifacts aren't portable across platforms, and
-          # a shared prefix would let restore-keys pull in the wrong one.
+          # flint3-sys builds FLINT from source on a cache miss (~5 min)
           key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock') }}
           restore-keys: |
             verifier-rust-${{ runner.os }}-
@@ -137,7 +122,14 @@ jobs:
       run: pytest
 
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            test_cases: "single_add_1 single_loadbu"
+          - os: macos-latest
+            test_cases: "single_add_1"
+    runs-on: ${{ matrix.os }}
     needs: [binaries, build-rust]
 
     steps:
@@ -180,10 +172,7 @@ jobs:
       uses: actions/cache@v3
       with:
           path: verifier/rust/target/
-          # flint3-sys builds FLINT (+ GMP/MPFR) from source on a cache miss,
-          # which takes several minutes; cache it keyed on the lockfile. Keyed
-          # per-OS too: target/ artifacts aren't portable across platforms, and
-          # a shared prefix would let restore-keys pull in the wrong one.
+          # flint3-sys builds FLINT from source on a cache miss (~5 min)
           key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock') }}
           restore-keys: |
             verifier-rust-${{ runner.os }}-
@@ -194,16 +183,26 @@ jobs:
         path: ~/bin/
         fail-on-cache-miss: true
         key: bin-sdk-${{ runner.os }}-${{ needs.binaries.outputs.date }}
-    
+
+    - name: install autotools
+      # needed for flint3-sys's from-source FLINT build; Ubuntu ships these already
+      if: runner.os == 'macOS'
+      run: brew install autoconf automake libtool
+
     - name: install python dependencies
       run: |
         pip install -r verifier/requirements.txt
         pysmt-install --z3 --confirm-agreement
 
     - name: use the downloaded z3 for linking (no system-wide z3)
+      shell: bash
       run: |
         echo "PKG_CONFIG_PATH=$HOME/bin/z3-sdk/pkgconfig" >> "$GITHUB_ENV"
-        echo "LD_LIBRARY_PATH=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
+        if [ "${{ runner.os }}" = "macOS" ]; then
+          echo "DYLD_LIBRARY_PATH=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
+        else
+          echo "LD_LIBRARY_PATH=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
+        fi
 
     - name: build verifier rust workspace
       # The tracer/evaluator/verifier resolve the rust simplifier at
@@ -217,31 +216,31 @@ jobs:
 
     - name: run test cases
       run: |
-        for test in ${{ env.TEST_CASES }}; do
+        for test in ${{ matrix.test_cases }}; do
           echo "::group::run powdr on ${test}"
           python3 verifier/orchestrate.py powdr ${test} || exit 1
           echo "::endgroup::"
         done
-    
+
     - name: run tracer
       run: |
-        for test in ${{ env.TEST_CASES }}; do
+        for test in ${{ matrix.test_cases }}; do
           echo "::group::run tracer on ${test}"
           python3 verifier/orchestrate.py trace ${test} : || exit 1
           echo "::endgroup::"
         done
-    
+
     - name: run evaluator
       run: |
-        for test in ${{ env.TEST_CASES }}; do
+        for test in ${{ matrix.test_cases }}; do
           echo "::group::run evaluator on ${test}"
           python3 verifier/orchestrate.py eval ${test} : || exit 1
           echo "::endgroup::"
         done
-    
+
     - name: run separate evaluator
       run: |
-        for test in ${{ env.TEST_CASES }}; do
+        for test in ${{ matrix.test_cases }}; do
           echo "::group::run separate evaluator on ${test}"
           python3 verifier/orchestrate.py evaluate ${test} : || exit 1
           echo "::endgroup::"
@@ -249,28 +248,31 @@ jobs:
 
     - name: run verifier
       run: |
-        for test in ${{ env.TEST_CASES }}; do
+        for test in ${{ matrix.test_cases }}; do
           echo "::group::run verifier on ${test}"
           python3 verifier/orchestrate.py verify ${test} : || exit 1
           echo "::endgroup::"
         done
-    
+
     - name: generate reports
       run: |
-        for test in ${{ env.TEST_CASES }}; do
+        for test in ${{ matrix.test_cases }}; do
           echo "::group::run verifier on ${test}"
           python3 verifier/main.py report verifier/reports/${test} report_${test}.html || exit 1
           echo "::endgroup::"
         done
-    
-    - name: upload reports
+
+    - name: upload reports (single_add_1)
       uses: actions/upload-artifact@v7
       with:
+        name: report_single_add_1-${{ matrix.os }}
         path: report_single_add_1.html
         archive: false
-    - name: upload reports
+    - name: upload reports (single_loadbu)
+      if: contains(matrix.test_cases, 'single_loadbu')
       uses: actions/upload-artifact@v7
       with:
+        name: report_single_loadbu-${{ matrix.os }}
         path: report_single_loadbu.html
         archive: false
 
@@ -288,8 +290,7 @@ jobs:
         path: verifier
         submodules: recursive
 
-    # `binaries` already built and cached this for every OS in the matrix;
-    # just reuse it (same as lint/build) instead of redownloading z3 again.
+    # reuse binaries' cache instead of redownloading z3
     - name: restore binary cache
       uses: actions/cache/restore@v5
       with:
@@ -298,8 +299,7 @@ jobs:
         key: bin-sdk-${{ runner.os }}-${{ needs.binaries.outputs.date }}
 
     - name: install autotools
-      # flint3-sys builds FLINT (+ GMP/MPFR) from source via autotools on a
-      # cache miss. Ubuntu's runner image ships these already; macOS's doesn't.
+      # needed for flint3-sys's from-source FLINT build; Ubuntu ships these already
       if: runner.os == 'macOS'
       run: brew install autoconf automake libtool
 
@@ -309,9 +309,7 @@ jobs:
       uses: actions/cache@v3
       with:
           path: verifier/rust/target/
-          # Keyed per-OS too: target/ artifacts aren't portable across
-          # platforms, and a shared prefix would let restore-keys pull in
-          # the wrong one.
+          # flint3-sys builds FLINT from source on a cache miss (~5 min)
           key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock') }}
           restore-keys: |
             verifier-rust-${{ runner.os }}-

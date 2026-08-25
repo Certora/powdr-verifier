@@ -1,16 +1,9 @@
 # Build recipes for the Rust simplifier/checker workspace.
-#
-# FLINT backend: simplifier depends on flint3-sys 3.6 (see
-# src/poly_factor/ffi.rs), which builds on both Linux and macOS — no
-# per-platform dependency swap needed.
 
-# Native build.
 build:
     cargo build --release
 
-# macOS build against a custom z3. FLINT 3.6 is compiled from source via
-# autotools on first build, so the first run takes a few minutes. `z3dir`
-# must contain libz3.dylib.
+# macOS build against a custom z3; FLINT compiles from source on first run.
 build-osx z3dir:
     #!/usr/bin/env bash
     set -euo pipefail
