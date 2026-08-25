@@ -2,7 +2,7 @@
 
 # git clone git@github.com:Certora/powdr-verifier.git verifier/
 
-git clone git@github.com:Certora/powdr.git
+git clone https://github.com/powdr-labs/powdr.git
 
 sudo apt install python3-venv
 python3 -m venv .venv
