@@ -15,6 +15,7 @@ Contents:
 - [The pipeline, end to end](#the-pipeline-end-to-end)
 - [`main.py` subcommands](#mainpy-subcommands)
 - [Bus-interaction encoders](#bus-interaction-encoders)
+- [`membus` — memory-bus diagnosis, alignment, and certified extraction](#membus--memory-bus-diagnosis-alignment-and-certified-extraction)
 - [The simplifier](#the-simplifier)
 - [The checker](#the-checker)
 - [The Rust workspace](#the-rust-workspace)
@@ -311,6 +312,251 @@ encoder's own* constraints, reference side only; see
   helpers specifically for the "plain" (permutation-style) memory encoding,
   used to pre-resolve match-variable polarities before the main solve.
 
+## `membus` — memory-bus diagnosis, alignment, and certified extraction
+
+`membus.py <command> <group> <block> <step> [options]` (a thin wrapper over
+`src/membus/`) is a standalone CLI for investigating the memory bus (OpenVM
+bus id 1) of one or two APC dumps by hand — distinct from, but designed
+consistently with, the automatic memory-alignment analysis (`MemoryAnalysis`
+in `src/bus_interactions/openvm_memory.py`) that runs inside `verify()`. The
+two are not wired together in code — the only actual coupling is
+`openvm_memory.py` importing the `TS_MAX` constant from `membus/facts.py`,
+and its extensive cross-reference comments (`"[[membus/facts.py]]
+Assumption.TS_BOUND"`) show the in-pipeline logic was *designed against*
+membus's certified assumptions, not implemented via membus. Reach for
+`membus` by hand when a `memory`-pass equivalence check fails or looks
+suspicious and you need to see *why*, independently of the main pipeline.
+Run `membus.py --agent` for a dense, load-bearing usage guide or
+`membus.py --help` for the human version.
+
+**The problem it solves.** A memory interaction on bus 1 is a send
+(`mult=1`, a write) or recv (`mult=-1`, a read) with
+`args = [address_space, pointer, b0, b1, b2, b3, timestamp]`. The `memory`
+optimizer pass removes interactions; removal is sound *iff*, per alias
+class, the send↔recv pairing is forced. `membus` surfaces exactly the
+pieces that decide that — the recovered address **key**, the timestamp
+**order**, and the **alias** structure — and, uniquely, can turn every one
+of its own deductions into an independently z3-checked proof obligation.
+
+### Subcommands
+
+Input is resolved the same way `lens` does: `<group> <block> <step>` (e.g.
+`keccak 2100224 022`), or explicit files via `--file-a`/`--file-b`.
+
+- **`stats <group> <block> <step>`** — per-address-space shape of one
+  circuit's memory bus: interaction count, send/recv balance, symbolic vs.
+  concrete keys, distinct alias classes, and the two preconditions `extract`
+  needs (`sends_ordered`, `recvs_bounded`). Start here.
+  ```sh
+  membus.py stats keccak 2100224 022
+  ```
+- **`info <group> <block> <step> [--as N] [--limit N] [--debug-propagate]`**
+  — one row per interaction: send/recv kind, address space, recovered key
+  (`const <v>`, `<base>+<off>`, or `unresolved(...)`), timestamp column with
+  its position in the deduced order, and an alias-class id.
+  ```sh
+  membus.py info keccak 2100224 021 --as 2
+  ```
+- **`solve <group> <block> <step> [--as N=1] [--assume-is-valid]`** — solves
+  the bus constraints (no memory-consistency assumption smuggled in) to
+  recover, per cell, the recv↔send matching, and classifies each
+  interaction as `input` (reads the block-entry value), `output` (escapes
+  the block, read by nothing), or interior `flow` (recv `← #send`).
+  Constant keys go through an exact graph algorithm; symbolic keys (AS2)
+  fall back to the SMT-backed forcing check in `smtsolve.py`, with aliasing
+  left open.
+  ```sh
+  membus.py solve keccak 2100224 022 --as 1
+  ```
+- **`extract <group> <block> <stepA> [stepB] [--as N] [-o FILE]`** — emits a
+  `.bus` file in the `busat` textual format: each interaction's timestamp
+  abstracted to a symbol `ts_i`, plus `DEFS` (recovered `base+offset` keys)
+  and `CONSTRAINTS` (justified `<` order edges, each preceded by a `#`
+  justification comment). One circuit dumps the whole bus; two dumps only
+  the **removed** set (A − B).
+  ```sh
+  membus.py extract keccak 2100224 021 022 --as 2 -o as2.bus
+  ```
+- **`align <group> <block> <before> <after> [--as N=1]`** — the high-
+  confidence before/after mapping described below.
+  ```sh
+  membus.py align keccak 2100224 021 022
+  ```
+- **`certify <group> <block> <step> [--run] [--z3-path PATH] [-o DIR]`** —
+  emits (and, with `--run`, checks) one SMT certificate per fact the
+  analysis extracted from that dump.
+  ```sh
+  membus.py certify keccak 2100224 022 --run
+  ```
+
+### `align`: mapping a removal pass
+
+`align.compute(before, after, mem_id, addr_space)` accounts for **every**
+`before` interaction one of two ways:
+
+- **cross-match** — a kept interaction maps to its equivalent in `after`,
+  matched *purely by* `(effective kind, canonical timestamp)`. This is
+  explicitly a **guess**: optimizer passes rewrite pointer expressions of
+  kept interactions (re-association, limb substitution) but never their
+  timestamp, so the pointer is deliberately excluded from the match key. A
+  wrong cross-match only costs completeness downstream (an unprovable VC),
+  never soundness.
+- **local connection** — from `solve(before)`: a recv paired with the local
+  send it reads, or vice versa. On symbolic-key spaces only claims `solve`
+  marked **forced** (true under every possible aliasing resolution) are
+  ever committed.
+
+`align` is deliberately unforgiving: it raises (CLI exit 2) rather than
+emit a mapping it can't justify — `after` must be a subset of `before`, the
+removed set must self-balance (nothing removed touches the boundary,
+nothing kept was a removal's partner), and every match must be
+unambiguous. A concrete worked example from `tests/membus/test_align.py`:
+given a `before` cell with `[send_a, recv_a(input), send_b(output),
+recv_b]` where `recv_b` reads `send_a`, an `after` that drops the interior
+pair `(send_a, recv_b)` produces `al.n_local_pairs == 1` with
+`row(0).local_partners == [3]` and `row(3).local_partners == [0]` — the
+tool has independently reconstructed that those two specific interactions
+were an internally-balanced write/read pair safe to elide, using nothing
+but the timestamp/order facts.
+
+### `certify`: turning every deduction into its own proof obligation
+
+Every fact `membus` produces — a `Bound`, `Gap`, `RecvUpper`, `AffineDef`,
+`EffKind`, `Pin`, `LinZero`, or `ExprEval` (see `facts.py`) — is a frozen
+dataclass carrying `sources` (which raw constraint/bus-interaction indices
+it came from), `premises` (other facts it was built on), and
+`assumptions` (which of the three named `Assumption`s it relies on:
+`TS_BOUND`, `MEMBUS_BYTE`, `ACTIVE_SELECTOR` — see below). Nothing is
+trusted just because a Python function returned it.
+
+`certify.certificate(analysis, fact)` mechanically renders one SMT-LIB
+query per fact:
+
+1. every column is declared as an `Int` constrained to `[0, p)` (the field
+   residue domain, `p` = BabyBear prime);
+2. each cited **source** constraint is asserted with its native semantics —
+   `E ≡ 0 (mod p)` for an algebraic constraint (a product constraint splits
+   into the prime-field disjunction `F1≡0 ∨ F2≡0 ∨ …`, since `p` is prime),
+   a range-check bus row as `E mod p ∈ [0, 2^bits)`, gated on the row
+   actually being sent (`mult ≠ 0`);
+3. each cited **premise fact** is asserted as its own claim (certificates
+   compose recursively along the fact DAG — a premise's own certificate is
+   what actually justifies asserting it here);
+4. each cited **assumption** is asserted exactly where it attaches — never
+   by column name. `TS_BOUND`/`MEMBUS_BYTE` *grant* a `Bound` fact outright,
+   but only at the assumption's exact licensed range (`[0, 2^29)` /
+   `[0, 256)`); a `Bound` claiming anything else is left ungranted so a
+   mismatch surfaces as a failing certificate instead of silently passing;
+5. finally, the fact's own claim is asserted **negated**.
+
+`(check-sat)` must return `unsat`: the sources + premises + assumptions
+prove the claim, so its negation is unsatisfiable. If z3 instead says
+`sat`, the model is a **concrete counterexample** showing the extraction
+rule accepted something its inputs don't actually justify — "a rule bug
+shows up as a SAT certificate, not a wrong answer downstream" is not a
+metaphor, it's mechanically what happens. `tests/membus/test_certify.py`
+demonstrates this directly: `test_bogus_fact_certificate_is_sat` fabricates
+a `Gap` fact claiming a timestamp gap of `4` when the cited source
+constraint actually encodes a gap of `3`, builds its certificate, and
+asserts the result is `sat` — proving the harness itself can fail loudly
+rather than rubber-stamp a wrong deduction. The companion
+`test_certificates_are_unsat` checks every *real* fact from a realistic dump
+does come back `unsat`. `certify_dump(data, run=True)` runs this over every
+fact extractable from a dump in one pass; `--run` on the CLI wires this up
+end to end and exits nonzero if anything comes back non-`unsat`.
+
+The three assumptions are the *only* things taken on faith, and are
+deliberately positional/structural rather than name-based: `TS_BOUND`
+(any column in a memory-bus timestamp slot, or gap-linked to one, lies in
+`[0, 2^29)` — true because openvm's offline memory checker enforces it, but
+not itself derivable from a dump), `MEMBUS_BYTE` (a recv's data args are
+bytes — reads are trusted, writes are the circuit's own proof obligation),
+and `ACTIVE_SELECTOR` (`--assume-is-valid`: the one column structurally
+gating every memory multiplicity in the dump is fixed to 1).
+
+### Extraction rules (`rules.py`)
+
+`rules.py`'s `Analysis` class is the deduction engine; its module docstring
+names the rules after the R0/R1/R2 scheme of an earlier prototype. Each
+rule performs its own **window argument** (bounds tight enough that a
+field equation reduces to the claimed integer statement) explicitly, and
+*declines* — returns nothing — rather than assume the common case when it
+can't:
+
+- **R0 → `Bound`** — a range-check bus arg bounds its value; a *scaled* arg
+  `c·col` bounds `col` via the modular inverse of `c`, when that stays
+  small enough to avoid wraparound. Memory-bus recv data are bytes by
+  `MEMBUS_BYTE`. Bounds then propagate to a fixpoint across `pos = neg + d`
+  two-column constraints.
+- **Timestamp domain** — a column is a *clock* purely because it sits in a
+  send's timestamp slot (never by name); linked columns (the `from_state`
+  ±1 chain) join the same domain with a derived, not assumed, bound.
+- **R1 → `Gap`** — a two-clock-column constraint `a − b + c = 0` reads as
+  the integer gap `a = b − c`, premised on both columns' bounds fitting
+  under `p`.
+- **R2 → `RecvUpper`** (two forms) — a constraint form (`fs − pv − Σmᵢlᵢ + c
+  = 0` with bounded limbs) and a range-check form for the post-`inlining`
+  shape where the top limb survives only as a scaled range-checked
+  residue — the latter enumerates the residue's integer preimages and
+  requires every one to be non-negative, since accepting on sign alone
+  (without checking every candidate) was a real historical soundness gap.
+- **Affine gadget → `AffineDef`** — solves a byte-decomposition gadget
+  `G·H=0, H=G+δ` for a limb, but only once the chosen root is proven
+  unique in its window *and* the other factor's in-window roots are
+  refuted (the gadget has two roots; a rule that only checks the first is
+  unsound).
+- **Kind → `EffKind`** — resolves a multiplicity expression to send/recv/
+  disabled: constant `±1/0` always works; under `--assume-is-valid`, `±g`
+  also resolves where `g` is the single column structurally gating every
+  non-constant memory multiplicity in the dump.
+
+### Supporting modules
+
+- **`propagate.py`** — constant propagation over memory multiplicities
+  (deciding-flag enumeration, capped at 2¹⁶ combinations), itself certified
+  via the same `Fact` machinery (`Pin`, `LinZero`, `ExprEval`) rather than
+  being a separate untrusted optimization.
+- **`solve.py`** — the per-address-space matching solver described under
+  `align` above: a prefix-interval graph algorithm over each key's totally-
+  ordered sends, with `RecvUpper` bounds intersected across every extracted
+  constraint (not just the first found) so a solution respects all of them.
+- **`smtsolve.py`** — upgrades a symbolic-key (AS2) guessed claim to
+  *forced* by checking, over the integers with busat MEM semantics, that
+  blocking the claim is UNSAT with aliasing left fully open — i.e. it holds
+  under every possible aliasing resolution, not just the no-alias reading
+  `solve.py` computes by default.
+- **`keys.py`** — turns certified `AffineDef` facts into `BaseOffset`
+  labels (`base` = column identity of the address's low-limb decomposition,
+  `offset` = the recovered constant, `mod` = usually `2^16`, the carry root
+  of a 16-bit address add) — the actual "key recovery" the CLI help text
+  refers to.
+- **`linform.py`** — the single normalization layer every rule consumes
+  expressions through: parses a dump expression into a canonical `LinForm`
+  (signed residues, zero-coefficients dropped), a `Product` of two linear
+  factors, or declines (`None`) — no rule ever reads raw JSON directly.
+- **`order.py`** — propagates `Gap`-fact offsets into a per-connected-
+  component virtual clock, conflict-checking (two disagreeing gap paths
+  poison the whole component rather than silently pick one).
+- **`naming.py`** — display-only column labels; explicitly documented as
+  never load-bearing, since the fact layer identifies timestamps/selectors
+  structurally, not by name.
+- **`busfmt.py`** — renders the `busat` `.bus` text format for `extract`
+  (lifting compound fields into `DEFS` lines with common-subexpression
+  sharing).
+- **`busmodel.py`** — the one place that knows OpenVM bus argument layouts
+  (`MEMORY`=1, `VAR_RANGE`=3, `BITWISE`=6, `TUPLE_RANGE`=7) — everything
+  else consumes rows through its typed `MemRow`/`range_bus_rows`, never raw
+  indexing.
+- **`meminfo.py`** / **`memstats.py`** — build the `info` command's per-
+  interaction rows and the `stats` command's per-address-space aggregates
+  (including the two extraction preconditions) respectively.
+- **`extract.py`** — the abstract-timestamp `.bus` emission algorithm
+  itself (distinct from `busfmt.py`'s text rendering): assigns one symbol
+  per interaction's timestamp, then derives (never guesses) order edges
+  between them purely from virtual-time facts.
+- **`render.py`** — all human/JSON/plain-text rendering for every
+  subcommand, plus the `--agent` guide text.
+
 ## The simplifier
 
 An SMT-LIB script that's about to be handed to z3 is usually first run
@@ -443,14 +689,11 @@ build-cache-fingerprint stability across jobs).
   blocks, or `lens.py diff keccak <block> 010 011` to see exactly what one
   pass changed. Can join against a report DB to annotate dumps with solve
   time/status. Run `lens.py --agent` for a dense machine-readable guide.
-- **`membus.py`** / **`src/membus/`** — a standalone CLI focused on the
-  memory bus specifically: key recovery, alias-class structure, timestamp
-  ordering, whether a memory-pass removal is actually sound
-  (`stats|info|solve|extract|align|certify`). Its `facts.py`/`certify.py`
-  design is unusually rigorous: every deduction carries its `sources`,
-  `premises`, and named `assumptions`, and can be turned into its own
-  standalone UNSAT-checked proof obligation — a rule bug surfaces as a SAT
-  certificate, not a silently wrong downstream answer.
+- **`membus.py`** / **`src/membus/`** — a standalone CLI for diagnosing the
+  memory bus specifically (key recovery, alignment across a removal pass,
+  certified proof obligations for every deduction) — see
+  [`membus`](#membus--memory-bus-diagnosis-alignment-and-certified-extraction)
+  above.
 - **`src/verify/bug_injection.py`** (`--inject [seed]` on `verify`/`diff`) —
   nine deterministic mutation operators (drop/modify a constraint, drop/modify
   a bus interaction, drop/swap an instruction, drop a derived column) used to
