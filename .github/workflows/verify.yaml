@@ -111,7 +111,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           # flint3-sys builds FLINT from source on a cache miss (~5 min)
-          key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock') }}
+          # workflow file is part of the key so changes to what/how we cache
+          # (e.g. adding ~/.cargo/registry) invalidate old incompatible caches
+          # instead of getting stuck restoring them forever (actions/cache
+          # never overwrites an existing key on a hit)
+          key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock', '.github/workflows/verify.yaml') }}
           restore-keys: |
             verifier-rust-${{ runner.os }}-
 
@@ -192,7 +196,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           # flint3-sys builds FLINT from source on a cache miss (~5 min)
-          key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock') }}
+          # workflow file is part of the key so changes to what/how we cache
+          # (e.g. adding ~/.cargo/registry) invalidate old incompatible caches
+          # instead of getting stuck restoring them forever (actions/cache
+          # never overwrites an existing key on a hit)
+          key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock', '.github/workflows/verify.yaml') }}
           restore-keys: |
             verifier-rust-${{ runner.os }}-
 
@@ -337,7 +345,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           # flint3-sys builds FLINT from source on a cache miss (~5 min)
-          key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock') }}
+          # workflow file is part of the key so changes to what/how we cache
+          # (e.g. adding ~/.cargo/registry) invalidate old incompatible caches
+          # instead of getting stuck restoring them forever (actions/cache
+          # never overwrites an existing key on a hit)
+          key: verifier-rust-${{ runner.os }}-${{ hashFiles('verifier/rust/Cargo.lock', '.github/workflows/verify.yaml') }}
           restore-keys: |
             verifier-rust-${{ runner.os }}-
 
