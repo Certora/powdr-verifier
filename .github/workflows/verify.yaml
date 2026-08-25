@@ -197,9 +197,9 @@ jobs:
       shell: bash
       run: |
         echo "PKG_CONFIG_PATH=$HOME/bin/z3-sdk/pkgconfig" >> "$GITHUB_ENV"
-        if [ "${{ runner.os }}" = "macOS" ]; then
-          echo "DYLD_LIBRARY_PATH=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
-        else
+        # embeds an rpath (build.rs) so *_LIBRARY_PATH doesn't also hijack pysmt's z3 import
+        echo "Z3_LIB_DIR=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
+        if [ "${{ runner.os }}" != "macOS" ]; then
           echo "LD_LIBRARY_PATH=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
         fi
 
@@ -317,9 +317,9 @@ jobs:
       shell: bash
       run: |
         echo "PKG_CONFIG_PATH=$HOME/bin/z3-sdk/pkgconfig" >> "$GITHUB_ENV"
-        if [ "${{ runner.os }}" = "macOS" ]; then
-          echo "DYLD_LIBRARY_PATH=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
-        else
+        # embeds an rpath (build.rs) so *_LIBRARY_PATH doesn't also hijack pysmt's z3 import
+        echo "Z3_LIB_DIR=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
+        if [ "${{ runner.os }}" != "macOS" ]; then
           echo "LD_LIBRARY_PATH=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
         fi
 
