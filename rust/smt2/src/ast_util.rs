@@ -1202,12 +1202,8 @@ mod tests {
         let rebuilt = rebuild_quantifier_dyn(true, &bounds, &body);
         let rebuilt_ast = Dynamic::from_ast(&rebuilt);
         assert_eq!(quantifier_bound_names(&rebuilt_ast), vec!["x", "flag"]);
-        // z3's forall_const() always passes an explicit weight=0, and this z3
-        // build's to_string() serializes that as `(! ... :weight 0)` -- not an
-        // actual `!`-wrapper AST node (strip_annotations can't touch it, and
-        // strip_annotations_deep would just reintroduce it by rebuilding via
-        // the same forall_const call). Compare logical equivalence instead of
-        // the (weight-annotation-sensitive) string form.
+        // forall_const() always sets weight=0, which this z3 build prints as
+        // `(! ... :weight 0)`; compare semantics instead of the string form.
         let solver = z3::Solver::new();
         solver.assert(&rebuilt.eq(&b).not());
         assert_eq!(

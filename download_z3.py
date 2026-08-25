@@ -12,8 +12,7 @@ re_link = re.compile(r"<(https://api.github.com/[^>]+)>")
 
 
 def _asset_pattern() -> str:
-    """Release-asset regex for the current OS/arch, e.g. z3-*-x64-glibc*.zip
-    on Linux x86_64 or z3-*-arm64-osx*.zip on Apple Silicon macOS."""
+    # e.g. z3-*-x64-glibc*.zip on Linux, z3-*-arm64-osx*.zip on Apple Silicon
     arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x64"
     system = platform.system()
     if system == "Linux":
@@ -38,10 +37,7 @@ if args.sdk is not None:
 
 
 def _github_api_headers() -> dict[str, str]:
-    # Unauthenticated requests to api.github.com are capped at 60/hour per IP,
-    # which CI's shared runner pool can exhaust quickly. GH Actions exposes a
-    # token via GITHUB_TOKEN/GH_TOKEN that raises this to 1000/hour; use it
-    # when present, but don't require it for local/non-CI use.
+    # raises the api.github.com rate limit from 60/hour to 1000/hour
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     return {"Authorization": f"Bearer {token}"} if token else {}
 
@@ -163,8 +159,7 @@ def download_release_asset(*releases: dict):
 
 
 def _already_installed() -> bool:
-    # "all"/"latest" inherently need the API to know what's available; only a
-    # concrete tag (our CI usage) can be checked against disk up front.
+    # "all"/"latest" need the API; a concrete tag can be checked on disk
     if args.version in ("all", "latest"):
         return False
     if args.sdk is not None:

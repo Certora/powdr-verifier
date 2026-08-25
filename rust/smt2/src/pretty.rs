@@ -396,8 +396,7 @@ mod tests {
             ctx.ingest_command(&format!("(declare-fun {name} () Int)"))
                 .unwrap();
         }
-        // Needs >= COLLAPSE_SIZE (10) AST nodes to stay uncollapsed: `not` +
-        // `<=` + `+` + 7 leaves + `0` = 11. `(+ a b)` alone (6 nodes) collapses.
+        // 7 leaves keeps this >= COLLAPSE_SIZE (10 nodes); `a b` alone collapses.
         let b = ctx
             .ingest_command("(assert (not (<= (+ a b c d e f g) 0)))")
             .unwrap()

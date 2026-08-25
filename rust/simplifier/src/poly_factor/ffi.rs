@@ -1,12 +1,4 @@
-//! FLINT FFI backend.
-//!
-//! Bindings for the FLINT C library, via `flint3-sys` 3.6 (a single flat
-//! module, no bindgen layout tests) — it builds on both Linux and macOS,
-//! unlike the older `flint-sys` 0.9 (its bindgen layout tests hard-code the
-//! Linux struct layout, and `pthread_mutex_t` is 64 bytes on Darwin vs 40 on
-//! Linux; the fields are `libc`-typed so the real FFI layout is fine — only
-//! the baked-in tests are wrong). The rest of `poly_factor` is
-//! backend-agnostic: it imports every symbol from here.
+//! FLINT bindings via `flint3-sys` (builds on Linux and macOS, unlike `flint-sys`).
 
 // We factor over GF(P) (prime field), not over Z: `fmpz_mod_mpoly_*` with the
 // field modulus. Factoring over Z fails on polynomials whose factorization only
