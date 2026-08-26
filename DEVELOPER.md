@@ -86,7 +86,6 @@ verifier/
 │   ├── smt2/         # SMT-LIB parsing/pretty-printing straight into real Z3 ASTs
 │   ├── simplifier/   # fast Rust reimplementation of the hottest simplify passes
 │   └── checker/      # fast Rust solver-invocation binary
-├── audit/rewrite-rules/   # per-pass soundness proof obligations (see "The simplifier")
 ├── tests/                  # pytest unit tests, mirroring src/ + tests/regression_cases/
 └── .github/workflows/verify.yaml  # CI
 ```
@@ -575,13 +574,8 @@ Each pass has a **Python reference implementation** under `src/simplify/`
 reasoning) and, for the hottest passes, a **Rust reimplementation** under
 `rust/simplifier/src/passes/` for speed (`src/simplify/rust.py` resolves the
 compiled binary and dispatches to it; the Python version remains the
-fallback and the audited reference). Pass names in both implementations line
-up 1:1 with proof directories under `audit/rewrite-rules/<pass-name>/*.smt2`
-— each of those is a standalone SMT-LIB obligation proving that specific pass
-sound; if you touch a pass, check whether its audit directory needs a new
-case. `src/rewriter/` implements the `rewrite` pass specifically, using
-SymPy for modular polynomial factoring (its `audit/rewrite-rules/
-rewriter-sympy/` proofs cover it).
+fallback and reference implementation). `src/rewriter/` implements the
+`rewrite` pass specifically, using SymPy for modular polynomial factoring.
 
 ## The checker
 
