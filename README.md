@@ -69,9 +69,7 @@ powdr build  →  apc_candidate_*.json dumps (one per optimizer pass)
 
 The Python side (`src/`) owns the SMT encoding and orchestration; a small
 Rust workspace (`rust/`) reimplements the hottest simplification and
-checking steps for speed. A large tree of proof obligations
-(`audit/rewrite-rules/`) independently certifies that every simplification
-pass is sound.
+checking steps for speed.
 
 ## Documentation
 
