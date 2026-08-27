@@ -1,3 +1,33 @@
+[project]
+name = "powdr-verifier"
+version = "0.1.0"
+description = "Formal equivalence checking for powdr's APC optimizer, via SMT"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.13"
+dependencies = [
+    "pandas",
+    "plotly",
+    "psutil",
+    "pysmt",
+    "requests",
+    "rich",
+    "semver",
+    "setuptools",
+    "sympy",
+    "termcolor",
+    # pinned to match what `pysmt-install --z3` used to fetch; pysmt detects
+    # an importable `z3` module directly, no separate install step needed
+    "z3-solver==4.13.0",
+]
+
+[project.optional-dependencies]
+# needed only by plot_benchmark_results.py
+plots = ["matplotlib"]
+
+[dependency-groups]
+dev = ["pytest", "ruff"]
+
 [tool.ruff]
 exclude = [
     ".github",

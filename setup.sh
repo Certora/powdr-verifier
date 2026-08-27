@@ -31,12 +31,6 @@ else
     need make || missing_pkgs+=(make)
 fi
 
-if need python3; then
-    python3 -m venv --help >/dev/null 2>&1 || { [ "$os" != "Darwin" ] && missing_pkgs+=(python3-venv); }
-else
-    missing_pkgs+=(python3)
-fi
-
 if [ "${#missing_pkgs[@]}" -gt 0 ] || [ "${#missing_notes[@]}" -gt 0 ]; then
     echo "Missing required tools:" >&2
     for note in "${missing_notes[@]}"; do
@@ -61,20 +55,24 @@ if ! need cargo; then
     exit 1
 fi
 
+if ! need uv; then
+    echo "uv not found. Install it yourself, e.g.:" >&2
+    echo "  curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+    echo "Then re-run this script." >&2
+    exit 1
+fi
+
 if [ ! -d powdr ]; then
     git clone https://github.com/powdr-labs/powdr.git
 fi
 
-if [ ! -d .venv ]; then
-    python3 -m venv .venv
-fi
-source .venv/bin/activate
-pip install -r verifier/requirements.txt
-pysmt-install --z3 --confirm-agreement
+# manages its own venv (verifier/.venv) and, if needed, its own Python
+# interpreter — no system python3/pip required
+(cd verifier && uv sync)
 
 mkdir -p ~/bin/ ~/lib/
-python3 verifier/download_z3.py z3-4.16.0 --sdk ~/lib/z3-4.16.0 --bindir ~/bin
-python3 verifier/download_z3.py Nightly --bindir ~/bin
+uv run --project verifier python3 verifier/download_z3.py z3-4.16.0 --sdk ~/lib/z3-4.16.0 --bindir ~/bin
+uv run --project verifier python3 verifier/download_z3.py Nightly --bindir ~/bin
 chmod +x ~/bin/*
 
 source verifier/ec2-z3-env.sh
@@ -84,4 +82,4 @@ cargo build --release -p simplifier
 cargo build --release -p checker
 cd ../..
 
-python3 verifier/orchestrate.py powdr-guest guest-keccak
+uv run --project verifier python3 verifier/orchestrate.py powdr-guest guest-keccak
