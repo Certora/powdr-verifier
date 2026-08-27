@@ -98,14 +98,17 @@ everything for you) from a workspace directory. Either way you end up with:
 
 - this repo cloned into `verifier/`,
 - `powdr-labs/powdr` cloned into a sibling `powdr/`,
-- a Python venv with `requirements.txt` installed plus `pysmt-install --z3`,
+- a `uv`-managed venv (`verifier/.venv`) with `pysmt`, `z3-solver`, and
+  everything else declared in `verifier/pyproject.toml` installed,
 - a downloaded z3 SDK (`~/lib/z3-4.16.0`) and a `z3-nightly` alias in `~/bin/`,
 - the Rust `simplifier`/`checker` binaries built in release mode,
 - a `guest-keccak` smoke test run via `orchestrate.py` to confirm it all works.
 
 Before building the Rust workspace, `source ec2-z3-env.sh` — it points
-`Z3_LIB_DIR`/`Z3_SYS_Z3_HEADER` at the downloaded SDK (not whatever
-`pysmt-install` put in place) and bakes an rpath into `RUSTFLAGS` so the built
+`Z3_LIB_DIR`/`Z3_SYS_Z3_HEADER` at the downloaded SDK, since the Python side's
+`z3-solver` package only ships the Python bindings' shared library, not the
+headers/static libs the Rust crates need for linking, and bakes an rpath into
+`RUSTFLAGS` so the built
 binaries find `libz3` without `LD_LIBRARY_PATH` set globally. See
 [The Rust workspace](#the-rust-workspace) for the underlying `Z3_LIB_DIR`
 mechanism if you're building manually.
@@ -220,7 +223,7 @@ apc_candidate_<block>_substitutions.json          (companion: eliminated-variabl
 `powdr-dumps/<test>/` directory:
 
 ```sh
-python3 orchestrate.py [common flags] <command> <test> [block[:block] [step[:step]]] [-- main.py flags]
+uv run python3 orchestrate.py [common flags] <command> <test> [block[:block] [step[:step]]] [-- main.py flags]
 ```
 
 `<command>` is one of `powdr` / `powdr-guest` (run the sibling `powdr/`
@@ -699,7 +702,7 @@ build-cache-fingerprint stability across jobs).
 
 ## Testing
 
-`pytest` from the repo root runs everything (`pyproject.toml` sets
+`uv run pytest` from the repo root runs everything (`pyproject.toml` sets
 `pythonpath = ["."]` so `from src.foo import bar` resolves without
 installing the package). Two kinds of tests:
 
@@ -737,14 +740,14 @@ needed. `REGRESSION_TAGS=tag1,tag2` filters to matching cases;
 intentional behavior change). Add a new case with:
 
 ```sh
-python3 tests/regression_cases/scaffold.py --name <name> --tags a,b \
+uv run python3 tests/regression_cases/scaffold.py --name <name> --tags a,b \
     --from <src_dir> --files "*.json" \
     --template simplify-pass|verify-pipeline|orchestrate-verify
 ```
 
 then fill in the description/steps/asserts by hand.
 
-`ruff format --diff .` / `ruff check .` cover formatting/lint (config in
+`uv run ruff format --diff .` / `uv run ruff check .` cover formatting/lint (config in
 `pyproject.toml`: wildcard-import warnings are globally disabled since
 `from ..smt.utils import *` is a deliberate house style; `src/smt_backends/
 pysmt.py` and `test_*.py` files are excluded from lint).
@@ -790,7 +793,7 @@ the sibling `powdr/` checkout's own independent `Cargo.lock`.
 | `evaluate.py` | manually check a solver model is real, given a dump + model JSON |
 | `download_z3.py` | fetch a prebuilt z3 SDK/binary for the current OS/arch |
 | `benchmark_solvers.py` | run a batch of solver configs over a directory of `.rewrite.smt2` files, resumable |
-| `plot_benchmark_results.py` | plot `benchmark_solvers.py` output (needs `matplotlib`, not in `requirements.txt`) |
+| `plot_benchmark_results.py` | plot `benchmark_solvers.py` output (needs the `plots` extra: `uv sync --extra plots`) |
 | `select_blocks.py` | cut a large `powdr-dumps/` dir down to the top-N most-optimized blocks |
 | `simplify_smt2.py` | cheap regex-based textual `.smt2` cleanup (not the real simplifier) |
 | `find_duplicated_ids.py` | one-off check that powdr never reuses a variable id across programs |
@@ -810,8 +813,6 @@ the sibling `powdr/` checkout's own independent `Cargo.lock`.
   `requires = ["powdr"]` so it silently no-ops without a sibling `powdr/`
   checkout, but will error wherever one is present. Needs deleting or
   rewriting.
-- `plot_benchmark_results.py` depends on `matplotlib`, which isn't listed in
-  `requirements.txt` — install it separately if you need that script.
 - `src/smt_backends/z3.py` and `cvc5.py` are, per their own docstrings, a
   legacy/unused experiment and a reserved-but-unimplemented stub,
   respectively. `pysmt.py` is the one actually in use.

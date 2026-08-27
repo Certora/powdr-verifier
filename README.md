@@ -34,28 +34,29 @@ git clone https://github.com/Certora/powdr-verifier.git verifier
 ```
 
 `setup.sh` checks for the tools you need (a C toolchain, `pkg-config`, `m4`,
-`nasm`, `libtool`, `autoconf`/`automake`, Python 3 with `venv`, Rust) and
-tells you what to install if anything's missing — it never runs `sudo` on
-your behalf. Once everything's present, it clones `powdr` as a sibling
-directory, sets up a Python venv, downloads a z3 SDK, builds the Rust
+`nasm`, `libtool`, `autoconf`/`automake`, [`uv`](https://docs.astral.sh/uv/),
+Rust) and tells you what to install if anything's missing — it never runs
+`sudo` on your behalf. Once everything's present, it clones `powdr` as a
+sibling directory, runs `uv sync` (which provisions its own Python if
+needed — no system Python required), downloads a z3 SDK, builds the Rust
 helper binaries, and runs a smoke test. (On a disposable box you control
 fully, `ec2-setup.sh` does the same thing but installs missing packages for
 you automatically.)
 
 ## Basic usage
 
-Build a benchmark and verify one pass of it:
+Build a benchmark and verify one pass of it (from inside `verifier/`):
 
 ```sh
-python3 orchestrate.py powdr-guest guest-keccak # build the circuit, export APC dumps
-python3 orchestrate.py verify guest-keccak 0 0  # verify block 0's first optimizer pass
+uv run python3 orchestrate.py powdr-guest guest-keccak # build the circuit, export APC dumps
+uv run python3 orchestrate.py verify guest-keccak 0 0  # verify block 0's first optimizer pass
 ```
 
 Or drive a single equivalence check by hand:
 
 ```sh
-python3 main.py verify before.json after.json out.smt2
-python3 main.py check out.soundness.smt2
+uv run python3 main.py verify before.json after.json out.smt2
+uv run python3 main.py check out.soundness.smt2
 ```
 
 ## How it fits together
@@ -82,8 +83,8 @@ tools, testing, and CI. Start there for anything beyond a quick look.
 ## Testing
 
 ```sh
-pytest              # unit tests + declarative regression cases
-ruff format --diff . && ruff check .
+uv run pytest                                     # unit tests + declarative regression cases
+uv run ruff format --diff . && uv run ruff check .
 ```
 
 ## License
