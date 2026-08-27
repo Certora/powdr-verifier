@@ -45,6 +45,16 @@ Rust helper binaries, and runs a smoke test. (On a disposable box you control
 fully, `ec2-setup.sh` does the same thing but installs missing packages for
 you automatically.)
 
+### Even quicker: without building powdr
+
+If you don't want to build powdrt, `verify_sample_dump.py` downloads a small
+tarball of pre-generated dumps and runs a full soundness + completeness check on
+one pass from it, using python and z3, without a powdr checkout or Rust build:
+
+```sh
+python3 verify_sample_dump.py
+```
+
 Everything lands inside the workspace directory — nothing is written to
 `~/bin` or `~/lib`:
 
