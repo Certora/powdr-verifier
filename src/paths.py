@@ -11,6 +11,10 @@ VERIFIER_DIR = Path(__file__).resolve().parent.parent
 WORKSPACE_DIR = VERIFIER_DIR.parent
 POWDR_DIR = WORKSPACE_DIR / "powdr"
 POWDR_DUMPS_DIR = VERIFIER_DIR / "powdr-dumps"
+# Where setup.sh installs the z3 binaries: a sibling of powdr/ and verifier/,
+# deliberately NOT on PATH, so anything shelling out to a solver has to resolve
+# a path rather than rely on a bare name (see solver_command in smt_backends).
+Z3_BIN_DIR = WORKSPACE_DIR / "z3" / "bin"
 DATA_DIR = VERIFIER_DIR / "data"
 REPORTS_DIR = VERIFIER_DIR / "reports"
 
@@ -18,6 +22,13 @@ _REL_VERIFIER = VERIFIER_DIR.relative_to(WORKSPACE_DIR).as_posix()
 MAIN_SCRIPT = f"./{_REL_VERIFIER}/main.py"
 ORCHESTRATE_SCRIPT = f"./{_REL_VERIFIER}/orchestrate.py"
 _PRLIMIT_BIN = shutil.which("prlimit")
+
+
+def installed_z3_binaries() -> list[Path]:
+    """Every z3 binary setup.sh installed, sorted by name; empty if none."""
+    if not Z3_BIN_DIR.is_dir():
+        return []
+    return sorted(p for p in Z3_BIN_DIR.iterdir() if p.name.startswith("z3-"))
 
 
 def display_path(path: Path | str) -> str:

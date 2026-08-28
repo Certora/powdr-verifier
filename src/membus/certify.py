@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from src.lens.normalize import BABYBEAR_PRIME
+from src.paths import installed_z3_binaries
 
 from .facts import (
     AffineDef, Assumption, Bound, EffKind, ExprEval, Fact, Gap, LinZero, Pin, RecvUpper, TS_MAX,
@@ -384,7 +385,30 @@ def all_facts(an: Analysis) -> list[Fact]:
     return out
 
 
+def _release_key(name: str) -> tuple[int, ...] | None:
+    """``z3-5.1.0`` -> (5, 1, 0); ``z3-nightly`` and friends -> None."""
+    try:
+        return tuple(int(part) for part in name.removeprefix("z3-").split("."))
+    except ValueError:
+        return None
+
+
 def find_z3() -> str | None:
+    """The z3 to certify with: the workspace's, else whatever PATH offers.
+
+    The workspace binaries come first deliberately. They are the ones the rest
+    of the pipeline uses, and they are not on PATH, so a bare ``which("z3")``
+    finds neither -- it finds whatever unrelated z3 happens to be around (a
+    stale one bundled in some other project's virtualenv, say), which for this
+    module matters: the two-phase strategy in ``run_z3`` below is tuned to a
+    specific range of z3 versions.
+    """
+    installed = installed_z3_binaries()
+    releases = [p for p in installed if _release_key(p.name) is not None]
+    if releases:
+        return str(max(releases, key=lambda p: _release_key(p.name)))
+    if installed:
+        return str(installed[0])
     for c in _Z3_CANDIDATES:
         w = shutil.which(c)
         if w:
@@ -423,8 +447,8 @@ def certify_dump(data: Any, mem_id: int = 1, assume_is_valid: bool = True,
                  z3_path: str | None = None) -> list[dict]:
     """Certificates for every fact of one dump; optionally write + run them.
 
-    ``z3_path`` overrides the binary used for ``run`` (default: ``z3`` on
-    PATH)."""
+    ``z3_path`` overrides the binary used for ``run`` (default: the workspace
+    z3, else ``z3`` on PATH -- see ``find_z3``)."""
     an = Analysis(data, mem_id, assume_is_valid)
     z3 = None
     if run:
@@ -436,8 +460,9 @@ def certify_dump(data: Any, mem_id: int = 1, assume_is_valid: bool = True,
             z3 = find_z3()
             if z3 is None:
                 raise ValueError(
-                    "certify: --run requested but no z3 binary found on PATH "
-                    "(use --z3-path)")
+                    "certify: --run requested but no z3 binary found in "
+                    "the workspace z3/bin or on PATH (run setup.sh, or "
+                    "use --z3-path)")
     results: list[dict] = []
     for i, fact in enumerate(all_facts(an)):
         cert = certificate(an, fact)

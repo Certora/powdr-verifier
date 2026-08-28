@@ -29,7 +29,7 @@ def simplify_cvc5(smt: str, subaction=None) -> str:
 
     proc = subprocess.run(
         #["cvc5", "--dag-thresh", "0", "--preprocess-only", "-o", "post-asserts", "--no-interactive"],
-        ["/home/gereon/stuff/cvc5/build/bin/cvc5", "--incremental", "--arrays-exp", "--dag-thresh", "0", "--preprocess-only", "-t", "assertions::pre-theory-preprocess", "--no-interactive"],
+        [str(CVC5_BIN), "--incremental", "--arrays-exp", "--dag-thresh", "0", "--preprocess-only", "-t", "assertions::pre-theory-preprocess", "--no-interactive"],
         input=smt,
         capture_output=True,
         text=True,

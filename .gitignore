@@ -11,3 +11,6 @@ benchmark-results.json
 cprofile.prof
 rust-cprofile-*.data
 rust-cprofile-*.svg
+
+# z3 writes this when a trace is enabled
+.z3-trace

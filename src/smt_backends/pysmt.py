@@ -6,10 +6,11 @@ import os
 from pathlib import Path
 import re
 import semver
+import shutil
 import subprocess
 from typing import BinaryIO, Optional, TextIO
 
-from ..paths import WORKSPACE_DIR
+from ..paths import Z3_BIN_DIR, installed_z3_binaries
 from ..utils.io import SMT_ENCODING
 from pysmt import operators
 from pysmt import substituter
@@ -272,8 +273,6 @@ def Equals(left, right):
 # workspace links against (see verifier/z3-env.sh), so the solver we shell out
 # to and the libz3 we link are always the same build. bin/z3-nightly is a
 # separate, deliberately-newer binary.
-Z3_BIN_DIR = WORKSPACE_DIR / "z3" / "bin"
-
 # Anything else the user built themselves; not installed by setup.sh.
 Z3_LOCAL_BIN = Path(os.environ.get("Z3_LOCAL_BIN", "~/stuff/z3/build/z3")).expanduser()
 
@@ -299,10 +298,10 @@ def _discover_z3_solvers() -> list[dict]:
     ``z3-latest`` alias is kept because it is the documented stable name for
     "newest tagged release we have".
     """
-    if not Z3_BIN_DIR.is_dir():
-        logging.info(f"no z3 binaries: {Z3_BIN_DIR} does not exist (run setup.sh)")
+    found = installed_z3_binaries()
+    if not found:
+        logging.info(f"no z3 binaries under {Z3_BIN_DIR} (run setup.sh)")
         return []
-    found = sorted(p for p in Z3_BIN_DIR.iterdir() if p.name.startswith("z3-"))
     entries = [
         {
             'name': path.name,
@@ -374,6 +373,34 @@ def resolve_solver_binary(name: str) -> Path | None:
         if solver["name"] == name:
             path = solver["path"]
             return path if path.exists() else None
+    return None
+
+
+_WARNED_MISSING_SOLVERS: set[str] = set()
+
+
+def solver_command(name: str, context: str) -> str | None:
+    """The command to exec for solver ``name``, or ``None`` if there isn't one.
+
+    Registry first (that is where the workspace's z3/bin binaries are), PATH
+    only as a fallback for a solver someone installed themselves. Warns once
+    per name rather than letting the caller fail quietly: every caller of this
+    swallows OSError and degrades to "unknown", so an unresolvable solver is
+    otherwise invisible.
+    """
+    path = resolve_solver_binary(name)
+    if path is not None:
+        return str(path)
+    found = shutil.which(name)
+    if found is not None:
+        return found
+    if name not in _WARNED_MISSING_SOLVERS:
+        _WARNED_MISSING_SOLVERS.add(name)
+        logging.warning(
+            "%s: solver %r not found in the registry or on PATH; "
+            "results will degrade to unknown (run setup.sh?)",
+            context, name,
+        )
     return None
 
 
