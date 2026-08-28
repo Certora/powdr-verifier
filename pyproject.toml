@@ -16,9 +16,12 @@ dependencies = [
     "setuptools",
     "sympy",
     "termcolor",
-    # pinned to match what `pysmt-install --z3` used to fetch; pysmt detects
-    # an importable `z3` module directly, no separate install step needed
-    "z3-solver==4.13.0",
+    # Kept in step with Z3_VERSION in z3-env.sh: this wheel carries its own
+    # bundled libz3 for the in-process bindings, separate from the SDK the Rust
+    # workspace links and the binary the generic solvers exec, so it is the one
+    # z3 that has to be pinned by hand. pysmt detects an importable `z3` module
+    # directly, so there is no separate install step.
+    "z3-solver==5.1.0.0",
 ]
 
 [project.optional-dependencies]
