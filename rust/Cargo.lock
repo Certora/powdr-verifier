@@ -197,7 +197,6 @@ dependencies = [
  "serde_json",
  "smt2",
  "z3",
- "z3-sys",
 ]
 
 [[package]]

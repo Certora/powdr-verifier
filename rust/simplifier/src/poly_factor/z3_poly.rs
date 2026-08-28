@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use smt2::ast_hash_int;
+use smt2::{ast_hash_int, with_numeral_cstr};
 
 use z3::ast::{Ast, AstKind, Dynamic, Int};
 use z3::{SortKind, DeclKind};
-use z3_sys::{Z3_get_numeral_string, Z3_is_numeral_ast};
 
 use super::flint::{
     divides_terms, factor_mpoly, BuiltMpoly, Coeff, Monomial, SparsePoly, TermMap,
@@ -86,16 +85,13 @@ unsafe fn set_fmpz_from_z3(z: *mut super::ffi::fmpz, expr: &Int) -> Result<(), F
         fmpz_set_si(z, v);
         return Ok(());
     }
-    let ctx = expr.get_ctx().get_z3_context();
-    let ast = expr.get_z3_ast();
-    if !Z3_is_numeral_ast(ctx, ast) {
-        return Err(FactorError::BuildFailed);
-    }
-    let ptr = Z3_get_numeral_string(ctx, ast);
-    if ptr.is_null() {
-        return Err(FactorError::BuildFailed);
-    }
-    if fmpz_set_str(z, ptr, 10) != 0 {
+    // smt2 owns the raw z3-sys handoff; the callback shape lets FLINT read Z3's
+    // own buffer directly, with no String round trip in between.
+    let rc = with_numeral_cstr(&Dynamic::from_ast(expr), |digits| unsafe {
+        fmpz_set_str(z, digits.as_ptr(), 10)
+    })
+    .ok_or(FactorError::BuildFailed)?;
+    if rc != 0 {
         return Err(FactorError::BuildFailed);
     }
     Ok(())
