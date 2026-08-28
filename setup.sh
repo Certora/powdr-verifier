@@ -20,7 +20,7 @@ need git        || missing_pkgs+=(git)
 need pkg-config || missing_pkgs+=(pkg-config)
 need m4         || missing_pkgs+=(m4)
 need nasm       || missing_pkgs+=(nasm)
-need libtool    || missing_pkgs+=(libtool)
+#need libtool    || missing_pkgs+=(libtool)
 need autoconf   || missing_pkgs+=(autoconf)
 need automake   || missing_pkgs+=(automake)
 
@@ -73,7 +73,7 @@ fi
 mkdir -p ~/bin/ ~/lib/
 uv run --project verifier python3 verifier/download_z3.py z3-4.16.0 --sdk ~/lib/z3-4.16.0 --bindir ~/bin
 uv run --project verifier python3 verifier/download_z3.py Nightly --bindir ~/bin
-chmod +x ~/bin/*
+chmod +x ~/bin/z3-*
 
 source verifier/ec2-z3-env.sh
 
