@@ -11,16 +11,16 @@ export PATH="$HOME/.local/bin:$PATH"
 # interpreter — no system python3/pip required
 (cd verifier && uv sync)
 
-mkdir -p ~/bin/ ~/lib/
-uv run --project verifier python3 verifier/download_z3.py z3-4.16.0 --sdk ~/lib/z3-4.16.0 --bindir ~/bin
-uv run --project verifier python3 verifier/download_z3.py Nightly --bindir ~/bin
-chmod +x ~/bin/*
+z3_version="$(sed -n 's/^Z3_VERSION="\${Z3_VERSION:-\(.*\)}"$/\1/p' verifier/z3-env.sh)"
+uv run --project verifier python3 verifier/download_z3.py \
+    "z3-$z3_version" --sdk "z3/z3-$z3_version" --bindir z3/bin
+uv run --project verifier python3 verifier/download_z3.py Nightly --bindir z3/bin
 
-sudo apt install -y build-essential m4 pkg-config clang nasm libtool
+sudo apt install -y build-essential m4 clang libtool
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 . "$HOME/.cargo/env"
 
-source verifier/ec2-z3-env.sh
+source verifier/z3-env.sh
 
 cd verifier/rust
 cargo build --release -p simplifier

@@ -6,6 +6,7 @@ import platform
 from pathlib import Path
 import re
 import requests
+import subprocess
 import zipfile
 
 re_link = re.compile(r"<(https://api.github.com/[^>]+)>")
@@ -104,6 +105,30 @@ def download_and_extract_binary(url: str, target: Path):
     raise FileNotFoundError(f"bin/z3 not found in {url}")
 
 
+def fix_macos_install_name(prefix: Path):
+    """Make the SDK's libz3.dylib resolvable through an embedded rpath.
+
+    The dylib shipped in the macOS release records its own install-name as a
+    bare "libz3.dylib". dyld only consults LC_RPATH for references that are
+    written "@rpath/...", so anything linked against it would fail to load
+    unless DYLD_LIBRARY_PATH were set -- which we avoid, because it would also
+    apply to python3 and hijack the z3-solver package's bundled libz3.
+    Rewriting the id here fixes it once, for every consumer.
+    """
+    dylib = prefix / "bin" / "libz3.dylib"
+    if platform.system() != "Darwin" or not dylib.is_file():
+        return
+    res = subprocess.run(
+        ["install_name_tool", "-id", "@rpath/libz3.dylib", str(dylib)],
+        capture_output=True,
+        text=True,
+        check=False,  # reported below with the path that failed
+    )
+    if res.returncode != 0:
+        raise RuntimeError(f"install_name_tool failed on {dylib}: {res.stderr.strip()}")
+    logging.warning("set install-name of %s to @rpath/libz3.dylib", dylib)
+
+
 def install_bin_link(prefix: Path, name: str, bindir: Path):
     src = (prefix / "bin" / "z3").resolve()
     dest = bindir / name
@@ -136,6 +161,7 @@ def download_and_extract_sdk(url: str, prefix: Path, bin_name: str):
                     if rel == "bin/z3":
                         dest.chmod(0o755)
         marker.write_text(url + "\n", encoding="utf-8")
+    fix_macos_install_name(prefix)
     install_bin_link(prefix, bin_name, args.bindir)
 
 
@@ -170,6 +196,7 @@ def _already_installed() -> bool:
 if _already_installed():
     logging.warning("%s already installed, skipping download", args.version)
     if args.sdk is not None:
+        fix_macos_install_name(args.sdk)
         install_bin_link(args.sdk, args.version, args.bindir)
 else:
     logging.warning("downloading %s...", args.version)

@@ -5,8 +5,15 @@ set -euo pipefail
 # installing system packages onto: this only checks for what's needed and
 # tells you what to run yourself, then does everything else automatically.
 #
-# Run from a workspace directory; clones powdr as a sibling of this checkout.
-# git clone git@github.com:Certora/powdr-verifier.git verifier/
+# Run from the workspace root, with this repo already checked out into
+# verifier/ -- i.e.
+#
+#   mkdir verifier-root && cd verifier-root
+#   git clone git@github.com:Certora/powdr-verifier.git verifier/
+#   bash ./verifier/setup.sh
+#
+# and you end up with powdr/, z3/ and verifier/ as siblings. Nothing is written
+# outside the workspace root.
 
 os="$(uname -s)"
 need() { command -v "$1" >/dev/null 2>&1; }
@@ -17,9 +24,7 @@ missing_pkgs=()
 missing_notes=()
 
 need git        || missing_pkgs+=(git)
-need pkg-config || missing_pkgs+=(pkg-config)
 need m4         || missing_pkgs+=(m4)
-need nasm       || missing_pkgs+=(nasm)
 #need libtool    || missing_pkgs+=(libtool)
 need autoconf   || missing_pkgs+=(autoconf)
 need automake   || missing_pkgs+=(automake)
@@ -70,12 +75,21 @@ fi
 # interpreter — no system python3/pip required
 (cd verifier && uv sync)
 
-mkdir -p ~/bin/ ~/lib/
-uv run --project verifier python3 verifier/download_z3.py z3-4.16.0 --sdk ~/lib/z3-4.16.0 --bindir ~/bin
-uv run --project verifier python3 verifier/download_z3.py Nightly --bindir ~/bin
-chmod +x ~/bin/z3-*
+# z3-env.sh owns the version; asking it first keeps the pinned release named
+# in exactly one place. It exits non-zero until the SDK exists, so read the
+# variables out of it rather than sourcing it here.
+z3_version="$(sed -n 's/^Z3_VERSION="\${Z3_VERSION:-\(.*\)}"$/\1/p' verifier/z3-env.sh)"
+[ -n "$z3_version" ] || { echo "could not read Z3_VERSION from verifier/z3-env.sh" >&2; exit 1; }
 
-source verifier/ec2-z3-env.sh
+# One download serves both consumers: bin/libz3.* is what the Rust workspace
+# links against, and bin/z3 is the binary the Python side shells out to. They
+# come out of the same archive, so they cannot drift apart.
+uv run --project verifier python3 verifier/download_z3.py \
+    "z3-$z3_version" --sdk "z3/z3-$z3_version" --bindir z3/bin
+# the default --solver is z3-nightly; it is a separate, deliberately-newer build
+uv run --project verifier python3 verifier/download_z3.py Nightly --bindir z3/bin
+
+source verifier/z3-env.sh
 
 cd verifier/rust
 cargo build --release -p simplifier

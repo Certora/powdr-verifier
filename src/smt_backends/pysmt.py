@@ -2,12 +2,14 @@
 import contextlib
 from io import StringIO
 import logging
+import os
 from pathlib import Path
 import re
 import semver
 import subprocess
 from typing import BinaryIO, Optional, TextIO
 
+from ..paths import WORKSPACE_DIR
 from ..utils.io import SMT_ENCODING
 from pysmt import operators
 from pysmt import substituter
@@ -265,6 +267,64 @@ def Equals(left, right):
     else:
         return pysmt.shortcuts.Equals(left, right)
 
+# The z3 binaries setup.sh installs, as siblings of powdr/ and verifier/ under
+# the workspace root. bin/z3-<version> is a symlink into the same SDK the Rust
+# workspace links against (see verifier/z3-env.sh), so the solver we shell out
+# to and the libz3 we link are always the same build. bin/z3-nightly is a
+# separate, deliberately-newer binary.
+Z3_BIN_DIR = WORKSPACE_DIR / "z3" / "bin"
+
+# Anything else the user built themselves; not installed by setup.sh.
+Z3_LOCAL_BIN = Path(os.environ.get("Z3_LOCAL_BIN", "~/stuff/z3/build/z3")).expanduser()
+
+_Z3_OPTIONS = ['-smt2', '-in']
+# smt2/z3_parse.rs and the pipeline both need a z3 new enough to have the
+# parser-context API; anything older is not worth registering.
+_Z3_MIN_VERSION = ('Z3 version ([0-9.]+)', '4.12.2')
+
+
+def _z3_release_version(name: str) -> semver.VersionInfo | None:
+    """``z3-5.1.0`` -> parsed 5.1.0; ``z3-nightly`` and friends -> None."""
+    try:
+        return semver.VersionInfo.parse(name.removeprefix("z3-"))
+    except ValueError:
+        return None
+
+
+def _discover_z3_solvers() -> list[dict]:
+    """One entry per installed binary, plus a ``z3-latest`` alias.
+
+    Registering by filename means whatever setup.sh put in z3/bin/ is usable by
+    name without this list having to be edited every time the pin moves. The
+    ``z3-latest`` alias is kept because it is the documented stable name for
+    "newest tagged release we have".
+    """
+    if not Z3_BIN_DIR.is_dir():
+        logging.info(f"no z3 binaries: {Z3_BIN_DIR} does not exist (run setup.sh)")
+        return []
+    found = sorted(p for p in Z3_BIN_DIR.iterdir() if p.name.startswith("z3-"))
+    entries = [
+        {
+            'name': path.name,
+            'path': path,
+            'options': _Z3_OPTIONS,
+            'logics': logics.SMTLIB2_LOGICS,
+        }
+        for path in found
+    ]
+    releases = [p for p in found if _z3_release_version(p.name) is not None]
+    if releases:
+        newest = max(releases, key=lambda p: _z3_release_version(p.name))
+        entries.append({
+            'name': 'z3-latest',
+            'path': newest,
+            'options': _Z3_OPTIONS,
+            'logics': logics.SMTLIB2_LOGICS,
+            'min-version': _Z3_MIN_VERSION,
+        })
+    return entries
+
+
 solvers = [
     {
         'name': 'cvc5ff',
@@ -273,29 +333,21 @@ solvers = [
         'logics': [ logics.QF_UFNIA, logics.UFNIA, logics.QF_AUFNIA, logics.AUFNIA ],
     },
     {
-        'name': 'z3-latest',
-        'path': Path('~/bin/z3-4.16.0').expanduser(),
-        'options': ['-smt2', '-in'],
-        'logics': logics.SMTLIB2_LOGICS,
-        'min-version': ('Z3 version ([0-9.]+)', '4.12.2'),
-    },
-    {
         'name': 'z3-local',
-        'path': Path('~/stuff/z3/build/z3').expanduser(),
-        'options': ['-smt2', '-in'],
+        'path': Z3_LOCAL_BIN,
+        'options': _Z3_OPTIONS,
         'logics': logics.SMTLIB2_LOGICS,
     },
-    {
-        'name': 'z3-nightly',
-        'path': Path('~/bin/z3-nightly').expanduser(),
-        'options': ['-smt2', '-in'],
-        'logics': logics.SMTLIB2_LOGICS,
-    }
+    *_discover_z3_solvers(),
 ]
 
 for solver in solvers:
     if not solver['path'].exists():
+        # Skipping matters: without it the min-version probe below would raise
+        # FileNotFoundError, and a generic solver would be registered against a
+        # path that cannot run.
         logging.info(f"did not add solver {solver['name']}: {solver['path']} does not exist")
+        continue
     if 'min-version' in solver:
         res = subprocess.run([solver['path'], '--version'], capture_output=True, text=True)
         version = re.search(solver['min-version'][0], res.stdout).group(1)

@@ -30,10 +30,10 @@ jobs:
     - name: setup custom binary cache
       uses: actions/cache@v3
       with:
-          path: ~/bin/
+          path: z3/
           # per-OS: binaries aren't portable across platforms
-          key: bin-sdk-${{ runner.os }}-${{ hashFiles('verifier/.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
-          restore-keys: bin-sdk-${{ runner.os }}-
+          key: z3-sdk-${{ runner.os }}-${{ hashFiles('verifier/.github/workflows/verify.yaml', 'verifier/download_z3.py', 'verifier/z3-env.sh') }}
+          restore-keys: z3-sdk-${{ runner.os }}-
 
     - name: install custom binaries
       shell: bash
@@ -41,32 +41,25 @@ jobs:
         # raises the api.github.com rate limit from 60/hour to 1000/hour
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        mkdir -p ~/bin/
+        # verifier/z3-env.sh is the single place the pinned version is named;
+        # everything else derives it from there.
+        z3_version="$(sed -n 's/^Z3_VERSION="\${Z3_VERSION:-\(.*\)}"$/\1/p' verifier/z3-env.sh)"
+        [ -n "$z3_version" ] || { echo "could not read Z3_VERSION" >&2; exit 1; }
         # macOS's system python is PEP 668 externally-managed; venv avoids it
-        python3 -m venv ~/bin/.download-z3-venv
-        ~/bin/.download-z3-venv/bin/pip install --quiet requests
-        ~/bin/.download-z3-venv/bin/python3 verifier/download_z3.py z3-4.16.0 --bindir ~/bin/ --sdk ~/bin/z3-sdk
-        # the downloaded dylib's own install-name is a bare "libz3.dylib", which
-        # dyld won't resolve via LC_RPATH (only "@rpath/..."-prefixed refs are);
-        # rewrite it before anything links against it
-        if [ "${{ runner.os }}" = "macOS" ]; then
-          install_name_tool -id "@rpath/libz3.dylib" ~/bin/z3-sdk/bin/libz3.dylib
-        fi
-        # The default --solver is z3-nightly (~/bin/z3-nightly); alias it to the
-        # pinned release so CI solves with the exact z3 it downloaded instead of
-        # a stale cached nightly.
-        cp ~/bin/z3-4.16.0 ~/bin/z3-nightly
-        chmod +x ~/bin/*
-        # pkg-config file so z3-sys links the downloaded z3 (the parser-context
-        # API in smt2/z3_parse.rs needs a recent z3, newer than distro packages).
-        mkdir -p ~/bin/z3-sdk/pkgconfig
-        printf '%s\n' \
-          'Name: z3' \
-          'Description: Z3 theorem prover' \
-          'Version: 4.16.0' \
-          "Libs: -L$HOME/bin/z3-sdk/bin -lz3" \
-          "Cflags: -I$HOME/bin/z3-sdk/include" \
-          > ~/bin/z3-sdk/pkgconfig/z3.pc
+        python3 -m venv /tmp/download-z3-venv
+        /tmp/download-z3-venv/bin/pip install --quiet requests
+        # One SDK serves both the Rust link (bin/libz3.*) and the Python side's
+        # subprocess solver (bin/z3, symlinked as z3/bin/z3-$z3_version).
+        # download_z3.py also rewrites the macOS dylib's install-name to
+        # @rpath/libz3.dylib, without which the rpath the Rust build embeds
+        # cannot resolve it.
+        /tmp/download-z3-venv/bin/python3 verifier/download_z3.py \
+          "z3-$z3_version" --sdk "z3/z3-$z3_version" --bindir z3/bin
+        # The default --solver is z3-nightly; alias it to the pinned release so
+        # CI solves with the exact z3 it downloaded rather than a stale cached
+        # nightly. cp (not ln) so it survives independently of the symlink.
+        cp "z3/bin/z3-$z3_version" z3/bin/z3-nightly
+        chmod +x z3/bin/*
 
   lint:
     runs-on: ubuntu-latest
@@ -87,9 +80,9 @@ jobs:
     - name: setup custom binary cache
       uses: actions/cache/restore@v5
       with:
-        path: ~/bin/
+        path: z3/
         fail-on-cache-miss: true
-        key: bin-sdk-${{ runner.os }}-${{ hashFiles('verifier/.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
+        key: z3-sdk-${{ runner.os }}-${{ hashFiles('verifier/.github/workflows/verify.yaml', 'verifier/download_z3.py', 'verifier/z3-env.sh') }}
 
     - name: install python dependencies
       run: (cd verifier && uv sync)
@@ -118,9 +111,19 @@ jobs:
             verifier-rust-${{ runner.os }}-
 
     - name: use the downloaded z3 for linking (no system-wide z3)
+      shell: bash
       run: |
-        echo "PKG_CONFIG_PATH=$HOME/bin/z3-sdk/pkgconfig" >> "$GITHUB_ENV"
-        echo "LD_LIBRARY_PATH=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
+        # z3-env.sh sets Z3_LIBRARY_PATH_OVERRIDE / Z3_NO_PKG_CONFIG /
+        # Z3_SYS_Z3_VERSION for z3-sys's build script, plus an rpath in
+        # RUSTFLAGS. Deliberately no LD_LIBRARY_PATH: the rpath covers the Rust
+        # binaries, and LD_LIBRARY_PATH would also hijack the z3-solver
+        # package's own libz3 inside python3.
+        source verifier/z3-env.sh
+        for var in Z3_ROOT Z3_PREFIX Z3_LIB_DIR Z3_BIN_DIR \
+                   Z3_LIBRARY_PATH_OVERRIDE Z3_NO_PKG_CONFIG \
+                   Z3_SYS_Z3_VERSION Z3_SYS_Z3_HEADER RUSTFLAGS; do
+          echo "$var=${!var}" >> "$GITHUB_ENV"
+        done
 
     - name: build verifier rust workspace
       run: cargo build --release --workspace --manifest-path verifier/rust/Cargo.toml
@@ -208,9 +211,9 @@ jobs:
     - name: setup custom binary cache
       uses: actions/cache/restore@v5
       with:
-        path: ~/bin/
+        path: z3/
         fail-on-cache-miss: true
-        key: bin-sdk-${{ runner.os }}-${{ hashFiles('verifier/.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
+        key: z3-sdk-${{ runner.os }}-${{ hashFiles('verifier/.github/workflows/verify.yaml', 'verifier/download_z3.py', 'verifier/z3-env.sh') }}
 
     - name: install autotools
       # needed for flint3-sys's from-source FLINT build; Ubuntu ships these already
@@ -223,18 +226,23 @@ jobs:
     - name: use the downloaded z3 for linking (no system-wide z3)
       shell: bash
       run: |
-        echo "PKG_CONFIG_PATH=$HOME/bin/z3-sdk/pkgconfig" >> "$GITHUB_ENV"
-        # embeds an rpath (build.rs) so *_LIBRARY_PATH doesn't also hijack pysmt's z3 import
-        echo "Z3_LIB_DIR=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
-        if [ "${{ runner.os }}" != "macOS" ]; then
-          echo "LD_LIBRARY_PATH=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
-        fi
+        # z3-env.sh sets Z3_LIBRARY_PATH_OVERRIDE / Z3_NO_PKG_CONFIG /
+        # Z3_SYS_Z3_VERSION for z3-sys's build script, plus an rpath in
+        # RUSTFLAGS. Deliberately no LD_LIBRARY_PATH: the rpath covers the Rust
+        # binaries, and LD_LIBRARY_PATH would also hijack the z3-solver
+        # package's own libz3 inside python3.
+        source verifier/z3-env.sh
+        for var in Z3_ROOT Z3_PREFIX Z3_LIB_DIR Z3_BIN_DIR \
+                   Z3_LIBRARY_PATH_OVERRIDE Z3_NO_PKG_CONFIG \
+                   Z3_SYS_Z3_VERSION Z3_SYS_Z3_HEADER RUSTFLAGS; do
+          echo "$var=${!var}" >> "$GITHUB_ENV"
+        done
 
     - name: build verifier rust workspace
       # The tracer/evaluator/verifier resolve the rust simplifier at
       # rust/target/release/simplifier; without this build they fall back to the
-      # slow python passes. LD_LIBRARY_PATH (above) is also needed at run time so
-      # the binary finds the SDK's libz3.so.
+      # slow python passes. The rpath in RUSTFLAGS (above) is what lets the
+      # built binary find the SDK's libz3 at run time.
       run: cargo build --release --workspace --manifest-path verifier/rust/Cargo.toml
 
     - name: run test cases
@@ -317,9 +325,9 @@ jobs:
     - name: restore binary cache
       uses: actions/cache/restore@v5
       with:
-        path: ~/bin/
+        path: z3/
         fail-on-cache-miss: true
-        key: bin-sdk-${{ runner.os }}-${{ hashFiles('verifier/.github/workflows/verify.yaml', 'verifier/download_z3.py') }}
+        key: z3-sdk-${{ runner.os }}-${{ hashFiles('verifier/.github/workflows/verify.yaml', 'verifier/download_z3.py', 'verifier/z3-env.sh') }}
 
     - name: install autotools
       # needed for flint3-sys's from-source FLINT build; Ubuntu ships these already
@@ -352,24 +360,29 @@ jobs:
     - name: use the downloaded z3 for linking (no system-wide z3)
       shell: bash
       run: |
-        echo "PKG_CONFIG_PATH=$HOME/bin/z3-sdk/pkgconfig" >> "$GITHUB_ENV"
-        # embeds an rpath (build.rs) so *_LIBRARY_PATH doesn't also hijack pysmt's z3 import
-        echo "Z3_LIB_DIR=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
-        if [ "${{ runner.os }}" != "macOS" ]; then
-          echo "LD_LIBRARY_PATH=$HOME/bin/z3-sdk/bin" >> "$GITHUB_ENV"
-        fi
+        # z3-env.sh sets Z3_LIBRARY_PATH_OVERRIDE / Z3_NO_PKG_CONFIG /
+        # Z3_SYS_Z3_VERSION for z3-sys's build script, plus an rpath in
+        # RUSTFLAGS. Deliberately no LD_LIBRARY_PATH: the rpath covers the Rust
+        # binaries, and LD_LIBRARY_PATH would also hijack the z3-solver
+        # package's own libz3 inside python3.
+        source verifier/z3-env.sh
+        for var in Z3_ROOT Z3_PREFIX Z3_LIB_DIR Z3_BIN_DIR \
+                   Z3_LIBRARY_PATH_OVERRIDE Z3_NO_PKG_CONFIG \
+                   Z3_SYS_Z3_VERSION Z3_SYS_Z3_HEADER RUSTFLAGS; do
+          echo "$var=${!var}" >> "$GITHUB_ENV"
+        done
 
-    - name: diagnose which z3 pkg-config resolves
+    - name: diagnose the z3 the build will use
       shell: bash
       run: |
-        echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
-        cat ~/bin/z3-sdk/pkgconfig/z3.pc || true
-        echo "--- pkg-config --modversion z3 ---"
-        pkg-config --modversion z3 || echo "pkg-config could not resolve z3"
-        echo "--- pkg-config --libs --cflags z3 ---"
-        pkg-config --libs --cflags z3 || true
-        echo "--- our downloaded sdk contents ---"
-        ls -la ~/bin/z3-sdk/bin ~/bin/z3-sdk/include 2>&1 || true
+        echo "Z3_PREFIX=$Z3_PREFIX"
+        echo "Z3_SYS_Z3_VERSION=$Z3_SYS_Z3_VERSION"
+        echo "RUSTFLAGS=$RUSTFLAGS"
+        echo "--- sdk contents ---"
+        ls -la "$Z3_LIB_DIR" "$Z3_PREFIX/include" 2>&1 || true
+        echo "--- installed binaries ---"
+        ls -la "$Z3_BIN_DIR" 2>&1 || true
+        "$Z3_BIN_DIR/z3-$Z3_SYS_Z3_VERSION" --version || true
 
     - name: build verifier rust workspace
       run: cargo build --release --workspace --manifest-path verifier/rust/Cargo.toml
