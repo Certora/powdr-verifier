@@ -679,8 +679,25 @@ Invocation:
 checker [--dump-model PATH] [--solve-chunked] [--timeout SEC] <input.smt2>
 ```
 
-**Building**: `source verifier/z3-env.sh` first, then `cd rust && cargo build
---release --workspace` (or just `just build`, which sources it for you).
+**Building**: `cd rust && just build` — that is the whole thing; the recipe
+sources `z3-env.sh` for you. To do it by hand, `source verifier/z3-env.sh`
+first, then `cargo build --release --workspace`. Forgetting the source step
+gives `ld: library 'z3' not found`, because the linker gets a bare `-lz3` with
+no `-L` to resolve it.
+
+| recipe | what |
+| --- | --- |
+| `just build` | all three crates, release |
+| `just test` | the above plus `cargo test --workspace` |
+| `just check` | type-check only, no linking — quickest way to catch a bad z3 bump |
+| `just build-sandboxed [args]` | `just build` inside a `nono` sandbox |
+| `just build-with <dir>` | build against some other z3 |
+
+`build-sandboxed` exists because a hand-written `nono run -- cargo build` needs
+the z3 SDK on the allow-list: it lives outside the cwd tree, so the sandbox
+hides it and the link fails the same way as a missing `source`, but with an
+`ld: warning: search path ... not found` line above it. The recipe derives the
+path from `z3-env.sh` rather than hard-coding it.
 
 There is no `build.rs` in this workspace. Discovery and linking are entirely
 z3-sys's own build script, driven by three upstream environment variables that
