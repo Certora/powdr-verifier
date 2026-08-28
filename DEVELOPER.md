@@ -59,7 +59,7 @@ verifier/
 ├── evaluate.py            # standalone model-evaluation script (used by orchestrate's `evaluate` command)
 ├── download_z3.py         # fetches prebuilt z3 SDKs/binaries from GitHub Releases
 ├── setup.sh / ec2-setup.sh # workstation / throwaway-box provisioning
-├── ec2-z3-env.sh, ec2-run.sh, ec2-sync.sh  # remote-benchmark-box helpers
+├── z3-env.sh, ec2-run.sh, ec2-sync.sh  # remote-benchmark-box helpers
 ├── benchmark_solvers.py, plot_benchmark_results.py, select_blocks.py,
 │   simplify_smt2.py, check-pp-pipeline.py, find_duplicated_ids.py  # standalone one-off tools
 ├── membus.py, lens.py     # thin wrappers for the src/membus, src/lens CLIs
@@ -100,18 +100,32 @@ everything for you) from a workspace directory. Either way you end up with:
 - `powdr-labs/powdr` cloned into a sibling `powdr/`,
 - a `uv`-managed venv (`verifier/.venv`) with `pysmt`, `z3-solver`, and
   everything else declared in `verifier/pyproject.toml` installed,
-- a downloaded z3 SDK (`~/lib/z3-4.16.0`) and a `z3-nightly` alias in `~/bin/`,
+- a downloaded z3 SDK in a sibling `z3/`, plus a `z3-nightly` binary,
 - the Rust `simplifier`/`checker` binaries built in release mode,
 - a `guest-keccak` smoke test run via `orchestrate.py` to confirm it all works.
 
-Before building the Rust workspace, `source ec2-z3-env.sh` — it points
-`Z3_LIB_DIR`/`Z3_SYS_Z3_HEADER` at the downloaded SDK, since the Python side's
-`z3-solver` package only ships the Python bindings' shared library, not the
-headers/static libs the Rust crates need for linking, and bakes an rpath into
-`RUSTFLAGS` so the built
-binaries find `libz3` without `LD_LIBRARY_PATH` set globally. See
-[The Rust workspace](#the-rust-workspace) for the underlying `Z3_LIB_DIR`
-mechanism if you're building manually.
+Nothing is installed outside the workspace root: after `bash ./verifier/setup.sh`
+you have `powdr/`, `z3/` and `verifier/` as siblings and nothing in `~/bin` or
+`~/lib`.
+
+```
+<workspace>/
+  powdr/
+  verifier/                 this repo
+  z3/
+    z3-5.1.0/               SDK: bin/z3, bin/libz3.{a,dylib}, include/
+    bin/z3-5.1.0            symlink to the SDK's binary
+    bin/z3-nightly          separate, deliberately-newer build
+```
+
+The same downloaded release serves both sides: the Rust workspace links
+`bin/libz3.*`, and the Python solvers shell out to `bin/z3`. They cannot drift
+apart, because there is only one download.
+
+Before building the Rust workspace, `source verifier/z3-env.sh` — it is the
+single place the pinned z3 version is named, and it exports everything the
+build needs. See [The Rust workspace](#the-rust-workspace) for the underlying
+linking mechanism if you're building manually.
 
 ## Core concepts
 
@@ -649,13 +663,31 @@ Invocation:
 checker [--dump-model PATH] [--solve-chunked] [--timeout SEC] <input.smt2>
 ```
 
-**Building**: `cd rust && cargo build --release --workspace` (or `just
-build`). `Z3_LIB_DIR` is the one environment variable to know — each crate's
-`build.rs` uses it (when set) to add an rpath link arg so the binary finds
-`libz3` at runtime without `LD_LIBRARY_PATH`; unset, it falls back to probing
-`~/lib/z3-4.16.0/bin` and `~/stuff/z3/build`. On macOS, `flint3-sys` builds
-FLINT from source and needs autotools (`autoconf automake libtool`, plus
-`nasm`/`m4`/`pkg-config`) — `just build-osx <z3dir>` checks for these and
+**Building**: `source verifier/z3-env.sh` first, then `cd rust && cargo build
+--release --workspace` (or just `just build`, which sources it for you).
+
+There is no `build.rs` in this workspace. Discovery and linking are entirely
+z3-sys's own build script, driven by three upstream environment variables that
+`z3-env.sh` sets:
+
+| variable | why |
+| --- | --- |
+| `Z3_LIBRARY_PATH_OVERRIDE` | `-L` for the workspace SDK, so `-lz3` resolves to it |
+| `Z3_NO_PKG_CONFIG` | stops z3-sys probing pkg-config, which would otherwise silently prefer a system/brew z3 too old for the parser-context API `smt2/z3_parse.rs` needs |
+| `Z3_SYS_Z3_VERSION` | states the version rather than letting z3-sys guess; with pkg-config off it has no other way to detect one |
+
+plus an rpath in `RUSTFLAGS` so the built binaries find `libz3` at runtime
+without `LD_LIBRARY_PATH` — which is deliberately avoided, since it would also
+apply to `python3` and hijack the `z3-solver` package's own bundled `libz3`.
+
+To build against a different z3 — a local checkout, say — use `just build-with
+<dir>`, or set the same variables yourself. To move the whole workspace to
+another release, change `Z3_VERSION` in `verifier/z3-env.sh`: `setup.sh` and CI
+read it from there, and the Python solver registry picks up whatever ends up in
+`z3/bin/` by filename, so no other file names a version.
+
+On macOS, `flint3-sys` builds FLINT from source and needs autotools (`autoconf
+automake libtool`, plus `m4`) — `just build-with <z3dir>` checks for these and
 gives you the `brew install` command if missing (the same set `setup.sh`
 checks for). The toolchain is pinned via `rust-toolchain.toml`
 (`min-version = "1.85"`; CI additionally pins an exact `1.95.0` for
@@ -757,10 +789,11 @@ pysmt.py` and `test_*.py` files are excluded from lint).
 Single workflow, `.github/workflows/verify.yaml` ("Generate rust cache for PR
 builds"), on every push, four jobs:
 
-- **`binaries`** (ubuntu + macos) — downloads/installs the z3 SDK into
-  `~/bin/` via `download_z3.py`; on macOS also rewrites the downloaded
-  `libz3.dylib`'s install-name to `@rpath/libz3.dylib` (bare install-names
-  aren't resolved via `LC_RPATH`).
+- **`binaries`** (ubuntu + macos) — downloads/installs the z3 SDK into the
+  workspace's `z3/` via `download_z3.py`, which on macOS also rewrites the
+  downloaded `libz3.dylib`'s install-name to `@rpath/libz3.dylib` (bare
+  install-names aren't resolved via `LC_RPATH`). The cache key includes
+  `z3-env.sh`, so bumping the pin invalidates it.
 - **`build-rust`** (needs `binaries`; ubuntu + macos) — pins the Rust
   toolchain to `1.95.0` and runs `cargo build --release --workspace` +
   `cargo test --release --workspace`, purely to warm the shared build cache
@@ -801,7 +834,7 @@ the sibling `powdr/` checkout's own independent `Cargo.lock`.
 | `lens.py` / `membus.py` | wrappers for the `src/lens`/`src/membus` inspection CLIs — see above |
 | `setup.sh` | provision a regular workstation (checks deps, never sudo-installs) |
 | `ec2-setup.sh` | provision a throwaway box (installs everything automatically) |
-| `ec2-z3-env.sh` | `source` before building/running anything that links z3 |
+| `z3-env.sh` | `source` before building/running anything that links z3 |
 | `ec2-run.sh <scenario> [verify-args...]` | repeat a full benchmark run (`keccak`, `keccak-selection`, `pairing`, `reth`) on an already-provisioned box |
 | `ec2-sync.sh <scenario>` | rsync dumps/reports back from a remote benchmark box and regenerate its HTML report |
 

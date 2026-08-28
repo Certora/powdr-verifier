@@ -5,5 +5,13 @@ members = ["smt2", "simplifier", "checker"]
 [workspace.package]
 edition = "2021"
 
+# z3 and z3-sys must move together: z3 0.21 depends on z3-sys 0.13, and mixing
+# in a second z3-sys would give two incompatible sets of raw Z3_context types.
+# Discovery/linking is entirely z3-sys's own build script, driven by the
+# environment that verifier/z3-env.sh exports -- there is no build.rs here.
+[workspace.dependencies]
+z3 = "0.21"
+z3-sys = "0.13"
+
 [profile.release]
 debug = true
