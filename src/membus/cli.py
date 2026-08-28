@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -281,3 +282,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"membus: {e}", file=sys.stderr)
         return 2
     return 0
+
+
+def console_main() -> int:
+    """Entry point for the ``membus`` console script and ``membus.py``.
+
+    Wraps ``main`` so that a closed stdout -- ``membus stats ... | head``, say --
+    exits quietly instead of raising BrokenPipeError from the interpreter's
+    flush-on-exit.
+    """
+    try:
+        return main()
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 0

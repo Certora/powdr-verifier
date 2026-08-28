@@ -100,6 +100,41 @@ Note that `orchestrate.py verify` also runs the simplifier between those two
 steps; checking the raw encoding by hand is much more likely to come back
 `unknown-timeout`.
 
+## Exploration tools
+
+Two CLIs for looking at dumps by hand. Both are installed as console scripts,
+so `uv run lens ...` / `uv run membus ...` work from anywhere in the checkout;
+the root `lens.py` / `membus.py` remain as equivalent entry points. Both take
+`--agent` for a dense machine-oriented guide and `--help` for the human one,
+and `--json` on any subcommand for machine-readable output.
+
+**`lens`** — statistics and diffs over the APC JSON dumps. This is the tool for
+answering "what is actually in this circuit, and what did that pass change?"
+without opening a 50MB JSON by hand.
+
+```sh
+uv run lens show guest-keccak 2099512 0        # constraint/bus/column counts for one dump
+uv run lens diff guest-keccak 2099512 21 22    # what one optimizer pass changed
+uv run lens sweep guest-keccak 2099512         # every pass of one block, side by side
+uv run lens sweep all                          # one row per block, across the corpus
+```
+
+**`membus`** — the memory-bus solver: it reads the memory bus (bus id 1)
+interactions out of a dump and works out how the sends and receives pair up,
+which addresses are provably distinct, and which address spaces can be
+resolved symbolically. That pairing is what makes a memory-bus equivalence
+obligation tractable, so this is not only an inspection tool — **the verify
+pipeline shells out to it** (`src/verify/membus_subprocess.py` runs
+`membus.py` as a subprocess and parses its `--json` output, memoized per
+process). Running it by hand is how you see what the pipeline saw.
+
+```sh
+uv run membus stats guest-keccak 2099512 022             # per-address-space send/recv balance
+uv run membus info  guest-keccak 2099512 021 --as 2      # detail for one address space
+uv run membus solve guest-keccak 2099512 022 --as 1      # resolve the interaction pairing
+uv run membus align guest-keccak 2099512 021 022         # pair a before/after dump's buses
+```
+
 ## How it fits together
 
 ```

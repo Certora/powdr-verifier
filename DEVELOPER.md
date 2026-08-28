@@ -63,6 +63,9 @@ verifier/
 ├── benchmark_solvers.py, plot_benchmark_results.py, select_blocks.py,
 │   simplify_smt2.py, check-pp-pipeline.py, find_duplicated_ids.py  # standalone one-off tools
 ├── membus.py, lens.py     # thin wrappers for the src/membus, src/lens CLIs
+│                          # (also installed as the `membus` / `lens` console
+│                          # scripts; membus.py's path is load-bearing, see
+│                          # src/verify/membus_subprocess.py)
 ├── src/
 │   ├── smt/               # FormulaWithAxioms + SmtConverter — dump → SMT structure
 │   ├── encoding/          # SMT structure → concrete SMT-LIB scripts (trace, sanity)
@@ -335,7 +338,8 @@ encoder's own* constraints, reference side only; see
 
 ## `membus` — memory-bus diagnosis, alignment, and certified extraction
 
-`membus.py <command> <group> <block> <step> [options]` (a thin wrapper over
+`membus <command> <group> <block> <step> [options]` — or equivalently
+`membus.py ...` (a thin wrapper over
 `src/membus/`) is a standalone CLI for investigating the memory bus (OpenVM
 bus id 1) of one or two APC dumps by hand — distinct from, but designed
 consistently with, the automatic memory-alignment analysis (`MemoryAnalysis`
