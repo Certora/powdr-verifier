@@ -14,7 +14,6 @@ import logging
 import os
 import re
 import subprocess
-import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -385,33 +384,11 @@ def _declare(v: FNode) -> str:
     return f"(declare-fun {v.symbol_name()} () {_smt_sort(t)})"
 
 
-def _solver_command(name: str) -> str | None:
-    """The solver to exec, resolved to a path when we know one.
-
-    The registry is the source of truth (the binaries live in the workspace's
-    z3/bin/, off PATH); PATH is only a fallback for a solver someone installed
-    themselves. Warns rather than failing silently -- an unresolvable solver
-    turns this whole pass into a no-op, which is easy to miss.
-    """
-    from ..smt_backends.pysmt import resolve_solver_binary
-
-    path = resolve_solver_binary(name)
-    if path is not None:
-        return str(path)
-    found = shutil.which(name)
-    if found is not None:
-        return found
-    logger.warning(
-        "domain_probe: solver %r not found in the registry or on PATH; "
-        "skipping the pass (run setup.sh?)",
-        name,
-    )
-    return None
-
-
 def _oneshot(formulas: list[FNode], budget_s: int) -> Optional[bool]:
     """One-shot ``z3`` subprocess. Returns True=sat, False=unsat, None=unknown."""
-    solver = _solver_command(getattr(ARGS(), "solver", "z3-nightly"))
+    from ..smt_backends.pysmt import solver_command
+
+    solver = solver_command(getattr(ARGS(), "solver", "z3-nightly"), "domain_probe")
     if solver is None:
         return None
     decls = sorted(

@@ -43,6 +43,7 @@ from pathlib import Path
 
 from ..report.action import Action
 from ..smt.utils import *
+from ..smt_backends.pysmt import solver_command
 from ..utils.args import ARGS
 from .coi import ConstraintIndex, boundary_vars
 
@@ -752,11 +753,17 @@ class _SlicedChecker:
                 probes=probes,
             )
         budget_s = max(1, budget_ms // 1000)
+        # Resolve to a path: the workspace's z3/bin is deliberately off PATH,
+        # so a bare ARGS().solver would raise OSError and be swallowed below
+        # into a silent "unknown" for every disjunct.
+        solver = solver_command(ARGS().solver, "sliced check")
+        if solver is None:
+            return None, ""
         t0 = time.perf_counter()
         with self.metrics.timed(f"solve_{rung}_{label}"):
             try:
                 proc = subprocess.run(
-                    [ARGS().solver, *(z3_args or []), f"-T:{budget_s}", str(path)],
+                    [solver, *(z3_args or []), f"-T:{budget_s}", str(path)],
                     capture_output=True,
                     text=True,
                     timeout=budget_s + 30,

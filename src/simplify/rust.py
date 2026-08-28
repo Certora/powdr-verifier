@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 from ..paths import DATA_DIR, POWDR_DUMPS_DIR, VERIFIER_DIR, data_path_for_dump
-from ..smt_backends.pysmt import script
+from ..smt_backends.pysmt import script, solver_command
 from ..utils.args import ARGS
 from ..utils.io import SMT_ENCODING
 from ..utils.stats import stats_dump
@@ -366,6 +366,13 @@ def run_rust_pipeline(
 
     env = os.environ.copy()
     env["SIMPLIFIER_FIELD_MOD"] = str(ARGS().field_type.value)
+    # The rust domain_probe pass shells out to a solver by whatever
+    # SIMPLIFIER_SOLVER names, defaulting to a bare "z3-nightly" it expects on
+    # PATH. The workspace binaries are deliberately not on PATH, so hand it the
+    # resolved path -- otherwise the pass silently finds nothing.
+    _solver = solver_command(ARGS().solver, "rust simplifier")
+    if _solver is not None:
+        env["SIMPLIFIER_SOLVER"] = _solver
     env["LIFT_SUBSTITUTE"] = "1" if ARGS().lift_substitute else "0"
     # or_small only helps the `solver`/`memory` steps; elsewhere it just adds
     # branch cost and times z3 out. Gate it off outside those steps, unless
