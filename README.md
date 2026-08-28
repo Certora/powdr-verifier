@@ -26,38 +26,79 @@ difference.
 
 This repo needs a sibling checkout of
 [`powdr-labs/powdr`](https://github.com/powdr-labs/powdr) itself — that's
-where the circuits actually get built. From an empty workspace directory:
+where the circuits actually get built. `setup.sh` clones it for you; run it
+from the workspace directory that holds this checkout, not from inside it:
 
 ```sh
+mkdir verifier-root && cd verifier-root
 git clone https://github.com/Certora/powdr-verifier.git verifier
-./verifier/setup.sh
+bash ./verifier/setup.sh
 ```
 
-`setup.sh` checks for the tools you need (a C toolchain, `pkg-config`, `m4`,
-`nasm`, `libtool`, `autoconf`/`automake`, [`uv`](https://docs.astral.sh/uv/),
-Rust) and tells you what to install if anything's missing — it never runs
-`sudo` on your behalf. Once everything's present, it clones `powdr` as a
-sibling directory, runs `uv sync` (which provisions its own Python if
-needed — no system Python required), downloads a z3 SDK, builds the Rust
-helper binaries, and runs a smoke test. (On a disposable box you control
+`setup.sh` checks for the tools you need (a C toolchain, `m4`,
+`autoconf`/`automake` — FLINT builds from source —
+[`uv`](https://docs.astral.sh/uv/), Rust) and tells you what to install if
+anything's missing; it never runs `sudo` on your behalf. Once everything's
+present it clones `powdr`, runs `uv sync` (which provisions its own Python if
+needed — no system Python required), downloads the pinned z3 SDK, builds the
+Rust helper binaries, and runs a smoke test. (On a disposable box you control
 fully, `ec2-setup.sh` does the same thing but installs missing packages for
 you automatically.)
+
+Everything lands inside the workspace directory — nothing is written to
+`~/bin` or `~/lib`:
+
+```
+verifier-root/
+  powdr/            cloned by setup.sh
+  verifier/         this repo
+  z3/               the pinned z3: SDK the Rust side links, binary the solvers run
+```
+
+To rebuild the Rust workspace later, `cd verifier/rust && just build`. It
+needs the environment `verifier/z3-env.sh` exports, which the recipe sources
+for you; a bare `cargo build` without it fails at link time with
+`ld: library 'z3' not found`.
 
 ## Basic usage
 
 Build a benchmark and verify one pass of it (from inside `verifier/`):
 
 ```sh
-uv run python3 orchestrate.py powdr-guest guest-keccak # build the circuit, export APC dumps
-uv run python3 orchestrate.py verify guest-keccak 0 0  # verify block 0's first optimizer pass
+uv run python3 orchestrate.py powdr-guest guest-keccak  # build the circuit, export APC dumps
+uv run python3 orchestrate.py verify guest-keccak 0     # verify the first optimizer pass
 ```
 
-Or drive a single equivalence check by hand:
+The trailing arguments select what to verify. One argument is a *step* (which
+optimizer pass); two are *block* then *step*; each accepts a single index or
+an `a:b` range, and omitting them verifies everything:
 
 ```sh
-uv run python3 main.py verify before.json after.json out.smt2
+uv run python3 orchestrate.py verify guest-keccak            # every pass of every block
+uv run python3 orchestrate.py verify guest-keccak 0:3        # first three passes, every block
+uv run python3 orchestrate.py verify guest-keccak 2099512 0  # one block, first pass
+```
+
+Blocks are named by the ids in the dump filenames
+(`apc_candidate_<block>_<step>_<pass>.json`) — program addresses like
+`2099512`, **not** 0-based indices. `verify guest-keccak 0 0` therefore selects
+block 0, which does not exist, and reports `no files found ... did you run
+powdr?` even when the dumps are fine. Use `ls powdr-dumps/<test>/` to see the
+block ids you have.
+
+Or drive a single equivalence check by hand. `--base-dump` is required and
+must come *before* the subcommand: only the step-0 dump carries the block
+definition that later dumps are diffed against.
+
+```sh
+uv run python3 main.py --base-dump dumps/apc_candidate_2099512_000_unopt.json \
+    verify before.json after.json out.smt2   # writes out.{soundness,completeness}.smt2
 uv run python3 main.py check out.soundness.smt2
 ```
+
+Note that `orchestrate.py verify` also runs the simplifier between those two
+steps; checking the raw encoding by hand is much more likely to come back
+`unknown-timeout`.
 
 ## How it fits together
 
