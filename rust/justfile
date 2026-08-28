@@ -4,12 +4,48 @@
 # here any more); it reads the environment that ../z3-env.sh exports. Source
 # that first, or use the recipes below, which do it for you.
 
-# Build against the workspace SDK at <workspace>/z3/, as installed by setup.sh.
+# Everything: all three crates, release, against the workspace SDK.
 build:
     #!/usr/bin/env bash
     set -euo pipefail
     source "{{justfile_directory()}}/../z3-env.sh"
-    cargo build --release
+    cargo build --release --workspace
+
+# Everything, plus the test binaries, then run them.
+test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "{{justfile_directory()}}/../z3-env.sh"
+    cargo test --release --workspace
+
+# Type-check everything without linking. Fastest way to catch a bad z3 bump.
+check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "{{justfile_directory()}}/../z3-env.sh"
+    cargo check --release --workspace
+
+# Everything, inside a nono sandbox. Extra args go to cargo.
+build-sandboxed *args:
+    #!/usr/bin/env bash
+    # Two things trip up a hand-written `nono run -- cargo build`: the sandbox
+    # has to be told about the z3 SDK, which lives outside the cwd tree, and
+    # the environment still has to be sourced or the linker gets a bare -lz3
+    # with no -L to resolve it. Both are handled here, and $Z3_PREFIX is
+    # derived rather than typed, so it stays right when the pin moves.
+    #   just build-sandboxed -p simplifier
+    set -euo pipefail
+    source "{{justfile_directory()}}/../z3-env.sh"
+    command -v nono >/dev/null || { echo "error: nono not on PATH." >&2; exit 1; }
+    nono run \
+        --allow-cwd \
+        --allow-file "$HOME/.gitconfig" \
+        --allow "$HOME/.cache" \
+        --allow "$HOME/.rustup" \
+        --allow "$HOME/.cargo" \
+        --allow "{{justfile_directory()}}/target" \
+        --allow "$Z3_PREFIX" \
+        -- cargo build --release --workspace {{args}}
 
 # Build against some other z3, e.g. a local checkout's build dir.
 build-with z3dir:
