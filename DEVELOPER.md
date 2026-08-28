@@ -122,6 +122,11 @@ The same downloaded release serves both sides: the Rust workspace links
 `bin/libz3.*`, and the Python solvers shell out to `bin/z3`. They cannot drift
 apart, because there is only one download.
 
+There is a third z3 in the picture — the `z3-solver` wheel, which carries its
+own bundled `libz3` for the in-process bindings (`z3_simplify`, the pysmt `z3`
+solver). That one is pinned by hand in `pyproject.toml` and has to be bumped
+alongside `Z3_VERSION` when the pin moves; all three are currently 5.1.0.
+
 Before building the Rust workspace, `source verifier/z3-env.sh` — it is the
 single place the pinned z3 version is named, and it exports everything the
 build needs. See [The Rust workspace](#the-rust-workspace) for the underlying
