@@ -361,6 +361,22 @@ for solver in solvers:
     )
 
 
+def resolve_solver_binary(name: str) -> Path | None:
+    """Absolute path of a registered solver's binary, or ``None``.
+
+    For callers that shell out to the solver themselves rather than going
+    through pysmt -- domain_probe's one-shot probe, checker.py's pre-try. They
+    cannot rely on a bare name resolving through PATH: setup.sh installs the
+    binaries into the workspace's ``z3/bin/``, which is deliberately not added
+    to PATH, so ``z3-nightly`` alone finds nothing.
+    """
+    for solver in solvers:
+        if solver["name"] == name:
+            path = solver["path"]
+            return path if path.exists() else None
+    return None
+
+
 def wrap_mod(input: FNode, modulus: Optional[FNode] = None) -> FNode:
     if modulus is None:
         modulus = Int(ARGS().field_type.value)

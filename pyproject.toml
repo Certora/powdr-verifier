@@ -24,6 +24,14 @@ dependencies = [
     "z3-solver==5.1.0.0",
 ]
 
+# Console scripts, so the two exploration CLIs run as `uv run lens ...` /
+# `uv run membus ...` instead of `uv run python3 lens.py ...`. The root
+# lens.py / membus.py files stay: the verify pipeline shells out to
+# membus.py by path (src/verify/membus_subprocess.py).
+[project.scripts]
+lens = "src.lens.cli:main"
+membus = "src.membus.cli:console_main"
+
 [project.optional-dependencies]
 # needed only by plot_benchmark_results.py
 plots = ["matplotlib"]
@@ -47,3 +55,13 @@ ignore = ["F403", "F405"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+# Declaring a build backend makes this an installable project rather than a
+# bare virtualenv, which is what lets [project.scripts] produce entry points.
+# uv installs it editable, so `src/verify/membus_subprocess.py` still resolves
+# membus.py through the checkout rather than a copy in site-packages.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

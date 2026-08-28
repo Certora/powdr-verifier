@@ -356,14 +356,10 @@ def _resolve_pretry_z3() -> Path | None:
     if not name.startswith("z3"):
         return None
     try:
-        from .smt_backends.pysmt import solvers as _solvers
+        from .smt_backends.pysmt import resolve_solver_binary
     except Exception:
         return None
-    for s in _solvers:
-        if s["name"] == name:
-            path = s["path"]
-            return path if path.exists() else None
-    return None
+    return resolve_solver_binary(name)
 
 
 def _read_status_from_file(path: Path) -> str | None:
