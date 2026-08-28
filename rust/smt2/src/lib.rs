@@ -31,6 +31,7 @@ pub use ast_util::{
     contains_bound_var_dyn, de_bruijn_bound_name, de_bruijn_bound_symbol_id,
     debug_assert_direct_int_operand,
     has_bool_sort_leaf_dyn, unwrap_zero_mod_eq,
+    with_numeral_cstr,
 };
 pub use command::{
     declare_fun_name_cmd, declare_fun_symbol, declare_fun_symbol_id, parse_single_command,

@@ -635,6 +635,17 @@ Three crates under `rust/`, sharing a workspace `Cargo.toml`:
 | `simplifier` | `simplifier` | `smt2`, `z3`, `flint3-sys` | fast reimplementation of the hottest simplify passes |
 | `checker` | `checker` | `z3`, `regex` | fast solver-invocation binary (no `smt2` dep — it only solves, doesn't round-trip) |
 
+**`smt2` is the only crate that names `z3-sys`**, deliberately. `z3-sys` is the
+raw FFI layer and `z3` the safe wrapper built on it; the two must resolve to a
+single `z3-sys`, or raw pointers passed between them would be different types
+from different crate instances. Confining the direct dependency to one crate
+keeps that constraint in one place — `cargo tree -i z3-sys` should always show
+`smt2` and `z3` as the only parents. Where another crate needs something the
+safe wrapper doesn't expose, `smt2` exports a helper instead of the raw call:
+`with_numeral_cstr` is the example, handing a numeral's digits to a callback as
+Z3's own `CStr` so `simplifier` can feed FLINT's `fmpz_set_str` directly,
+without a `String` round trip and without its own `z3-sys` dependency.
+
 **Why `smt2` exists in-house**: it feeds SMT-LIB commands directly into real
 `z3::ast` nodes via Z3's own native parser context, rather than into an
 independent IR that would need a separate translation step — while *also*
@@ -851,8 +862,5 @@ the sibling `powdr/` checkout's own independent `Cargo.lock`.
   `requires = ["powdr"]` so it silently no-ops without a sibling `powdr/`
   checkout, but will error wherever one is present. Needs deleting or
   rewriting.
-- `src/smt_backends/z3.py` and `cvc5.py` are, per their own docstrings, a
-  legacy/unused experiment and a reserved-but-unimplemented stub,
-  respectively. `pysmt.py` is the one actually in use.
 - `check-pp-pipeline.py` is a personal debugging scratchpad with hardcoded
   filenames and a `meld` dependency — not part of any documented workflow.

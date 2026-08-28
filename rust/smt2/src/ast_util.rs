@@ -1,6 +1,7 @@
 //! Thin Z3 AST helpers (domain-specific; generic ops use `z3::ast` directly).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ffi::CStr;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
@@ -146,6 +147,32 @@ impl Default for IntTermSet {
     }
 }
 
+/// Runs `f` on a numeral's decimal text, borrowed from Z3's own buffer.
+///
+/// This is the one place the raw `Z3_get_numeral_string` handoff lives. The
+/// pointer Z3 hands back points into a per-context scratch buffer that a later
+/// Z3 call may reuse, so the `CStr` goes to a callback rather than being
+/// returned: that way it cannot outlive the window in which it is valid.
+/// Callers who need to keep the digits must copy them inside `f`; callers
+/// feeding another C library (FLINT, say) can pass `.as_ptr()` straight
+/// through without a round trip through `String`.
+///
+/// `None` if `ast` is not a numeral, or if Z3 declines to render it.
+pub fn with_numeral_cstr<R>(ast: &Dynamic, f: impl FnOnce(&CStr) -> R) -> Option<R> {
+    unsafe {
+        let ctx = ast.get_ctx().get_z3_context();
+        let a = ast.get_z3_ast();
+        if !Z3_is_numeral_ast(ctx, a) {
+            return None;
+        }
+        let ptr = Z3_get_numeral_string(ctx, a);
+        if ptr.is_null() {
+            return None;
+        }
+        Some(f(CStr::from_ptr(ptr)))
+    }
+}
+
 pub fn int_value(e: &Int) -> Option<i128> {
     if let Some(v) = e.as_i64() {
         return Some(v as i128);
@@ -153,19 +180,10 @@ pub fn int_value(e: &Int) -> Option<i128> {
     if e.kind() != AstKind::Numeral || e.get_sort().kind() != SortKind::Int {
         return None;
     }
-    unsafe {
-        let ctx = e.get_ctx().get_z3_context();
-        let ast = e.get_z3_ast();
-        if !Z3_is_numeral_ast(ctx, ast) {
-            return None;
-        }
-        let ptr = Z3_get_numeral_string(ctx, ast);
-        if ptr.is_null() {
-            return None;
-        }
-        let s = std::ffi::CStr::from_ptr(ptr).to_string_lossy();
-        parse_int_literal(&s)
-    }
+    with_numeral_cstr(&Dynamic::from_ast(e), |s| {
+        parse_int_literal(&s.to_string_lossy())
+    })
+    .flatten()
 }
 
 pub fn int_value_dyn(ast: &Dynamic) -> Option<i128> {
@@ -178,17 +196,8 @@ pub fn numeral_smtlib_string(ast: &Dynamic) -> Option<String> {
     if ast.kind() != AstKind::Numeral {
         return None;
     }
-    unsafe {
-        let ctx = ast.get_ctx().get_z3_context();
-        let a = ast.get_z3_ast();
-        if !Z3_is_numeral_ast(ctx, a) {
-            return None;
-        }
-        let ptr = Z3_get_numeral_string(ctx, a);
-        if ptr.is_null() {
-            return None;
-        }
-        let s = std::ffi::CStr::from_ptr(ptr).to_string_lossy();
+    with_numeral_cstr(ast, |cs| {
+        let s = cs.to_string_lossy();
         if s.contains('/') {
             return None;
         }
@@ -196,7 +205,8 @@ pub fn numeral_smtlib_string(ast: &Dynamic) -> Option<String> {
             Some(mag) => Some(format!("(- {mag})")),
             None => Some(s.into_owned()),
         }
-    }
+    })
+    .flatten()
 }
 
 pub fn parse_int_literal(s: &str) -> Option<i128> {
