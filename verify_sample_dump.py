@@ -9,10 +9,14 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
-URL = "https://drive.google.com/file/d/1CbwwYASxGE8ziLNUH7wbv1ygijD6hsNz/view"
+# pinned commit of https://github.com/alex-ozdemir/apc-examples, so the
+# candidate ids below stay valid regardless of what's later added upstream
+EXAMPLES_COMMIT = "ea27130ee102b9a6980821e0de218cd38ae77c17"
+URL = f"https://github.com/alex-ozdemir/apc-examples/archive/{EXAMPLES_COMMIT}.tar.gz"
 VENV_DIR = REPO_ROOT / ".venv"
 DOWNLOAD_DIR = REPO_ROOT / "powdr-dumps" / "_sample-download"
 
@@ -34,7 +38,7 @@ def ensure_venv() -> Path:
         subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)], check=True)
     subprocess.run(
         [str(py), "-m", "pip", "install", "-q",
-         "-r", str(REPO_ROOT / "requirements.txt"), "gdown", "z3-solver"],
+         "-r", str(REPO_ROOT / "requirements.txt"), "z3-solver"],
         check=True,
     )
     return py
@@ -53,19 +57,19 @@ def ensure_solver() -> None:
             target.symlink_to(system_z3)
 
 
-def download_and_extract(py: Path) -> Path:
+def download_and_extract() -> Path:
     extract_dir = DOWNLOAD_DIR / "extracted"
-    if any(extract_dir.glob("**/apc_candidate_*.json")):
-        return extract_dir
+    if not any(extract_dir.glob("**/apc_candidate_*.json")):
+        DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        archive = DOWNLOAD_DIR / "examples.tar.gz"
+        urllib.request.urlretrieve(URL, archive)
 
-    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    archive = DOWNLOAD_DIR / "dumps.tar.gz"
-    subprocess.run([str(py), "-m", "gdown", URL, "-O", str(archive)], check=True)
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(archive) as tf:
+            tf.extractall(extract_dir, filter="data")
 
-    extract_dir.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(archive) as tf:
-        tf.extractall(extract_dir, filter="data")
-    return extract_dir
+    # the archive wraps everything in a single "apc-examples-<commit>" directory
+    return next(extract_dir.glob(f"**/{SCENARIO_DIR}"))
 
 
 def run_main(py: Path, *args: str) -> str:
@@ -82,7 +86,7 @@ def main() -> None:
     ensure_solver()
 
     print("\n== downloading sample powdr dump ==\n")
-    extract_dir = download_and_extract(py) / SCENARIO_DIR
+    extract_dir = download_and_extract()
     before, after = extract_dir / BEFORE, extract_dir / AFTER
     base_dump, substitutions = extract_dir / BASE_DUMP, extract_dir / SUBSTITUTIONS
 
