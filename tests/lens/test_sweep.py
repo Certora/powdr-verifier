@@ -81,7 +81,8 @@ def test_build_sweep_delta_vs_prev(tmp_path):
     _make_block(tmp_path)
     rows = _rows(tmp_path, with_diff=True)
     assert rows[0].delta is None            # first row: no prev
-    assert rows[1].delta == "xrep"          # 001 (C) vs 000 (M): not comparable
+    # 001 (C) vs 000 (M): compared across the flip; f*(f-1) is the same constraint
+    assert rows[1].delta[0] == (0, 0, 0)
     # 002 (C) vs 001 (C): identical -> all-zero (cons, mem, bus) triples
     assert rows[2].delta == ((0, 0, 0), (0, 0, 0), (0, 0, 0))
 
@@ -114,7 +115,6 @@ def test_render_sweep_delta_columns_only_with_diff(tmp_path):
     with_d = render_sweep(_rows(tmp_path, with_diff=True), "keccak", "111",
                           PLAIN, with_diff=True)
     assert "dcons" in with_d and "dmem" in with_d and "dbus" in with_d
-    assert "—" in with_d         # the cross-representation row
 
 
 def test_build_sweep_markers_memory_and_sym(tmp_path):

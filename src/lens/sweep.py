@@ -199,7 +199,7 @@ def build_sweep(
     """Compute a StepRow per entry whose NNN is within ``[lo, hi]``.
 
     When ``with_diff`` is set, each emitted row carries a diff summary vs the
-    previous emitted row (same representation only, else ``"xrep"``). Diffing is
+    previous emitted row (either representation; ``"xrep"`` for other dumps). Diffing is
     off by default because it is expensive on large blocks. When ``times`` (from
     a report DB, keyed by NNN) is given, each row carries its verification time
     and status.
@@ -241,12 +241,12 @@ def build_sweep(
 def _step_delta(prev, keys, fmt):
     """Counts-only diff of precomputed `keys` vs `prev` (keys, fmt).
 
-    Returns None (no prev), "xrep" (cross-representation), or (cons, mem, bus).
+    Returns None (no prev), "xrep" (a non-constraint dump), or (cons, mem, bus).
     """
     if prev is None:
         return None
     pkeys, pfmt = prev
-    if pfmt != fmt or fmt not in ("machine", "constraints"):
+    if {pfmt, fmt} - {"machine", "constraints"}:
         return "xrep"
     c = counts_from_keys(pkeys, keys)
     return (c["cons"], c["mem"], c["bus"])

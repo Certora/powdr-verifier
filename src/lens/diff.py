@@ -3,16 +3,16 @@
 Reports constraints removed / added / changed, plus columns added/removed
 (annotated with their substitution / derived-column definitions).
 
-Restricted to a single representation: powdr flips between the ``machine``
+Works within and across representations. powdr flips between the ``machine``
 (AlgebraicExpression) and ``constraints`` (GroupedExpression) encodings between
-passes, and that flip is usually coincidental (no real optimization), so a
-cross-encoding diff is mostly noise. ``build_diff`` refuses M-vs-C.
+passes. Constraints and bus interactions are matched on the factored keys of
+``canon.py``, which identify the two encodings of the same polynomial: scalars
+distributed over sums, scalars moved between factors, and, for constraints
+only, the sign or any unit multiple. Products are not expanded over sums.
 
-Canonicalization is light/structural — signed constants + flatten/sort of
-commutative ``+``/``*`` with identity folding, NO polynomial distribution.
-Within one representation that is enough (verified: C-C pairs are pure
-add/remove); the lone exception is the ``loop_iteration`` M-M pair, which
-distributes and surfaces as "changed".
+``canon_constraint`` below is the older, lighter key (signed constants and
+flatten/sort of ``+``/``*``). ``membus align`` still uses it. It does not match
+across the two representations.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
+from .canon import CanonError, canon_value, canon_zero, key_cols
 from .loader import detect_format, machine_of
 from .metrics import analyze_expr, mult_kind
 from .normalize import to_signed
@@ -142,7 +143,7 @@ def _greedy_match(removed, added, keyfn, threshold):
     return changed, lr, la
 
 
-def _canon_cols(node, out: set) -> None:
+def _canon_cols(node, out: set) -> None:  # keys of canon_constraint
     """Collect column names (``('v', name)`` leaves) from a canon tuple."""
     if not isinstance(node, tuple):
         return
@@ -177,7 +178,7 @@ def _count_diff(keys_a: list, keys_b: list, groupfn) -> tuple:
 
 def _cons_group(k) -> frozenset:
     cols: set = set()
-    _canon_cols(k, cols)
+    key_cols(k, cols)
     return frozenset(cols)
 
 
@@ -185,9 +186,9 @@ def _bus_group(k) -> tuple:
     if k[0] == 1:  # memory: (address_space, pointer) cell
         return ("mem", k[2][0], k[2][1]) if len(k[2]) >= 2 else ("mem", k[2])
     cols: set = set()
-    _canon_cols(k[1], cols)
+    key_cols(k[1], cols)
     for a in k[2]:
-        _canon_cols(a, cols)
+        key_cols(a, cols)
     return (k[0], frozenset(cols))
 
 
@@ -199,7 +200,7 @@ def dump_keys(data: Any) -> tuple:
     """
     m = machine_of(data)
     return (
-        [canon_constraint(c) for c in m.get("constraints", [])],
+        [canon_zero(c) for c in m.get("constraints", [])],
         [_bus_exact_key(bi) for bi in m.get("bus_interactions", [])],
     )
 
@@ -222,18 +223,21 @@ def diff_counts(a_data: Any, b_data: Any) -> dict:
 
     Returns ``{cons, mem, bus}``, each a ``(removed, added, changed)`` triple;
     ``mem`` is the Memory bus (id 1), ``bus`` the rest. Raises DiffError unless
-    both dumps are the same representation.
+    both dumps are constraint dumps (either representation).
     """
     fa, fb = detect_format(a_data), detect_format(b_data)
-    if fa not in _DIFFABLE or fb not in _DIFFABLE or fa != fb:
+    if fa not in _DIFFABLE or fb not in _DIFFABLE:
         raise DiffError(f"not comparable (A={fa}, B={fb})")
-    return counts_from_keys(dump_keys(a_data), dump_keys(b_data))
+    try:
+        return counts_from_keys(dump_keys(a_data), dump_keys(b_data))
+    except CanonError as e:
+        raise DiffError(str(e)) from e
 
 
 def _bus_exact_key(bi: dict) -> tuple:
     """Full identity of a bus interaction (for exact/unchanged matching)."""
-    return (bi.get("id"), canon_constraint(bi.get("mult")),
-            tuple(canon_constraint(a) for a in bi.get("args", [])))
+    return (bi.get("id"), canon_value(bi.get("mult")),
+            tuple(canon_value(a) for a in bi.get("args", [])))
 
 
 def _bus_cols(bi: dict) -> set[str]:
@@ -247,21 +251,21 @@ def _bus_cols(bi: dict) -> set[str]:
 def _mem_cell(bi: dict) -> tuple:
     """Memory identity = (address_space, pointer) = canon(args[0], args[1])."""
     args = bi.get("args", [])
-    a0 = canon_constraint(args[0]) if len(args) > 0 else None
-    a1 = canon_constraint(args[1]) if len(args) > 1 else None
+    a0 = canon_value(args[0]) if len(args) > 0 else None
+    a1 = canon_value(args[1]) if len(args) > 1 else None
     return (a0, a1)
 
 
 def _mem_order(bi: dict):
     """Within a memory cell, order by (mult kind, timestamp) for pairing."""
     args = bi.get("args", [])
-    ts = repr(canon_constraint(args[-1])) if args else ""
+    ts = repr(canon_value(args[-1])) if args else ""
     return (mult_kind(bi.get("mult")), ts)
 
 
 @dataclass
 class DiffResult:
-    """Result of diffing two same-representation dumps."""
+    """Result of diffing two constraint dumps (``fmt`` is ``A->B`` across formats)."""
 
     fmt: str
     removed: list = field(default_factory=list)         # original constraints
@@ -281,9 +285,10 @@ def build_diff(
     labels: dict[str, str] | None = None,
     match_threshold: float = 0.5,
 ) -> DiffResult:
-    """Diff constraints and bus interactions of two same-representation dumps.
+    """Diff constraints and bus interactions of two constraint dumps.
 
-    Raises DiffError unless both dumps are the same representation. ``subs`` is
+    Either representation on either side. Raises DiffError on other inputs
+    (e.g. a substitutions list) or on a non-expression node. ``subs`` is
     the block's ``_substitutions.json`` list (annotates removed columns);
     ``labels`` is the ``bus_map`` (id -> name) for bus labels.
     """
@@ -291,12 +296,13 @@ def build_diff(
     fa, fb = detect_format(a_data), detect_format(b_data)
     if fa not in _DIFFABLE or fb not in _DIFFABLE:
         raise DiffError(f"not constraint dumps (A={fa}, B={fb})")
-    if fa != fb:
-        raise DiffError(
-            f"cannot diff across representations: A is {fa}, B is {fb}. "
-            f"The M/C flip is just an encoding change — diff two {fa} steps "
-            f"or two {fb} steps.")
+    try:
+        return _build_diff(a_data, b_data, fa, fb, subs, labels, match_threshold)
+    except CanonError as e:
+        raise DiffError(str(e)) from e
 
+
+def _build_diff(a_data, b_data, fa, fb, subs, labels, match_threshold):
     ma, mb = machine_of(a_data), machine_of(b_data)
     ca, cb = ma.get("constraints", []), mb.get("constraints", [])
 
@@ -306,11 +312,11 @@ def build_diff(
     origa: dict = {}
     origb: dict = {}
     for c in ca:
-        k = canon_constraint(c)
+        k = canon_zero(c)
         ka[k] += 1
         origa.setdefault(k, c)
     for c in cb:
-        k = canon_constraint(c)
+        k = canon_zero(c)
         kb[k] += 1
         origb.setdefault(k, c)
 
@@ -338,7 +344,7 @@ def build_diff(
     cols_removed = [(n, subs_map.get(n)) for n in sorted(cols_a - cols_b)]
 
     return DiffResult(
-        fmt=fa,
+        fmt=fa if fa == fb else f"{fa}->{fb}",
         removed=removed,
         added=added,
         changed=changed,

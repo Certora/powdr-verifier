@@ -100,7 +100,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sp_diff = sub.add_parser(
         "diff", parents=[common],
-        help="constraint-level diff of two steps (same representation only)")
+        help="constraint-level diff of two steps (either representation)")
     sp_diff.add_argument("group")
     sp_diff.add_argument("block")
     sp_diff.add_argument("step_a")
@@ -175,7 +175,7 @@ def _run_sweep(args, mode: str) -> None:
 
 
 def _run_diff(args, mode: str) -> int:
-    """`diff <group> <block> <stepA> <stepB>`: same-representation only."""
+    """`diff <group> <block> <stepA> <stepB>`: within or across representations."""
     directory = resolve.group_dir(args.group, args.root)
     entries = resolve.index_block(directory, args.block)
     ea = resolve.resolve_step(entries, args.step_a)

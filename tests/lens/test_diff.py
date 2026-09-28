@@ -65,11 +65,24 @@ def test_diff_columns_with_substitution_annotation():
     assert d.cols_added == []
 
 
-def test_diff_refuses_cross_representation():
-    a = _c([["x@0", "+", 2013265920]])     # constraints (residue, no '-')
-    b = _m([["x@0", "-", 1]])               # machine ('-')
-    with pytest.raises(DiffError, match="across representations"):
-        build_diff(a, b)
+def test_diff_across_representations_pure_flip_is_empty():
+    a = _c([["x@0", "+", 2013265920],                              # x - 1
+            [["x@0", "+", [2013265920, "*", "y@1"]], "+", 2013265920]])  # x - y - 1
+    b = _m([["x@0", "-", 1],
+            ["x@0", "-", ["y@1", "+", 1]]])
+    d = build_diff(a, b)
+    assert (d.removed, d.added, d.changed) == ([], [], [])
+    assert d.fmt == "constraints->machine"
+
+
+def test_diff_matches_sign_flipped_constraint():
+    d = build_diff(_c([[2013265920, "*", "x@0"]]), _m(["x@0"]))    # -x = 0 vs x = 0
+    assert (d.removed, d.added) == ([], [])
+
+
+def test_diff_refuses_non_expression_node():
+    with pytest.raises(DiffError, match="not a dump expression"):
+        build_diff(_c([["x@0", "/", "y@1"]]), _c(["x@0"]))
 
 
 def test_diff_refuses_substitutions_input():

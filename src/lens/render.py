@@ -976,8 +976,9 @@ WHAT / WHY
   One trap it handles for you: between adjacent passes the *encoding* flips
   (machine <-> constraints, see FORMAT). A constraint like f*(f-1) is written
   ["f","*",["f","-",1]] in machine form and ["f","*",["f","+",2013265920]] in
-  constraints form — identical math, different bytes. lens normalizes this and
-  REFUSES to diff across the flip, so you always compare like with like.
+  constraints form — identical math, different bytes. lens matches constraints
+  on a factored canonical key (src/lens/canon.py) that identifies the two
+  encodings, so a diff across the flip shows only real changes.
 
 DECIDE (goal -> command)
   stats / shape of one dump            -> show <g> <b> <step>
@@ -997,11 +998,10 @@ TYPICAL SESSION
   lens sweep keccak 2104492
   # 3. attribute the change to each pass (counts; opt-in, slower)
   lens sweep keccak 2104492 --diff
-  # 4. drill into one transition — same representation only
+  # 4. drill into one transition (either representation on either side)
   lens diff keccak 2104492 010 011
-  # 5. a step pair that flips M<->C is refused; pick two same-rep steps,
-  #    e.g. skip the machine-encoded loop_iteration between two C steps
-  lens diff keccak 2104492 011 014
+  # 5. a step pair that flips M<->C works too; a pure flip diffs empty
+  lens diff keccak 2104492 012 013
   # 6. explain an eliminated variable seen in a diff's columns
   lens subs keccak 2104492 | grep <var>
   # 7. full detail on a single dump
@@ -1024,8 +1024,8 @@ SUBCOMMANDS
             keys:[{address_space,pointer,symbolic,count}]} or, with --by-as,
             by_address_space:[{address_space,count,symbolic,distinct}]}
   diff    <group> <block> <stepA> <stepB> [--limit N]   constraint- AND
-            bus-level diff (removed/added/changed + columns). SAME
-            representation only: refuses M-vs-C. Memory busses matched by
+            bus-level diff (removed/added/changed + columns), within or
+            across representations. Memory busses matched by
             (address_space, pointer)+timestamp; others by column proxy.
 
 GLOBAL FLAGS
@@ -1049,7 +1049,8 @@ RESOLUTION
 EXIT CODES
   0   success (incl. an empty diff / zero changes)
   2   resolution error (unknown group/block/step, ambiguous pass name) OR a
-      refused diff (M-vs-C, or a non-constraint dump). Message on stderr.
+      refused diff (a non-constraint dump, or a node outside the expression
+      grammar). Message on stderr.
   argparse usage errors exit 2 as well (stderr usage line).
 
 PERFORMANCE
@@ -1094,8 +1095,8 @@ JSON FIELDS (compare)
 SWEEP COLUMNS / JSON (one row per step)
   NNN pass  f  cons bus mem mkey der deg cols  [dcons dmem dbus]  sym-busses
   dcons/dmem/dbus (only with --diff; slower on big blocks) = -rem+add~chg of
-    constraints / Memory-bus / other-bus vs the previous step (same
-    representation only; "—" across M/C; blank on first row)
+    constraints / Memory-bus / other-bus vs the previous step (either
+    representation; blank on first row)
   f = format marker: M=machine C=constraints
   cons=n_constraints bus=n_bus_interactions mem=Memory-bus count
   mkey=Memory interactions with symbolic (addr,ptr) key (· if none)
@@ -1137,5 +1138,5 @@ DIFF JSON FIELDS
   columns{added:[{name,def}], removed:[{name,def}]}
   bus{removed[str], added[str], changed[{before,after}],
       memory{removed,added,changed}}
-  same-representation only; M-vs-C diff exits non-zero with a message.
+  works within and across representations.
 """
